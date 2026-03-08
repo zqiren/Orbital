@@ -8,8 +8,10 @@
 
 **An operating system for autonomous AI agents.**
 
-**Every second an agent sits idle is a second of productivity wasted.**
-**Every second an agent acts unsupervised is a loophole for disaster.**
+Every second an agent sits idle is a second of productivity wasted.
+
+Every second an agent acts unsupervised is a loophole for disaster.
+
 **Orbital manages this tradeoff — maximum agent throughput, full human oversight, zero compromise.**
 
 Orbital runs on your machine. You control it from your phone.
@@ -18,6 +20,11 @@ Orbital runs on your machine. You control it from your phone.
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
 </p>
 <p align="center"><em>Multiple agents running in parallel — each with its own project, triggers, and session history</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve, deny, or redirect from your phone" width="350">
+</p>
+<p align="center"><em>An agent needs permission to run a command — approve or deny from your phone</em></p>
 
 ---
 
