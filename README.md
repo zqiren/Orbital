@@ -23,35 +23,57 @@ Orbital runs on your machine. You control it from your phone.
 
 ## The Problem
 
-AI agents today are autonomous in capability but not in operation. They can write code, browse the web, manage files, and chain complex multi-step workflows — but the moment you look away, things break down. Five specific problems make current agent workflows unsustainable:
+AI agents are autonomous in capability but not in operation. The moment you look away, things break down.
 
-**1. Supervision and execution are coupled.** You are the process manager, the permission system, the approval queue, and the activity monitor — all at once, all manually. The agent can only work while you sit at the keyboard watching it. Close the laptop and the agent stops. Walk away and it runs blind. There is no way to supervise from a distance or asynchronously.
+&nbsp;
 
-**2. Agents are destructive by default.** An agent with shell access can `rm -rf` your project. An agent with browser access can leak credentials to a malicious site via prompt injection. An agent with network access can exfiltrate data. Current tools rely on the agent "behaving well" — there is no enforcement layer. No sandbox. No network isolation. No approval gate that the agent cannot bypass.
+**1. You are the operating system**
+<br>You manage processes, permissions, approvals, and monitoring — all at once, all manually. Close the laptop and the agent stops. Walk away and it runs blind.
 
-**3. Agents don't live where your work lives.** Most agent platforms require you to migrate context into their environment — upload files to a cloud workspace, copy-paste instructions into a chat window, re-explain your project structure every session. But your code is on your machine. Your documents are in your folders. Your browser sessions are in your browser. Agents should operate in your existing task environment, not ask you to relocate into theirs.
+**2. Agents are destructive by default**
+<br>`rm -rf`. Leaked credentials. Data exfiltration. Current tools rely on agents "behaving well" — no sandbox, no network isolation, no approval gate the agent can't bypass.
 
-**4. There is no centralized management.** If you run three agents — a coding agent, a research agent, and a writing agent — you manage three separate terminals, three separate permission models, three separate context windows. There is no unified dashboard, no single approval queue, no way to see what all your agents are doing at a glance.
+**3. Agents don't live where your work lives**
+<br>Most platforms ask you to upload files, copy-paste context, re-explain your project every session. But your code is on your machine. Agents should work in your environment, not ask you to relocate into theirs.
 
-**5. Agent knowledge is ephemeral.** Most agent sessions start from zero. The agent doesn't remember what it learned yesterday, what decisions it made last week, or what files it created in the previous session. There is no long-term persistent state. Every session is a cold start, and you re-explain the same context over and over.
+**4. No centralized management**
+<br>Three agents means three terminals, three permission models, three context windows. No unified dashboard. No single approval queue.
+
+**5. Agent knowledge is ephemeral**
+<br>Every session starts from zero. The agent doesn't remember yesterday's decisions or last week's files. You re-explain the same context over and over.
 
 ---
 
 ## The Insight
 
-Orbital treats AI agents as autonomous processes that need an operating system — not a chat interface, not a wrapper, not a framework. An actual operating system: process management, permission enforcement, resource isolation, persistent state, and a supervision interface.
+Orbital treats AI agents as processes that need an **operating system** — process management, permission enforcement, resource isolation, persistent state, and a supervision interface.
 
-Here is how Orbital addresses each problem:
-
-**Supervision decoupled from execution.** Agents run continuously on your desktop machine. When an agent needs a decision, it pauses and sends an approval request to your phone. You approve, deny, or redirect — from the gym, from the bus, from bed. The agent resumes instantly. Supervision is asynchronous; execution never waits for you to sit down at the keyboard.
-
-**Containment at the OS level.** Orbital doesn't ask agents to behave — it enforces boundaries. Shell commands from the LLM execute in a sandboxed process. File access is restricted to explicitly granted folders. Network traffic is filtered through per-project domain allowlists. The approval system is fail-closed: if it breaks, the agent is blocked, not unleashed. Credentials use token substitution so the LLM never sees raw passwords — they are resolved at the execution boundary and never written to logs.
-
-**Agents live in your environment.** Orbital runs on your machine, operates on your local filesystem, and uses your local browser. Your code, your documents, your folders — the agent works directly in your existing workspace. No file uploads to a cloud platform. No context migration. The workspace IS the project.
-
-**One dashboard, all agents.** Every agent — built-in or external — appears in a single project dashboard. One activity stream. One approval queue. Start, stop, pause, resume, and monitor all agents from one interface, whether you're at your desktop or on your phone.
-
-**Persistent state through workspace files.** Agent knowledge lives in the workspace as human-readable files. `PROJECT_STATE.md` is the agent's working memory — updated after meaningful work, read on session start. `DECISIONS.md` logs non-obvious choices. `instructions/*.md` files shape agent behavior across sessions. This isn't a vector database or a hidden embedding store — it's plain text files you can read, edit, and version control.
+<table>
+<tr>
+<th width="40%">Problem</th>
+<th width="60%">How Orbital solves it</th>
+</tr>
+<tr>
+<td>Supervision = sitting at keyboard</td>
+<td>Agents run on your machine. Need a decision? The agent pauses and pings your phone. <br>Approve, deny, or redirect — from anywhere.</td>
+</tr>
+<tr>
+<td>No safety boundaries</td>
+<td>Sandboxed shell. File access restricted to granted folders. Fail-closed approval. <br>Credentials resolved at the execution boundary — the LLM never sees raw passwords.</td>
+</tr>
+<tr>
+<td>Work lives somewhere else</td>
+<td>Runs on your machine, your filesystem, your browser. <br>No cloud uploads. No context migration. The workspace IS the project.</td>
+</tr>
+<tr>
+<td>Fragmented management</td>
+<td>One dashboard, all agents. One approval queue. Desktop or phone.</td>
+</tr>
+<tr>
+<td>Cold starts every session</td>
+<td>Agent memory lives in workspace files: <code>PROJECT_STATE.md</code>, <code>DECISIONS.md</code>, <code>LESSONS.md</code>. <br>Plain text you can read, edit, and version-control.</td>
+</tr>
+</table>
 
 ---
 
