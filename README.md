@@ -8,11 +8,13 @@
 
 **An operating system for autonomous AI agents.**
 
-Every second an agent sits idle is a second of productivity wasted.
 
-Every second an agent acts unsupervised is a loophole for disaster.
+**Every second an agent sits idle is a second of productivity wasted.**
+
+**Every second an agent acts unsupervised is a loophole for disaster.**
 
 **Orbital manages this tradeoff — maximum agent throughput, full human oversight, zero compromise.**
+
 
 Orbital runs on your machine. You control it from your phone.
 
