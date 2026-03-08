@@ -1,0 +1,690 @@
+{
+  "providers": {
+    "openai": {
+      "display_name": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["gpt-5.2", "gpt-5-mini", "gpt-5-nano"],
+      "notes": "Flagship: gpt-5.2. Fast/cheap: gpt-5-mini, gpt-5-nano.",
+      "pricing": {
+        "gpt-5.2": { "input_per_1m": 1.75, "output_per_1m": 14.00 },
+        "gpt-5.1": { "input_per_1m": 1.25, "output_per_1m": 10.00 },
+        "gpt-5": { "input_per_1m": 1.25, "output_per_1m": 10.00 },
+        "gpt-5-mini": { "input_per_1m": 0.25, "output_per_1m": 2.00 },
+        "gpt-5-nano": { "input_per_1m": 0.05, "output_per_1m": 0.40 },
+        "gpt-4.1": { "input_per_1m": 2.00, "output_per_1m": 8.00 },
+        "gpt-4o": { "input_per_1m": 2.50, "output_per_1m": 10.00 },
+        "gpt-4o-mini": { "input_per_1m": 0.15, "output_per_1m": 0.60 },
+        "o3": { "input_per_1m": 2.00, "output_per_1m": 8.00 },
+        "o3-mini": { "input_per_1m": 1.10, "output_per_1m": 4.40 },
+        "o4-mini": { "input_per_1m": 1.10, "output_per_1m": 4.40 },
+        "o1": { "input_per_1m": 15.00, "output_per_1m": 60.00 },
+        "_default": { "input_per_1m": 2.00, "output_per_1m": 8.00 }
+      },
+      "models": {
+        "gpt-5.2": {
+          "display_name": "GPT-5.2",
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-5.1": {
+          "display_name": "GPT-5.1",
+          "tier": "flagship",
+          "context_window": 128000,
+          "max_output": 128000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-5": {
+          "display_name": "GPT-5",
+          "tier": "flagship",
+          "context_window": 128000,
+          "max_output": 128000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-5-mini": {
+          "display_name": "GPT-5 Mini",
+          "tier": "fast",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-5-nano": {
+          "display_name": "GPT-5 Nano",
+          "tier": "fast",
+          "context_window": 128000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-4.1": {
+          "display_name": "GPT-4.1",
+          "tier": "balanced",
+          "context_window": 128000,
+          "max_output": 32768,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-4o": {
+          "display_name": "GPT-4o",
+          "tier": "balanced",
+          "context_window": 128000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gpt-4o-mini": {
+          "display_name": "GPT-4o Mini",
+          "tier": "fast",
+          "context_window": 128000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "o3": {
+          "display_name": "o3",
+          "tier": "reasoning",
+          "context_window": 200000,
+          "max_output": 100000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "o3-mini": {
+          "display_name": "o3 Mini",
+          "tier": "reasoning",
+          "context_window": 200000,
+          "max_output": 100000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "o4-mini": {
+          "display_name": "o4 Mini",
+          "tier": "reasoning",
+          "context_window": 200000,
+          "max_output": 100000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "o1": {
+          "display_name": "o1",
+          "tier": "reasoning",
+          "context_window": 200000,
+          "max_output": 100000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 128000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "anthropic": {
+      "display_name": "Anthropic",
+      "base_url": "https://api.anthropic.com",
+      "supports_model_list": true,
+      "model_list_endpoint": "/v1/models",
+      "sdk": "anthropic",
+      "suggested_models": ["claude-opus-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"],
+      "notes": "Flagship: claude-opus-4-6. Balanced: claude-sonnet-4-5. Fast/cheap: claude-haiku-4-5.",
+      "pricing": {
+        "claude-opus-4-6": { "input_per_1m": 5.00, "output_per_1m": 25.00 },
+        "claude-sonnet-4-6": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "claude-sonnet-4-5": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "claude-haiku-4-5": { "input_per_1m": 1.00, "output_per_1m": 5.00 },
+        "claude-opus-4-5": { "input_per_1m": 5.00, "output_per_1m": 25.00 },
+        "claude-opus-4-1": { "input_per_1m": 15.00, "output_per_1m": 75.00 },
+        "claude-sonnet-4": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "claude-opus-4": { "input_per_1m": 15.00, "output_per_1m": 75.00 },
+        "claude-3-haiku": { "input_per_1m": 0.25, "output_per_1m": 1.25 },
+        "claude-3-5-sonnet": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "claude-3-opus": { "input_per_1m": 15.00, "output_per_1m": 75.00 },
+        "_default": { "input_per_1m": 3.00, "output_per_1m": 15.00 }
+      },
+      "models": {
+        "claude-opus-4-6": {
+          "display_name": "Claude Opus 4.6",
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-sonnet-4-6": {
+          "display_name": "Claude Sonnet 4.6",
+          "tier": "balanced",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-opus-4-5": {
+          "display_name": "Claude Opus 4.5",
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-sonnet-4-5": {
+          "display_name": "Claude Sonnet 4.5",
+          "tier": "balanced",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-haiku-4-5": {
+          "display_name": "Claude Haiku 4.5",
+          "tier": "fast",
+          "context_window": 200000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-sonnet-4": {
+          "display_name": "Claude Sonnet 4",
+          "tier": "balanced",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "claude-opus-4": {
+          "display_name": "Claude Opus 4",
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "base_url": "https://api.deepseek.com",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["deepseek-chat", "deepseek-reasoner"],
+      "notes": "deepseek-chat = V3.2 (general). deepseek-reasoner = R1 (reasoning). OpenAI-compatible. Text-only, no vision.",
+      "pricing": {
+        "deepseek-chat": { "input_per_1m": 0.28, "output_per_1m": 0.42 },
+        "deepseek-reasoner": { "input_per_1m": 0.55, "output_per_1m": 2.19 },
+        "_default": { "input_per_1m": 0.28, "output_per_1m": 0.42 }
+      },
+      "models": {
+        "deepseek-chat": {
+          "display_name": "DeepSeek V3.2",
+          "tier": "flagship",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "deepseek-reasoner": {
+          "display_name": "DeepSeek R1",
+          "tier": "reasoning",
+          "context_window": 128000,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": false, "streaming": true }
+        },
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "moonshot": {
+      "display_name": "Moonshot AI (Kimi)",
+      "base_url": "https://api.moonshot.ai/v1",
+      "china_base_url": "https://api.moonshot.cn/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["kimi-k2.5", "kimi-k2-instruct", "moonshot-v1-128k"],
+      "notes": "Kimi K2.5 is latest flagship with vision. OpenAI-compatible.",
+      "pricing": {
+        "kimi-k2.5": { "input_per_1m": 0.60, "output_per_1m": 3.00 },
+        "kimi-k2-instruct": { "input_per_1m": 0.50, "output_per_1m": 2.40 },
+        "moonshot-v1-128k": { "input_per_1m": 2.00, "output_per_1m": 5.00 },
+        "moonshot-v1-32k": { "input_per_1m": 1.00, "output_per_1m": 3.00 },
+        "moonshot-v1-8k": { "input_per_1m": 0.20, "output_per_1m": 2.00 },
+        "_default": { "input_per_1m": 1.00, "output_per_1m": 3.00 }
+      },
+      "models": {
+        "kimi-k2.5": {
+          "display_name": "Kimi K2.5",
+          "tier": "flagship",
+          "context_window": 256000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "kimi-k2-instruct": {
+          "display_name": "Kimi K2 Instruct",
+          "tier": "balanced",
+          "context_window": 131072,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "moonshot-v1-128k": {
+          "display_name": "Moonshot V1 128K",
+          "tier": "balanced",
+          "context_window": 131072,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "moonshot-v1-32k": {
+          "display_name": "Moonshot V1 32K",
+          "tier": "fast",
+          "context_window": 32768,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 131072,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "zhipu": {
+      "display_name": "Zhipu AI (GLM)",
+      "base_url": "https://api.z.ai/v1",
+      "china_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "supports_model_list": false,
+      "sdk": "openai",
+      "suggested_models": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5-air"],
+      "notes": "GLM-5 is latest flagship (744B MoE). GLM-4.7 is thinking model.",
+      "pricing": {
+        "glm-5": { "input_per_1m": 1.00, "output_per_1m": 3.20 },
+        "glm-4.7": { "input_per_1m": 1.00, "output_per_1m": 3.00 },
+        "glm-4.6": { "input_per_1m": 0.50, "output_per_1m": 1.50 },
+        "glm-4.5-air": { "input_per_1m": 0.20, "output_per_1m": 0.60 },
+        "_default": { "input_per_1m": 1.00, "output_per_1m": 3.00 }
+      },
+      "models": {
+        "glm-5": {
+          "display_name": "GLM-5",
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "glm-4.7": {
+          "display_name": "GLM-4.7",
+          "tier": "balanced",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "glm-4.6": {
+          "display_name": "GLM-4.6",
+          "tier": "balanced",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "glm-4.5-air": {
+          "display_name": "GLM-4.5 Air",
+          "tier": "fast",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "qwen": {
+      "display_name": "Alibaba Cloud (Qwen)",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "china_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "supports_model_list": false,
+      "sdk": "openai",
+      "suggested_models": ["qwen3.5-max", "qwen3-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"],
+      "notes": "Qwen 3.5 is latest flagship with native multimodal. OpenAI-compatible.",
+      "pricing": {
+        "qwen3.5-max": { "input_per_1m": 2.00, "output_per_1m": 8.00 },
+        "qwen3.5-plus": { "input_per_1m": 0.80, "output_per_1m": 3.00 },
+        "qwen3-max": { "input_per_1m": 1.00, "output_per_1m": 3.00 },
+        "qwen-plus": { "input_per_1m": 0.50, "output_per_1m": 2.00 },
+        "qwen-turbo": { "input_per_1m": 0.20, "output_per_1m": 0.60 },
+        "qwen3-coder-plus": { "input_per_1m": 0.50, "output_per_1m": 2.00 },
+        "_default": { "input_per_1m": 1.00, "output_per_1m": 3.00 }
+      },
+      "models": {
+        "qwen3.5-max": {
+          "display_name": "Qwen 3.5 Max",
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": 32768,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "qwen3-max": {
+          "display_name": "Qwen 3 Max",
+          "tier": "flagship",
+          "context_window": 131072,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "qwen3.5-plus": {
+          "display_name": "Qwen 3.5 Plus",
+          "tier": "balanced",
+          "context_window": 262144,
+          "max_output": 32768,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "qwen-plus": {
+          "display_name": "Qwen Plus",
+          "tier": "balanced",
+          "context_window": 131072,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "qwen-turbo": {
+          "display_name": "Qwen Turbo",
+          "tier": "fast",
+          "context_window": 131072,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "qwen3-coder-plus": {
+          "display_name": "Qwen 3 Coder Plus",
+          "tier": "balanced",
+          "context_window": 131072,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 131072,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "xai": {
+      "display_name": "xAI (Grok)",
+      "base_url": "https://api.x.ai/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning", "grok-code-fast-1"],
+      "notes": "Grok 4.1 Fast has 2M context. Grok 4 is flagship. OpenAI-compatible.",
+      "pricing": {
+        "grok-4": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "grok-4-1-fast-reasoning": { "input_per_1m": 0.20, "output_per_1m": 0.50 },
+        "grok-4-1-fast-non-reasoning": { "input_per_1m": 0.20, "output_per_1m": 0.50 },
+        "grok-code-fast-1": { "input_per_1m": 0.20, "output_per_1m": 1.50 },
+        "grok-3": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
+        "_default": { "input_per_1m": 3.00, "output_per_1m": 15.00 }
+      },
+      "models": {
+        "grok-4": {
+          "display_name": "Grok 4",
+          "tier": "flagship",
+          "context_window": 256000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "grok-4-1-fast-reasoning": {
+          "display_name": "Grok 4.1 Fast (Reasoning)",
+          "tier": "reasoning",
+          "context_window": 2000000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "grok-4-1-fast-non-reasoning": {
+          "display_name": "Grok 4.1 Fast (Non-Reasoning)",
+          "tier": "fast",
+          "context_window": 2000000,
+          "max_output": 16384,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "grok-code-fast-1": {
+          "display_name": "Grok Code Fast",
+          "tier": "fast",
+          "context_window": 2000000,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "grok-3": {
+          "display_name": "Grok 3",
+          "tier": "flagship",
+          "context_window": 131072,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 131072,
+          "max_output": 16384,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "google": {
+      "display_name": "Google (Gemini)",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-flash"],
+      "notes": "Gemini 3 Pro is latest flagship. 1M context. OpenAI-compatible endpoint via v1beta/openai.",
+      "pricing": {
+        "gemini-3-pro-preview": { "input_per_1m": 2.00, "output_per_1m": 12.00 },
+        "gemini-3-flash-preview": { "input_per_1m": 0.50, "output_per_1m": 3.00 },
+        "gemini-2.5-flash": { "input_per_1m": 0.30, "output_per_1m": 2.50 },
+        "gemini-2.5-pro": { "input_per_1m": 1.25, "output_per_1m": 10.00 },
+        "gemini-2.0-flash": { "input_per_1m": 0.10, "output_per_1m": 0.40 },
+        "_default": { "input_per_1m": 1.00, "output_per_1m": 5.00 }
+      },
+      "models": {
+        "gemini-3-pro-preview": {
+          "display_name": "Gemini 3 Pro",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gemini-3-flash-preview": {
+          "display_name": "Gemini 3 Flash",
+          "tier": "fast",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gemini-2.5-flash": {
+          "display_name": "Gemini 2.5 Flash",
+          "tier": "fast",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gemini-2.5-pro": {
+          "display_name": "Gemini 2.5 Pro",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "gemini-2.0-flash": {
+          "display_name": "Gemini 2.0 Flash",
+          "tier": "fast",
+          "context_window": 1000000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 1000000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "mistral": {
+      "display_name": "Mistral AI",
+      "base_url": "https://api.mistral.ai/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["mistral-large-latest", "magistral-medium-latest", "mistral-small-latest", "devstral-small-latest"],
+      "notes": "Mistral Large 3 = flagship. Magistral = reasoning. Devstral/Codestral = code. OpenAI-compatible.",
+      "pricing": {
+        "mistral-large-latest": { "input_per_1m": 0.50, "output_per_1m": 1.50 },
+        "mistral-medium-latest": { "input_per_1m": 0.40, "output_per_1m": 2.00 },
+        "magistral-medium-latest": { "input_per_1m": 0.40, "output_per_1m": 2.00 },
+        "magistral-small-latest": { "input_per_1m": 0.10, "output_per_1m": 0.30 },
+        "mistral-small-latest": { "input_per_1m": 0.06, "output_per_1m": 0.18 },
+        "codestral-latest": { "input_per_1m": 0.30, "output_per_1m": 0.90 },
+        "devstral-small-latest": { "input_per_1m": 0.06, "output_per_1m": 0.18 },
+        "_default": { "input_per_1m": 0.50, "output_per_1m": 2.00 }
+      },
+      "models": {
+        "mistral-large-latest": {
+          "display_name": "Mistral Large 3",
+          "tier": "flagship",
+          "context_window": 256000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "mistral-medium-latest": {
+          "display_name": "Mistral Medium 3",
+          "tier": "balanced",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "magistral-medium-latest": {
+          "display_name": "Magistral Medium",
+          "tier": "reasoning",
+          "context_window": 128000,
+          "max_output": 40000,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "magistral-small-latest": {
+          "display_name": "Magistral Small",
+          "tier": "reasoning",
+          "context_window": 128000,
+          "max_output": 40000,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "mistral-small-latest": {
+          "display_name": "Mistral Small",
+          "tier": "fast",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "codestral-latest": {
+          "display_name": "Codestral",
+          "tier": "balanced",
+          "context_window": 256000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "devstral-small-latest": {
+          "display_name": "Devstral Small",
+          "tier": "fast",
+          "context_window": 256000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        },
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "groq": {
+      "display_name": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"],
+      "notes": "Ultra-fast inference for open-source models. OpenAI-compatible.",
+      "pricing": {
+        "llama-4-scout-17b-16e-instruct": { "input_per_1m": 0.11, "output_per_1m": 0.34 },
+        "deepseek-r1-distill-llama-70b": { "input_per_1m": 0.75, "output_per_1m": 0.99 },
+        "_default": { "input_per_1m": 0.50, "output_per_1m": 1.00 }
+      },
+      "models": {
+        "llama-4-scout-17b-16e-instruct": {
+          "display_name": "Llama 4 Scout",
+          "tier": "fast",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": true, "tool_use": true, "streaming": true }
+        },
+        "deepseek-r1-distill-llama-70b": {
+          "display_name": "DeepSeek R1 Distill 70B",
+          "tier": "reasoning",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": false, "streaming": true }
+        },
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "together": {
+      "display_name": "Together AI",
+      "base_url": "https://api.together.xyz/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": ["meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "moonshotai/Kimi-K2.5"],
+      "notes": "Hosts many open-source models. OpenAI-compatible.",
+      "pricing": {
+        "_default": { "input_per_1m": 0.50, "output_per_1m": 1.00 }
+      },
+      "models": {
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "openrouter": {
+      "display_name": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": [],
+      "notes": "Aggregator for 200+ models from all providers. OpenAI-compatible. Good fallback for any model.",
+      "pricing": {
+        "_default": { "input_per_1m": 2.00, "output_per_1m": 8.00 }
+      },
+      "models": {
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    },
+    "custom": {
+      "display_name": "Custom / Self-Hosted",
+      "base_url": null,
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": [],
+      "notes": "User provides base_url manually. Works with any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)",
+      "pricing": {
+        "_default": { "input_per_1m": 3.00, "output_per_1m": 15.00 }
+      },
+      "models": {
+        "_default": {
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": { "vision": false, "tool_use": true, "streaming": true }
+        }
+      }
+    }
+  },
+  "defaults": {
+    "unknown_model": {
+      "context_window": 128000,
+      "max_output": 8192,
+      "capabilities": {
+        "vision": false,
+        "tool_use": true,
+        "streaming": true
+      }
+    }
+  }
+}

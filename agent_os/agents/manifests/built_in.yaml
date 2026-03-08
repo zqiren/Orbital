@@ -1,0 +1,26 @@
+manifest_version: "1"
+name: "Orbital Assistant"
+slug: "built-in"
+description: "Built-in management agent powered by your LLM"
+author: "agent-os"
+version: "1.0.0"
+
+runtime:
+  adapter: built_in
+
+capabilities:
+  skills:
+    - file_management
+    - research
+    - writing
+    - analysis
+    - task_planning
+  input_types: [text, files]
+  output_types: [text, files]
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

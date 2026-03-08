@@ -1,0 +1,18 @@
+name: "Management Agent"
+description: "Built-in management agent that supervises workspace projects, coordinates sub-agents, and handles user interactions"
+author: "AgentOS"
+version: "1.0.0"
+agent_type: "built-in"
+permissions:
+  browser: "optional"
+  shell: "required"
+  network_domains:
+    - "api.anthropic.com"
+    - "api.openai.com"
+    - "generativelanguage.googleapis.com"
+    - "api.moonshot.cn"
+estimated_cost_per_run: "$0.05-0.50"
+schedule_suggestion: null
+autonomy_recommended: "hands_off"
+secrets_required:
+  - "LLM_API_KEY"

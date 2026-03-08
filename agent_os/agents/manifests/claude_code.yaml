@@ -1,0 +1,82 @@
+manifest_version: "1"
+name: "Claude Code"
+slug: "claude-code"
+description: "Anthropic's autonomous coding agent"
+author: "anthropic"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "claude"
+  transport: sdk
+  mode: pipe
+  args: ["--output-format", "stream-json", "--verbose"]
+  prompt_flag: "-p"
+  resume_flag: "--resume"
+  session_id_pattern: '"session_id":\s*"([^"]+)"'
+  approval_patterns:
+    - regex: "Do you want to proceed\\?"
+      type: confirm
+    - regex: "Allow this action\\?"
+      type: confirm
+  activity_patterns:
+    - regex: "Reading file: (.+)"
+      label: "Read {1}"
+    - regex: "Writing file: (.+)"
+      label: "Write {1}"
+    - regex: "Running: (.+)"
+      label: "Shell: {1}"
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @anthropic-ai/claude-code"
+  check_command: "claude --version"
+  credentials:
+    - key: "claude_auth"
+      label: "Claude Account"
+      type: oauth_cli
+      required: true
+      check_command: "claude auth status --json"
+      check_field: "loggedIn"
+      check_value: "true"
+      setup_command: "claude login"
+      setup_label: "Log in to Claude"
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\claude.cmd"
+      - "%PROGRAMFILES%\\nodejs\\claude.cmd"
+    macos:
+      - "/usr/local/bin/claude"
+      - "$HOME/.npm-global/bin/claude"
+    linux:
+      - "/usr/local/bin/claude"
+      - "$HOME/.npm-global/bin/claude"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, refactoring"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.anthropic.com"
+    - "sentry.io"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Agent OS runtime
+.agent-os/
+.agent-os-data/
+.agent-os-test-data/
+device.json
+*.log
+
+# Build outputs
+installer/Output/
+Orbital-portable.zip
+
+# Test artifacts
+evidence/
+MagicMock/
+_test_workspace/
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Claude Code
+.claude/

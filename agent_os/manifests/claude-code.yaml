@@ -1,0 +1,19 @@
+name: "Claude Code"
+description: "Anthropic's CLI coding agent for software engineering tasks"
+author: "Anthropic"
+version: "1.0.0"
+agent_type: "cli"
+permissions:
+  browser: "none"
+  shell: "required"
+  network_domains:
+    - "api.anthropic.com"
+    - "pypi.org"
+    - "registry.npmjs.org"
+    - "github.com"
+    - "raw.githubusercontent.com"
+estimated_cost_per_run: "$0.10-2.00"
+schedule_suggestion: null
+autonomy_recommended: "check_in"
+secrets_required:
+  - "ANTHROPIC_API_KEY"

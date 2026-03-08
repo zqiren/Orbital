@@ -1,0 +1,438 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Workspace file management and session-end routine.
+
+Manages the 6 workspace files in {workspace}/.agent-os/:
+  AGENT.md, PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md, LESSONS.md, CONTEXT.md
+
+Provides:
+  - WorkspaceFileManager: read/write/append workspace files, build cold resume context
+  - run_session_end_routine: generate and write workspace files at session end via LLM
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import shutil
+
+logger = logging.getLogger(__name__)
+
+WORKSPACE_DIR = ".agent-os"
+
+FILE_NAMES: dict[str, str] = {
+    "agent": "AGENT.md",
+    "state": "PROJECT_STATE.md",
+    "decisions": "DECISIONS.md",
+    "session_log": "SESSION_LOG.md",
+    "lessons": "LESSONS.md",
+    "context": "CONTEXT.md",
+}
+
+# Order for cold resume context assembly
+_RESUME_ORDER = ["agent", "state", "decisions", "lessons", "context", "session_log"]
+
+# Section headers for cold resume context
+_SECTION_HEADERS: dict[str, str] = {
+    "agent": "Agent Directive",
+    "state": "Project State",
+    "decisions": "Decisions",
+    "lessons": "Lessons Learned",
+    "context": "External Context",
+    "session_log": "Session Log (Recent)",
+}
+
+# Max number of sessions to include from SESSION_LOG
+_SESSION_LOG_MAX_SESSIONS = 3
+
+
+class WorkspaceFileManager:
+    """Reads and writes the 6 workspace files."""
+
+    def __init__(self, workspace: str, project_id: str = "",
+                 project_dir_name: str = ""):
+        self._workspace = workspace
+        # Prefer project_dir_name (slugified); fall back to raw project_id
+        ns = project_dir_name or project_id
+        self._project_ns = ns
+        if ns:
+            self._dir = os.path.join(workspace, WORKSPACE_DIR, ns)
+        else:
+            self._dir = os.path.join(workspace, WORKSPACE_DIR)
+        # AGENT.md is always at workspace level (shared across projects)
+        self._agent_file = os.path.join(workspace, WORKSPACE_DIR, "AGENT.md")
+
+    @property
+    def workspace(self) -> str:
+        return self._workspace
+
+    @property
+    def dir(self) -> str:
+        return self._dir
+
+    def ensure_dir(self) -> None:
+        """Create .agent-os/ (and project subdirectory if namespaced)."""
+        os.makedirs(self._dir, exist_ok=True)
+        # Also ensure the base .agent-os/ dir exists for shared AGENT.md
+        if self._project_ns:
+            os.makedirs(os.path.join(self._workspace, WORKSPACE_DIR), exist_ok=True)
+            self._migrate_flat_to_namespaced()
+
+    def _migrate_flat_to_namespaced(self) -> None:
+        """One-time migration of flat .agent-os/ files into the project namespace.
+
+        Runs only once per project directory.  Writes a ``.migrated`` marker
+        to skip on subsequent starts.  Moves (not copies) flat files so stale
+        data doesn't linger.  The first project to start in a shared workspace
+        claims the flat files; subsequent projects start fresh.
+
+        TODO: Remove this method after one release cycle.
+        """
+        marker = os.path.join(self._dir, ".migrated")
+        if os.path.exists(marker):
+            return
+
+        base = os.path.join(self._workspace, WORKSPACE_DIR)
+
+        _migrate_items = [
+            ("instructions", True),       # directory
+            ("shell_output", True),        # directory
+            ("browser-screenshots", True), # directory
+            ("browser-pdfs", True),        # directory
+            ("approval_history.jsonl", False),  # file
+        ]
+        for name, is_dir in _migrate_items:
+            flat = os.path.join(base, name)
+            ns = os.path.join(self._dir, name)
+            if is_dir:
+                if os.path.isdir(flat) and not os.path.isdir(ns):
+                    shutil.move(flat, ns)
+            else:
+                if os.path.isfile(flat) and not os.path.isfile(ns):
+                    shutil.move(flat, ns)
+
+        # Write marker
+        try:
+            with open(marker, "w") as f:
+                f.write("migrated\n")
+        except OSError:
+            pass
+
+        logger.info("Migrated flat .agent-os/ files into %s/ namespace", self._project_ns)
+
+    def _file_path(self, file_key: str) -> str:
+        """Return the full path for a workspace file key.
+
+        AGENT.md is always at workspace/.agent-os/AGENT.md (shared).
+        All other files use the project-namespaced directory.
+        """
+        if file_key == "agent":
+            return self._agent_file
+        return os.path.join(self._dir, FILE_NAMES[file_key])
+
+    def read(self, file_key: str) -> str | None:
+        """Read a workspace file. Returns None if file doesn't exist.
+
+        file_key is one of: agent, state, decisions, session_log, lessons, context
+        """
+        if file_key not in FILE_NAMES:
+            raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
+        filepath = self._file_path(file_key)
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def write(self, file_key: str, content: str) -> None:
+        """Write (overwrite) a workspace file. Creates .agent-os/ if needed."""
+        if file_key not in FILE_NAMES:
+            raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
+        self.ensure_dir()
+        filepath = self._file_path(file_key)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def append(self, file_key: str, content: str) -> None:
+        """Append to a workspace file. Creates file if needed."""
+        if file_key not in FILE_NAMES:
+            raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
+        self.ensure_dir()
+        filepath = self._file_path(file_key)
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(content)
+
+    def read_all(self) -> dict[str, str | None]:
+        """Read all 6 files. Returns {key: content_or_None}."""
+        return {key: self.read(key) for key in FILE_NAMES}
+
+    def exists(self, file_key: str) -> bool:
+        """Check if a workspace file exists."""
+        if file_key not in FILE_NAMES:
+            raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
+        filepath = self._file_path(file_key)
+        return os.path.isfile(filepath)
+
+    def build_cold_resume_context(self) -> str:
+        """Assemble cold resume context from available files.
+
+        Read order (skip missing files):
+        1. AGENT.md      - "what am I supposed to do"
+        2. PROJECT_STATE  - "where did I leave off"
+        3. DECISIONS      - "what's already been decided"
+        4. LESSONS        - "what should I avoid"
+        5. CONTEXT        - "who/what am I working with"
+        6. SESSION_LOG    - "what's the history" (last 3 sessions only)
+
+        Returns assembled markdown string with section headers.
+        """
+        sections: list[str] = []
+
+        for key in _RESUME_ORDER:
+            content = self.read(key)
+            if content is None:
+                continue
+
+            # For session_log, truncate to last N sessions
+            if key == "session_log":
+                content = _truncate_session_log(content, _SESSION_LOG_MAX_SESSIONS)
+
+            header = _SECTION_HEADERS[key]
+            sections.append(f"## {header}\n\n{content.strip()}")
+
+        return "\n\n---\n\n".join(sections)
+
+    def build_session_end_prompt(self, session_summary: dict) -> str:
+        """Build the LLM prompt for session-end file generation.
+
+        session_summary contains message_count, tool_calls_count, files_modified,
+        recent_messages, etc.
+
+        Returns a prompt string that asks the LLM to produce JSON with:
+        project_state, decisions, session_log_entry, lessons, context.
+        """
+        # Read existing files for dedup context
+        existing_state = self.read("state") or "(no existing state)"
+        existing_decisions = self.read("decisions") or "(no existing decisions)"
+        existing_lessons = self.read("lessons") or "(no existing lessons)"
+        existing_context = self.read("context") or "(no existing context)"
+
+        # Format recent messages
+        recent_lines: list[str] = []
+        for msg in session_summary.get("recent_messages", []):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            recent_lines.append(f"[{role}] {content}")
+        recent_formatted = "\n".join(recent_lines) if recent_lines else "(no messages)"
+
+        files_modified = ", ".join(session_summary.get("files_modified", [])) or "(none)"
+        message_count = session_summary.get("message_count", 0)
+        tool_calls_count = session_summary.get("tool_calls_count", 0)
+
+        prompt = f"""You are maintaining workspace memory files for an AI agent project.
+
+Given the session information below, produce a JSON object with these fields:
+
+1. "project_state" (REQUIRED): A complete snapshot of current project status.
+   Include: what was accomplished, what's in progress, blockers, next steps.
+   This REPLACES the previous state file entirely.
+
+2. "decisions" (string, empty if none): Any significant technical or strategic
+   decisions made THIS SESSION. Include rationale and rejected alternatives.
+   Format each as: ## date: title\\n**Chose:** ...\\n**Reason:** ...\\n**Rejected:** ...
+
+3. "session_log_entry" (REQUIRED): A log entry for this session.
+   Format: ## Session {{id}} -- {{date}} {{start}}--{{end}}\\n- Completed: ...\\n- Attempted: ...
+
+4. "lessons" (string): The COMPLETE updated lessons file. This REPLACES
+   the existing LESSONS.md entirely (same as project_state).
+   - Include genuinely new learnings from THIS session
+   - Carry forward still-relevant lessons from the existing file
+   - Drop lessons that are now obsolete (e.g., the underlying issue was resolved)
+   - Merge duplicates or closely related lessons into single entries
+   - Cap at 20 entries. Prioritize recent and frequently relevant.
+   - Return empty string "" ONLY if there are truly zero lessons (existing or new)
+
+5. "context" (string, empty if none): Any NEW external entities, people, services,
+   or environment details discovered THIS SESSION. Only include genuinely new info.
+
+IMPORTANT:
+- For decisions, lessons, and context: return empty string "" if nothing new.
+  Do NOT fabricate entries. Only include what actually happened.
+- For project_state: always produce a complete snapshot even if not much changed.
+- Respond with ONLY valid JSON. No markdown fences. No explanation.
+
+--- EXISTING FILES (for context, DO NOT duplicate existing content) ---
+PROJECT_STATE.md:
+{existing_state}
+
+DECISIONS.md:
+{existing_decisions}
+
+LESSONS.md:
+{existing_lessons}
+
+CONTEXT.md:
+{existing_context}
+
+--- THIS SESSION ({message_count} messages, {tool_calls_count} tool calls) ---
+Files modified: {files_modified}
+Recent conversation:
+{recent_formatted}"""
+
+        return prompt
+
+
+def _truncate_session_log(content: str, max_sessions: int) -> str:
+    """Extract only the last N sessions from a SESSION_LOG.md content.
+
+    Sessions are delimited by '## Session' headers.
+    """
+    # Split on session headers, keeping the delimiter
+    parts = re.split(r'(?=^## Session )', content, flags=re.MULTILINE)
+
+    # Filter out any preamble (parts before the first session header)
+    session_parts = [p for p in parts if p.strip().startswith("## Session")]
+
+    if not session_parts:
+        return content
+
+    # Take last N sessions
+    recent = session_parts[-max_sessions:]
+    return "\n".join(p.strip() for p in recent)
+
+
+async def run_session_end_routine(
+    session,
+    provider,
+    workspace_files: WorkspaceFileManager,
+    utility_provider=None,
+) -> None:
+    """Generate and write workspace files at session end.
+
+    Uses utility_provider (cheaper model) if available.
+    This runs AFTER the agent loop exits but BEFORE session archival.
+    """
+    # 1. Gather session summary
+    summary = _build_session_summary(session)
+
+    # 2. Build prompt
+    prompt = workspace_files.build_session_end_prompt(summary)
+
+    # 3. Call LLM (utility model preferred)
+    llm = utility_provider if utility_provider is not None else provider
+    messages = [
+        {"role": "system", "content": "You maintain workspace memory files for an AI agent. Respond with ONLY valid JSON."},
+        {"role": "user", "content": prompt},
+    ]
+    response = await llm.complete(messages)
+
+    # 4. Parse JSON response
+    result = _parse_session_end_response(response.text)
+    if result is None:
+        logger.warning("Session-end routine: failed to parse LLM response, skipping file updates")
+        return
+
+    # 5. Write files
+    # PROJECT_STATE: full overwrite (always)
+    if result.get("project_state"):
+        workspace_files.write("state", result["project_state"])
+
+    # DECISIONS: append only if new decisions
+    if result.get("decisions", "").strip():
+        workspace_files.append("decisions", "\n" + result["decisions"])
+
+    # SESSION_LOG: always append
+    if result.get("session_log_entry"):
+        workspace_files.append("session_log", "\n" + result["session_log_entry"])
+
+    # LESSONS: full overwrite (consolidation replaces entire file)
+    if result.get("lessons", "").strip():
+        workspace_files.write("lessons", result["lessons"])
+
+    # CONTEXT: append only if new context
+    if result.get("context", "").strip():
+        workspace_files.append("context", "\n" + result["context"])
+
+
+def _build_session_summary(session) -> dict:
+    """Extract summary stats from session for the LLM prompt."""
+    messages = session.get_messages()
+
+    tool_calls = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+    # Extract modified files from write/edit tool results
+    files_modified: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                func = tc.get("function", tc)
+                name = func.get("name", "")
+                if name in ("write", "edit"):
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, ValueError):
+                            args = {}
+                    path = args.get("path", args.get("file_path", ""))
+                    if path:
+                        files_modified.add(path)
+
+    # Recent messages for context (last 30, but cap total chars)
+    recent = messages[-30:] if len(messages) > 30 else messages
+    recent_trimmed: list[dict] = []
+    total_chars = 0
+    for msg in reversed(recent):
+        content = str(msg.get("content", ""))[:500]
+        total_chars += len(content)
+        if total_chars > 10000:
+            break
+        recent_trimmed.insert(0, {
+            "role": msg.get("role"),
+            "content": content,
+            "source": msg.get("source", ""),
+        })
+
+    return {
+        "session_id": getattr(session, "session_id", "unknown"),
+        "message_count": len(messages),
+        "tool_calls_count": sum(len(m.get("tool_calls", [])) for m in tool_calls),
+        "files_modified": sorted(files_modified),
+        "recent_messages": recent_trimmed,
+    }
+
+
+def _parse_session_end_response(text: str | None) -> dict | None:
+    """Parse JSON from LLM response, handling markdown fences and whitespace.
+
+    Returns None on failure.
+    """
+    if not text:
+        return None
+
+    # Strip whitespace
+    cleaned = text.strip()
+
+    # Remove markdown code fences if present
+    if cleaned.startswith("```"):
+        # Remove opening fence (```json or just ```)
+        first_newline = cleaned.index("\n") if "\n" in cleaned else len(cleaned)
+        cleaned = cleaned[first_newline + 1:]
+        # Remove closing fence
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+    try:
+        result = json.loads(cleaned)
+        if isinstance(result, dict):
+            return result
+        logger.warning("Session-end LLM response was not a JSON object: %s", type(result).__name__)
+        return None
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("Session-end LLM response JSON parse failed: %s", e)
+        return None
