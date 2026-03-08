@@ -6,8 +6,6 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
 
-**An operating system for autonomous AI agents.**
-
 
 **Every second an agent sits idle is a second of productivity wasted.**
 
