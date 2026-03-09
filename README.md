@@ -113,33 +113,32 @@ Orbital treats AI agents as processes that need an **operating system** — proc
 
 ## Installation
 
-### Windows (Recommended)
+### Windows
 
-1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.1.0/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.1.0)
+1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.1.1/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.1.1)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
-The installer bundles everything — Python runtime, backend daemon, and frontend — into a single executable. No Python or Node.js installation required.
-
-#### Windows SmartScreen Warning
+<details>
+<summary>Windows SmartScreen Warning</summary>
 
 Orbital is not yet code-signed, so Windows will show a security warning:
 
 > **Windows protected your PC** — Microsoft Defender SmartScreen prevented an unrecognized app from starting.
 
 Click **"More info"** then **"Run anyway"**. Code signing will be added in a future release.
-
-#### Antivirus False Positives
-
-Some antivirus software may flag PyInstaller-bundled applications. This is a [known issue](https://github.com/pyinstaller/pyinstaller/issues/5854) affecting all PyInstaller projects. Add an exception for the Orbital install directory if flagged.
+</details>
 
 ### macOS
 
-1. Download `Orbital-1.0.0-macOS.dmg` from [Releases](../../releases)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.1.1/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.1.1)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
-#### macOS Gatekeeper Warning
+Requires macOS 13 (Ventura) or later. Apple Silicon and Intel supported.
+
+<details>
+<summary>macOS Gatekeeper Warning</summary>
 
 Orbital is not yet code-signed, so macOS will block it on first launch:
 
@@ -151,10 +150,7 @@ To proceed:
 3. Click **"Open Anyway"**
 
 This is only needed once. Code signing will be added in a future release.
-
-#### Supported Versions
-
-macOS 13 (Ventura) or later. Apple Silicon and Intel Macs both supported.
+</details>
 
 ### From Source
 
@@ -244,7 +240,7 @@ Orbital prevents system sleep while agents are actively working (via OS-level sl
 
 **Key design decisions:**
 - **Target user**: Non-technical consumers — no Docker, terminal, or Python knowledge required
-- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt planned, Linux bubblewrap planned)
+- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
 - **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
 - **Single daemon**: PID file enforcement prevents multiple instances
 
@@ -584,7 +580,7 @@ curl http://localhost:8000/api/v2/projects
 - **Webhook triggers** — HTTP endpoint that fires agent tasks on incoming webhooks
 - **Pipeline triggers** — Chain project outputs as inputs to other projects
 - **Network isolation** — Per-project domain allowlists enforced at OS level
-- **macOS / Linux sandboxing** — Seatbelt and bubblewrap enforcement
+- **Linux sandboxing** — bubblewrap enforcement
 - **Code signing** — Eliminate SmartScreen warnings on Windows
 - **Auto-resume on daemon restart** — Restore in-progress sessions
 

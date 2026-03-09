@@ -50,3 +50,9 @@ htmlcov/
 
 # Claude Code
 .claude/
+
+# Internal planning documents
+TASK-*.md
+REPORT-*.md
+DIAGNOSIS-*.md
+ACTIVE-*.md
