@@ -42,6 +42,7 @@ class MacOSPlatformProvider(PlatformProvider):
         self._portal_paths: dict[str, str] = {}
         self._on_network_blocked = on_network_blocked
         self._caffeinate_proc: subprocess.Popen | None = None
+        self._app_nap_activity = None
         self._workspace_base = str(
             Path.home() / "Library" / "Application Support" / "Orbital" / "workspace"
         )
@@ -58,6 +59,7 @@ class MacOSPlatformProvider(PlatformProvider):
                     error="sandbox-exec not found — expected at /usr/bin/sandbox-exec",
                 )
             os.makedirs(self._workspace_base, exist_ok=True)
+            self._disable_app_nap()
             return SetupResult(success=True)
         except Exception as exc:
             logger.error("setup() failed: %s", exc)
@@ -65,6 +67,8 @@ class MacOSPlatformProvider(PlatformProvider):
 
     async def teardown(self) -> SetupResult:
         try:
+            self._enable_app_nap()
+
             # Stop all proxies
             for project_id, proxy in list(self._proxies.items()):
                 try:
@@ -97,6 +101,56 @@ class MacOSPlatformProvider(PlatformProvider):
         except Exception as exc:
             logger.error("teardown() failed: %s", exc)
             return SetupResult(success=False, error=str(exc))
+
+    # ------------------------------------------------------------------
+    # App Nap prevention
+    # ------------------------------------------------------------------
+
+    def _disable_app_nap(self):
+        """Prevent macOS App Nap from throttling the daemon.
+
+        App Nap aggressively throttles apps with no visible windows:
+        timers deferred, network I/O deprioritized, CPU priority reduced.
+        This uses Apple's NSProcessInfo API to declare latency-critical work.
+        """
+        if self._app_nap_activity is not None:
+            return  # Already disabled
+
+        try:
+            from AppKit import NSProcessInfo
+
+            # NSActivityUserInitiatedAllowingIdleSystemSleep = 0x00FFFFFF
+            # Tells macOS this process is doing real work — do not throttle.
+            self._app_nap_activity = (
+                NSProcessInfo.processInfo()
+                .beginActivityWithOptions_reason_(
+                    0x00FFFFFF,
+                    "Orbital daemon: maintaining agent connections and background tasks",
+                )
+            )
+            logger.info("macOS App Nap disabled")
+        except ImportError:
+            logger.warning("AppKit not available — cannot disable App Nap")
+        except Exception as e:
+            logger.warning("Failed to disable App Nap: %s", e)
+
+    def _enable_app_nap(self):
+        """Re-enable App Nap (called during teardown)."""
+        if self._app_nap_activity is None:
+            return
+
+        try:
+            from AppKit import NSProcessInfo
+
+            NSProcessInfo.processInfo().endActivity_(self._app_nap_activity)
+            self._app_nap_activity = None
+            logger.info("macOS App Nap re-enabled")
+        except Exception as e:
+            logger.warning("Failed to re-enable App Nap: %s", e)
+
+    # ------------------------------------------------------------------
+    # Capabilities
+    # ------------------------------------------------------------------
 
     def is_setup_complete(self) -> bool:
         return shutil.which("sandbox-exec") is not None

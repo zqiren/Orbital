@@ -68,6 +68,28 @@ def resolve_spa_dir() -> str:
     return os.path.abspath(spa)
 
 
+def _disable_app_nap():
+    """Disable App Nap at daemon startup on macOS (defense-in-depth).
+
+    The primary assertion lives in MacOSPlatformProvider.setup(), but
+    the desktop app may start serving before the provider is initialized.
+    Multiple assertions are safe — macOS tracks them independently.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSProcessInfo
+
+        activity = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
+            0x00FFFFFF,  # NSActivityUserInitiatedAllowingIdleSystemSleep
+            "Orbital daemon: maintaining agent connections and background tasks",
+        )
+        # Store globally to prevent garbage collection
+        _disable_app_nap._activity = activity
+    except Exception:
+        pass
+
+
 def start_daemon(port: int):
     os.environ["AGENT_OS_SPA_DIR"] = resolve_spa_dir()
     os.environ["AGENT_OS_PORT"] = str(port)
@@ -331,6 +353,7 @@ def main():
 
     PORT = 8000
     run_migrations()
+    _disable_app_nap()
 
     if is_already_running(PORT):
         open_window(PORT)
