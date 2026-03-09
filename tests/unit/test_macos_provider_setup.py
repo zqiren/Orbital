@@ -13,10 +13,10 @@ from agent_os.platform.macos.provider import MacOSPlatformProvider
 from agent_os.platform.types import PlatformCapabilities, SetupResult
 
 
-@pytest.mark.asyncio
 class TestMacOSProviderSetup:
     """Tests for setup() and is_setup_complete()."""
 
+    @pytest.mark.asyncio
     @patch("agent_os.platform.macos.provider.shutil.which", return_value="/usr/bin/sandbox-exec")
     async def test_setup_success_when_sandbox_exec_exists(self, mock_which):
         """Mock shutil.which("sandbox-exec") returns path -> SetupResult(success=True)."""
@@ -25,6 +25,7 @@ class TestMacOSProviderSetup:
         assert isinstance(result, SetupResult)
         assert result.success is True
 
+    @pytest.mark.asyncio
     @patch("agent_os.platform.macos.provider.shutil.which", return_value=None)
     async def test_setup_fails_when_sandbox_exec_missing(self, mock_which):
         """Mock shutil.which -> None -> SetupResult(success=False)."""
@@ -33,6 +34,7 @@ class TestMacOSProviderSetup:
         assert isinstance(result, SetupResult)
         assert result.success is False
 
+    @pytest.mark.asyncio
     @patch("agent_os.platform.macos.provider.shutil.which", return_value="/usr/bin/sandbox-exec")
     async def test_capabilities_platform_macos(self, mock_which):
         """get_capabilities() returns platform='macos', isolation_method='seatbelt'."""
@@ -42,6 +44,7 @@ class TestMacOSProviderSetup:
         assert caps.platform == "macos"
         assert caps.isolation_method == "seatbelt"
 
+    @pytest.mark.asyncio
     @patch("agent_os.platform.macos.provider.shutil.which", return_value=None)
     async def test_capabilities_setup_incomplete(self, mock_which):
         """When sandbox-exec missing -> setup_complete=False, setup_issues non-empty."""
@@ -51,6 +54,7 @@ class TestMacOSProviderSetup:
         assert len(caps.setup_issues) > 0
         assert any("sandbox-exec" in issue for issue in caps.setup_issues)
 
+    @pytest.mark.asyncio
     async def test_teardown_stops_all_proxies_and_processes(self):
         """Mock proxies/processes -> teardown calls stop."""
         provider = MacOSPlatformProvider()
