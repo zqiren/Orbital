@@ -10,11 +10,13 @@ import socket
 
 # PyInstaller windowed mode (console=False) sets sys.stdout/stderr to None.
 # Uvicorn's log formatter calls sys.stderr.isatty() on init and crashes.
-# Redirect to devnull before anything touches logging.
+# Redirect to a log file so errors are visible for debugging.
 if getattr(sys, "frozen", False) and sys.stderr is None:
-    _devnull = open(os.devnull, "w")
-    sys.stdout = _devnull
-    sys.stderr = _devnull
+    _log_dir = os.path.join(os.path.expanduser("~"), "Library", "Logs", "Orbital")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_file = open(os.path.join(_log_dir, "orbital-stderr.log"), "w")
+    sys.stdout = _log_file
+    sys.stderr = _log_file
 
 # Set AppUserModelID so Windows taskbar shows the Orbital icon, not Python's
 if sys.platform == "win32":
@@ -44,9 +46,23 @@ def is_already_running(port: int = 8000) -> bool:
         return False
 
 
+def _frozen_base_dir() -> str:
+    """Return the base directory for bundled resources.
+
+    On macOS .app bundles the executable lives in Contents/MacOS/ but
+    manually-copied resources (web/, assets/) live in Contents/Resources/.
+    On Windows the resources sit alongside the executable.
+    """
+    exe_dir = os.path.dirname(sys.executable)
+    resources_dir = os.path.join(os.path.dirname(exe_dir), "Resources")
+    if os.path.isdir(resources_dir):
+        return resources_dir
+    return exe_dir
+
+
 def resolve_spa_dir() -> str:
     if getattr(sys, "frozen", False):
-        spa = os.path.join(os.path.dirname(sys.executable), "web")
+        spa = os.path.join(_frozen_base_dir(), "web")
     else:
         spa = os.path.join(os.path.dirname(__file__), "..", "..", "web", "dist")
     return os.path.abspath(spa)
@@ -83,9 +99,15 @@ def wait_for_daemon(port: int, timeout: int = 15) -> bool:
 
 def resolve_icon_path() -> str:
     if getattr(sys, "frozen", False):
-        icon = os.path.join(os.path.dirname(sys.executable), "assets", "icon.ico")
+        base = _frozen_base_dir()
+        # Use .png on macOS (.ico is Windows-only)
+        if sys.platform == "darwin":
+            icon = os.path.join(base, "assets", "icon.png")
+        else:
+            icon = os.path.join(base, "assets", "icon.ico")
     else:
-        icon = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "icon.ico")
+        ext = "icon.png" if sys.platform == "darwin" else "icon.ico"
+        icon = os.path.join(os.path.dirname(__file__), "..", "..", "assets", ext)
     return os.path.abspath(icon)
 
 
@@ -131,6 +153,48 @@ def open_window(port: int):
     icon_thread = threading.Thread(target=_set_window_icon, daemon=True)
     icon_thread.start()
 
+    def _activate_macos():
+        """Force window to foreground on macOS Sequoia.
+
+        pywebview uses the deprecated activateIgnoringOtherApps: API which
+        macOS 14+ silently ignores.  This callback fires after the run loop
+        starts and uses the modern activateWithOptions: API instead.
+        """
+        if sys.platform != "darwin":
+            return
+        import time
+        time.sleep(0.5)  # let the NSApp run loop settle
+        try:
+            import AppKit
+            app = AppKit.NSRunningApplication.currentApplication()
+            app.activateWithOptions_(AppKit.NSApplicationActivateIgnoringOtherApps)
+        except Exception:
+            pass
+
+    def _on_closing():
+        """Intercept window close on macOS — minimize to Dock instead.
+
+        Standard macOS behavior: red X hides the window, app stays in Dock
+        with a running indicator dot.  Cmd+Q and Dock Quit go through
+        applicationShouldTerminate_ which also fires this event — detect
+        that case via the call stack and allow the quit to proceed.
+        """
+        if sys.platform != "darwin":
+            return True  # Allow close on other platforms
+        # During app termination (Cmd+Q, Dock→Quit), the call stack
+        # includes applicationShouldTerminate_.  Allow the quit.
+        frame = sys._getframe()
+        while frame is not None:
+            if frame.f_code.co_name == "applicationShouldTerminate_":
+                return True
+            frame = frame.f_back
+        # Red X close button — minimize to Dock instead of closing
+        try:
+            window.native.miniaturize_(window.native)
+        except Exception:
+            pass
+        return False  # Prevent actual close — window is minimized
+
     window = webview.create_window(
         title="Orbital",
         url=f"http://127.0.0.1:{port}",
@@ -140,7 +204,8 @@ def open_window(port: int):
         text_select=True,
         js_api=Api(),
     )
-    webview.start(icon=resolve_icon_path())
+    window.events.closing += _on_closing
+    webview.start(icon=resolve_icon_path(), func=_activate_macos)
 
 
 def run_sandbox_setup():
@@ -283,25 +348,38 @@ def main():
         webview.start()
         return
 
-    from agent_os.desktop.tray import start_tray
-
     def shutdown():
         os._exit(0)
 
-    tray_thread = threading.Thread(
-        target=start_tray,
-        args=(port, lambda: open_window(port), shutdown),
-        daemon=True,
-    )
-    tray_thread.start()
+    # On macOS, pystray's Cocoa backend must run on the main thread, but
+    # pywebview also requires it.  Initialising pystray from a background
+    # thread corrupts AppKit state and causes an NSApplication assertion
+    # crash.  macOS .app bundles already get a Dock icon, so the tray is
+    # unnecessary — skip it entirely on Darwin.
+    if sys.platform != "darwin":
+        from agent_os.desktop.tray import start_tray
+
+        tray_thread = threading.Thread(
+            target=start_tray,
+            args=(port, lambda: open_window(port), shutdown),
+            daemon=True,
+        )
+        tray_thread.start()
 
     open_window(port)
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
+    if sys.platform == "darwin":
+        # macOS: no system tray, so window close = app close.
+        # This is standard macOS behavior for non-document-based apps.
+        os._exit(0)
+    else:
+        # Windows/Linux: system tray keeps app alive after window close.
+        # User quits via tray menu → shutdown() → os._exit(0).
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

@@ -628,6 +628,11 @@ class BrowserManager:
         """
         self._profile_dir.mkdir(parents=True, exist_ok=True)
 
+        if async_playwright is None:
+            raise RuntimeError(
+                "patchright is not installed — install with: pip install patchright"
+            )
+
         try:
             pw = await async_playwright().start()
         except FileNotFoundError:

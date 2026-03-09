@@ -56,6 +56,9 @@ def generate_profile(
         to ``sandbox-exec -p``.
     """
     home = os.path.expanduser("~")
+    # Resolve symlinks so Seatbelt path matching works correctly
+    # (e.g. /var -> /private/var on macOS).
+    workspace_path = os.path.realpath(workspace_path)
     lines: list[str] = []
 
     # ------------------------------------------------------------------
@@ -101,14 +104,17 @@ def generate_profile(
     # ------------------------------------------------------------------
     if portal_paths:
         for path, access in portal_paths.items():
+            real_path = os.path.realpath(path)
+            # Always grant read — base profile only covers system paths,
+            # not user directories like /Users.
+            lines.append(f'(allow file-read* (subpath "{real_path}"))')
             if access == "read_only":
-                # Read is already broadly allowed; explicitly deny write.
                 lines.append(
-                    f'(deny file-write* (subpath "{path}")'
+                    f'(deny file-write* (subpath "{real_path}")'
                     ' (with message "orbital:portal-read-only"))'
                 )
             elif access == "read_write":
-                lines.append(f'(allow file-write* (subpath "{path}"))')
+                lines.append(f'(allow file-write* (subpath "{real_path}"))')
 
     # ------------------------------------------------------------------
     # 7. Sensitive path denies (deny read even though base allows it)
@@ -137,13 +143,15 @@ def generate_profile(
     lines.append('(allow file-write* (subpath "/tmp"))')
     lines.append('(allow file-read* (subpath "/private/tmp"))')
     lines.append('(allow file-write* (subpath "/private/tmp"))')
-    lines.append('(allow file-read* (subpath "/var/folders/"))')
-    lines.append('(allow file-write* (subpath "/var/folders/"))')
+    lines.append('(allow file-read* (subpath "/private/var/folders"))')
+    lines.append('(allow file-write* (subpath "/private/var/folders"))')
 
     tmpdir = os.environ.get("TMPDIR")
-    if tmpdir and tmpdir not in ("/tmp", "/private/tmp") and not tmpdir.startswith("/var/folders/"):
-        lines.append(f'(allow file-read* (subpath "{tmpdir}"))')
-        lines.append(f'(allow file-write* (subpath "{tmpdir}"))')
+    if tmpdir:
+        real_tmpdir = os.path.realpath(tmpdir)
+        if real_tmpdir not in ("/tmp", "/private/tmp") and not real_tmpdir.startswith("/private/var/folders"):
+            lines.append(f'(allow file-read* (subpath "{real_tmpdir}"))')
+            lines.append(f'(allow file-write* (subpath "{real_tmpdir}"))')
 
     # ------------------------------------------------------------------
     # 10. Network rules

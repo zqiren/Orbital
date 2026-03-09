@@ -4,7 +4,7 @@
   <img src="orbital-logo.png" alt="Orbital" width="120">
 </p>
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
 
 
 **Every second an agent sits idle is a second of productivity wasted.**
@@ -133,6 +133,29 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 Some antivirus software may flag PyInstaller-bundled applications. This is a [known issue](https://github.com/pyinstaller/pyinstaller/issues/5854) affecting all PyInstaller projects. Add an exception for the Orbital install directory if flagged.
 
+### macOS
+
+1. Download `Orbital-1.0.0-macOS.dmg` from [Releases](../../releases)
+2. Open the DMG and drag Orbital to your Applications folder
+3. Launch Orbital from Applications or Spotlight
+
+#### macOS Gatekeeper Warning
+
+Orbital is not yet code-signed, so macOS will block it on first launch:
+
+> **"Orbital" can't be opened because Apple cannot check it for malicious software.**
+
+To proceed:
+1. Open **System Settings → Privacy & Security**
+2. Scroll down — you'll see "Orbital was blocked"
+3. Click **"Open Anyway"**
+
+This is only needed once. Code signing will be added in a future release.
+
+#### Supported Versions
+
+macOS 13 (Ventura) or later. Apple Silicon and Intel Macs both supported.
+
 ### From Source
 
 ```bash
@@ -156,7 +179,7 @@ Open `http://localhost:5173` in your browser. The setup wizard runs on first lau
 
 ### Note on Sleep/Shutdown
 
-Orbital prevents system sleep while agents are actively working (via OS-level sleep inhibition on Windows). When all agents are idle, sleep is re-allowed. The system tray icon shows current agent activity status.
+Orbital prevents system sleep while agents are actively working (via OS-level sleep inhibition on Windows and macOS). When all agents are idle, sleep is re-allowed. The system tray icon shows current agent activity status.
 
 ---
 
