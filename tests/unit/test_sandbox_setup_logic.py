@@ -152,3 +152,40 @@ class TestRunSandboxTeardown:
         with pytest.raises(SystemExit) as exc_info:
             run_sandbox_teardown()
         assert exc_info.value.code == 0
+
+
+class TestMacOSProviderSetupLogic:
+    """Test that macOS provider setup logic doesn't create sandbox users."""
+
+    @patch("agent_os.platform.create_platform_provider")
+    def test_macos_provider_skips_sandbox_user_setup(self, mock_create):
+        """MacOSPlatformProvider setup() does NOT attempt to create a user account."""
+        provider = MagicMock()
+        provider.get_capabilities.return_value = MockCapabilities(
+            platform="macos", isolation_method="seatbelt", setup_complete=False,
+        )
+        provider.setup = AsyncMock(return_value=MockSetupResult(success=True))
+        mock_create.return_value = provider
+
+        from agent_os.desktop.main import run_sandbox_setup
+        with pytest.raises(SystemExit) as exc_info:
+            run_sandbox_setup()
+        assert exc_info.value.code == 0
+        provider.setup.assert_called_once()
+
+    @patch("agent_os.platform.create_platform_provider")
+    def test_macos_provider_setup_checks_sandbox_exec(self, mock_create):
+        """Setup validates sandbox-exec binary exists (failure case)."""
+        provider = MagicMock()
+        provider.get_capabilities.return_value = MockCapabilities(
+            platform="macos", isolation_method="seatbelt", setup_complete=False,
+        )
+        provider.setup = AsyncMock(
+            return_value=MockSetupResult(success=False, error="sandbox-exec not found")
+        )
+        mock_create.return_value = provider
+
+        from agent_os.desktop.main import run_sandbox_setup
+        with pytest.raises(SystemExit) as exc_info:
+            run_sandbox_setup()
+        assert exc_info.value.code == 1

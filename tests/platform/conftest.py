@@ -15,6 +15,7 @@ import pytest
 # --- Module-level booleans ---
 
 IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
 
 IS_ADMIN = False
 if IS_WINDOWS:
@@ -39,6 +40,10 @@ if IS_WINDOWS:
     except Exception:
         HAS_SANDBOX_USER = False
 
+HAS_SANDBOX_EXEC = False
+if IS_MACOS:
+    HAS_SANDBOX_EXEC = shutil.which("sandbox-exec") is not None
+
 # --- Skip markers ---
 
 skip_not_windows = pytest.mark.skipif(
@@ -51,6 +56,14 @@ skip_not_admin = pytest.mark.skipif(
 
 skip_no_sandbox = pytest.mark.skipif(
     not HAS_SANDBOX_USER, reason="Requires AgentOS-Worker user to exist"
+)
+
+skip_not_macos = pytest.mark.skipif(
+    not IS_MACOS, reason="Requires macOS"
+)
+
+skip_no_seatbelt = pytest.mark.skipif(
+    not HAS_SANDBOX_EXEC, reason="Requires sandbox-exec"
 )
 
 # --- Fixtures ---
@@ -88,6 +101,14 @@ def ensure_sandbox_account():
     if not status.exists or not status.password_valid:
         pytest.skip(f"Could not ensure sandbox account: {status.error}")
     yield
+
+
+@pytest.fixture
+def macos_sandbox_workspace(tmp_path):
+    """Create a temp workspace for macOS Seatbelt tests."""
+    workspace = tmp_path / "macos_workspace"
+    workspace.mkdir()
+    yield str(workspace)
 
 
 @pytest.fixture

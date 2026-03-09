@@ -242,6 +242,16 @@ def run_sandbox_teardown():
     sys.exit(0)
 
 
+def _get_log_path() -> str:
+    """Return the platform-appropriate log directory path for error messages."""
+    if sys.platform == "win32":
+        return os.path.join(os.environ.get("APPDATA", ""), "Orbital", "logs")
+    elif sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Logs", "Orbital")
+    else:
+        return os.path.join(os.path.expanduser("~"), ".orbital", "logs")
+
+
 def main():
     # Handle CLI flags before any daemon/GUI setup
     if "--setup-sandbox" in sys.argv:
@@ -268,7 +278,7 @@ def main():
         import webview
         webview.create_window(
             "Orbital \u2014 Error",
-            html="<h2>Failed to start daemon</h2><p>Check logs in %APPDATA%\\Orbital\\logs</p>",
+            html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
         )
         webview.start()
         return

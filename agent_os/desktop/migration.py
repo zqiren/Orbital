@@ -4,12 +4,24 @@
 
 import json
 import os
+import sys
 import logging
 
 logger = logging.getLogger(__name__)
 
 CURRENT_DATA_VERSION = 1
-DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Orbital")
+
+
+def _get_data_dir() -> str:
+    if sys.platform == "win32":
+        return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Orbital")
+    elif sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Orbital")
+    else:
+        return os.path.join(os.path.expanduser("~"), ".orbital")
+
+
+DATA_DIR = _get_data_dir()
 VERSION_FILE = os.path.join(DATA_DIR, "version.json")
 
 MIGRATIONS: dict = {

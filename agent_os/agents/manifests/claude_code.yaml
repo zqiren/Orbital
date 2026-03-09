@@ -54,6 +54,8 @@ setup:
     macos:
       - "/usr/local/bin/claude"
       - "$HOME/.npm-global/bin/claude"
+      - "$HOME/.npm/bin/claude"
+      - "/opt/homebrew/bin/claude"
     linux:
       - "/usr/local/bin/claude"
       - "$HOME/.npm-global/bin/claude"
