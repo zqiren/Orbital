@@ -508,6 +508,7 @@ class AgentManager:
             session, prompt_builder, base_prompt_context,
             model_context_limit=model_info.context_window,
             workspace_files=workspace_files,
+            sub_agent_provider=lambda: self._sub_agent_manager.list_active(project_id),
         )
 
         # 10. Interceptor

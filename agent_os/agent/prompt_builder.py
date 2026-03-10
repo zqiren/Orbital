@@ -45,6 +45,11 @@ class PromptContext:
     vision_enabled: bool = False        # model supports vision (image input)
     project_id: str = ""                # store-level project id
     project_dir_name: str = ""          # slugified dir name under .agent-os/
+    active_sub_agents: list = None      # [{"handle": str, "status": str, ...}]
+
+    def __post_init__(self):
+        if self.active_sub_agents is None:
+            self.active_sub_agents = []
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +217,7 @@ class PromptBuilder:
             self._standing_rules(context),
             self._memory(context),
             self._sub_agents(context),
+            self._sub_agent_awareness(context),
             self._browser_section(context),
             self._skills(context),
             self._workspace_bootstrap(context),
@@ -488,6 +494,33 @@ class PromptBuilder:
             "- If output is incorrect or incomplete, either fix it yourself "
             "or send the sub-agent a follow-up with specific corrections"
         )
+        return "\n".join(lines)
+
+    def _sub_agent_awareness(self, context: PromptContext) -> str | None:
+        """Section: Active sub-agents and interaction model (layer 5 awareness)."""
+        if not context.active_sub_agents:
+            return None
+
+        lines = ["## Sub-Agent Coordination\n"]
+        lines.append("You coordinate sub-agents via the agent_message tool. Key behaviors:")
+        lines.append("- agent_message(send) returns IMMEDIATELY. It does NOT wait for the sub-agent to finish.")
+        lines.append("- Sub-agent output goes directly to the user's chat. You do not see it in your conversation.")
+        lines.append("- You are notified via [Sub-agent] system messages when sub-agents complete or error.")
+        lines.append('- To check progress: agent_message(action="status", agent="handle")')
+        lines.append("- To see detailed output: read the transcript file path from the notification message.")
+        lines.append("- Sub-agent results appear as file changes in the workspace. Use the read tool to inspect.\n")
+
+        lines.append("### Current Sub-Agent States\n")
+        for agent_info in context.active_sub_agents:
+            handle = agent_info["handle"]
+            state = agent_info.get("status", "unknown")
+            last_activity = agent_info.get("last_activity", "")
+
+            status_line = f"- **{handle}**: {state}"
+            if last_activity:
+                status_line += f" (last activity: {last_activity})"
+            lines.append(status_line)
+
         return "\n".join(lines)
 
     def _browser_section(self, context: PromptContext) -> str | None:

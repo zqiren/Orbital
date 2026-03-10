@@ -30,6 +30,7 @@ class ContextManager:
         model_context_limit: int = 128_000,
         response_reserve: int = 20_000,
         workspace_files=None,
+        sub_agent_provider=None,
     ):
         self._session = session
         self._prompt_builder = prompt_builder
@@ -37,6 +38,7 @@ class ContextManager:
         self._model_context_limit = model_context_limit
         self._response_reserve = response_reserve
         self._workspace_files = workspace_files
+        self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
         self._window_factor: float = 1.0
@@ -156,10 +158,12 @@ class ContextManager:
         available_budget = self._model_context_limit - self._response_reserve
 
         # Update transient fields in PromptContext
+        active_subs = self._sub_agent_provider() if self._sub_agent_provider else []
         ctx = replace(
             self._base_ctx,
             datetime_now=datetime.now().isoformat(),
             context_usage_pct=self._last_usage_pct,
+            active_sub_agents=active_subs,
         )
 
         # Build system prompt
