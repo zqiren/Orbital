@@ -444,6 +444,12 @@ class AgentLoop:
                         tool_content = result.content
                         # Store result for observation-aware hash
                         _exec_result = result
+
+                        # Pause if credential was requested (wait for user input)
+                        if result.meta and result.meta.get("credential_request"):
+                            self._session.pause()
+                            exit_outer = True
+                            break
                     except Exception as e:
                         tool_content = f"Error executing tool: {e}"
                         self._session.append_tool_result(

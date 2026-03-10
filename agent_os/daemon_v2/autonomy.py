@@ -59,6 +59,10 @@ class AutonomyInterceptor:
         name = tool_call.get("name", "")
         args = tool_call.get("arguments", {})
 
+        # Credentials always require human interaction, regardless of autonomy preset
+        if name == "request_credential":
+            return True
+
         # Check approve-all bypass (time-bounded session-level override)
         if self._bypass_all_until is not None and time.time() < self._bypass_all_until:
             return False

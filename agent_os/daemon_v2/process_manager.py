@@ -46,6 +46,16 @@ class ProcessManager:
                     }
                     session.append(msg)
 
+                    # Broadcast for real-time chat display
+                    if chunk.chunk_type in ("response", "message") or chunk.chunk_type is None:
+                        self._ws.broadcast(project_id, {
+                            "type": "chat.sub_agent_message",
+                            "project_id": project_id,
+                            "content": chunk.text,
+                            "source": handle,
+                            "timestamp": msg["timestamp"],
+                        })
+
                     if chunk.chunk_type == "approval_request":
                         metadata = getattr(chunk, 'metadata', {}) or {}
                         self._ws.broadcast(project_id, {

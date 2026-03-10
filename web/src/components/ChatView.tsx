@@ -32,6 +32,7 @@ import ChatMessage from './ChatMessage';
 import StreamingMessage from './StreamingMessage';
 import ActivityBlockComponent from './ActivityBlock';
 import ApprovalCard from './ApprovalCard';
+import CredentialCard from './CredentialCard';
 
 interface ChatViewProps {
   projectId: string;
@@ -897,7 +898,30 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
               );
             } else if (item.type === 'approval_card') {
               const resolved = approvals.get(item.tool_call_id)?.resolved ?? item.resolved;
-              rendered = (
+              rendered = item.tool_name === 'request_credential' ? (
+                <CredentialCard
+                  key={`cred-${item.tool_call_id}`}
+                  credential={{
+                    tool_call_id: item.tool_call_id,
+                    name: item.tool_args?.name as string ?? '',
+                    domain: item.tool_args?.domain as string ?? '',
+                    fields: (item.tool_args?.fields as string[]) ?? [],
+                    reason: item.tool_args?.reason as string ?? '',
+                    resolved: !!resolved,
+                  }}
+                  projectId={projectId}
+                  onResolve={(toolCallId: string) => {
+                    setApprovals((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      if (existing) {
+                        next.set(toolCallId, { ...existing, resolved: 'approved' });
+                      }
+                      return next;
+                    });
+                  }}
+                />
+              ) : (
                 <ApprovalCard
                   key={`apr-${item.tool_call_id}`}
                   approval={item}
@@ -948,24 +972,48 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                   (i) => i.type === 'approval_card' && i.tool_call_id === a.tool_call_id,
                 ),
             )
-            .map((a) => (
-              <ApprovalCard
-                key={`rt-apr-${a.tool_call_id}`}
-                approval={a}
-                projectId={projectId}
-                resolved={a.resolved}
-                onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
-                  setApprovals((prev) => {
-                    const next = new Map(prev);
-                    const existing = next.get(toolCallId);
-                    if (existing) {
-                      next.set(toolCallId, { ...existing, resolved: resolution });
-                    }
-                    return next;
-                  });
-                }}
-              />
-            ))}
+            .map((a) =>
+              a.tool_name === 'request_credential' ? (
+                <CredentialCard
+                  key={`rt-cred-${a.tool_call_id}`}
+                  credential={{
+                    tool_call_id: a.tool_call_id,
+                    name: a.tool_args?.name as string ?? '',
+                    domain: a.tool_args?.domain as string ?? '',
+                    fields: (a.tool_args?.fields as string[]) ?? [],
+                    reason: a.tool_args?.reason as string ?? '',
+                  }}
+                  projectId={projectId}
+                  onResolve={(toolCallId: string) => {
+                    setApprovals((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      if (existing) {
+                        next.set(toolCallId, { ...existing, resolved: 'approved' });
+                      }
+                      return next;
+                    });
+                  }}
+                />
+              ) : (
+                <ApprovalCard
+                  key={`rt-apr-${a.tool_call_id}`}
+                  approval={a}
+                  projectId={projectId}
+                  resolved={a.resolved}
+                  onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
+                    setApprovals((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      if (existing) {
+                        next.set(toolCallId, { ...existing, resolved: resolution });
+                      }
+                      return next;
+                    });
+                  }}
+                />
+              ),
+            )}
 
         {subAgentLoading && (
           <div className="flex justify-start mb-3">

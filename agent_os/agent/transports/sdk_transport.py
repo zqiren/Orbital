@@ -94,10 +94,11 @@ class SDKTransport(AgentTransport):
                     got_result = True
                 events = self._message_to_events(msg)
                 for event in events:
+                    # Queue ALL events for read_stream consumers (enables real-time streaming)
+                    await self._event_queue.put(event)
+                    # Also collect message text for send() return value
                     if event.event_type == "message":
                         response_parts.append(event.raw_text)
-                    # Queue non-message events for read_stream consumers
-                    await self._event_queue.put(event)
         except Exception as e:
             # SDK may raise on unknown message types (e.g. rate_limit_event).
             # If we already collected some response text, return it rather than failing.

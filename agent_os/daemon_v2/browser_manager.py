@@ -644,12 +644,7 @@ class BrowserManager:
         launch_kwargs = dict(
             user_data_dir=str(self._profile_dir),
             headless=False,
-            args=[
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-popup-blocking",
-                "--force-color-profile=srgb",
-            ],
+            args=self.CHROME_FLAGS + ["--force-color-profile=srgb"],
             ignore_default_args=["--enable-automation"],
             locale=_detect_locale(),
             timezone_id=_detect_timezone(),
@@ -682,6 +677,7 @@ class BrowserManager:
 
         # Navigate to the target URL in a new page
         page = await ctx.new_page()
+        await self._apply_stealth(page)
         await page.goto(url)
 
         # Wait for user to close the browser
