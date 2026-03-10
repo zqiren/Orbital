@@ -318,13 +318,23 @@ class _FakeResultMessage:
 
 
 class TestBug005a_StreamingAPI:
-    """Real ProcessManager consuming from real SDKTransport → session + WS."""
+    """Real ProcessManager consuming from real SDKTransport → WS broadcast (v5: no session)."""
 
     @pytest.mark.asyncio
     async def test_full_stack_streaming(self):
-        """SDKTransport → CLIAdapter → ProcessManager → session append + WS broadcast."""
+        """SDKTransport → CLIAdapter → ProcessManager → WS broadcast (v5 transcript isolation)."""
         # Build real components
+        broadcast_items = []
+        broadcast_event = asyncio.Event()
         ws = WebSocketManager()
+        original_broadcast = ws.broadcast
+
+        def tracking_broadcast(pid, payload):
+            original_broadcast(pid, payload)
+            broadcast_items.append(payload)
+            broadcast_event.set()
+
+        ws.broadcast = tracking_broadcast
         activity_translator = ActivityTranslator(ws)
         pm = ProcessManager(ws, activity_translator)
 
@@ -338,19 +348,6 @@ class TestBug005a_StreamingAPI:
         transport._needs_flush = False
 
         adapter = CLIAdapter(handle="claude-code", display_name="Claude Code", transport=transport)
-
-        # Mock session that tracks appends
-        session_items = []
-        session_event = asyncio.Event()
-
-        class TrackingSession(list):
-            def append(self, item):
-                super().append(item)
-                session_items.append(item)
-                session_event.set()
-
-        mock_session = TrackingSession()
-        pm.set_session("proj-1", mock_session)
 
         # Set up mock SDK responses
         assistant_msg = _FakeAssistantMessage([_FakeTextBlock("Analysis complete: 42 files found.")])
@@ -378,21 +375,22 @@ class TestBug005a_StreamingAPI:
             # Simulate user sending message via API
             send_task = asyncio.create_task(adapter.send("analyze workspace"))
 
-            # Wait for message to arrive at session (via PM consumer)
+            # Wait for message to arrive at WS broadcast (via PM consumer)
             try:
-                await asyncio.wait_for(session_event.wait(), timeout=5.0)
+                await asyncio.wait_for(broadcast_event.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 pytest.fail(
-                    "BUG-005a: message never reached session through ProcessManager. "
+                    "BUG-005a: message never reached WS broadcast through ProcessManager. "
                     "Events are still being buffered instead of streamed."
                 )
 
             await send_task
 
-            # Verify content reached session
-            assert len(session_items) >= 1
-            assert any("42 files found" in str(item) for item in session_items), \
-                f"Expected message content in session, got: {session_items}"
+            # Verify content reached broadcast
+            chat_msgs = [b for b in broadcast_items if b.get("type") == "chat.sub_agent_message"]
+            assert len(chat_msgs) >= 1
+            assert any("42 files found" in str(m.get("content", "")) for m in chat_msgs), \
+                f"Expected message content in broadcast, got: {chat_msgs}"
 
             transport._alive = False
             await pm.stop("proj-1", "claude-code")

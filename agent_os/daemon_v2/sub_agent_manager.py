@@ -32,6 +32,7 @@ class SubAgentManager:
         self._setup_engine = setup_engine
         self._project_store = project_store
         self._adapters: dict[str, dict[str, object]] = {}  # project_id -> {handle -> adapter}
+        self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}  # project_id -> lock
         self._stopping: set[str] = set()  # project_ids currently in stop_all
 
@@ -97,7 +98,18 @@ class SubAgentManager:
                 self._adapters[project_id] = {}
             self._adapters[project_id][handle] = adapter
 
-        await self._process_manager.start(project_id, handle, adapter)
+        # Create transcript if workspace is available
+        transcript = None
+        if self._project_store is not None:
+            project = self._project_store.get_project(project_id) if self._project_store else {}
+            workspace = project.get("workspace", "") if project else ""
+            if workspace:
+                from uuid import uuid4
+                from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+                transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+                self._transcripts[(project_id, handle)] = transcript
+
+        await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
         return f"Started {handle}"
 
     def _resolve_transport(self, manifest, config_dict):
@@ -236,12 +248,20 @@ class SubAgentManager:
                 self._adapters[project_id] = {}
             self._adapters[project_id][handle] = adapter
 
+        # Create transcript for this sub-agent
+        transcript = None
+        if workspace:
+            from uuid import uuid4
+            from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+            transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+            self._transcripts[(project_id, handle)] = transcript
+
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
         from agent_os.agent.transports.acp_transport import ACPTransport
         from agent_os.agent.transports.pipe_transport import PipeTransport
         if not isinstance(transport, (ACPTransport, PipeTransport)):
-            await self._process_manager.start(project_id, handle, adapter)
+            await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
         return f"Started {manifest.name}"
 
     async def send(self, project_id: str, handle: str, message: str) -> str:
@@ -326,3 +346,7 @@ class SubAgentManager:
                     "status": "running" if not adapter.is_idle() else "idle",
                 })
         return result
+
+    def get_transcript(self, project_id: str, handle: str):
+        """Return the transcript for a sub-agent, or None."""
+        return self._transcripts.get((project_id, handle))

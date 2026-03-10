@@ -2,13 +2,17 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Sub-agent output -> session bridge.
+"""Sub-agent output -> transcript bridge.
 
-Consumes adapter output streams and feeds into session as role='agent' messages.
+Consumes adapter output streams and writes to per-agent transcript files.
+v5: ProcessManager never writes role=agent to the management session.
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -16,44 +20,42 @@ def _now() -> str:
 
 
 class ProcessManager:
-    """Consumes adapter output streams. Feeds into session as role='agent' messages."""
+    """Consumes adapter output streams. Writes to sub-agent transcripts (v5)."""
 
     def __init__(self, ws_manager, activity_translator):
         self._ws = ws_manager
         self._activity_translator = activity_translator
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
-        self._sessions: dict[str, object] = {}           # project_id -> session
 
     def set_session(self, project_id: str, session) -> None:
-        """Register session for a project."""
-        self._sessions[project_id] = session
+        """Deprecated: sessions are no longer used by ProcessManager (v5)."""
+        logger.warning("ProcessManager.set_session() is deprecated (v5 transcript isolation)")
 
-    async def start(self, project_id: str, handle: str, adapter) -> None:
+    async def start(self, project_id: str, handle: str, adapter, transcript=None) -> None:
         """Start background task consuming adapter.read_stream()."""
         key = f"{project_id}:{handle}"
 
         async def consume():
-            session = self._sessions.get(project_id)
-            if session is None:
-                return
             try:
                 async for chunk in adapter.read_stream():
-                    msg = {
-                        "role": "agent",
+                    entry = {
                         "source": handle,
                         "content": chunk.text,
                         "timestamp": _now(),
+                        "chunk_type": chunk.chunk_type,
                     }
-                    session.append(msg)
+                    # Write to sub-agent transcript (v5: never to management session)
+                    if transcript is not None:
+                        transcript.append(entry)
 
-                    # Broadcast for real-time chat display
+                    # Broadcast text output to frontend for real-time display
                     if chunk.chunk_type in ("response", "message") or chunk.chunk_type is None:
                         self._ws.broadcast(project_id, {
                             "type": "chat.sub_agent_message",
                             "project_id": project_id,
                             "content": chunk.text,
                             "source": handle,
-                            "timestamp": msg["timestamp"],
+                            "timestamp": entry["timestamp"],
                         })
 
                     if chunk.chunk_type == "approval_request":
@@ -69,7 +71,10 @@ class ProcessManager:
                             "recent_activity": [],
                         })
 
-                    self._activity_translator.on_message(msg, project_id)
+                    self._activity_translator.on_message(
+                        {"role": "agent", "source": handle, "content": chunk.text, "timestamp": entry["timestamp"]},
+                        project_id
+                    )
             except asyncio.CancelledError:
                 pass
 
