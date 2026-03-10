@@ -24,13 +24,14 @@ class SubAgentManager:
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
-                 project_store=None):
+                 project_store=None, lifecycle_observer=None):
         self._process_manager = process_manager
         self._adapter_configs = adapter_configs or {}  # handle -> AdapterConfig (legacy)
         self._platform_provider = platform_provider
         self._registry = registry
         self._setup_engine = setup_engine
         self._project_store = project_store
+        self._lifecycle_observer = lifecycle_observer
         self._adapters: dict[str, dict[str, object]] = {}  # project_id -> {handle -> adapter}
         self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}  # project_id -> lock
@@ -110,6 +111,11 @@ class SubAgentManager:
                 self._transcripts[(project_id, handle)] = transcript
 
         await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+
+        if self._lifecycle_observer:
+            tp = transcript.filepath if transcript else "unknown"
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+
         return f"Started {handle}"
 
     def _resolve_transport(self, manifest, config_dict):
@@ -262,6 +268,11 @@ class SubAgentManager:
         from agent_os.agent.transports.pipe_transport import PipeTransport
         if not isinstance(transport, (ACPTransport, PipeTransport)):
             await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+
+        if self._lifecycle_observer:
+            tp = transcript.filepath if transcript else "unknown"
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+
         return f"Started {manifest.name}"
 
     async def send(self, project_id: str, handle: str, message: str) -> str:
@@ -280,6 +291,14 @@ class SubAgentManager:
         transcript_path = transcript.filepath if transcript else "unknown"
 
         await self._dispatch_async(adapter, project_id, handle, message)
+
+        if self._lifecycle_observer:
+            await self._lifecycle_observer.on_message_routed(
+                project_id, handle,
+                initiator="management_agent",
+                message_preview=message[:100],
+                transcript_path=transcript_path,
+            )
 
         return f"Message sent to {handle}. Transcript: {transcript_path}"
 

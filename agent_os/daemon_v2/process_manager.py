@@ -22,9 +22,10 @@ def _now() -> str:
 class ProcessManager:
     """Consumes adapter output streams. Writes to sub-agent transcripts (v5)."""
 
-    def __init__(self, ws_manager, activity_translator):
+    def __init__(self, ws_manager, activity_translator, lifecycle_observer=None):
         self._ws = ws_manager
         self._activity_translator = activity_translator
+        self._lifecycle = lifecycle_observer
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
 
     def set_session(self, project_id: str, session) -> None:
@@ -36,6 +37,7 @@ class ProcessManager:
         key = f"{project_id}:{handle}"
 
         async def consume():
+            last_response_text = ""
             try:
                 async for chunk in adapter.read_stream():
                     entry = {
@@ -48,8 +50,9 @@ class ProcessManager:
                     if transcript is not None:
                         transcript.append(entry)
 
-                    # Broadcast text output to frontend for real-time display
+                    # Track last response text for completion summary
                     if chunk.chunk_type in ("response", "message") or chunk.chunk_type is None:
+                        last_response_text = chunk.text
                         self._ws.broadcast(project_id, {
                             "type": "chat.sub_agent_message",
                             "project_id": project_id,
@@ -75,8 +78,21 @@ class ProcessManager:
                         {"role": "agent", "source": handle, "content": chunk.text, "timestamp": entry["timestamp"]},
                         project_id
                     )
+
+                # Stream ended — fire lifecycle event
+                if self._lifecycle and transcript is not None:
+                    await self._lifecycle.on_completed(
+                        project_id, handle,
+                        summary=last_response_text or "(no output)",
+                        transcript_path=transcript.filepath,
+                    )
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                if self._lifecycle and transcript is not None:
+                    await self._lifecycle.on_error(
+                        project_id, handle, str(e), transcript.filepath,
+                    )
 
         task = asyncio.create_task(consume())
         self._tasks[key] = task

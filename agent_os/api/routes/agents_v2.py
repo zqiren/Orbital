@@ -119,13 +119,14 @@ _settings_store = None
 _credential_store = None
 _trigger_manager = None
 _provider_registry = None
+_lifecycle_observer = None
 
 
 def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
               setup_engine=None, settings_store=None, credential_store=None,
-              trigger_manager=None, provider_registry=None):
+              trigger_manager=None, provider_registry=None, lifecycle_observer=None):
     """Called by app factory to inject dependencies."""
-    global _project_store, _agent_manager, _ws_manager, _sub_agent_manager, _setup_engine, _settings_store, _credential_store, _trigger_manager, _provider_registry
+    global _project_store, _agent_manager, _ws_manager, _sub_agent_manager, _setup_engine, _settings_store, _credential_store, _trigger_manager, _provider_registry, _lifecycle_observer
     _project_store = project_store
     _agent_manager = agent_manager
     _ws_manager = ws_manager
@@ -135,6 +136,7 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
     _credential_store = credential_store
     _trigger_manager = trigger_manager
     _provider_registry = provider_registry
+    _lifecycle_observer = lifecycle_observer
 
 
 # ---- Session cache for sub-agent-only projects ----
@@ -576,22 +578,27 @@ async def inject_message(project_id: str, req: InjectRequest):
             except Exception:
                 raise HTTPException(status_code=404, detail=f"Failed to auto-start {req.target}")
 
-        # Persist agent response
-        agent_ts = datetime.now(timezone.utc).isoformat()
-        session.append({
-            "role": "agent",
-            "source": req.target,
-            "content": result,
-            "timestamp": agent_ts,
-        })
-        # Broadcast so ChatView receives the sub-agent response in real-time
+        # Broadcast acknowledgement so ChatView knows the message was sent
+        ack_ts = datetime.now(timezone.utc).isoformat()
         _ws_manager.broadcast(project_id, {
             "type": "chat.sub_agent_message",
             "project_id": project_id,
             "content": result,
             "source": req.target,
-            "timestamp": agent_ts,
+            "timestamp": ack_ts,
         })
+
+        # Notify lifecycle observer (session injection handled there)
+        if _lifecycle_observer:
+            transcript = _sub_agent_manager.get_transcript(project_id, req.target)
+            transcript_path = transcript.filepath if transcript else "unknown"
+            await _lifecycle_observer.on_message_routed(
+                project_id, req.target,
+                initiator="user_mention",
+                message_preview=req.content[:100],
+                transcript_path=transcript_path,
+            )
+
         return {"status": result}
     else:
         # Route to management agent (auto-starts if no session)

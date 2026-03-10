@@ -698,6 +698,27 @@ class AgentManager:
         except ImportError:
             pass
 
+    async def inject_system_message(self, project_id: str, content: str) -> str:
+        """Inject a system message into the management agent's session.
+
+        Used by the lifecycle observer for sub-agent state notifications.
+        If the management agent is idle, starts a new loop to process the message.
+        """
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return "no_session"
+        handle.session.append({
+            "role": "system",
+            "content": content,
+            "source": "daemon",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        # If management agent is idle, trigger a new loop
+        if handle.task is None or handle.task.done():
+            await self._start_loop(project_id)
+            return "delivered"
+        return "queued"
+
     async def inject_message(self, project_id: str, content: str, *, nonce: str | None = None) -> str:
         """Inject a message. Three cases:
         1. Loop running -> queue
