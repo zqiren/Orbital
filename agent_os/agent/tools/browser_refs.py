@@ -243,6 +243,16 @@ async def resolve_ref(ref_map: RefMap, ref: str, page) -> object:
 
     if entry.nth > 0:
         locator = locator.nth(entry.nth)
+    else:
+        # When nth==0 and multiple elements match (e.g. login + register forms
+        # with identical field names), use .first to avoid Playwright strict-mode
+        # errors instead of failing with "Multiple elements matched".
+        try:
+            count = await locator.count()
+            if count > 1:
+                locator = locator.first
+        except Exception:
+            pass  # count() can fail on detached frames; fall through
 
     return locator
 

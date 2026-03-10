@@ -4,8 +4,12 @@
 
 """Credential CRUD endpoints — website credential management."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2")
 
@@ -28,36 +32,14 @@ class StoreCredentialRequest(BaseModel):
 
 @router.post("/credentials")
 async def store_credential(req: StoreCredentialRequest):
+    """Store a credential. Session lifecycle (resume) is handled by the
+    separate ``/approve`` endpoint which the frontend calls after storing."""
     if _credential_store is None:
         raise HTTPException(status_code=501, detail="Credential store not available")
     try:
         _credential_store.store(req.name, req.domain, req.fields)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-    # If a project session is paused waiting for this credential, resume it
-    if req.project_id and _agent_manager is not None:
-        try:
-            session = _agent_manager.get_session(req.project_id)
-            if session is not None and session.is_paused():
-                import json
-                tokens = {f: f"<secret:{req.name}.{f}>" for f in req.fields}
-                # Find the pending tool call for request_credential
-                pending_tc = session.get_pending_credential_tc()
-                if pending_tc:
-                    session.append_tool_result(
-                        pending_tc,
-                        json.dumps({
-                            "status": "ready",
-                            "name": req.name,
-                            "tokens": tokens,
-                            "message": f"Credential '{req.name}' stored. Use <secret:> tokens.",
-                        }),
-                    )
-                    session.resume()
-        except Exception:
-            pass  # Best-effort resume
-
     return {"status": "stored", "name": req.name}
 
 

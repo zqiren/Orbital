@@ -29,7 +29,7 @@ export default function CredentialCard({
   const [values, setValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [resolved, setResolved] = useState(false);
-  const { denyToolCall } = useAgent();
+  const { approveToolCall, denyToolCall } = useAgent();
 
   if (resolved || credential.resolved) {
     return (
@@ -57,6 +57,8 @@ export default function CredentialCard({
           tool_call_id: credential.tool_call_id,
         }),
       });
+      // Resolve the intercepted request_credential tool call
+      await approveToolCall(projectId, credential.tool_call_id);
       setResolved(true);
       onResolve?.(credential.tool_call_id);
     } finally {
