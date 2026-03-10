@@ -50,6 +50,9 @@ class Session:
         # Message injection queue — each item is (content, nonce)
         self._queue: list[tuple[str, str | None]] = []
 
+        # Deferred messages (lifecycle notifications buffered during tool execution)
+        self._deferred_messages: list[dict] = []
+
         # Observer callbacks (sync only)
         self.on_append = None
         self.on_stream = None
@@ -264,6 +267,27 @@ class Session:
         queued = self._queue[:]
         self._queue.clear()
         return queued
+
+    # ------------------------------------------------------------------
+    # Deferred messages (lifecycle notifications during tool execution)
+    # ------------------------------------------------------------------
+
+    def defer_message(self, content: str, role: str = "system", source: str = "daemon") -> None:
+        """Queue a message for insertion after the current tool batch completes.
+
+        Used for lifecycle notifications that must not interrupt tool execution."""
+        self._deferred_messages.append({
+            "role": role,
+            "content": content,
+            "source": source,
+            "timestamp": _now(),
+        })
+
+    def pop_deferred_messages(self) -> list[dict]:
+        """Pop all deferred messages. Called by the loop after tool batch completes."""
+        msgs = list(self._deferred_messages)
+        self._deferred_messages.clear()
+        return msgs
 
     # ------------------------------------------------------------------
     # Lifecycle flags

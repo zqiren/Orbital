@@ -28,10 +28,6 @@ class ProcessManager:
         self._lifecycle = lifecycle_observer
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
 
-    def set_session(self, project_id: str, session) -> None:
-        """Deprecated: sessions are no longer used by ProcessManager (v5)."""
-        logger.warning("ProcessManager.set_session() is deprecated (v5 transcript isolation)")
-
     async def start(self, project_id: str, handle: str, adapter, transcript=None) -> None:
         """Start background task consuming adapter.read_stream()."""
         key = f"{project_id}:{handle}"

@@ -439,16 +439,6 @@ class TestActivityTranslator:
 class TestProcessManager:
     """Tests for daemon_v2/process_manager.py."""
 
-    def test_set_session_deprecated(self):
-        from agent_os.daemon_v2.process_manager import ProcessManager
-
-        ws = MagicMock()
-        translator = MagicMock()
-        pm = ProcessManager(ws_manager=ws, activity_translator=translator)
-        session = MagicMock()
-        # set_session is deprecated (v5) but should not raise
-        pm.set_session("proj_1", session)
-
     @pytest.mark.asyncio
     async def test_start_creates_consumer_task(self):
         from agent_os.daemon_v2.process_manager import ProcessManager
@@ -648,7 +638,6 @@ class TestAgentManager:
             await mgr.start_agent("proj_1", config)
 
             assert "proj_1" in mgr._handles
-            pm.set_session.assert_called_once_with("proj_1", mock_session)
             # Should broadcast running status
             ws.broadcast.assert_called()
 

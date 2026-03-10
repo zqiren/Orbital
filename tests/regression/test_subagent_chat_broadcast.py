@@ -40,8 +40,6 @@ class TestSubAgentChatBroadcast:
         activity = MagicMock()
 
         pm = ProcessManager(ws, activity)
-        session = MagicMock()
-        pm.set_session("proj-1", session)
 
         adapter = _FakeAdapter([_FakeChunk("Hello from Claude Code", "response")])
         await pm.start("proj-1", "claude-code", adapter)
@@ -63,8 +61,6 @@ class TestSubAgentChatBroadcast:
         activity = MagicMock()
 
         pm = ProcessManager(ws, activity)
-        session = MagicMock()
-        pm.set_session("proj-1", session)
 
         adapter = _FakeAdapter([_FakeChunk("Running shell: ls", "tool_activity")])
         await pm.start("proj-1", "claude-code", adapter)
@@ -85,8 +81,6 @@ class TestSubAgentChatBroadcast:
         activity = MagicMock()
 
         pm = ProcessManager(ws, activity)
-        session = MagicMock()
-        pm.set_session("proj-1", session)
 
         adapter = _FakeAdapter([_FakeChunk(
             "Approve tool?", "approval_request",

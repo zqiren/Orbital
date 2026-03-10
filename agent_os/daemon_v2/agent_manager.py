@@ -576,9 +576,6 @@ class AgentManager:
         )
         self._handles[project_id] = project_handle
 
-        # 13. Process manager
-        self._process_manager.set_session(project_id, session)
-
         # 11. Start loop task
         task = asyncio.create_task(loop.run(initial_message, initial_nonce=initial_nonce))
         task.add_done_callback(self._on_loop_done(project_id))
@@ -703,22 +700,28 @@ class AgentManager:
         """Inject a system message into the management agent's session.
 
         Used by the lifecycle observer for sub-agent state notifications.
-        If the management agent is idle, starts a new loop to process the message.
+        If the management agent is idle, appends directly and starts a new loop.
+        If the loop is running, defers the message for safe insertion after the
+        current tool batch completes (avoids breaking assistant→tool sequences).
         """
         handle = self._handles.get(project_id)
         if handle is None:
             return "no_session"
-        handle.session.append({
-            "role": "system",
-            "content": content,
-            "source": "daemon",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        # If management agent is idle, trigger a new loop
+
+        # If loop is idle, append directly (safe — no pending tool calls) and wake
         if handle.task is None or handle.task.done():
+            handle.session.append({
+                "role": "system",
+                "content": content,
+                "source": "daemon",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
             await self._start_loop(project_id)
             return "delivered"
-        return "queued"
+
+        # Loop is running — defer for safe insertion after tool batch
+        handle.session.defer_message(content, role="system", source="daemon")
+        return "deferred"
 
     async def inject_message(self, project_id: str, content: str, *, nonce: str | None = None) -> str:
         """Inject a message. Three cases:
@@ -1066,9 +1069,6 @@ class AgentManager:
         handle.session = new_session
         handle.task = None
 
-        # 9. Update process manager
-        self._process_manager.set_session(project_id, new_session)
-
         # 10. Broadcast new_session event, then idle so frontend status
         #     doesn't stay stuck (enables repeat /new invocations).
         self._ws.broadcast(project_id, {
@@ -1225,6 +1225,10 @@ class AgentManager:
             handle = self._handles.get(project_id)
             if not handle or handle.session.is_stopped():
                 return
+
+            # Drain any deferred messages (lifecycle notifications)
+            for msg in handle.session.pop_deferred_messages():
+                handle.session.append(msg)
 
             # Check if paused for approval FIRST — don't drain the queue
             # or broadcast idle while a tool call is awaiting user decision.
