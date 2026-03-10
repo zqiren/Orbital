@@ -8,7 +8,9 @@ Owns all sub-agent adapters. Provides interface for AgentMessageTool.
 """
 
 import asyncio
+import json
 import logging
+import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
@@ -398,3 +400,44 @@ class SubAgentManager:
     def get_transcript(self, project_id: str, handle: str):
         """Return the transcript for a sub-agent, or None."""
         return self._transcripts.get((project_id, handle))
+
+    def get_all_transcript_entries(self, project_id: str) -> list[dict]:
+        """Read all sub-agent transcript entries for a project.
+
+        Uses disk scan as primary method (survives daemon restarts),
+        with in-memory transcript paths as supplementary source.
+        """
+        import glob as globmod
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        seen_paths: set[str] = set()
+        entries: list[dict] = []
+
+        # 1. Disk scan: find all transcript JSONL files in workspace
+        workspace = ""
+        if self._project_store is not None:
+            project = self._project_store.get_project(project_id)
+            workspace = (project.get("workspace", "") if project else "")
+
+        if workspace:
+            base = os.path.join(workspace, ".agent-os", "sub_agents")
+            if os.path.isdir(base):
+                for jsonl_path in globmod.glob(os.path.join(base, "*", "*.jsonl")):
+                    norm = os.path.normpath(jsonl_path)
+                    seen_paths.add(norm)
+                    try:
+                        entries.extend(SubAgentTranscript.read(norm))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+
+        # 2. In-memory transcripts (covers cases where workspace lookup fails)
+        for (pid, handle), transcript in self._transcripts.items():
+            if pid == project_id:
+                norm = os.path.normpath(transcript.filepath)
+                if norm not in seen_paths:
+                    try:
+                        entries.extend(SubAgentTranscript.read(norm))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+
+        return entries

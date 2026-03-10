@@ -784,9 +784,37 @@ async def chat_history(
     dir_name = _project_dir_name(project.get("name", ""), project_id)
     sessions_dir = os.path.join(workspace, ".agent-os", dir_name, "sessions")
 
-    messages, total = await asyncio.to_thread(
-        _read_chat_messages, sessions_dir, limit, offset
-    )
+    # Read sub-agent transcript entries (disk scan + in-memory)
+    sub_entries = []
+    if _sub_agent_manager is not None:
+        sub_entries = await asyncio.to_thread(
+            _sub_agent_manager.get_all_transcript_entries, project_id
+        )
+        # Normalize transcript entries to chat message format
+        for entry in sub_entries:
+            entry.setdefault("role", "agent")
+
+    if not sub_entries:
+        # Fast path: no transcripts, use original pagination
+        messages, total = await asyncio.to_thread(
+            _read_chat_messages, sessions_dir, limit, offset
+        )
+    else:
+        # Merge path: read all management messages, merge with transcripts, sort
+        management_messages, mgmt_total = await asyncio.to_thread(
+            _read_chat_messages, sessions_dir, 0, 0  # read all
+        )
+        all_messages = management_messages + sub_entries
+        all_messages.sort(key=lambda m: m.get("timestamp", ""))
+        total = len(all_messages)
+
+        # Apply pagination to merged result
+        if limit > 0:
+            end = total - offset
+            start = max(0, end - limit)
+            messages = all_messages[start:end] if end > 0 else []
+        else:
+            messages = all_messages
 
     from starlette.responses import JSONResponse
     resp = JSONResponse(content=messages)
