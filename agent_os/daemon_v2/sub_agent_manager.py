@@ -265,16 +265,45 @@ class SubAgentManager:
         return f"Started {manifest.name}"
 
     async def send(self, project_id: str, handle: str, message: str) -> str:
-        """Forward message to adapter."""
+        """Dispatch message to adapter without blocking on response.
+
+        Returns immediately with a transcript path acknowledgement.
+        The response will appear asynchronously in the transcript and
+        via WebSocket broadcast.
+        """
         adapters = self._adapters.get(project_id, {})
         adapter = adapters.get(handle)
         if adapter is None:
             return f"Error: agent '{handle}' not running for project '{project_id}'"
-        await adapter.send(message)
-        # Transport-backed adapters store response in _last_response
-        if getattr(adapter, '_last_response', None):
-            return adapter._last_response
-        return f"Message sent to {handle}"
+
+        transcript = self._transcripts.get((project_id, handle))
+        transcript_path = transcript.filepath if transcript else "unknown"
+
+        await self._dispatch_async(adapter, project_id, handle, message)
+
+        return f"Message sent to {handle}. Transcript: {transcript_path}"
+
+    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str) -> None:
+        """Dispatch message to adapter without blocking on response.
+
+        For transports that support non-blocking dispatch (SDK with queue),
+        writes to the adapter and returns. For blocking transports (Pipe, ACP)
+        and legacy PTY paths, wraps the send in a background task.
+        """
+        transport = getattr(adapter, '_transport', None)
+
+        if transport is not None and hasattr(transport, 'dispatch'):
+            await transport.dispatch(message)
+            return
+
+        # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
+        async def _background_send():
+            try:
+                await adapter.send(message)
+            except Exception as e:
+                logger.warning("Background send to %s failed: %s", handle, e)
+
+        asyncio.create_task(_background_send())
 
     async def stop(self, project_id: str, handle: str) -> str:
         """Stop adapter, deregister from process_manager."""

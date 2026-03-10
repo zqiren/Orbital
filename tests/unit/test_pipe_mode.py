@@ -393,37 +393,38 @@ class TestSubAgentManagerPipeWiring:
         pm.start.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_returns_pipe_response(self):
-        """SubAgentManager.send() should return actual response for pipe transport."""
+    async def test_send_returns_transcript_ack(self):
+        """SubAgentManager.send() returns non-blocking ack with transcript path."""
         from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 
         pm = MagicMock()
         mgr = SubAgentManager(process_manager=pm)
 
         mock_adapter = AsyncMock()
-        mock_adapter._last_response = "Hello from sub-agent!"
+        mock_adapter._transport = None  # Legacy path: background task
         mgr._adapters["proj_1"] = {"test-agent": mock_adapter}
 
         result = await mgr.send("proj_1", "test-agent", "hi")
 
-        mock_adapter.send.assert_called_once_with("hi")
-        assert result == "Hello from sub-agent!"
+        assert "Message sent to test-agent" in result
+        assert "Transcript:" in result
 
     @pytest.mark.asyncio
-    async def test_send_returns_generic_for_interactive(self):
-        """SubAgentManager.send() should return generic message when no _last_response."""
+    async def test_send_returns_unknown_transcript_when_none_registered(self):
+        """SubAgentManager.send() returns 'unknown' transcript when no transcript registered."""
         from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 
         pm = MagicMock()
         mgr = SubAgentManager(process_manager=pm)
 
         mock_adapter = AsyncMock()
-        mock_adapter._last_response = None
+        mock_adapter._transport = None  # Legacy path: background task
         mgr._adapters["proj_1"] = {"test-agent": mock_adapter}
 
         result = await mgr.send("proj_1", "test-agent", "hi")
 
-        assert result == "Message sent to test-agent"
+        assert "Message sent to test-agent" in result
+        assert "Transcript: unknown" in result
 
     @pytest.mark.asyncio
     async def test_send_returns_error_for_unknown_agent(self):
@@ -438,8 +439,9 @@ class TestSubAgentManagerPipeWiring:
         assert result.startswith("Error:")
 
     @pytest.mark.asyncio
-    async def test_agent_message_send_returns_response_through_full_chain(self):
-        """Mock PipeTransport.send() to return 'Echo: hello', verify full chain."""
+    async def test_agent_message_send_dispatches_through_full_chain(self):
+        """Non-blocking send: dispatches message, returns transcript ack."""
+        import asyncio
         from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
         from agent_os.agent.adapters.cli_adapter import CLIAdapter
         from agent_os.agent.adapters.base import AdapterConfig
@@ -447,6 +449,9 @@ class TestSubAgentManagerPipeWiring:
         mock_transport = AsyncMock()
         mock_transport.send = AsyncMock(return_value="Echo: hello")
         mock_transport.is_alive.return_value = True
+        # Mock transport has dispatch (from AsyncMock), so _dispatch_async
+        # will call transport.dispatch(). Verify the dispatch path.
+        mock_transport.dispatch = AsyncMock()
 
         adapter = CLIAdapter(
             handle="test-agent", display_name="Test",
@@ -461,5 +466,8 @@ class TestSubAgentManagerPipeWiring:
 
         result = await mgr.send("proj_1", "test-agent", "hello")
 
-        mock_transport.send.assert_called_once_with("hello")
-        assert result == "Echo: hello"
+        # Non-blocking: returns transcript ack, not the response body
+        assert "Message sent to test-agent" in result
+        assert "Transcript:" in result
+        # dispatch() was called on the transport
+        mock_transport.dispatch.assert_awaited_once_with("hello")

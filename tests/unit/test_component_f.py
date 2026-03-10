@@ -544,10 +544,14 @@ class TestSubAgentManager:
 
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as MockAdapter:
             mock_instance = AsyncMock()
+            mock_instance._transport = None  # Legacy path: background task calls adapter.send()
             MockAdapter.return_value = mock_instance
 
             await mgr.start("proj_1", "claudecode")
             result = await mgr.send("proj_1", "claudecode", "hello")
+            assert "Message sent to claudecode" in result
+            # Background task dispatches asynchronously
+            await asyncio.sleep(0.05)
             mock_instance.send.assert_awaited_once_with("hello")
 
     @pytest.mark.asyncio
