@@ -176,6 +176,10 @@ class BrowserTool(Tool):
         "- For navigate: try an alternative URL or skip this site entirely.\n"
         "- If a site appears to be blocking you: report to the user and move on to "
         "alternative sources."
+        "\n\nIf clicking, typing, or other element interactions fail 3+ times, the element "
+        "is likely not interactive (disabled, hidden, or dynamically removed). Do NOT keep "
+        "retrying the same element. Switch strategy: navigate directly to URLs, use search, "
+        "use fetch, or try different elements on the page."
     )
 
     parameters = {
@@ -271,6 +275,27 @@ class BrowserTool(Tool):
         tracker.append(summary)
 
         consecutive = len(tracker)
+
+        # HARD REFUSAL at 5+ failures — stop executing this action type
+        if consecutive >= 5 and self._is_element_action(action):
+            recent = "; ".join(tracker[-3:])
+            self._action_failure_tracker.pop(action, None)  # Reset so agent can try later if strategy changes
+            return ToolResult(
+                content=(
+                    f"BLOCKED: browser:{action} has failed {consecutive} consecutive times. "
+                    f"This action is not working on this page. Recent failures: {recent}\n\n"
+                    f"Do NOT retry {action} on this page. Instead:\n"
+                    f"- Navigate directly to the target URL if you know it\n"
+                    f"- Use search to find the content via a different route\n"
+                    f"- Use fetch to read the page content as text\n"
+                    f"- Report to the user that this content is not accessible via browser interaction\n\n"
+                    f"If you need to interact with this page, try scroll to find different elements, "
+                    f"or navigate away and come back."
+                ),
+                meta={"blocked_action": action, "failure_count": consecutive},
+            )
+
+        # Existing advisory at 3+ failures (kept as early warning)
         if consecutive >= 3:
             recent = "; ".join(tracker[-3:])
             content = result.content if isinstance(result.content, str) else str(result.content)
@@ -320,6 +345,14 @@ class BrowserTool(Tool):
         content = result.content if isinstance(result.content, str) else str(result.content)
         first_line = content.split("\n")[0][:80]
         return first_line
+
+    @staticmethod
+    def _is_element_action(action: str) -> bool:
+        """Actions that target specific DOM elements."""
+        return action in (
+            "click", "type", "fill", "press", "hover",
+            "select", "drag", "check", "uncheck", "upload_file",
+        )
 
     @staticmethod
     def _make_resolver(store):
@@ -1160,7 +1193,11 @@ class BrowserTool(Tool):
         if "waiting for locator" in msg.lower() or "timeout" in msg.lower():
             ref = args.get("ref", "")
             return ToolResult(
-                content=f"Element ref {ref} did not become actionable. Run snapshot to check if it's still present."
+                content=(
+                    f"Element ref {ref} did not become actionable. "
+                    f"This element may be disabled, hidden, or removed by page scripts. "
+                    f"Try a different element or approach instead of retrying this ref."
+                )
             )
         if "intercept" in msg.lower() or "pointer" in msg.lower():
             return ToolResult(
