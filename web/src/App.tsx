@@ -312,9 +312,10 @@ export default function App() {
   }, []);
 
   // Handlers
-  function handleSetupComplete() {
+  async function handleSetupComplete() {
     setSetupComplete(true);
     listProjects();
+    await platform.getStatus();
   }
 
   function handleSelectProject(id: string) {
@@ -359,10 +360,11 @@ export default function App() {
   if (needsWizard === true) {
     return (
       <SetupWizard
-        onComplete={() => {
+        onComplete={async () => {
           setNeedsWizard(false);
           setSetupComplete(true);
           listProjects();
+          await platform.getStatus();
         }}
       />
     );
