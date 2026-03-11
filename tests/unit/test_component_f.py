@@ -439,26 +439,14 @@ class TestActivityTranslator:
 class TestProcessManager:
     """Tests for daemon_v2/process_manager.py."""
 
-    def test_set_session(self):
-        from agent_os.daemon_v2.process_manager import ProcessManager
-
-        ws = MagicMock()
-        translator = MagicMock()
-        pm = ProcessManager(ws_manager=ws, activity_translator=translator)
-        session = MagicMock()
-        pm.set_session("proj_1", session)
-        assert pm._sessions["proj_1"] is session
-
     @pytest.mark.asyncio
     async def test_start_creates_consumer_task(self):
         from agent_os.daemon_v2.process_manager import ProcessManager
 
         ws = MagicMock()
+        ws.broadcast = MagicMock()
         translator = MagicMock()
         pm = ProcessManager(ws_manager=ws, activity_translator=translator)
-        session = MagicMock()
-        session.append = MagicMock()
-        pm.set_session("proj_1", session)
 
         adapter = AsyncMock()
 
@@ -475,9 +463,10 @@ class TestProcessManager:
         # Let the consumer task run
         await asyncio.sleep(0.1)
 
-        # Session should have received the agent message
-        session.append.assert_called()
-        call_args = session.append.call_args[0][0]
+        # v5: ProcessManager writes to transcript, not session.
+        # Verify activity_translator received the message instead.
+        translator.on_message.assert_called()
+        call_args = translator.on_message.call_args[0][0]
         assert call_args["role"] == "agent"
         assert call_args["source"] == "claudecode"
 
@@ -497,8 +486,6 @@ class TestProcessManager:
                 yield  # never reached
         adapter.read_stream = endless_stream
 
-        session = MagicMock()
-        pm.set_session("proj_1", session)
         await pm.start("proj_1", "claudecode", adapter)
         await pm.stop("proj_1", "claudecode")
         key = "proj_1:claudecode"
@@ -547,10 +534,14 @@ class TestSubAgentManager:
 
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as MockAdapter:
             mock_instance = AsyncMock()
+            mock_instance._transport = None  # Legacy path: background task calls adapter.send()
             MockAdapter.return_value = mock_instance
 
             await mgr.start("proj_1", "claudecode")
             result = await mgr.send("proj_1", "claudecode", "hello")
+            assert "Message sent to claudecode" in result
+            # Background task dispatches asynchronously
+            await asyncio.sleep(0.05)
             mock_instance.send.assert_awaited_once_with("hello")
 
     @pytest.mark.asyncio
@@ -647,7 +638,6 @@ class TestAgentManager:
             await mgr.start_agent("proj_1", config)
 
             assert "proj_1" in mgr._handles
-            pm.set_session.assert_called_once_with("proj_1", mock_session)
             # Should broadcast running status
             ws.broadcast.assert_called()
 

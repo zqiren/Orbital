@@ -82,3 +82,37 @@ async def test_adapter_transitions_to_idle_after_work():
 
     assert adapter.is_idle() is True, \
         "Adapter should be idle after send() completes (work is done)"
+
+
+@pytest.mark.asyncio
+async def test_adapter_idle_after_read_stream_ends():
+    """Non-transport path: adapter becomes idle when read_stream() exhausts.
+
+    This covers the PTY/pipe fallback path where send() writes to stdin
+    and read_stream() is consumed by ProcessManager. After the output
+    stream ends (process exits), the adapter must transition to idle.
+    """
+    from agent_os.agent.adapters.output_parser import OutputParser
+
+    adapter = CLIAdapter(
+        handle="test-agent",
+        display_name="Test Agent",
+    )
+    # Simulate a process that exits after producing output
+    mock_process = MagicMock()
+    # First call: alive; second+ calls: exited
+    mock_process.poll = MagicMock(side_effect=[None, 0, 0, 0])
+    mock_process.stdout = MagicMock()
+    adapter._process = mock_process
+    adapter._parser = OutputParser([])
+    adapter._idle = False  # As if send() was called
+
+    # Mock _read_pipe to return one chunk then None (triggering is_alive check → False)
+    with patch.object(adapter, '_read_pipe', side_effect=[b"Done\n", None]):
+        chunks = []
+        async for chunk in adapter.read_stream():
+            chunks.append(chunk)
+
+    assert adapter.is_idle() is True, \
+        "Adapter should be idle after read_stream() exhausts (process exited)"
+    assert len(chunks) >= 1, "Should have yielded at least one chunk"

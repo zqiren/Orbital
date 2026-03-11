@@ -510,6 +510,10 @@ class AgentLoop:
                         # Successful execution clears error tracking for this tool
                         error_tracker.pop(tc["name"], None)
 
+                # Drain deferred messages (lifecycle notifications)
+                for msg in self._session.pop_deferred_messages():
+                    self._session.append(msg)
+
                 # Resolve unprocessed tool calls from this batch on intercept-break
                 if exit_outer and intercepted_tc_id is not None:
                     for tc in tool_calls:
@@ -607,6 +611,9 @@ class AgentLoop:
         finally:
             if not self._session._paused_for_approval:
                 self._session.resolve_pending_tool_calls()
+            # Drain any remaining deferred messages
+            for msg in self._session.pop_deferred_messages():
+                self._session.append(msg)
             # Trigger session-end callback (e.g. workspace file generation)
             # Skip if LLM failed — the provider is unreachable so the
             # session-end LLM call would also fail.

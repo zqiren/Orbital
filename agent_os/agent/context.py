@@ -10,10 +10,12 @@ Owned by Component A. Builds the message list sent to the LLM on each iteration.
 from __future__ import annotations
 
 import json
+import logging
 import os
-import re
 from dataclasses import replace
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from agent_os.agent.prompt_builder import PromptContext
 from agent_os.agent.token_utils import estimate_message_tokens
@@ -30,6 +32,7 @@ class ContextManager:
         model_context_limit: int = 128_000,
         response_reserve: int = 20_000,
         workspace_files=None,
+        sub_agent_provider=None,
     ):
         self._session = session
         self._prompt_builder = prompt_builder
@@ -37,6 +40,7 @@ class ContextManager:
         self._model_context_limit = model_context_limit
         self._response_reserve = response_reserve
         self._workspace_files = workspace_files
+        self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
         self._window_factor: float = 1.0
@@ -156,10 +160,12 @@ class ContextManager:
         available_budget = self._model_context_limit - self._response_reserve
 
         # Update transient fields in PromptContext
+        active_subs = self._sub_agent_provider() if self._sub_agent_provider else []
         ctx = replace(
             self._base_ctx,
             datetime_now=datetime.now().isoformat(),
             context_usage_pct=self._last_usage_pct,
+            active_sub_agents=active_subs,
         )
 
         # Build system prompt
@@ -262,15 +268,14 @@ class ContextManager:
         return result
 
     _VALID_LLM_ROLES = {"system", "user", "assistant", "tool"}
-    _ANSI_RE = re.compile(r'\x1b\[[^a-zA-Z]*[a-zA-Z]')
 
     @staticmethod
     def _sanitize_roles(messages: list[dict]) -> list[dict]:
-        """Remap non-standard roles for LLM API compatibility.
+        """Filter non-standard roles for LLM API compatibility.
 
-        Session stores role='agent' for sub-agent output. Remap to 'user'
-        with a source prefix. Strip ANSI escape codes from agent content.
-        Drop messages with any other unknown roles.
+        v5: Sub-agent output goes to transcripts, not the management session.
+        role='agent' messages should no longer appear in the sliding window.
+        If one is found, log a warning and drop it.
         """
         result = []
         for msg in messages:
@@ -279,20 +284,11 @@ class ContextManager:
                 result.append(msg)
             elif role == "agent":
                 source = msg.get("source", "sub-agent")
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    # Strip ANSI escape codes from sub-agent output
-                    content = ContextManager._ANSI_RE.sub("", content)
-                    if not content or not content.strip():
-                        continue  # skip empty agent output
-                    remapped = dict(msg)
-                    remapped["role"] = "user"
-                    remapped["content"] = f"[{source}]: {content}"
-                else:
-                    # Multimodal content: pass through as-is
-                    remapped = dict(msg)
-                    remapped["role"] = "user"
-                result.append(remapped)
+                logger.warning(
+                    "Unexpected role='agent' message from %s in management session "
+                    "(v5 transcript isolation should prevent this). Dropping.",
+                    source,
+                )
             # else: drop messages with unknown roles
         return result
 

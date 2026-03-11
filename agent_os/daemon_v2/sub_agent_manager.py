@@ -8,7 +8,9 @@ Owns all sub-agent adapters. Provides interface for AgentMessageTool.
 """
 
 import asyncio
+import json
 import logging
+import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
@@ -24,14 +26,16 @@ class SubAgentManager:
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
-                 project_store=None):
+                 project_store=None, lifecycle_observer=None):
         self._process_manager = process_manager
         self._adapter_configs = adapter_configs or {}  # handle -> AdapterConfig (legacy)
         self._platform_provider = platform_provider
         self._registry = registry
         self._setup_engine = setup_engine
         self._project_store = project_store
+        self._lifecycle_observer = lifecycle_observer
         self._adapters: dict[str, dict[str, object]] = {}  # project_id -> {handle -> adapter}
+        self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}  # project_id -> lock
         self._stopping: set[str] = set()  # project_ids currently in stop_all
 
@@ -97,7 +101,23 @@ class SubAgentManager:
                 self._adapters[project_id] = {}
             self._adapters[project_id][handle] = adapter
 
-        await self._process_manager.start(project_id, handle, adapter)
+        # Create transcript if workspace is available
+        transcript = None
+        if self._project_store is not None:
+            project = self._project_store.get_project(project_id) if self._project_store else {}
+            workspace = project.get("workspace", "") if project else ""
+            if workspace:
+                from uuid import uuid4
+                from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+                transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+                self._transcripts[(project_id, handle)] = transcript
+
+        await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+
+        if self._lifecycle_observer:
+            tp = transcript.filepath if transcript else "unknown"
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+
         return f"Started {handle}"
 
     def _resolve_transport(self, manifest, config_dict):
@@ -236,25 +256,75 @@ class SubAgentManager:
                 self._adapters[project_id] = {}
             self._adapters[project_id][handle] = adapter
 
+        # Create transcript for this sub-agent
+        transcript = None
+        if workspace:
+            from uuid import uuid4
+            from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+            transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+            self._transcripts[(project_id, handle)] = transcript
+
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
         from agent_os.agent.transports.acp_transport import ACPTransport
         from agent_os.agent.transports.pipe_transport import PipeTransport
         if not isinstance(transport, (ACPTransport, PipeTransport)):
-            await self._process_manager.start(project_id, handle, adapter)
+            await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+
+        if self._lifecycle_observer:
+            tp = transcript.filepath if transcript else "unknown"
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+
         return f"Started {manifest.name}"
 
     async def send(self, project_id: str, handle: str, message: str) -> str:
-        """Forward message to adapter."""
+        """Dispatch message to adapter without blocking on response.
+
+        Returns immediately with a transcript path acknowledgement.
+        The response will appear asynchronously in the transcript and
+        via WebSocket broadcast.
+        """
         adapters = self._adapters.get(project_id, {})
         adapter = adapters.get(handle)
         if adapter is None:
             return f"Error: agent '{handle}' not running for project '{project_id}'"
-        await adapter.send(message)
-        # Transport-backed adapters store response in _last_response
-        if getattr(adapter, '_last_response', None):
-            return adapter._last_response
-        return f"Message sent to {handle}"
+
+        transcript = self._transcripts.get((project_id, handle))
+        transcript_path = transcript.filepath if transcript else "unknown"
+
+        await self._dispatch_async(adapter, project_id, handle, message)
+
+        if self._lifecycle_observer:
+            await self._lifecycle_observer.on_message_routed(
+                project_id, handle,
+                initiator="management_agent",
+                message_preview=message[:100],
+                transcript_path=transcript_path,
+            )
+
+        return f"Message sent to {handle}. Transcript: {transcript_path}"
+
+    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str) -> None:
+        """Dispatch message to adapter without blocking on response.
+
+        For transports that support non-blocking dispatch (SDK with queue),
+        writes to the adapter and returns. For blocking transports (Pipe, ACP)
+        and legacy PTY paths, wraps the send in a background task.
+        """
+        transport = getattr(adapter, '_transport', None)
+
+        if transport is not None and hasattr(transport, 'dispatch'):
+            await transport.dispatch(message)
+            return
+
+        # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
+        async def _background_send():
+            try:
+                await adapter.send(message)
+            except Exception as e:
+                logger.warning("Background send to %s failed: %s", handle, e)
+
+        asyncio.create_task(_background_send())
 
     async def stop(self, project_id: str, handle: str) -> str:
         """Stop adapter, deregister from process_manager."""
@@ -326,3 +396,48 @@ class SubAgentManager:
                     "status": "running" if not adapter.is_idle() else "idle",
                 })
         return result
+
+    def get_transcript(self, project_id: str, handle: str):
+        """Return the transcript for a sub-agent, or None."""
+        return self._transcripts.get((project_id, handle))
+
+    def get_all_transcript_entries(self, project_id: str) -> list[dict]:
+        """Read all sub-agent transcript entries for a project.
+
+        Uses disk scan as primary method (survives daemon restarts),
+        with in-memory transcript paths as supplementary source.
+        """
+        import glob as globmod
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        seen_paths: set[str] = set()
+        entries: list[dict] = []
+
+        # 1. Disk scan: find all transcript JSONL files in workspace
+        workspace = ""
+        if self._project_store is not None:
+            project = self._project_store.get_project(project_id)
+            workspace = (project.get("workspace", "") if project else "")
+
+        if workspace:
+            base = os.path.join(workspace, ".agent-os", "sub_agents")
+            if os.path.isdir(base):
+                for jsonl_path in globmod.glob(os.path.join(base, "*", "*.jsonl")):
+                    norm = os.path.normpath(jsonl_path)
+                    seen_paths.add(norm)
+                    try:
+                        entries.extend(SubAgentTranscript.read(norm))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+
+        # 2. In-memory transcripts (covers cases where workspace lookup fails)
+        for (pid, handle), transcript in self._transcripts.items():
+            if pid == project_id:
+                norm = os.path.normpath(transcript.filepath)
+                if norm not in seen_paths:
+                    try:
+                        entries.extend(SubAgentTranscript.read(norm))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+
+        return entries

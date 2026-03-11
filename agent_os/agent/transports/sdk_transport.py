@@ -120,6 +120,41 @@ class SDKTransport(AgentTransport):
 
         return "\n".join(response_parts)
 
+    async def dispatch(self, message: str) -> None:
+        """Send query without waiting for response. Events flow via read_stream()."""
+        if self._client is None:
+            raise RuntimeError("SDK client not initialized — call start() first")
+
+        if self._needs_flush:
+            await self._flush_stale_messages()
+
+        await self._client.query(message)
+        asyncio.create_task(self._consume_response_background())
+
+    async def _consume_response_background(self) -> None:
+        """Background task: iterate receive_response(), feed events to queue."""
+        got_result = False
+        try:
+            async for msg in self._client.receive_response():
+                if isinstance(msg, ResultMessage):
+                    got_result = True
+                events = self._message_to_events(msg)
+                for event in events:
+                    await self._event_queue.put(event)
+        except Exception as e:
+            logger.warning("SDKTransport: background response consumption failed: %s", e)
+            await self._event_queue.put(TransportEvent(
+                event_type="error",
+                data={"error": str(e)},
+                raw_text=f"Error: {e}",
+            ))
+
+        if not got_result:
+            self._needs_flush = True
+            logger.warning("SDKTransport: background response ended without ResultMessage; will flush on next send")
+        else:
+            self._needs_flush = False
+
     async def _flush_stale_messages(self) -> None:
         """Drain leftover messages from the SDK buffer after a prior crash.
 

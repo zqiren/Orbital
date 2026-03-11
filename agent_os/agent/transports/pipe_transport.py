@@ -39,6 +39,7 @@ class PipeTransport(AgentTransport):
         self._workspace: str = ""
         self._env: dict | None = None
         self._session_id: str | None = None
+        self._running: bool = False
 
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._command = command
@@ -59,6 +60,7 @@ class PipeTransport(AgentTransport):
         if self._env:
             env.update(self._env)
 
+        self._running = True
         try:
             result = await asyncio.to_thread(
                 subprocess.run, cmd,
@@ -67,6 +69,8 @@ class PipeTransport(AgentTransport):
             )
         except subprocess.TimeoutExpired:
             return "Error: sub-agent timed out after 5 minutes"
+        finally:
+            self._running = False
 
         stdout = result.stdout.decode("utf-8", errors="replace")
         stderr = result.stderr.decode("utf-8", errors="replace")
@@ -116,7 +120,7 @@ class PipeTransport(AgentTransport):
         self._session_id = None
 
     def is_alive(self) -> bool:
-        return True
+        return self._running
 
     @property
     def session_id(self) -> str | None:

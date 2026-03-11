@@ -106,17 +106,24 @@ class TestSendSerialization:
 
     @pytest.mark.asyncio
     async def test_sends_to_different_adapters_parallel(self):
-        """Sends to different adapters should NOT block each other."""
+        """Sends to different adapters should NOT block each other.
+
+        SubAgentManager.send() is now non-blocking — it dispatches via
+        background task. Both sends should return near-instantly and the
+        background adapter.send() calls should be independent.
+        """
 
         async def slow_transport_send(msg):
             await asyncio.sleep(0.05)
             return "ok"
 
-        transport_a = MagicMock()
+        # Use spec to restrict transport to known interface (no dispatch)
+        from agent_os.agent.transports.base import AgentTransport
+        transport_a = MagicMock(spec=["send", "read_stream", "start", "stop", "is_alive"])
         transport_a.send = slow_transport_send
         transport_a.is_alive = MagicMock(return_value=True)
 
-        transport_b = MagicMock()
+        transport_b = MagicMock(spec=["send", "read_stream", "start", "stop", "is_alive"])
         transport_b.send = slow_transport_send
         transport_b.is_alive = MagicMock(return_value=True)
 
@@ -134,7 +141,7 @@ class TestSendSerialization:
         )
         elapsed = asyncio.get_event_loop().time() - t0
 
-        # Per-adapter locks allow parallel execution in ~0.05s
+        # Non-blocking dispatch returns immediately (< 0.05s)
         assert elapsed < 0.08, (
             f"Sends to different adapters blocked each other ({elapsed:.3f}s)"
         )

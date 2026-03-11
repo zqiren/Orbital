@@ -161,16 +161,17 @@ def _mock_playwright_context():
 # ======================================================================
 
 class TestBug005a_SDKTransportStreaming:
-    """E2E: message events stream through transport -> adapter -> ProcessManager -> session."""
+    """E2E: message events stream through transport -> adapter -> ProcessManager -> activity (v5)."""
 
     @pytest.mark.asyncio
-    async def test_message_events_reach_session_before_send_completes(self):
-        """Full stack: SDKTransport -> CLIAdapter -> ProcessManager -> session + activity.
+    async def test_message_events_reach_consumer_before_send_completes(self):
+        """Full stack: SDKTransport -> CLIAdapter -> ProcessManager -> activity_translator.
 
         Verifies that message events arrive at the ProcessManager consumer
-        (appended to session and fed to activity_translator) BEFORE send()
-        returns.  ProcessManager consumes from adapter.read_stream() in a
-        background task -- this is the path that was broken before BUG-005a.
+        (fed to activity_translator and broadcast) BEFORE send() returns.
+        ProcessManager consumes from adapter.read_stream() in a background
+        task -- this is the path that was broken before BUG-005a.
+        v5: ProcessManager writes to transcript, not session.
         """
         transport = _make_transport()
         adapter = _make_cli_adapter(transport)
@@ -188,12 +189,12 @@ class TestBug005a_SDKTransportStreaming:
 
         # --- Simulate ProcessManager ---
         ws_manager = MagicMock()
+        ws_manager.broadcast = MagicMock()
         activity_translator = MagicMock()
 
         # Track when activity_translator.on_message is called (proxy for
         # the message reaching the consumer in real-time)
         consumer_received = asyncio.Event()
-        original_on_message = activity_translator.on_message
 
         def on_message_hook(msg, project_id):
             consumer_received.set()
@@ -201,20 +202,6 @@ class TestBug005a_SDKTransportStreaming:
         activity_translator.on_message = on_message_hook
 
         pm = ProcessManager(ws_manager=ws_manager, activity_translator=activity_translator)
-
-        # Use a list with append-tracking to detect real-time arrival
-        class TrackedSession(list):
-            def __init__(self, event):
-                super().__init__()
-                self._event = event
-
-            def append(self, item):
-                super().append(item)
-                self._event.set()
-
-        session_received = asyncio.Event()
-        mock_session = TrackedSession(session_received)
-        pm.set_session("test-project", mock_session)
 
         with _patch_sdk_types():
             # Start PM consumer (like daemon startup)
@@ -226,9 +213,9 @@ class TestBug005a_SDKTransportStreaming:
             # Send a message (like user injecting via API)
             send_task = asyncio.create_task(adapter.send("analyze this workspace"))
 
-            # Message event must reach the PM consumer -> session BEFORE send() completes
+            # Message event must reach the PM consumer -> activity_translator BEFORE send() completes
             try:
-                await asyncio.wait_for(session_received.wait(), timeout=3.0)
+                await asyncio.wait_for(consumer_received.wait(), timeout=3.0)
             except asyncio.TimeoutError:
                 pytest.fail(
                     "BUG-005a regression: message event never reached ProcessManager "
@@ -238,13 +225,20 @@ class TestBug005a_SDKTransportStreaming:
             # Wait for send to complete
             await send_task
 
-            # Verify session got the message
-            assert len(mock_session) >= 1, "ProcessManager should have appended to session"
-            assert any("Here is your analysis." in msg.get("content", "") for msg in mock_session)
-
-            # Verify activity_translator was also notified
+            # Verify activity_translator was notified with the message content
             assert consumer_received.is_set(), \
                 "activity_translator.on_message was not called"
+
+            # Verify WS broadcast was called for chat messages
+            chat_broadcasts = [
+                c for c in ws_manager.broadcast.call_args_list
+                if c[0][1].get("type") == "chat.sub_agent_message"
+            ]
+            assert len(chat_broadcasts) >= 1, "WS broadcast should have been called"
+            assert any(
+                "Here is your analysis." in str(c[0][1].get("content", ""))
+                for c in chat_broadcasts
+            )
 
             # Clean up
             transport._alive = False

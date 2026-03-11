@@ -30,6 +30,7 @@ from agent_os.daemon_v2.project_store import ProjectStore
 from agent_os.daemon_v2.credential_store import ApiKeyStore, UserCredentialStore
 from agent_os.daemon_v2.settings_store import SettingsStore
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+from agent_os.daemon_v2.lifecycle_observer import LifecycleObserver
 from agent_os.agents.registry import AgentRegistry
 from agent_os.agents.setup_engine import SetupEngine
 from agent_os.daemon_v2.trigger_manager import TriggerManager
@@ -173,6 +174,11 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         provider_registry=provider_registry,
     )
 
+    # 6a. Lifecycle observer (wired after agent_manager exists)
+    lifecycle_observer = LifecycleObserver(agent_manager, ws_manager)
+    process_manager._lifecycle = lifecycle_observer
+    sub_agent_manager._lifecycle_observer = lifecycle_observer
+
     # 6b. Trigger manager
     trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager)
     agent_manager._trigger_manager = trigger_manager
@@ -194,7 +200,8 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                         setup_engine=setup_engine, settings_store=settings_store,
                         credential_store=credential_store,
                         trigger_manager=trigger_manager,
-                        provider_registry=provider_registry)
+                        provider_registry=provider_registry,
+                        lifecycle_observer=lifecycle_observer)
     app.include_router(agents_v2.router)
 
     # 7a-cred. Credential routes

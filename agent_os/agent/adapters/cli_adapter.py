@@ -197,6 +197,9 @@ class CLIAdapter(AgentAdapter):
         if not self.is_alive() and self._parser:
             yield self._parser.parse("")
 
+        # Mark adapter idle after output stream ends (restored from BUG-005b)
+        self._idle = True
+
     async def _read_provider(self):
         """Read from provider-managed ProcessHandle via a single persistent reader thread.
 
