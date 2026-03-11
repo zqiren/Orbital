@@ -58,7 +58,24 @@ def _make_mock_playwright(context):
     pw = MagicMock()
     pw.chromium.launch_persistent_context = AsyncMock(return_value=context)
     pw.stop = AsyncMock()
+    # Mock chromium.launch() for _get_clean_user_agent() UA probe
+    ua_page = MagicMock()
+    ua_page.evaluate = AsyncMock(return_value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+    ua_browser = AsyncMock()
+    ua_browser.new_page = AsyncMock(return_value=ua_page)
+    ua_browser.close = AsyncMock()
+    pw.chromium.launch = AsyncMock(return_value=ua_browser)
     return pw
+
+
+def _add_ua_probe_mock(pw):
+    """Add chromium.launch mock for _get_clean_user_agent() UA probe."""
+    ua_page = MagicMock()
+    ua_page.evaluate = AsyncMock(return_value="Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36")
+    ua_browser = AsyncMock()
+    ua_browser.new_page = AsyncMock(return_value=ua_page)
+    ua_browser.close = AsyncMock()
+    pw.chromium.launch = AsyncMock(return_value=ua_browser)
 
 
 async def _setup_mgr(tmp_path, pw, ctx=None):
@@ -407,6 +424,7 @@ class TestBrowserChannelFallback:
         pw = MagicMock()
         pw.chromium.launch_persistent_context = AsyncMock(return_value=ctx)
         pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
 
         mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
         with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
@@ -425,6 +443,7 @@ class TestBrowserChannelFallback:
         ctx = _make_mock_context()
         pw = MagicMock()
         pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
 
         call_count = 0
 
@@ -454,6 +473,7 @@ class TestBrowserChannelFallback:
         ctx = _make_mock_context()
         pw = MagicMock()
         pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
 
         channels_tried = []
 
@@ -482,6 +502,7 @@ class TestBrowserChannelFallback:
         """When all browser channels fail, raises RuntimeError with actionable message."""
         pw = MagicMock()
         pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
         pw.chromium.launch_persistent_context = AsyncMock(
             side_effect=FileNotFoundError("not found")
         )
