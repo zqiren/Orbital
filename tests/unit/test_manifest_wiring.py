@@ -47,6 +47,7 @@ class TestCreateAppLoadsRegistry:
         slugs = [a["slug"] for a in data]
         assert "built-in" in slugs
         assert "claude-code" in slugs
+        assert len(slugs) >= 2
 
 
 # ---------------------------------------------------------------------------
