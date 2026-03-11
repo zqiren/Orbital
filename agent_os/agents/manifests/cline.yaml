@@ -1,0 +1,112 @@
+# -----------------------------------------------------------------------
+# Cline CLI — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: cline
+# Verify installation: cline --version
+# Prompt input: `cline -y "prompt"` for headless autonomous mode
+#   -y flag bypasses all interactive UI and gives full autonomy
+#   Full stdin/stdout support for piping
+# Output format: Rich TUI (default), --output-format rich|json|plain (-F flag)
+#   --json shorthand for JSON streaming output
+# Approval prompts: Interactive mode asks permission for file edits, commands
+#   -y flag gives full autonomy (no prompts)
+#   VERIFY: exact interactive prompt patterns
+# Activity output: Shows file creates/edits, command execution, browser actions
+#   Streams in both interactive and headless modes
+# Install: npm install -g cline
+#   Then: cline auth (for provider setup)
+# Dependencies: Node.js >= 18
+# Auth: `cline auth` interactive wizard, or `cline auth -p anthropic -k <key> -m <model>`
+#   Also ANTHROPIC_API_KEY / OPENAI_API_KEY env vars
+# GitHub: github.com/cline/cline — ~58K+ stars, very actively maintained
+# Notes: CLI 2.0 released Feb 2026; macOS/Linux (Windows coming);
+#   originally a VS Code extension, now has standalone CLI
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Cline CLI"
+slug: "cline"
+description: "Autonomous coding agent with CLI and VS Code support"
+author: "cline"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "cline"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "-y"
+  # VERIFY: -y makes it headless with the prompt as positional arg
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    # VERIFY: exact Cline CLI approval patterns in interactive mode
+  activity_patterns:
+    - regex: "Creating (.+)"
+      label: "Create {1}"
+    - regex: "Editing (.+)"
+      label: "Edit {1}"
+    - regex: "Running (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Cline CLI activity output patterns
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g cline"
+  check_command: "cline --version"
+  credentials:
+    - key: "ANTHROPIC_API_KEY"
+      label: "Anthropic API Key"
+      type: secret
+      required: false
+      env_var: "ANTHROPIC_API_KEY"
+    - key: "OPENAI_API_KEY"
+      label: "OpenAI API Key"
+      type: secret
+      required: false
+      env_var: "OPENAI_API_KEY"
+      # At least one provider key needed; also configurable via `cline auth`
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\cline.cmd"
+      - "%PROGRAMFILES%\\nodejs\\cline.cmd"
+      # VERIFY: Windows support is still upcoming for Cline CLI 2.0
+    macos:
+      - "/usr/local/bin/cline"
+      - "$HOME/.npm-global/bin/cline"
+      - "/opt/homebrew/bin/cline"
+    linux:
+      - "/usr/local/bin/cline"
+      - "$HOME/.npm-global/bin/cline"
+      - "$HOME/.npm/bin/cline"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, file editing"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.anthropic.com"
+    - "api.openai.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

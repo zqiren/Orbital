@@ -1,0 +1,104 @@
+# -----------------------------------------------------------------------
+# Gemini CLI — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: gemini
+# Verify installation: gemini --version (or npx @google/gemini-cli)
+# Prompt input: Headless mode with --non-interactive flag
+#   Prompt passed as positional argument after flags
+# Output format: Plain text (default), --output-format json for JSON output
+# Approval prompts: Asks permission for file ops and shell commands
+#   --yolo flag auto-approves in trusted environments
+#   VERIFY: exact prompt wording
+# Activity output: Google Search grounding, file operations, shell commands,
+#   web fetching
+# Install: npm i -g @google/gemini-cli  OR  npx @google/gemini-cli
+# Dependencies: Node.js >= 18
+# Auth: Google account OAuth (browser), GEMINI_API_KEY env var,
+#   or service account credentials (GOOGLE_APPLICATION_CREDENTIALS)
+#   Free tier: 60 req/min, 1000 req/day
+# GitHub: github.com/google-gemini/gemini-cli — ~97K stars, very active
+# Notes: Approaching 100K stars; backed by Google; supports extensions
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Gemini CLI"
+slug: "gemini-cli"
+description: "Google's AI coding agent for the command line"
+author: "google"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "gemini"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "--non-interactive"
+  # VERIFY: prompt passed as positional arg after --non-interactive flag
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    # VERIFY: exact Gemini CLI approval patterns
+  activity_patterns:
+    - regex: "Reading (.+)"
+      label: "Read {1}"
+    - regex: "Writing (.+)"
+      label: "Write {1}"
+    - regex: "Running (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Gemini CLI activity output patterns
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @google/gemini-cli"
+  check_command: "gemini --version"
+  credentials:
+    - key: "GEMINI_API_KEY"
+      label: "Gemini API Key"
+      type: secret
+      required: true
+      env_var: "GEMINI_API_KEY"
+      # Also supports Google OAuth and service account credentials
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\gemini.cmd"
+      - "%PROGRAMFILES%\\nodejs\\gemini.cmd"
+    macos:
+      - "/usr/local/bin/gemini"
+      - "$HOME/.npm-global/bin/gemini"
+      - "/opt/homebrew/bin/gemini"
+    linux:
+      - "/usr/local/bin/gemini"
+      - "$HOME/.npm-global/bin/gemini"
+      - "$HOME/.npm/bin/gemini"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - research
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, research with Google Search grounding"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "generativelanguage.googleapis.com"
+    - "oauth2.googleapis.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

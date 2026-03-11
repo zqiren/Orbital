@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------
+# GitHub Copilot CLI — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: copilot
+# Verify installation: copilot --version
+# Prompt input: -p "prompt" for headless/non-interactive mode
+#   Interactive TUI by default
+# Output format: Rich TUI (default), non-interactive outputs to stdout
+#   VERIFY: JSON output format availability
+# Approval prompts: Previews every action before execution
+#   Supports hooks (preToolUse, postToolUse) for custom approval logic
+#   VERIFY: exact prompt patterns
+# Activity output: File edits, test execution, multi-step workflows
+#   Supports background delegation with & prefix
+#   Subagents and /fleet for parallel agent execution
+# Install: npm install -g @github/copilot
+#   Also: brew install gh (then gh extension install github/copilot-cli),
+#   or standalone binaries
+# Dependencies: Node.js >= 18 (for npm install)
+# Auth: OAuth device flow (/login command), or env vars:
+#   COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN for CI
+#   Falls back to gh CLI auth
+# GitHub: GA since Feb 2026, very actively maintained
+# Notes: Included with all GitHub Copilot plans;
+#   subagent and fleet capabilities are unique features
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "GitHub Copilot CLI"
+slug: "copilot-cli"
+description: "GitHub's AI coding agent for the terminal"
+author: "github"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "copilot"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "-p"
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    # VERIFY: exact Copilot CLI approval patterns
+  activity_patterns:
+    - regex: "Reading (.+)"
+      label: "Read {1}"
+    - regex: "Writing (.+)"
+      label: "Write {1}"
+    - regex: "Running (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Copilot CLI activity output patterns
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @github/copilot"
+  check_command: "copilot --version"
+  credentials:
+    - key: "GITHUB_TOKEN"
+      label: "GitHub Token (Copilot subscription required)"
+      type: secret
+      required: true
+      env_var: "GITHUB_TOKEN"
+      # Also supports: COPILOT_GITHUB_TOKEN, GH_TOKEN
+      # Or OAuth device flow via /login command
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\copilot.cmd"
+      - "%PROGRAMFILES%\\nodejs\\copilot.cmd"
+    macos:
+      - "/usr/local/bin/copilot"
+      - "$HOME/.npm-global/bin/copilot"
+      - "/opt/homebrew/bin/copilot"
+    linux:
+      - "/usr/local/bin/copilot"
+      - "$HOME/.npm-global/bin/copilot"
+      - "$HOME/.npm/bin/copilot"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, refactoring"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.github.com"
+    - "copilot-proxy.githubusercontent.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in
