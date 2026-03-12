@@ -166,7 +166,24 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
   while (i < messages.length) {
     const msg = messages[i];
 
-    if (msg._compaction || msg.role === 'system') {
+    if (msg._compaction) {
+      i++;
+      continue;
+    }
+
+    if (msg.role === 'system') {
+      if (msg._meta?.approval_request) {
+        items.push({
+          type: 'approval_card',
+          what: msg.content ?? '',
+          tool_name: (msg._meta.tool_name as string) ?? '',
+          tool_call_id: (msg._meta.tool_call_id as string) ?? '',
+          tool_args: (msg._meta.tool_args as Record<string, unknown>) ?? {},
+          recent_activity: [],
+          reasoning: msg._meta.reasoning as string | undefined,
+          resolved: msg._meta.resolution as 'approved' | 'denied' | undefined,
+        });
+      }
       i++;
       continue;
     }
@@ -191,6 +208,18 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'agent') {
+      if (msg.chunk_type === 'approval_request') {
+        items.push({
+          type: 'approval_card',
+          what: msg.content ?? '',
+          tool_name: (msg._meta?.tool_name as string) ?? '',
+          tool_call_id: (msg._meta?.tool_call_id as string) ?? '',
+          tool_args: (msg._meta?.tool_args as Record<string, unknown>) ?? {},
+          recent_activity: [],
+        });
+        i++;
+        continue;
+      }
       // Strip ANSI escape codes and filter empty / "(no response)" content
       const cleaned = (msg.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
       if (cleaned && cleaned !== '(no response)') {

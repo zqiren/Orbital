@@ -624,6 +624,8 @@ async def get_pending_approval(project_id: str):
     Used by mobile clients to recover approval cards missed via WebSocket.
     """
     approval = _agent_manager.get_pending_approval(project_id)
+    if approval is None and _sub_agent_manager is not None:
+        approval = _sub_agent_manager.get_pending_sub_agent_approval(project_id)
     if approval is None:
         return {"pending": False}
     return {"pending": True, **approval}

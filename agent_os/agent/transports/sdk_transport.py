@@ -47,6 +47,9 @@ class SDKTransport(AgentTransport):
         self._workspace: str = ""
         # Pending permission requests: request_id -> asyncio.Future
         self._pending_approvals: dict[str, asyncio.Future] = {}
+        # Metadata for pending approvals (for REST recovery):
+        # request_id -> {"request_id", "tool_name", "tool_input"}
+        self._pending_approval_data: dict[str, dict] = {}
         # Event queue for streaming events (tool use, permission requests)
         self._event_queue: asyncio.Queue[TransportEvent] = asyncio.Queue()
         # Flush flag: set when receive_response() ends without a ResultMessage
@@ -194,6 +197,7 @@ class SDKTransport(AgentTransport):
             if not future.done():
                 future.set_result(False)
         self._pending_approvals.clear()
+        self._pending_approval_data.clear()
 
         if self._client is not None:
             try:
@@ -215,6 +219,7 @@ class SDKTransport(AgentTransport):
     async def respond_to_permission(self, permission_id: str, approved: bool) -> None:
         """Resolve a pending permission request."""
         future = self._pending_approvals.pop(permission_id, None)
+        self._pending_approval_data.pop(permission_id, None)
         if future is not None and not future.done():
             future.set_result(approved)
 
@@ -230,6 +235,11 @@ class SDKTransport(AgentTransport):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._pending_approvals[request_id] = future
+        self._pending_approval_data[request_id] = {
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        }
 
         # Emit permission request event
         event = TransportEvent(
@@ -248,6 +258,7 @@ class SDKTransport(AgentTransport):
             approved = await future
         except asyncio.CancelledError:
             self._pending_approvals.pop(request_id, None)
+            self._pending_approval_data.pop(request_id, None)
             return PermissionResultDeny(message="Request cancelled")
 
         if approved:
