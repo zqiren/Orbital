@@ -532,6 +532,8 @@ async def start_agent(req: StartAgentRequest):
         agent_name=project.get("agent_name", project.get("name", "")),
         global_preferences_path="",
         llm_fallback_models=fallback_models,
+        budget_limit_usd=project.get("budget_limit_usd"),
+        budget_action=project.get("budget_action", "ask"),
     )
     try:
         await _agent_manager.start_agent(
