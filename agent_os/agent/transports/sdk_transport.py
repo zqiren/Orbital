@@ -138,25 +138,29 @@ class SDKTransport(AgentTransport):
         """Background task: iterate receive_response(), feed events to queue."""
         got_result = False
         try:
-            async for msg in self._client.receive_response():
-                if isinstance(msg, ResultMessage):
-                    got_result = True
-                events = self._message_to_events(msg)
-                for event in events:
-                    await self._event_queue.put(event)
-        except Exception as e:
-            logger.warning("SDKTransport: background response consumption failed: %s", e)
-            await self._event_queue.put(TransportEvent(
-                event_type="error",
-                data={"error": str(e)},
-                raw_text=f"Error: {e}",
-            ))
+            try:
+                async for msg in self._client.receive_response():
+                    if isinstance(msg, ResultMessage):
+                        got_result = True
+                    events = self._message_to_events(msg)
+                    for event in events:
+                        await self._event_queue.put(event)
+            except Exception as e:
+                logger.warning("SDKTransport: background response consumption failed: %s", e)
+                await self._event_queue.put(TransportEvent(
+                    event_type="error",
+                    data={"error": str(e)},
+                    raw_text=f"Error: {e}",
+                ))
 
-        if not got_result:
-            self._needs_flush = True
-            logger.warning("SDKTransport: background response ended without ResultMessage; will flush on next send")
-        else:
-            self._needs_flush = False
+            if not got_result:
+                self._needs_flush = True
+                logger.warning("SDKTransport: background response ended without ResultMessage; will flush on next send")
+            else:
+                self._needs_flush = False
+        finally:
+            # Always signal turn completion so adapter transitions to idle
+            await self._event_queue.put(TransportEvent(event_type="turn_complete"))
 
     async def _flush_stale_messages(self) -> None:
         """Drain leftover messages from the SDK buffer after a prior crash.

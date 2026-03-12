@@ -314,6 +314,7 @@ class SubAgentManager:
         transport = getattr(adapter, '_transport', None)
 
         if transport is not None and hasattr(transport, 'dispatch'):
+            adapter._idle = False  # Reset idle on new task
             await transport.dispatch(message)
             return
 

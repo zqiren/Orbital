@@ -169,7 +169,12 @@ class CLIAdapter(AgentAdapter):
         if self._transport:
             from agent_os.agent.transports.base import transport_event_to_chunk
             async for event in self._transport.read_stream():
-                yield transport_event_to_chunk(event)
+                if event.event_type == "turn_complete":
+                    self._idle = True
+                    # Don't yield turn_complete to consumers — it's internal
+                    continue
+                chunk = transport_event_to_chunk(event)
+                yield chunk
             return
         if self._using_provider and self._proc_handle:
             async for chunk in self._read_provider():
