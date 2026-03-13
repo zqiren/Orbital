@@ -1,0 +1,110 @@
+# -----------------------------------------------------------------------
+# Continue CLI (cn) — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: cn
+# Verify installation: cn --version
+# Prompt input: Interactive by default; headless mode outputs only final response
+#   Supports: cn "prompt" for interactive, cn --headless "prompt" for scripting
+#   Also supports: --resume to continue previous conversation
+# Output format: Plain text (interactive and headless)
+# Approval prompts: Tool permission system; asks before file writes and shell commands
+#   Permissions saved to ~/.continue/permissions.yaml
+#   Flags: --allow, --ask, --exclude for per-session control
+#   VERIFY: exact prompt patterns not confirmed — using conservative patterns
+# Activity output: Shows file edits, command execution, tool calls
+# Install: npm install -g @continuedev/cli
+# Dependencies: Node.js >= 18
+# Auth: Supports many providers via config; env vars like OPENAI_API_KEY,
+#   ANTHROPIC_API_KEY, etc.
+# GitHub: github.com/continuedev/continue — popular, actively maintained
+# Notes: Also available as VS Code and JetBrains extensions;
+#   CLI shares core with IDE extensions; supports MCP tools and rules
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Continue CLI"
+slug: "continue-cli"
+description: "Open-source modular coding agent for the command line"
+author: "continuedev"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "cn"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "--headless"
+  # VERIFY: exact flag for passing prompt text in non-interactive mode
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    - regex: "Allow\\?"
+      type: confirm
+    # VERIFY: exact Continue CLI approval patterns
+  activity_patterns:
+    - regex: "Reading (.+)"
+      label: "Read {1}"
+    - regex: "Writing (.+)"
+      label: "Write {1}"
+    - regex: "Running (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Continue CLI activity output patterns
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @continuedev/cli"
+  check_command: "cn --version"
+  credentials:
+    - key: "OPENAI_API_KEY"
+      label: "OpenAI API Key (or other provider key)"
+      type: secret
+      required: false
+      env_var: "OPENAI_API_KEY"
+    - key: "ANTHROPIC_API_KEY"
+      label: "Anthropic API Key"
+      type: secret
+      required: false
+      env_var: "ANTHROPIC_API_KEY"
+      # At least one LLM provider API key is needed
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\cn.cmd"
+      - "%PROGRAMFILES%\\nodejs\\cn.cmd"
+    macos:
+      - "/usr/local/bin/cn"
+      - "$HOME/.npm-global/bin/cn"
+      - "/opt/homebrew/bin/cn"
+    linux:
+      - "/usr/local/bin/cn"
+      - "$HOME/.npm-global/bin/cn"
+      - "$HOME/.npm/bin/cn"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - refactoring
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, reviewing, debugging, refactoring"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.openai.com"
+    - "api.anthropic.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

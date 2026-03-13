@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------
+# Goose (by Block) — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: goose
+# Verify installation: goose --version
+# Prompt input: Interactive session by default; `goose run "prompt"` or
+#   `goose run --instructions "prompt"` for non-interactive
+#   Also supports: --text flag, stdin piping
+# Output format: Plain text (interactive), structured via MCP
+# Approval prompts: Asks before executing shell commands and file modifications
+#   VERIFY: exact prompt patterns not confirmed — using conservative patterns
+# Activity output: Shows file edits, command execution, MCP tool calls
+# Install: Platform-specific installers:
+#   macOS: brew install block/tap/goose
+#   Linux: curl -fsSL https://github.com/block/goose/releases/latest/download/install.sh | sh
+#   Also available as cargo install or pre-built binaries
+# Dependencies: None (standalone Rust binary)
+# Auth: Supports many providers via env vars: provider-specific API keys
+#   configured via `goose configure` or env vars
+# GitHub: github.com/block/goose — 32K+ stars, very actively maintained
+# Notes: Written in Rust; MCP-native; supports 25+ LLM providers;
+#   contributed to Linux Foundation's Agentic AI Foundation
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Goose"
+slug: "goose"
+description: "Block's open-source AI agent that goes beyond code suggestions"
+author: "block"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "goose"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "--text"
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    - regex: "Allow this action\\?"
+      type: confirm
+    # VERIFY: exact Goose approval prompt patterns
+  activity_patterns:
+    - regex: "Reading (.+)"
+      label: "Read {1}"
+    - regex: "Writing (.+)"
+      label: "Write {1}"
+    - regex: "Executing (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Goose activity output patterns
+
+setup:
+  dependencies: []
+  # Goose is a standalone Rust binary — no runtime dependencies
+  install_command: "brew install block/tap/goose"
+  check_command: "goose --version"
+  credentials:
+    - key: "OPENAI_API_KEY"
+      label: "OpenAI API Key (or other provider key)"
+      type: secret
+      required: false
+      env_var: "OPENAI_API_KEY"
+    - key: "ANTHROPIC_API_KEY"
+      label: "Anthropic API Key"
+      type: secret
+      required: false
+      env_var: "ANTHROPIC_API_KEY"
+      # Goose supports 25+ providers; at least one API key is needed
+  auto_detect:
+    windows:
+      - "%LOCALAPPDATA%\\Programs\\goose\\goose.exe"
+      - "%USERPROFILE%\\.goose\\bin\\goose.exe"
+      # VERIFY: Windows install paths for Goose
+    macos:
+      - "/usr/local/bin/goose"
+      - "/opt/homebrew/bin/goose"
+      - "$HOME/.goose/bin/goose"
+    linux:
+      - "/usr/local/bin/goose"
+      - "$HOME/.goose/bin/goose"
+      - "$HOME/.local/bin/goose"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - task_planning
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, orchestrating workflows"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.openai.com"
+    - "api.anthropic.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

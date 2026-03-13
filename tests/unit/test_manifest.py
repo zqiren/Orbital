@@ -132,6 +132,48 @@ class TestManifestLoader:
         errors = ManifestLoader.validate(data)
         assert any("adapter" in e.lower() for e in errors)
 
+    def test_load_all_seed_manifests(self):
+        """Load every .yaml in the manifests directory and validate schema,
+        unique slugs, non-empty command for CLI adapters, and auto_detect paths."""
+        import glob
+
+        from agent_os.agents.manifest import ManifestLoader
+
+        yaml_files = sorted(glob.glob(os.path.join(_MANIFESTS_DIR, "*.yaml")))
+        assert len(yaml_files) >= 4, (
+            f"Expected at least 4 seed manifests, found {len(yaml_files)}"
+        )
+
+        slugs_seen = set()
+        for path in yaml_files:
+            m = ManifestLoader.load(path)
+
+            # Valid schema (load would have raised ManifestError otherwise)
+            assert m.manifest_version == "1"
+            assert m.slug
+            assert m.name
+
+            # Unique slugs
+            assert m.slug not in slugs_seen, (
+                f"Duplicate slug '{m.slug}' in {path}"
+            )
+            slugs_seen.add(m.slug)
+
+            # CLI adapters must have a non-empty command
+            if m.runtime.adapter == "cli":
+                assert m.runtime.command, (
+                    f"CLI manifest '{m.slug}' missing runtime.command"
+                )
+
+                # CLI adapters must have auto_detect paths for all 3 OS
+                for os_name in ("windows", "macos", "linux"):
+                    assert os_name in m.setup.auto_detect, (
+                        f"CLI manifest '{m.slug}' missing auto_detect.{os_name}"
+                    )
+                    assert len(m.setup.auto_detect[os_name]) >= 1, (
+                        f"CLI manifest '{m.slug}' has empty auto_detect.{os_name}"
+                    )
+
     def test_load_nonexistent_file(self):
         from agent_os.agents.manifest import ManifestError, ManifestLoader
 
@@ -168,7 +210,7 @@ class TestAgentRegistry:
         registry.load_directory(_MANIFESTS_DIR)
 
         all_manifests = registry.list_all()
-        assert len(all_manifests) == 2
+        assert len(all_manifests) >= 2
 
     def test_registry_get_by_slug(self):
         from agent_os.agents.registry import AgentRegistry
@@ -196,8 +238,9 @@ class TestAgentRegistry:
         registry.load_directory(_MANIFESTS_DIR)
 
         cli_agents = registry.list_by_adapter("cli")
-        assert len(cli_agents) == 1
-        assert cli_agents[0].slug == "claude-code"
+        assert len(cli_agents) >= 1
+        cli_slugs = [a.slug for a in cli_agents]
+        assert "claude-code" in cli_slugs
 
         builtin_agents = registry.list_by_adapter("built_in")
         assert len(builtin_agents) == 1
@@ -213,12 +256,14 @@ class TestAgentRegistry:
         registry.load_directory(_MANIFESTS_DIR)
 
         debugging = registry.get_for_routing("debugging")
-        assert len(debugging) == 1
-        assert debugging[0].slug == "claude-code"
+        assert len(debugging) >= 1
+        debugging_slugs = [a.slug for a in debugging]
+        assert "claude-code" in debugging_slugs
 
         research = registry.get_for_routing("research")
-        assert len(research) == 1
-        assert research[0].slug == "built-in"
+        assert len(research) >= 1
+        research_slugs = [a.slug for a in research]
+        assert "built-in" in research_slugs
 
         # Nonexistent skill
         assert len(registry.get_for_routing("teleportation")) == 0

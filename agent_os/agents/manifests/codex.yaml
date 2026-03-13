@@ -1,0 +1,97 @@
+# -----------------------------------------------------------------------
+# OpenAI Codex CLI — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: codex
+# Verify installation: codex --version
+# Prompt input: Interactive by default; `codex exec "prompt"` for non-interactive
+#   Also supports: codex -q "prompt" (quiet/non-interactive shorthand)
+# Output format: Plain text (interactive), JSONL (with codex exec --output-format jsonl)
+# Approval prompts: Codex asks before file writes and shell commands;
+#   patterns depend on approval mode (suggest/auto-edit/full-auto)
+#   VERIFY: exact prompt wording not confirmed — using conservative patterns
+# Activity output: Shows file edits, shell commands; format varies by mode
+# Install: npm i -g @openai/codex  OR  brew install --cask codex
+# Dependencies: Node.js >= 18 (npm install), or standalone binary via brew
+# Auth: OPENAI_API_KEY env var, or `codex login` for ChatGPT Plus/Pro auth
+# GitHub: github.com/openai/codex — very popular, actively maintained (2026)
+# Notes: Evolved from Node.js to Rust; supports AGENTS.md and MCP
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "OpenAI Codex CLI"
+slug: "codex"
+description: "OpenAI's lightweight coding agent that runs in your terminal"
+author: "openai"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "codex"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "-q"
+  approval_patterns:
+    - regex: "\\(y/n\\)"
+      type: confirm
+    - regex: "\\(Y/n\\)"
+      type: confirm
+    # VERIFY: exact Codex approval prompt patterns
+  activity_patterns:
+    - regex: "Reading (.+)"
+      label: "Read {1}"
+    - regex: "Writing (.+)"
+      label: "Write {1}"
+    - regex: "Running (.+)"
+      label: "Shell: {1}"
+    # VERIFY: exact Codex activity output patterns
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @openai/codex"
+  check_command: "codex --version"
+  credentials:
+    - key: "OPENAI_API_KEY"
+      label: "OpenAI API Key"
+      type: secret
+      required: true
+      env_var: "OPENAI_API_KEY"
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\codex.cmd"
+      - "%PROGRAMFILES%\\nodejs\\codex.cmd"
+    macos:
+      - "/usr/local/bin/codex"
+      - "$HOME/.npm-global/bin/codex"
+      - "/opt/homebrew/bin/codex"
+    linux:
+      - "/usr/local/bin/codex"
+      - "$HOME/.npm-global/bin/codex"
+      - "$HOME/.npm/bin/codex"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks: writing code, debugging, testing, refactoring"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.openai.com"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: check_in

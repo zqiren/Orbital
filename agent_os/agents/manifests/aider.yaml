@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------
+# Aider — Research Notes
+# -----------------------------------------------------------------------
+# CLI command: aider
+# Verify installation: aider --version
+# Prompt input: Interactive REPL by default; --message "prompt" for single-shot
+#   Also supports: --message-file, stdin piping
+# Output format: Plain text to stdout
+# Approval prompts: Asks before file edits with "Edit the files? (Y)es/(N)o"
+#   and before shell commands with "Run shell command? (Y)es/(N)o"
+# Activity output: Shows git diffs of changes, file names being edited
+# Install: pip install aider-chat  OR  pipx install aider-chat
+# Dependencies: Python >= 3.9, git
+# Auth: Supports many providers via env vars: OPENAI_API_KEY, ANTHROPIC_API_KEY,
+#   GEMINI_API_KEY, etc. Configured via --model flag or .aider.conf.yml
+# GitHub: github.com/Aider-AI/aider — 30K+ stars, very actively maintained
+# Notes: Git-aware; auto-commits changes; supports 100+ LLMs; architect mode
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Aider"
+slug: "aider"
+description: "AI pair programming in your terminal — edit code with LLMs"
+author: "aider-ai"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "aider"
+  transport: pty
+  mode: interactive
+  args: []
+  prompt_flag: "--message"
+  approval_patterns:
+    - regex: "Edit the files\\? \\(Y\\)es/\\(N\\)o"
+      type: confirm
+    - regex: "Run shell command\\?"
+      type: confirm
+    - regex: "\\(Y\\)es/\\(N\\)o"
+      type: confirm
+  activity_patterns:
+    - regex: "Editing (.+)"
+      label: "Edit {1}"
+    - regex: "Applied edit to (.+)"
+      label: "Write {1}"
+    # VERIFY: exact aider activity patterns may vary by version
+
+setup:
+  dependencies:
+    - name: "Python"
+      check_command: "python3 --version"
+      min_version: "3.9.0"
+      install:
+        windows: "winget install Python.Python.3.12"
+        macos: "brew install python@3.12"
+    - name: "Git"
+      check_command: "git --version"
+      min_version: "2.0.0"
+      install:
+        windows: "winget install Git.Git"
+        macos: "brew install git"
+  install_command: "pip install aider-chat"
+  check_command: "aider --version"
+  credentials:
+    - key: "OPENAI_API_KEY"
+      label: "OpenAI API Key (or other provider key)"
+      type: secret
+      required: false
+      env_var: "OPENAI_API_KEY"
+    - key: "ANTHROPIC_API_KEY"
+      label: "Anthropic API Key"
+      type: secret
+      required: false
+      env_var: "ANTHROPIC_API_KEY"
+      # At least one LLM provider API key is needed
+  auto_detect:
+    windows:
+      - "%LOCALAPPDATA%\\Programs\\Python\\Python312\\Scripts\\aider.exe"
+      - "%APPDATA%\\Python\\Scripts\\aider.exe"
+    macos:
+      - "/usr/local/bin/aider"
+      - "$HOME/.local/bin/aider"
+      - "/opt/homebrew/bin/aider"
+    linux:
+      - "/usr/local/bin/aider"
+      - "$HOME/.local/bin/aider"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h, .cs, .php]
+  routing_hint: "Use for coding tasks: pair programming, editing code, refactoring with git integration"
+  needs_shell: false
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "api.openai.com"
+    - "api.anthropic.com"
+  shell: false
+  workspace_access: read_write
+  autonomy_recommended: check_in
