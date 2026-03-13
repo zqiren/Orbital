@@ -16,7 +16,7 @@ from agent_os.daemon_v2.activity_translator import _describe_tool
 
 BROWSER_WRITE_ACTIONS = frozenset({
     "click", "type", "fill", "press", "hover", "select",
-    "drag", "upload_file", "evaluate",
+    "drag", "upload_file",
 })
 
 

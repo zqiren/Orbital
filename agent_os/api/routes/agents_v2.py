@@ -19,7 +19,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
@@ -84,6 +84,17 @@ class InjectRequest(BaseModel):
     content: str
     target: str | None = None
     nonce: str | None = None
+
+    @field_validator("content")
+    @classmethod
+    def reject_encoding_corruption(cls, v: str) -> str:
+        if "\ufffd" in v:
+            raise ValueError(
+                "Request contains invalid UTF-8 characters (possible terminal"
+                " encoding issue). Use Python with explicit UTF-8 encoding for"
+                " non-ASCII text, or send from the desktop app."
+            )
+        return v
 
 
 class ApproveRequest(BaseModel):

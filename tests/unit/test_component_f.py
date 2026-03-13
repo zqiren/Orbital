@@ -293,6 +293,30 @@ class TestAutonomyInterceptor:
         with pytest.raises(RuntimeError):
             interceptor.should_intercept({"id": "1", "name": "shell", "arguments": {}})
 
+    def test_check_in_does_not_intercept_browser_evaluate(self):
+        """evaluate is a read-only JS execution action and should NOT be
+        intercepted under CHECK_IN mode (Issue 3: excessive approvals)."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        interceptor = self._make_interceptor(Autonomy.CHECK_IN)
+        tool_call = {"id": "1", "name": "browser", "arguments": {"action": "evaluate"}}
+        assert not interceptor.should_intercept(tool_call)
+
+    def test_check_in_still_intercepts_browser_write_actions(self):
+        """click, type, fill, etc. MUST still be intercepted under CHECK_IN."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        interceptor = self._make_interceptor(Autonomy.CHECK_IN)
+        for action in ("click", "type", "fill", "press", "hover", "select", "drag", "upload_file"):
+            tool_call = {"id": "1", "name": "browser", "arguments": {"action": action}}
+            assert interceptor.should_intercept(tool_call), f"{action} should be intercepted"
+
+    def test_evaluate_not_in_browser_write_actions(self):
+        """evaluate must not appear in BROWSER_WRITE_ACTIONS frozenset."""
+        from agent_os.daemon_v2.autonomy import BROWSER_WRITE_ACTIONS
+
+        assert "evaluate" not in BROWSER_WRITE_ACTIONS
+
 
 # ---------------------------------------------------------------------------
 # ActivityTranslator tests

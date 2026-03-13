@@ -259,9 +259,40 @@ class ProcessLauncher:
 
         if not success:
             error_code = _GetLastError()
-            raise RuntimeError(
-                f"CreateProcessWithLogonW failed with error code {error_code}"
-            )
+
+            # ERROR_DIRECTORY (267): sandbox user cannot resolve the working
+            # directory despite valid ACLs — often caused by stale profile
+            # state after password reset.  Retry with system temp as cwd.
+            if error_code == 267:
+                logger.warning(
+                    "CreateProcessWithLogonW ERROR_DIRECTORY (267) for "
+                    "working_dir=%s — retrying with system temp", working_dir
+                )
+                fallback_dir = os.path.join(
+                    os.environ.get("SystemRoot", r"C:\Windows"), "Temp"
+                )
+                si = STARTUPINFOW()
+                si.cb = ctypes.sizeof(STARTUPINFOW)
+                pi = PROCESS_INFORMATION()
+                success = _CreateProcessWithLogonW(
+                    SANDBOX_USERNAME, ".", password, LOGON_NO_PROFILE,
+                    None, cmd_line_buf, creation_flags, env_block,
+                    fallback_dir, ctypes.byref(si), ctypes.byref(pi),
+                )
+                if not success:
+                    fallback_err = _GetLastError()
+                    raise RuntimeError(
+                        f"CreateProcessWithLogonW failed with error code "
+                        f"{error_code}, fallback also failed with {fallback_err}"
+                    )
+                logger.info(
+                    "Fallback succeeded: launched in %s instead of %s",
+                    fallback_dir, working_dir,
+                )
+            else:
+                raise RuntimeError(
+                    f"CreateProcessWithLogonW failed with error code {error_code}"
+                )
 
         # Capture raw Win32 handle for is_alive lambda (avoids circular ref).
         _proc_h = pi.hProcess
@@ -632,6 +663,18 @@ class ProcessLauncher:
             sandbox_tmp = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Temp")
             env["TEMP"] = sandbox_tmp
             env["TMP"] = sandbox_tmp
+
+        # Ensure HOMEDRIVE/HOMEPATH are set for the sandbox user.
+        # CreateProcessWithLogonW with LOGON_NO_PROFILE skips profile load,
+        # leaving the user without drive letter bindings or path resolution
+        # context.  Explicitly setting these prevents ERROR_DIRECTORY (267)
+        # when the sandbox user cannot resolve the working directory.
+        if inherit_env:
+            if "HOMEDRIVE" not in (env_vars or {}):
+                system_root = os.environ.get("SystemRoot", r"C:\Windows")
+                env["HOMEDRIVE"] = system_root[:2]       # e.g. "C:"
+                env["HOMEPATH"] = "\\Temp"
+                env["USERPROFILE"] = system_root[:2] + "\\Temp"
 
         parts = [f"{k}={v}" for k, v in sorted(env.items())]
         block = "\0".join(parts) + "\0\0"
