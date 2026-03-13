@@ -314,6 +314,7 @@ class SubAgentManager:
         transport = getattr(adapter, '_transport', None)
 
         if transport is not None and hasattr(transport, 'dispatch'):
+            adapter._idle = False  # Reset idle on new task
             await transport.dispatch(message)
             return
 
@@ -350,6 +351,33 @@ class SubAgentManager:
         if adapter.is_idle():
             return "idle"
         return "running"
+
+    def get_pending_sub_agent_approval(self, project_id: str) -> dict | None:
+        """Return the first pending sub-agent approval for a project, or None.
+
+        Used by the REST recovery endpoint so clients can fetch sub-agent
+        approval card data when they miss the WebSocket event.
+        """
+        adapters = self._adapters.get(project_id, {})
+        for handle, adapter in adapters.items():
+            transport = getattr(adapter, '_transport', None)
+            if transport is None:
+                continue
+            pending = getattr(transport, '_pending_approvals', {})
+            if not pending:
+                continue
+            # Get metadata from _pending_approval_data if available
+            approval_data = getattr(transport, '_pending_approval_data', {})
+            for request_id in pending:
+                data = approval_data.get(request_id, {})
+                return {
+                    "tool_call_id": data.get("request_id", request_id),
+                    "tool_name": data.get("tool_name", ""),
+                    "tool_args": data.get("tool_input", {}),
+                    "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
+                    "source": handle,
+                }
+        return None
 
     async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str, approved: bool) -> bool:
         """Try to resolve a permission request on any sub-agent transport.

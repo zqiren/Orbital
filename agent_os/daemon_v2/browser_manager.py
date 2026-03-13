@@ -247,6 +247,20 @@ class BrowserManager:
 
         return await self._launch()
 
+    async def _get_clean_user_agent(self) -> str:
+        """Launch browser briefly to get real UA, strip 'Headless', cache result."""
+        if hasattr(self, '_cached_clean_ua'):
+            return self._cached_clean_ua
+
+        browser = await self._playwright.chromium.launch(headless=True)
+        page = await browser.new_page()
+        raw_ua = await page.evaluate("navigator.userAgent")
+        await browser.close()
+
+        clean_ua = raw_ua.replace("HeadlessChrome", "Chrome")
+        self._cached_clean_ua = clean_ua
+        return clean_ua
+
     async def _launch(self):
         """Launch Chromium with persistent context and anti-detection flags."""
         self._profile_dir.mkdir(parents=True, exist_ok=True)
@@ -269,6 +283,9 @@ class BrowserManager:
         if os.environ.get("AGENT_OS_BROWSER_HEADED", "").lower() in ("1", "true"):
             headless = False
 
+        # Override UA in headless mode to remove "HeadlessChrome" detection signal
+        ua_override = await self._get_clean_user_agent() if headless else None
+
         # Detect system locale (BCP-47 format like "en-US", "zh-CN")
         detected_locale = _detect_locale()
 
@@ -282,6 +299,7 @@ class BrowserManager:
             ignore_default_args=["--enable-automation"],
             locale=detected_locale,
             timezone_id=detected_timezone,
+            user_agent=ua_override,
         )
 
         # Try system Chrome → Edge → bundled Chromium

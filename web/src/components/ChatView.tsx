@@ -379,6 +379,49 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     return () => clearInterval(timer);
   }, [agentStatus, projectId, scrollToBottom]);
 
+  // Polling safety net: while the agent is running, poll /pending-approval
+  // every 5 seconds so approvals surface even if the WS event was missed
+  // (relay disconnect, transient drop). This is a fallback — the WebSocket
+  // handler `handleApprovalRequest` remains the primary path.
+  useEffect(() => {
+    if (agentStatus !== 'running') return;
+
+    const timer = setInterval(() => {
+      api<{
+        pending: boolean;
+        tool_call_id?: string;
+        tool_name?: string;
+        tool_args?: Record<string, unknown>;
+        what?: string;
+        source?: string;
+        recent_activity?: ChatMessageType[];
+        reasoning?: string;
+      }>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`,
+      )
+        .then((result) => {
+          if (!result.pending || !result.tool_call_id) return;
+          setApprovals((prev) => {
+            if (prev.has(result.tool_call_id!)) return prev; // dedup
+            const next = new Map(prev);
+            next.set(result.tool_call_id!, {
+              what: result.what ?? '',
+              tool_name: result.tool_name ?? '',
+              tool_call_id: result.tool_call_id!,
+              tool_args: result.tool_args ?? {},
+              recent_activity: result.recent_activity ?? [],
+              reasoning: result.reasoning,
+            });
+            return next;
+          });
+          scrollToBottom();
+        })
+        .catch(() => {});
+    }, 5_000);
+
+    return () => clearInterval(timer);
+  }, [agentStatus, projectId, scrollToBottom]);
+
   useEffect(() => {
     function handleStreamDelta(event: WebSocketEvent) {
       const e = event as StreamDeltaEvent;

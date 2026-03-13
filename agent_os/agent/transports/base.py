@@ -11,7 +11,7 @@ from typing import AsyncIterator
 @dataclass
 class TransportEvent:
     """Structured event from a transport."""
-    event_type: str  # "message" | "tool_use" | "permission_request" | "status" | "error" | "session_created"
+    event_type: str  # "message" | "tool_use" | "permission_request" | "status" | "error" | "session_created" | "turn_complete"
     data: dict = field(default_factory=dict)
     raw_text: str = ""
 
@@ -57,6 +57,7 @@ def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
         "tool_use": "tool_activity",
         "permission_request": "approval_request",
         "status": "status",
+        "turn_complete": "status",
     }
     return OutputChunk(
         text=event.raw_text or event.data.get("text", ""),

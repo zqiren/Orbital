@@ -527,13 +527,18 @@ class AgentManager:
             )
 
         # 11b. Budget persistence callback
-        from agent_os.agent.pricing import get_cost_rates
+        from agent_os.agent.pricing import get_cost_rates, budget_usd_to_token_budget
         cost_per_1k_input, cost_per_1k_output = get_cost_rates(
             config.model, config.provider,
         )
         persisted_spend = (
             self._project_store.get_project(project_id) or {}
         ).get("runtime", {}).get("budget_spent_usd", 0.0)
+
+        # Derive token budget from dollar budget when set
+        effective_token_budget = budget_usd_to_token_budget(
+            config.budget_limit_usd, cost_per_1k_input, cost_per_1k_output,
+        )
 
         def on_cost_update(delta_usd, total_spent_usd):
             self._project_store.update_runtime(
@@ -546,7 +551,7 @@ class AgentManager:
             utility_provider=utility_provider,
             fallback_providers=fallback_providers,
             max_iterations=config.max_iterations,
-            token_budget=config.token_budget,
+            token_budget=effective_token_budget,
             budget_limit_usd=config.budget_limit_usd,
             budget_action=config.budget_action,
             budget_spent_usd=persisted_spend,

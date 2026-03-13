@@ -79,7 +79,7 @@ class AgentLoop:
         utility_provider=None,
         fallback_providers=None,
         max_iterations: int = 50,
-        token_budget: int = 500_000,
+        token_budget: int = 100_000_000,
         budget_limit_usd: float | None = None,
         budget_action: str = "ask",
         budget_spent_usd: float = 0.0,

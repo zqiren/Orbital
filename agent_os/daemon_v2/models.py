@@ -68,7 +68,7 @@ class AgentConfig:
     api_key: str
     base_url: str | None = None
     max_iterations: int = 50
-    token_budget: int = 500_000
+    token_budget: int = 100_000_000
     utility_model: str | None = None
     search_api_key: str | None = None
     autonomy: Autonomy = Autonomy.HANDS_OFF

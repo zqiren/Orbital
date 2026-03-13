@@ -68,7 +68,7 @@ class TestModels:
 
         cfg = AgentConfig(workspace="/tmp/ws", model="gpt-4", api_key="sk-test")
         assert cfg.max_iterations == 50
-        assert cfg.token_budget == 500_000
+        assert cfg.token_budget == 100_000_000
         assert cfg.autonomy == Autonomy.HANDS_OFF
         assert cfg.enabled_agents == []
         assert cfg.base_url is None

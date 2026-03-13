@@ -319,9 +319,9 @@ class TestProjectBudgetFields:
     """Project model accepts budget fields, serializes/deserializes correctly."""
 
     def test_agent_config_has_token_budget(self):
-        """AgentConfig has token_budget with default 500_000."""
+        """AgentConfig has token_budget with default 100_000_000."""
         config = _make_config()
-        assert config.token_budget == 500_000
+        assert config.token_budget == 100_000_000
 
     def test_agent_config_custom_token_budget(self):
         """AgentConfig accepts custom token_budget."""

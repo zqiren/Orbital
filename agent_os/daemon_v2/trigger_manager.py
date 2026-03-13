@@ -440,6 +440,8 @@ class TriggerManager:
                 is_scratch=project.get("is_scratch", False),
                 agent_name=project.get("agent_name", project.get("name", "")),
                 enabled_sub_agents=project.get("enabled_sub_agents", []),
+                budget_limit_usd=project.get("budget_limit_usd"),
+                budget_action=project.get("budget_action", "ask"),
             )
             await self._agent_manager.start_agent(
                 project_id, config,

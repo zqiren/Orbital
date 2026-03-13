@@ -79,3 +79,38 @@ def get_cost_rates(model: str, provider: str = "custom") -> tuple[float, float]:
 
     # Convert per-1M to per-1K
     return input_per_1m / 1000, output_per_1m / 1000
+
+
+# Default safety-net token budget when no dollar budget is configured
+_SAFETY_NET_TOKEN_BUDGET = 100_000_000  # 100M tokens
+
+# Assumed ratio of input to output tokens in agentic workloads.
+# Input dominates because the growing conversation context is re-sent each turn.
+_INPUT_TOKEN_RATIO = 0.85
+
+
+def budget_usd_to_token_budget(
+    budget_usd: float | None,
+    cost_per_1k_input: float,
+    cost_per_1k_output: float,
+    input_ratio: float = _INPUT_TOKEN_RATIO,
+) -> int:
+    """Convert a dollar budget to an approximate cumulative token budget.
+
+    Uses a blended cost rate weighted by input_ratio (default 85% input,
+    15% output) to account for agentic workloads where input tokens dominate
+    due to context re-sending.
+
+    Returns _SAFETY_NET_TOKEN_BUDGET when budget_usd is None (no cap set).
+    """
+    if budget_usd is None:
+        return _SAFETY_NET_TOKEN_BUDGET
+
+    if budget_usd <= 0:
+        return 0
+
+    blended_per_1k = input_ratio * cost_per_1k_input + (1 - input_ratio) * cost_per_1k_output
+    if blended_per_1k <= 0:
+        return _SAFETY_NET_TOKEN_BUDGET
+
+    return int(budget_usd / blended_per_1k * 1000)

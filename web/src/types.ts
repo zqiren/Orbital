@@ -101,6 +101,7 @@ export interface ChatMessage {
   _meta?: Record<string, unknown>;
   _activity_descriptions?: Record<string, string>;
   session_id?: string;
+  chunk_type?: string;
 }
 
 export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'stopped' | 'error' | 'new_session' | 'pending_approval';
