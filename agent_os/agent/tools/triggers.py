@@ -74,11 +74,6 @@ class CreateTriggerTool(Tool):
                     "type": "integer",
                     "description": "Seconds to wait after last file change before firing. Default 5. file_watch type only.",
                 },
-                "autonomy": {
-                    "type": "string",
-                    "enum": ["hands_off", "check_in", "supervised"],
-                    "description": "Optional autonomy override for this trigger. Null inherits project default.",
-                },
             },
             "required": ["name", "type", "task"],
         }
@@ -90,15 +85,12 @@ class CreateTriggerTool(Tool):
             name = arguments.get("name", "")
             ttype = arguments.get("type", "schedule")
             task = arguments.get("task", "")
-            autonomy = arguments.get("autonomy")
-
             trigger = {
                 "id": generate_trigger_id(),
                 "name": name,
                 "enabled": True,
                 "type": ttype,
                 "task": task,
-                "autonomy": autonomy,
                 "last_triggered": None,
                 "trigger_count": 0,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -227,11 +219,6 @@ class UpdateTriggerTool(Tool):
                     "type": "string",
                     "description": "New timezone",
                 },
-                "autonomy": {
-                    "type": "string",
-                    "enum": ["hands_off", "check_in", "supervised"],
-                    "description": "New autonomy setting (null to inherit project default)",
-                },
                 "enabled": {
                     "type": "boolean",
                     "description": "Enable or disable the trigger",
@@ -262,9 +249,6 @@ class UpdateTriggerTool(Tool):
                 trigger["task"] = arguments["task"]
             if "enabled" in arguments:
                 trigger["enabled"] = arguments["enabled"]
-            if "autonomy" in arguments:
-                trigger["autonomy"] = arguments["autonomy"]
-
             # Update schedule fields
             if "cron" in arguments or "human" in arguments or "timezone" in arguments:
                 schedule = trigger.get("schedule", {})

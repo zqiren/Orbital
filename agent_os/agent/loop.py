@@ -78,7 +78,7 @@ class AgentLoop:
         interceptor=None,
         utility_provider=None,
         fallback_providers=None,
-        max_iterations: int = 50,
+        max_iterations: int = 0,
         token_budget: int = 100_000_000,
         budget_limit_usd: float | None = None,
         budget_action: str = "ask",
@@ -220,8 +220,8 @@ class AgentLoop:
                     error_tracker.clear()
                     blocked_tools.clear()
 
-                # Check iteration cap
-                if iteration >= self._max_iterations:
+                # Check iteration cap (0 = unlimited)
+                if self._max_iterations and iteration >= self._max_iterations:
                     self._session.append_system(
                         "Maximum iteration limit reached. Save your current state and stop."
                     )

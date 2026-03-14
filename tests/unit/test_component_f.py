@@ -67,7 +67,7 @@ class TestModels:
         from agent_os.agent.prompt_builder import Autonomy
 
         cfg = AgentConfig(workspace="/tmp/ws", model="gpt-4", api_key="sk-test")
-        assert cfg.max_iterations == 50
+        assert cfg.max_iterations == 0  # 0 = unlimited (token budget is the cap)
         assert cfg.token_budget == 100_000_000
         assert cfg.autonomy == Autonomy.HANDS_OFF
         assert cfg.enabled_agents == []

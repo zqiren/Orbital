@@ -9,6 +9,7 @@ v2 API only. JSON-based project storage.
 
 import asyncio
 import json
+import logging
 import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -36,6 +37,8 @@ from agent_os.agents.setup_engine import SetupEngine
 from agent_os.daemon_v2.trigger_manager import TriggerManager
 from agent_os.platform import create_platform_provider
 from agent_os.utils.pid_file import acquire_pid_file, release_pid_file
+
+logger = logging.getLogger(__name__)
 
 
 SCRATCH_PROJECT_GOALS = """# Quick Tasks Assistant
@@ -113,10 +116,11 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     if _legacy.llm.api_key:
         try:
             credential_store.set_api_key(_legacy.llm.api_key)
+        except Exception as e:
+            logger.warning("Credential migration failed, keeping key in settings.json: %s", e)
+        else:
             _legacy.llm.api_key = None
             settings_store.update(_legacy)
-        except Exception:
-            pass  # keep legacy key if keychain unavailable
 
     # Auto-create scratch project
     _ensure_scratch_project(project_store, settings_store, store_dir)
