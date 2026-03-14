@@ -67,7 +67,7 @@ class AgentConfig:
     model: str
     api_key: str
     base_url: str | None = None
-    max_iterations: int = 50
+    max_iterations: int = 0
     token_budget: int = 100_000_000
     utility_model: str | None = None
     search_api_key: str | None = None

@@ -106,7 +106,7 @@ async def _get_ax_tree(page) -> dict | None:
 
 BROWSER_WRITE_ACTIONS = frozenset({
     "click", "type", "fill", "press", "hover", "select",
-    "drag", "upload_file", "evaluate",
+    "drag", "upload_file",
 })
 
 BROWSER_OBSERVATION_ACTIONS = frozenset({

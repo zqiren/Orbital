@@ -42,6 +42,8 @@ class ApiKeyStore:
 
     def set_api_key(self, key: str) -> dict:
         """Store key in OS keychain. No-op if env var is set."""
+        if not key or not key.strip():
+            raise ValueError("API key must be non-empty")
         if os.environ.get(_ENV_VAR):
             return {"source": "environment"}
         if not _KEYRING_AVAILABLE:
@@ -50,6 +52,11 @@ class ApiKeyStore:
             keyring.set_password(_SERVICE_NAME, _KEY_NAME, key)
         except Exception as exc:
             raise RuntimeError(f"keyring.set_password failed: {exc}") from exc
+        stored = keyring.get_password(_SERVICE_NAME, _KEY_NAME)
+        if stored != key:
+            raise RuntimeError(
+                "Keychain write verification failed: stored value does not match"
+            )
         return {"source": "keychain"}
 
     def delete_api_key(self) -> dict:

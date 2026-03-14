@@ -399,8 +399,8 @@ class TriggerManager:
             from agent_os.daemon_v2.models import AgentConfig
             from agent_os.agent.prompt_builder import Autonomy
 
-            # Resolve autonomy: trigger override or project default
-            autonomy_str = trigger.get("autonomy") or project.get("autonomy", "hands_off")
+            # Always use project-level autonomy (triggers inherit from project)
+            autonomy_str = project.get("autonomy", "hands_off")
             try:
                 autonomy = Autonomy(autonomy_str)
             except ValueError:
