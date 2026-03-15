@@ -570,7 +570,10 @@ class ProcessLauncher:
         original_args_joined = " ".join(
             f'"{a}"' if " " in a else a for a in args
         )
-        wrapped_inner = f'{command} {original_args_joined} > "{stdout_path}" 2> "{stderr_path}"'
+        # Explicitly cd to the working directory before running the command.
+        # CreateProcessWithLogonW with LOGON_NO_PROFILE unreliably sets cwd;
+        # the ERROR_DIRECTORY (267) fallback may land us in C:\Windows\Temp.
+        wrapped_inner = f'cd /d "{working_dir}" && {command} {original_args_joined} > "{stdout_path}" 2> "{stderr_path}"'
 
         timed_out = False
         exit_code = 1

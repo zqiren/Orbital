@@ -28,10 +28,12 @@ def _frozen_base_dir() -> str:
 
 def create_tray_icon() -> Image.Image:
     if getattr(sys, "frozen", False):
-        icon_path = os.path.join(_frozen_base_dir(), "assets", "icon.png")
+        base = _frozen_base_dir()
     else:
-        icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "icon.png")
-    icon_path = os.path.abspath(icon_path)
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    # Use .ico on Windows, .png elsewhere
+    ext = "icon.ico" if sys.platform == "win32" else "icon.png"
+    icon_path = os.path.join(base, "assets", ext)
     return Image.open(icon_path)
 
 
@@ -56,7 +58,7 @@ def start_tray(port: int, open_window_fn, shutdown_fn):
         )
         icon.run()
     except Exception:
-        # On macOS, pystray requires the main thread for Cocoa's NSApplication
-        # but pywebview already owns it.  The tray icon is non-essential —
-        # the app remains accessible via the Dock and the webview window.
-        logger.debug("System tray unavailable (expected on macOS .app bundles)", exc_info=True)
+        if sys.platform == "darwin":
+            logger.debug("System tray unavailable (expected on macOS .app bundles)", exc_info=True)
+        else:
+            logger.error("System tray failed to start", exc_info=True)
