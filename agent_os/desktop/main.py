@@ -68,6 +68,40 @@ def resolve_spa_dir() -> str:
     return os.path.abspath(spa)
 
 
+def _inherit_shell_path():
+    """Inherit the user's full shell PATH into the daemon process.
+
+    PyInstaller bundles run with a minimal PATH that doesn't include
+    user-installed tool directories (homebrew, npm global, ~/.local/bin,
+    etc.).  This prevents agent binary discovery via shutil.which().
+
+    We invoke the user's login shell once at startup to capture the
+    real PATH, then merge it into os.environ so all downstream code
+    (including SetupEngine.resolve_binary()) benefits.
+    """
+    import subprocess as _sp
+
+    shell = os.environ.get("SHELL", "/bin/bash")
+    try:
+        result = _sp.run(
+            [shell, "-lc", "echo $PATH"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            shell_path = result.stdout.strip()
+            current = os.environ.get("PATH", "")
+            # Merge: shell paths first, then existing (deduped)
+            seen = set()
+            merged = []
+            for p in shell_path.split(os.pathsep) + current.split(os.pathsep):
+                if p and p not in seen:
+                    seen.add(p)
+                    merged.append(p)
+            os.environ["PATH"] = os.pathsep.join(merged)
+    except Exception:
+        pass  # Fall back to existing PATH silently
+
+
 def _disable_app_nap():
     """Disable App Nap at daemon startup on macOS (defense-in-depth).
 
@@ -367,6 +401,7 @@ def main():
 
     PORT = 8000
     run_migrations()
+    _inherit_shell_path()
     _disable_app_nap()
 
     if is_already_running(PORT):
