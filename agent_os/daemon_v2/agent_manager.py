@@ -805,6 +805,30 @@ class AgentManager:
             return "queued"
 
         # Case 2: loop idle — append message and hot-resume
+        if handle is not None and handle.session.is_stopped():
+            del self._handles[project_id]
+            handle = None
+
+        if handle is None:
+            # Auto-start a fresh agent (stale stopped session was cleaned up)
+            config = AgentConfig(
+                workspace=project["workspace"],
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                autonomy=autonomy,
+                sdk=project.get("sdk", "openai"),
+                provider=project.get("provider", "custom"),
+                project_name=project.get("name", ""),
+                project_instructions=project.get("instructions", ""),
+                enabled_sub_agents=enabled_sub_agents or [],
+                budget_limit_usd=project.get("budget_limit_usd"),
+                budget_action=project.get("budget_action", "ask"),
+            )
+            await self.start_agent(project_id, config, initial_message=content,
+                                  initial_nonce=nonce)
+            return "started"
+
         if handle.task is not None and handle.task.done():
             try:
                 exc = handle.task.exception()
@@ -1228,7 +1252,15 @@ class AgentManager:
                 return
 
             handle = self._handles.get(project_id)
-            if not handle or handle.session.is_stopped():
+            if not handle:
+                return
+            if handle.session.is_stopped():
+                self._handles.pop(project_id, None)
+                self._ws.broadcast(project_id, {
+                    "type": "agent.status",
+                    "project_id": project_id,
+                    "status": "stopped",
+                })
                 return
 
             # Drain any deferred messages (lifecycle notifications)

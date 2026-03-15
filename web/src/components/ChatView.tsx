@@ -339,7 +339,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   }, [stream]);
 
   useEffect(() => {
-    if (agentStatus !== 'running' && agentStatus !== 'pending_approval') return;
+    if (!agentStatus) return;
     const timer = setInterval(() => {
       api<{ project_id: string; status: string }>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
