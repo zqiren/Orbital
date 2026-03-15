@@ -160,8 +160,20 @@ def _set_window_icon():
         pass
 
 
+_window = None
+
+
 def open_window(port: int):
+    global _window
     import webview
+
+    # If window already exists (hidden), just show it
+    if _window is not None:
+        try:
+            _window.show()
+        except Exception:
+            pass
+        return
 
     class Api:
         def pick_folder(self):
@@ -194,30 +206,31 @@ def open_window(port: int):
             pass
 
     def _on_closing():
-        """Intercept window close on macOS — minimize to Dock instead.
+        """Intercept window close — hide instead of closing.
 
-        Standard macOS behavior: red X hides the window, app stays in Dock
-        with a running indicator dot.  Cmd+Q and Dock Quit go through
-        applicationShouldTerminate_ which also fires this event — detect
-        that case via the call stack and allow the quit to proceed.
+        On macOS: Cmd+Q and Dock→Quit go through applicationShouldTerminate_
+        which also fires this event — detect via call stack and allow quit.
+        On Windows/Linux: quit happens via system tray menu (os._exit).
         """
-        if sys.platform != "darwin":
-            return True  # Allow close on other platforms
-        # During app termination (Cmd+Q, Dock→Quit), the call stack
-        # includes applicationShouldTerminate_.  Allow the quit.
-        frame = sys._getframe()
-        while frame is not None:
-            if frame.f_code.co_name == "applicationShouldTerminate_":
-                return True
-            frame = frame.f_back
-        # Red X close button — minimize to Dock instead of closing
+        if sys.platform == "darwin":
+            # During app termination (Cmd+Q, Dock→Quit), the call stack
+            # includes applicationShouldTerminate_.  Allow the quit.
+            frame = sys._getframe()
+            while frame is not None:
+                if frame.f_code.co_name == "applicationShouldTerminate_":
+                    return True
+                frame = frame.f_back
+        # Hide instead of close — app stays alive in tray (Windows) or Dock (macOS)
         try:
-            window.native.miniaturize_(window.native)
+            if sys.platform == "darwin":
+                window.native.miniaturize_(window.native)
+            else:
+                window.hide()
         except Exception:
             pass
-        return False  # Prevent actual close — window is minimized
+        return False
 
-    window = webview.create_window(
+    _window = webview.create_window(
         title="Orbital",
         url=f"http://127.0.0.1:{port}",
         width=1200,
@@ -226,6 +239,7 @@ def open_window(port: int):
         text_select=True,
         js_api=Api(),
     )
+    window = _window
     window.events.closing += _on_closing
     webview.start(icon=resolve_icon_path(), func=_activate_macos)
 
@@ -356,20 +370,19 @@ def main():
     _disable_app_nap()
 
     if is_already_running(PORT):
-        open_window(PORT)
-        return
+        port = PORT
+    else:
+        port = find_free_port(PORT)
+        server, thread = start_daemon(port)
 
-    port = find_free_port(PORT)
-    server, thread = start_daemon(port)
-
-    if not wait_for_daemon(port):
-        import webview
-        webview.create_window(
-            "Orbital \u2014 Error",
-            html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
-        )
-        webview.start()
-        return
+        if not wait_for_daemon(port):
+            import webview
+            webview.create_window(
+                "Orbital \u2014 Error",
+                html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
+            )
+            webview.start()
+            return
 
     def shutdown():
         os._exit(0)
