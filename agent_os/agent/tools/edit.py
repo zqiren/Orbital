@@ -29,6 +29,7 @@ class EditTool(Tool):
 
     def _resolve_safe(self, path: str) -> str | None:
         """Resolve path relative to workspace. Returns None if outside workspace."""
+        path = path.lstrip("/")
         resolved = os.path.realpath(os.path.join(self._workspace, path))
         if not resolved.startswith(self._workspace):
             return None

@@ -48,6 +48,9 @@ class ReadTool(Tool):
 
     def _resolve_safe(self, path: str) -> str | None:
         """Resolve path relative to workspace. Returns None if outside workspace."""
+        # Strip leading '/' so os.path.join treats it as relative, not absolute.
+        # On POSIX, os.path.join("/workspace", "/sub/path") ignores the first arg.
+        path = path.lstrip("/")
         resolved = os.path.realpath(os.path.join(self._workspace, path))
         # Ensure the resolved path is within the workspace
         if not resolved.startswith(self._workspace):
