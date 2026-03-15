@@ -7,14 +7,11 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
 
 
-**Every second an agent sits idle is a second of productivity wasted.**
+**Autonomous agents, under your control.**
 
-**Every second an agent acts unsupervised is a loophole for disaster.**
+> Your AI agents can work for hours — reading files, running shell commands, browsing the web, delegating to sub-agents. But who's watching them?
 
-**Orbital manages this tradeoff — maximum agent throughput, full human oversight, zero compromise.**
-
-
-Orbital runs on your machine. You control it from your phone.
+Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (via [ACP](https://agentcommunicationprotocol.dev/)), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
 
 <p align="center">
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
@@ -25,6 +22,30 @@ Orbital runs on your machine. You control it from your phone.
   <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve, deny, or redirect from your phone" width="350">
 </p>
 <p align="center"><em>An agent needs permission to run a command — approve or deny from your phone</em></p>
+
+## Orbital Is / Is Not
+
+| Orbital **IS** | Orbital **IS NOT** |
+| --- | --- |
+| An autonomous agent with sandbox boundaries and approval gates | A cloud service — everything runs on your machine |
+| A sub-agent coordinator: Claude Code, Codex, Gemini CLI via [ACP](https://agentcommunicationprotocol.dev/) + [claude-agent-sdk](https://github.com/anthropics/anthropic-sdk-python) | An OpenClaw fork — custom agent loop, built from scratch |
+| Mobile management: approve actions, browse workspace files, upload from phone | A chat wrapper — agents run continuously via cron and file watchers |
+| Budget controls, autonomy presets, credential management (OS keychain) | Fully autonomous God Mode (yet) — scheduler-driven today, full autonomy on the roadmap |
+
+## How Orbital Compares
+
+| | Orbital | OpenClaw | Copilot Cowork |
+| --- | --- | --- | --- |
+| Autonomous multi-hour sessions | ✅ | ✅ | ❌ (synchronous) |
+| Sandbox isolation | ✅ (OS-level) | ❌ | Cloud-side |
+| Approval workflows | ✅ (configurable autonomy presets) | IM notifications only | ❌ |
+| Mobile dashboard | ✅ (approve, browse files, upload) | IM notifications | ❌ |
+| Sub-agent coordination | ✅ (ACP + Claude SDK) | ✅ (multi-session) | ❌ |
+| Budget controls | ✅ (per-project hard limits) | ❌ | ❌ |
+| Credential management | ✅ (OS keychain, agent never sees raw secrets) | Plaintext config files | Cloud-managed |
+| Cron + file-watch triggers | ✅ (natural language) | ❌ | ❌ |
+| Local-first | ✅ | ✅ | ❌ |
+| Open source | GPL 3.0 | MIT | ❌ |
 
 ---
 
@@ -86,6 +107,8 @@ Orbital treats AI agents as processes that need an **operating system** — proc
 
 ## Table of Contents
 
+- [Orbital Is / Is Not](#orbital-is--is-not)
+- [How Orbital Compares](#how-orbital-compares)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Architecture Overview](#architecture-overview)
@@ -115,7 +138,7 @@ Orbital treats AI agents as processes that need an **operating system** — proc
 
 ### Windows
 
-1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.1.1/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.1.1)
+1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.3.0/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.0)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
@@ -131,7 +154,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.1.1/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.1.1)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.0/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.0)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
