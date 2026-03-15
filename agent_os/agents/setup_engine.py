@@ -61,13 +61,14 @@ class SetupEngine:
         # Check version via check_command
         version = None
         if installed and manifest.setup.check_command:
-            version = self._run_check_command(manifest.setup.check_command)
+            cmd = self._substitute_binary(manifest.setup.check_command, manifest.runtime.command, binary)
+            version = self._run_check_command(cmd)
 
         # Dependencies
         deps_met, missing_deps = self.check_dependencies(manifest)
 
         # Credentials
-        creds_ok, missing_creds = self.check_credentials(manifest)
+        creds_ok, missing_creds = self.check_credentials(manifest, binary)
 
         # Build setup actions
         actions = self._build_actions(manifest, installed, missing_deps, missing_creds)
@@ -149,7 +150,7 @@ class SetupEngine:
                 missing.append(dep.name)
         return (len(missing) == 0, missing)
 
-    def check_credentials(self, manifest: AgentManifest) -> tuple[bool, list[str]]:
+    def check_credentials(self, manifest: AgentManifest, resolved_binary: str | None = None) -> tuple[bool, list[str]]:
         """Check required credentials in credential_store or env vars.
 
         Returns (all_configured, missing_keys).
@@ -160,7 +161,7 @@ class SetupEngine:
                 continue
             # oauth_cli: check via CLI command
             if cred.type == "oauth_cli":
-                if not self._check_cli_auth(cred):
+                if not self._check_cli_auth(cred, manifest.runtime.command, resolved_binary):
                     missing.append(cred.key)
                 continue
             # Check credential store
@@ -175,7 +176,7 @@ class SetupEngine:
             missing.append(cred.key)
         return (len(missing) == 0, missing)
 
-    def _check_cli_auth(self, cred) -> bool:
+    def _check_cli_auth(self, cred, command: str | None = None, resolved_binary: str | None = None) -> bool:
         """Run a CLI command to check auth status (e.g. claude auth status --json).
 
         Parses JSON output and checks check_field == check_value.
@@ -183,9 +184,10 @@ class SetupEngine:
         import json as _json
         if not cred.check_command:
             return False
+        check_cmd = self._substitute_binary(cred.check_command, command, resolved_binary)
         try:
             result = subprocess.run(
-                cred.check_command,
+                check_cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -199,6 +201,19 @@ class SetupEngine:
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError,
                 _json.JSONDecodeError, ValueError):
             return False
+
+    @staticmethod
+    def _substitute_binary(cmd: str, command: str | None, resolved: str | None) -> str:
+        """Replace a bare command name with the resolved absolute path.
+
+        E.g. 'claude auth status --json' → '/Users/x/.claude/local/claude auth status --json'
+        Only substitutes if the command appears at the start of the string.
+        """
+        if not resolved or not command:
+            return cmd
+        if cmd == command or cmd.startswith(command + " "):
+            return resolved + cmd[len(command):]
+        return cmd
 
     def get_resolved_path(self, slug: str) -> str | None:
         """Return cached resolved binary path. Call check_agent first."""
