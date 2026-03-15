@@ -370,20 +370,19 @@ def main():
     _disable_app_nap()
 
     if is_already_running(PORT):
-        open_window(PORT)
-        return
+        port = PORT
+    else:
+        port = find_free_port(PORT)
+        server, thread = start_daemon(port)
 
-    port = find_free_port(PORT)
-    server, thread = start_daemon(port)
-
-    if not wait_for_daemon(port):
-        import webview
-        webview.create_window(
-            "Orbital \u2014 Error",
-            html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
-        )
-        webview.start()
-        return
+        if not wait_for_daemon(port):
+            import webview
+            webview.create_window(
+                "Orbital \u2014 Error",
+                html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
+            )
+            webview.start()
+            return
 
     def shutdown():
         os._exit(0)
