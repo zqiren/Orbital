@@ -319,9 +319,36 @@ class SubAgentManager:
             return
 
         # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
+        transcript = self._transcripts.get((project_id, handle))
+
         async def _background_send():
+            from datetime import datetime, timezone
             try:
                 await adapter.send(message)
+                # Pipe/ACP transports store the response in _last_response
+                response = getattr(adapter, '_last_response', None)
+                if response:
+                    ts = datetime.now(timezone.utc).isoformat()
+                    if transcript is not None:
+                        transcript.append({
+                            "source": handle,
+                            "content": response,
+                            "timestamp": ts,
+                            "chunk_type": "response",
+                        })
+                    self._process_manager._ws.broadcast(project_id, {
+                        "type": "chat.sub_agent_message",
+                        "project_id": project_id,
+                        "content": response,
+                        "source": handle,
+                        "timestamp": ts,
+                    })
+                    if self._lifecycle_observer and transcript is not None:
+                        await self._lifecycle_observer.on_completed(
+                            project_id, handle,
+                            summary=response[:200] if response else "(no output)",
+                            transcript_path=transcript.filepath,
+                        )
             except Exception as e:
                 logger.warning("Background send to %s failed: %s", handle, e)
 
