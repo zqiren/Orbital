@@ -43,6 +43,8 @@ a = Analysis(
         'agent_os.desktop.migration',
         'agent_os.desktop.tray',
         'multipart',
+        'claude_agent_sdk',
+        'claude_agent_sdk.types',
     ],
     hookspath=[],
     hooksconfig={},
