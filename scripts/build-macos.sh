@@ -17,21 +17,27 @@ echo "[1/5] Building React SPA..."
 cd web && npm run build && cd ..
 
 # 2. Generate .icns if missing
+#    Uses Pillow instead of sips to preserve the alpha channel
+#    (sips strips transparency, breaking macOS squircle mask).
 if [[ ! -f "assets/icon.icns" ]]; then
     echo "[2/5] Generating macOS icon..."
-    mkdir -p /tmp/orbital_icon.iconset
-    sips -z 16 16     assets/icon.png --out /tmp/orbital_icon.iconset/icon_16x16.png
-    sips -z 32 32     assets/icon.png --out /tmp/orbital_icon.iconset/icon_16x16@2x.png
-    sips -z 32 32     assets/icon.png --out /tmp/orbital_icon.iconset/icon_32x32.png
-    sips -z 64 64     assets/icon.png --out /tmp/orbital_icon.iconset/icon_32x32@2x.png
-    sips -z 128 128   assets/icon.png --out /tmp/orbital_icon.iconset/icon_128x128.png
-    sips -z 256 256   assets/icon.png --out /tmp/orbital_icon.iconset/icon_128x128@2x.png
-    sips -z 256 256   assets/icon.png --out /tmp/orbital_icon.iconset/icon_256x256.png
-    sips -z 512 512   assets/icon.png --out /tmp/orbital_icon.iconset/icon_256x256@2x.png
-    sips -z 512 512   assets/icon.png --out /tmp/orbital_icon.iconset/icon_512x512.png
-    sips -z 1024 1024 assets/icon.png --out /tmp/orbital_icon.iconset/icon_512x512@2x.png
-    iconutil -c icns /tmp/orbital_icon.iconset -o assets/icon.icns
-    rm -rf /tmp/orbital_icon.iconset
+    python3 -c "
+from PIL import Image
+import os, subprocess, shutil
+src = Image.open('assets/icon.png').convert('RGBA')
+iconset = '/tmp/orbital_icon.iconset'
+os.makedirs(iconset, exist_ok=True)
+for name, sz in [
+    ('icon_16x16.png',16),('icon_16x16@2x.png',32),
+    ('icon_32x32.png',32),('icon_32x32@2x.png',64),
+    ('icon_128x128.png',128),('icon_128x128@2x.png',256),
+    ('icon_256x256.png',256),('icon_256x256@2x.png',512),
+    ('icon_512x512.png',512),('icon_512x512@2x.png',1024),
+]:
+    src.resize((sz,sz), Image.LANCZOS).save(os.path.join(iconset,name), format='PNG')
+subprocess.run(['iconutil','-c','icns',iconset,'-o','assets/icon.icns'], check=True)
+shutil.rmtree(iconset)
+"
 else
     echo "[2/5] macOS icon already exists, skipping..."
 fi
