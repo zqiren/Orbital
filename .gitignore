@@ -53,6 +53,9 @@ htmlcov/
 
 # Internal planning documents
 TASK-*.md
+TASK/
 REPORT-*.md
+RESEARCH-*.md
 DIAGNOSIS-*.md
 ACTIVE-*.md
+ACTIVE-*/
