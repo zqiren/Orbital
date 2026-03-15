@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -141,7 +142,12 @@ def create_app(data_dir: str | None = None) -> FastAPI:
 
     # 5b. Agent registry + setup engine
     registry = AgentRegistry()
-    manifests_dir = os.path.join(os.path.dirname(__file__), "..", "agents", "manifests")
+    # In PyInstaller bundles, __file__ points to a temp extraction dir but
+    # data files live under sys._MEIPASS.  Try the frozen path first.
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        manifests_dir = os.path.join(sys._MEIPASS, "agent_os", "agents", "manifests")
+    else:
+        manifests_dir = os.path.join(os.path.dirname(__file__), "..", "agents", "manifests")
     registry.load_directory(manifests_dir)
     setup_engine = SetupEngine(registry)
 
