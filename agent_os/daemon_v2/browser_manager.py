@@ -206,6 +206,7 @@ class BrowserManager:
         self._playwright = None
         self._browser = None
         self._context = None
+        self._warmup_active = False
 
         # Per-project page tracking: project_id -> list[page]
         self._project_pages: dict[str, list] = {}
@@ -302,7 +303,8 @@ class BrowserManager:
             user_agent=ua_override,
         )
 
-        # Try system Chrome → Edge → bundled Chromium
+        # Try system Chrome → Edge → WebKit (macOS) → bundled Chromium
+        self._context = None
         channels = [
             ("chrome", "system Chrome"),
             ("msedge", "system Edge"),
@@ -317,18 +319,35 @@ class BrowserManager:
             except Exception:
                 logger.info("%s not available, trying next fallback", label)
         else:
-            # All named channels failed — try bundled Chromium (no channel)
-            try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
-                    **launch_kwargs
-                )
-                logger.info("Browser launched using bundled Chromium")
-            except Exception as exc:
-                raise RuntimeError(
-                    "No browser available. Install Chrome or Edge, or run "
-                    "'python -m patchright install chromium' to download a "
-                    "bundled browser."
-                ) from exc
+            # macOS: try WebKit (Safari engine) before bundled Chromium
+            if sys.platform == "darwin":
+                try:
+                    webkit_kwargs = dict(
+                        user_data_dir=str(self._profile_dir),
+                        headless=headless,
+                        locale=detected_locale,
+                        timezone_id=detected_timezone,
+                    )
+                    self._context = await self._playwright.webkit.launch_persistent_context(
+                        **webkit_kwargs
+                    )
+                    logger.info("Browser launched using WebKit (Safari)")
+                except Exception:
+                    logger.info("WebKit not available, trying bundled Chromium")
+                    self._context = None
+
+            if self._context is None:
+                try:
+                    self._context = await self._playwright.chromium.launch_persistent_context(
+                        **launch_kwargs
+                    )
+                    logger.info("Browser launched using bundled Chromium")
+                except Exception as exc:
+                    raise RuntimeError(
+                        "No browser available. Install Chrome or Edge, or run "
+                        "'python -m patchright install chromium' to download a "
+                        "bundled browser. On macOS, Safari (WebKit) is also supported."
+                    ) from exc
 
         # NOTE: Do NOT use context.add_init_script() — it breaks DNS
         # resolution on Patchright persistent contexts (Windows).  Stealth
@@ -637,6 +656,10 @@ class BrowserManager:
     # Browser warmup (headed session for cookie warmup)
     # ------------------------------------------------------------------
 
+    @property
+    def warmup_active(self) -> bool:
+        return self._warmup_active
+
     async def launch_warmup(self, url: str):
         """Launch a headed browser for manual cookie warmup.
 
@@ -644,6 +667,13 @@ class BrowserManager:
         the daemon's headless browser.  The user interacts with the browser,
         then closes it.  Cookies persist in the shared profile directory.
         """
+        self._warmup_active = True
+        try:
+            await self._launch_warmup_impl(url)
+        finally:
+            self._warmup_active = False
+
+    async def _launch_warmup_impl(self, url: str):
         self._profile_dir.mkdir(parents=True, exist_ok=True)
 
         if async_playwright is None:
@@ -668,7 +698,7 @@ class BrowserManager:
             timezone_id=_detect_timezone(),
         )
 
-        # Same Chrome -> Edge -> bundled Chromium fallback
+        # Same Chrome -> Edge -> WebKit (macOS) -> bundled Chromium fallback
         ctx = None
         channels = [
             ("chrome", "system Chrome"),
@@ -684,25 +714,43 @@ class BrowserManager:
             except Exception:
                 logger.info("Warmup: %s not available, trying next", label)
         else:
-            try:
-                ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
-                logger.info("Warmup browser launched using bundled Chromium")
-            except Exception as exc:
-                await pw.stop()
-                raise RuntimeError(
-                    "No browser available for warmup. Install Chrome or Edge."
-                ) from exc
+            # macOS: try WebKit (Safari engine) before bundled Chromium
+            if sys.platform == "darwin":
+                try:
+                    webkit_kwargs = dict(
+                        user_data_dir=str(self._profile_dir),
+                        headless=False,
+                        locale=_detect_locale(),
+                        timezone_id=_detect_timezone(),
+                    )
+                    ctx = await pw.webkit.launch_persistent_context(**webkit_kwargs)
+                    logger.info("Warmup browser launched using WebKit (Safari)")
+                except Exception:
+                    logger.info("Warmup: WebKit not available, trying bundled Chromium")
+
+            if ctx is None:
+                try:
+                    ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
+                    logger.info("Warmup browser launched using bundled Chromium")
+                except Exception as exc:
+                    await pw.stop()
+                    raise RuntimeError(
+                        "No browser available for warmup. Install Chrome or Edge. "
+                        "On macOS, Safari (WebKit) is also supported."
+                    ) from exc
 
         # Navigate to the target URL in a new page
         page = await ctx.new_page()
         await self._apply_stealth(page)
         await page.goto(url)
 
-        # Wait for user to close the browser
-        try:
-            await ctx.wait_for_event("close", timeout=0)
-        except Exception:
-            pass
+        # Wait for user to close all browser windows
+        while ctx.pages:
+            try:
+                page = ctx.pages[-1]
+                await page.wait_for_event("close", timeout=0)
+            except Exception:
+                break
 
         try:
             await ctx.close()

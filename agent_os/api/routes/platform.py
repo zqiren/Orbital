@@ -7,6 +7,7 @@
 Exposes sandbox setup, status, and folder access control to the desktop app (Electron).
 """
 
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
@@ -176,11 +177,35 @@ async def platform_browse(path: Optional[str] = None):
 
 @router.post("/browser/warmup")
 async def browser_warmup(req: BrowserWarmupRequest = BrowserWarmupRequest()):
-    """Launch headed browser for cookie warmup. Blocks until user closes browser."""
+    """Launch headed browser for cookie warmup (non-blocking).
+
+    Starts the warmup browser in a background task and returns immediately.
+    The frontend polls GET /browser/warmup/status to detect when the user
+    closes the browser.
+    """
     if _browser_manager is None:
         raise HTTPException(status_code=503, detail="Browser manager not available")
-    try:
-        await _browser_manager.launch_warmup(req.url)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    return {"status": "ok"}
+    if _browser_manager.warmup_active:
+        return {"status": "already_active"}
+
+    async def _run_warmup():
+        try:
+            await _browser_manager.launch_warmup(req.url)
+        except Exception:
+            pass  # warmup_active is reset in launch_warmup's finally path
+
+    asyncio.create_task(_run_warmup())
+
+    # Give the browser a moment to launch so we can catch immediate errors
+    await asyncio.sleep(0.5)
+    if not _browser_manager.warmup_active:
+        raise HTTPException(status_code=500, detail="Browser failed to launch")
+    return {"status": "launched"}
+
+
+@router.get("/browser/warmup/status")
+async def browser_warmup_status():
+    """Check whether the warmup browser is still open."""
+    if _browser_manager is None:
+        raise HTTPException(status_code=503, detail="Browser manager not available")
+    return {"active": _browser_manager.warmup_active}

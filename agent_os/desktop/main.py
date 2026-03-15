@@ -384,6 +384,10 @@ def main():
             webview.start()
             return
 
+    # Daemon is up — kick off background Chromium download (non-blocking)
+    from agent_os.desktop.migration import download_browsers_background
+    download_browsers_background()
+
     def shutdown():
         os._exit(0)
 

@@ -123,19 +123,31 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     }
   }, []);
 
-  // Browser warmup handler
+  // Browser warmup handler — fire-and-forget launch, then poll status
   const handleOpenBrowser = useCallback(async () => {
     setBrowserLoading(true);
     setBrowserError(null);
     try {
       await api('/api/v2/platform/browser/warmup', { method: 'POST' });
-      setBrowserDone(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to open browser';
       setBrowserError(msg);
-    } finally {
       setBrowserLoading(false);
+      return;
     }
+    // Poll until warmup browser is closed
+    const poll = setInterval(async () => {
+      try {
+        const status = await api<{ active: boolean }>('/api/v2/platform/browser/warmup/status');
+        if (!status.active) {
+          clearInterval(poll);
+          setBrowserDone(true);
+          setBrowserLoading(false);
+        }
+      } catch {
+        // Status endpoint failed — keep polling
+      }
+    }, 2000);
   }, []);
 
   // Render sandbox confirmation (green — setup complete)
