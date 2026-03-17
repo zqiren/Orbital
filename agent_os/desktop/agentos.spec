@@ -42,6 +42,8 @@ a = Analysis(
         'pystray',
         'pystray._win32',
         'PIL',
+        'claude_agent_sdk',
+        'claude_agent_sdk.types',
     ],
     hookspath=[],
     hooksconfig={},
