@@ -13,7 +13,11 @@
 
 Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (via [ACP](https://agentcommunicationprotocol.dev/)), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
 
-<!-- TODO: embed demo video -->
+## Demo
+
+https://github.com/zqiren/Orbital/raw/main/docs/demo.mp4
+
+[Watch on YouTube](https://youtube.com) <!-- TODO: replace with actual YouTube URL after uploading -->
 
 <p align="center">
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
