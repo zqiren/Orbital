@@ -15,9 +15,7 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 
 ## Demo
 
-https://github.com/zqiren/Orbital/raw/main/docs/demo.mp4
-
-[Watch on YouTube](https://youtube.com) <!-- TODO: replace with actual YouTube URL after uploading -->
+[![Watch the demo](https://img.youtube.com/vi/Z_8CXPEl3dI/maxresdefault.jpg)](https://www.youtube.com/watch?v=Z_8CXPEl3dI)
 
 <p align="center">
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
