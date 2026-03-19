@@ -13,6 +13,8 @@
 
 Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (via [ACP](https://agentcommunicationprotocol.dev/)), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
 
+<!-- TODO: embed demo video -->
+
 <p align="center">
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
 </p>
@@ -56,7 +58,7 @@ AI agents are autonomous in capability but not in operation. The moment you look
 &nbsp;
 
 **1. You are the operating system**
-<br>You manage processes, permissions, approvals, and monitoring — all at once, all manually. Close the laptop and the agent stops. Walk away and it runs blind.
+<br>You use one agent for strategy, another for architecture, a third for implementation. You're the one threading them together — copy-pasting deliverables from one conversation into another, verifying outputs, sequencing who works on what. You do very little actual work, but you're trapped in the chores of being the process manager. Close the laptop and everything stops. Walk away and context is lost.
 
 **2. Agents are destructive by default**
 <br>`rm -rf`. Leaked credentials. Data exfiltration. Current tools rely on agents "behaving well" — no sandbox, no network isolation, no approval gate the agent can't bypass.
@@ -204,7 +206,10 @@ Orbital prevents system sleep while agents are actively working (via OS-level sl
 
 ## Quick Start
 
-1. **Launch Orbital** — the setup wizard runs on first launch
+1. **Launch Orbital** — the setup wizard guides you through first-time configuration
+
+![Setup wizard — first launch configuration](docs/screenshots/apikey-setup.png)
+
 2. **Enter your API key** — supports Anthropic, OpenAI, Moonshot, DeepSeek, and 15+ other providers
 
 <p align="center">
@@ -262,7 +267,6 @@ Orbital prevents system sleep while agents are actively working (via OS-level sl
 ```
 
 **Key design decisions:**
-- **Target user**: Non-technical consumers — no Docker, terminal, or Python knowledge required
 - **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
 - **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
 - **Single daemon**: PID file enforcement prevents multiple instances
@@ -358,6 +362,7 @@ Orbital is not tied to a single AI tool. The management agent plans and delegate
 | **Pipe** | stdin/stdout subprocess, JSON streaming |
 | **PTY** | Pseudo-terminal for interactive agents |
 | **SDK** | Direct Claude SDK integration |
+| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — Codex, Gemini CLI, and other ACP-compatible agents |
 
 ### Built-in Tool Suite
 
@@ -496,7 +501,6 @@ The agent loop includes multiple safety mechanisms to prevent runaway execution:
 
 | Guard | Threshold | Behavior |
 |-------|-----------|----------|
-| **Iteration cap** | 50 iterations | Hard stop, agent saves state |
 | **Token budget** | 500K tokens (configurable) | Hard stop on cumulative usage |
 | **Repetition detection** | 5 identical action hashes | Forces different approach |
 | **Ping-pong detection** | 3 identical consecutive pairs | Breaks alternating cycles |
