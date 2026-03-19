@@ -208,24 +208,34 @@ Orbital prevents system sleep while agents are actively working (via OS-level sl
 
 ## Quick Start
 
-1. **Launch Orbital** — the setup wizard guides you through first-time configuration
+1. **Launch Orbital** — the setup wizard guides you through three steps:
 
-![Setup wizard — first launch configuration](docs/screenshots/apikey-setup.png)
+   **Step 1 — LLM Provider:** Connect your API key. Supports Anthropic, OpenAI, Moonshot, DeepSeek, and 15+ other providers.
 
-2. **Enter your API key** — supports Anthropic, OpenAI, Moonshot, DeepSeek, and 15+ other providers
+   <p align="center">
+     <img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1 — configure your LLM provider and API key" width="700">
+   </p>
 
-<p align="center">
-  <img src="docs/screenshots/global-setting.png" alt="Global settings — configure your LLM provider" width="700">
-</p>
+   **Step 2 — Sandbox:** Orbital creates an isolated user account so agents can't access your personal files or network without permission.
 
-3. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
+   <p align="center">
+     <img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2 — sandbox isolation confirmation" width="700">
+   </p>
+
+   **Step 3 — Browser Warm-up:** Sign into sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs.
+
+   <p align="center">
+     <img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3 — browser warm-up for agent web access" width="700">
+   </p>
+
+2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
 
 <p align="center">
   <img src="docs/screenshots/new-project-setting.png" alt="New project creation with workspace and autonomy settings" width="700">
 </p>
 
-4. **Chat** — type a task in the chat bar and the management agent handles it
-5. **Approve or automate** — review tool calls in the approval card, or set autonomy to hands-off
+3. **Chat** — type a task in the chat bar and the management agent handles it
+4. **Approve or automate** — review tool calls in the approval card, or set autonomy to hands-off
 
 ---
 
