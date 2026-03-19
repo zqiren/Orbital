@@ -158,7 +158,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.0/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.0)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.4/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.4)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
