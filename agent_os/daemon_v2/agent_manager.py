@@ -888,6 +888,21 @@ class AgentManager:
             return "waiting"
         return "idle"
 
+    def update_autonomy(self, project_id: str, preset) -> bool:
+        """Push a new autonomy preset to a running agent's interceptor.
+
+        Returns True if the running agent was updated, False if no agent
+        is running (disk-only update is sufficient in that case).
+        """
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return False
+        handle.interceptor.update_preset(preset)
+        handle.session.append_system(
+            f"[autonomy changed to {preset.value}]"
+        )
+        return True
+
     def get_pending_approval(self, project_id: str) -> dict | None:
         """Return the pending approval payload for a project, or None.
 

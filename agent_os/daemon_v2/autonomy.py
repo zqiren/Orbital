@@ -144,6 +144,10 @@ class AutonomyInterceptor:
         """Deactivate approve-all bypass (called on new user message)."""
         self._bypass_all_until = None
 
+    def update_preset(self, preset: Autonomy) -> None:
+        """Change the autonomy preset at runtime (live settings update)."""
+        self._preset = preset
+
     def record_approval(self, tool_name: str, tool_args: dict) -> None:
         """Record hash for bypass window. Called by agent_manager.approve()."""
         h = self._hash_tool(tool_name, tool_args)
