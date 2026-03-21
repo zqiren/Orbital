@@ -248,19 +248,34 @@ class BrowserManager:
 
         return await self._launch()
 
-    async def _get_clean_user_agent(self) -> str:
-        """Launch browser briefly to get real UA, strip 'Headless', cache result."""
+    async def _get_clean_user_agent(self) -> str | None:
+        """Launch browser briefly to get real UA, strip 'Headless', cache result.
+
+        Tries system browsers (channel="chrome", "msedge") before a bare
+        chromium.launch() so this works even when bundled chromium hasn't
+        been downloaded yet.  Returns None if no browser is available —
+        the caller should skip the UA override in that case.
+        """
         if hasattr(self, '_cached_clean_ua'):
             return self._cached_clean_ua
 
-        browser = await self._playwright.chromium.launch(headless=True)
-        page = await browser.new_page()
-        raw_ua = await page.evaluate("navigator.userAgent")
-        await browser.close()
+        for channel in ("chrome", "msedge", None):
+            try:
+                kwargs = {"headless": True}
+                if channel:
+                    kwargs["channel"] = channel
+                browser = await self._playwright.chromium.launch(**kwargs)
+                page = await browser.new_page()
+                raw_ua = await page.evaluate("navigator.userAgent")
+                await browser.close()
+                clean_ua = raw_ua.replace("HeadlessChrome", "Chrome")
+                self._cached_clean_ua = clean_ua
+                return clean_ua
+            except Exception:
+                continue
 
-        clean_ua = raw_ua.replace("HeadlessChrome", "Chrome")
-        self._cached_clean_ua = clean_ua
-        return clean_ua
+        logger.warning("Could not obtain clean UA — no browser available for probe")
+        return None
 
     async def _launch(self):
         """Launch Chromium with persistent context and anti-detection flags."""
