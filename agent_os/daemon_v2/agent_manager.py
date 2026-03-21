@@ -901,6 +901,9 @@ class AgentManager:
         handle.session.append_system(
             f"[autonomy changed to {preset.value}]"
         )
+        # Also propagate to sub-agent transports (SDK filtering)
+        if self._sub_agent_manager is not None:
+            self._sub_agent_manager.update_sub_agent_autonomy(project_id, preset)
         return True
 
     def get_pending_approval(self, project_id: str) -> dict | None:
