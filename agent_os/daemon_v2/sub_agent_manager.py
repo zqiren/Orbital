@@ -13,6 +13,7 @@ import logging
 import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
+from agent_os.agent.prompt_builder import Autonomy
 from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ class SubAgentManager:
 
         return f"Started {handle}"
 
-    def _resolve_transport(self, manifest, config_dict):
+    def _resolve_transport(self, manifest, config_dict, autonomy=None):
         """Resolve the appropriate transport for a manifest."""
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
@@ -146,7 +147,7 @@ class SubAgentManager:
             try:
                 from agent_os.agent.transports.sdk_transport import SDKTransport, HAS_SDK
                 if HAS_SDK:
-                    return SDKTransport()
+                    return SDKTransport(autonomy=autonomy)
             except ImportError:
                 pass
             # Fallback to pipe if SDK not available
@@ -227,8 +228,17 @@ class SubAgentManager:
             except RuntimeError as e:
                 return f"Error: network configuration failed: {e}"
 
+        # Resolve autonomy preset for SDK transport filtering
+        autonomy = None
+        if project:
+            autonomy_str = project.get("autonomy", "check_in")
+            try:
+                autonomy = Autonomy(autonomy_str)
+            except ValueError:
+                autonomy = Autonomy.CHECK_IN
+
         # Resolve transport from manifest
-        transport = self._resolve_transport(manifest, config_dict)
+        transport = self._resolve_transport(manifest, config_dict, autonomy=autonomy)
 
         adapter = CLIAdapter(
             handle=handle,
@@ -421,6 +431,14 @@ class SubAgentManager:
                     await transport.respond_to_permission(tool_call_id, approved)
                     return True
         return False
+
+    def update_sub_agent_autonomy(self, project_id: str, preset) -> None:
+        """Propagate autonomy preset change to all active SDK sub-agent transports."""
+        adapters = self._adapters.get(project_id, {})
+        for handle, adapter in adapters.items():
+            transport = getattr(adapter, '_transport', None)
+            if transport is not None and hasattr(transport, 'update_autonomy'):
+                transport.update_autonomy(preset)
 
     async def stop_all(self, project_id: str) -> None:
         """Stop all sub-agent adapters for a project."""

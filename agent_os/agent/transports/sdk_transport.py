@@ -9,6 +9,8 @@ import uuid
 from typing import AsyncIterator
 
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
+from agent_os.agent.prompt_builder import Autonomy
+from agent_os.agent.transports.tool_risk import should_auto_approve
 
 try:
     from claude_agent_sdk import (
@@ -38,7 +40,7 @@ class SDKTransport(AgentTransport):
     AgentOS's approval system.
     """
 
-    def __init__(self):
+    def __init__(self, autonomy: "Autonomy | None" = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
@@ -56,6 +58,9 @@ class SDKTransport(AgentTransport):
         # (e.g. due to unknown message type crash). Next send() drains stale
         # messages before issuing a new query.
         self._needs_flush: bool = False
+        # Autonomy preset for filtering permission requests.
+        # When set, low-risk tools are auto-approved without surfacing to the user.
+        self._autonomy: Autonomy | None = autonomy
 
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
@@ -216,6 +221,10 @@ class SDKTransport(AgentTransport):
     def is_alive(self) -> bool:
         return self._alive
 
+    def update_autonomy(self, preset: Autonomy) -> None:
+        """Update the autonomy preset for permission filtering (live settings update)."""
+        self._autonomy = preset
+
     @property
     def session_id(self) -> str | None:
         return self._session_id
@@ -233,6 +242,11 @@ class SDKTransport(AgentTransport):
         Emits a permission_request TransportEvent and waits for approval
         via respond_to_permission().
         """
+        # Auto-approve if autonomy preset allows this tool
+        if self._autonomy is not None and should_auto_approve(tool_name, self._autonomy):
+            logger.debug("SDKTransport: auto-approved %s (autonomy=%s)", tool_name, self._autonomy.value)
+            return PermissionResultAllow()
+
         request_id = str(uuid.uuid4())
 
         # Create a future for the approval response
