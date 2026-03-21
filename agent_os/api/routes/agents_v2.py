@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel, field_validator
 
+from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
 
@@ -344,6 +345,13 @@ async def update_project(project_id: str, body: ProjectUpdate):
             _project_store.update_project(project_id, updates)
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
+    # Push autonomy change to running agent (if any)
+    if "autonomy" in updates and _agent_manager is not None:
+        try:
+            new_autonomy = Autonomy(updates["autonomy"])
+            _agent_manager.update_autonomy(project_id, new_autonomy)
+        except ValueError:
+            pass  # invalid value already persisted — interceptor keeps old preset
     updated = _project_store.get_project(project_id)
     result = _redact_project(updated)
     _enrich_with_disk_content(result, workspace, dir_name)
@@ -487,7 +495,6 @@ async def delete_project(project_id: str, clear_output: bool = False):
 @router.post("/agents/start")
 async def start_agent(req: StartAgentRequest):
     from agent_os.daemon_v2.models import AgentConfig
-    from agent_os.agent.prompt_builder import Autonomy
 
     project = _project_store.get_project(req.project_id)
     if project is None:
