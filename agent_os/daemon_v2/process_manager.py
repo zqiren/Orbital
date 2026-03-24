@@ -36,6 +36,15 @@ class ProcessManager:
             last_response_text = ""
             try:
                 async for chunk in adapter.read_stream():
+                    if chunk.chunk_type == "turn_complete":
+                        if self._lifecycle and transcript is not None:
+                            await self._lifecycle.on_completed(
+                                project_id, handle,
+                                summary=last_response_text or "(no output)",
+                                transcript_path=transcript.filepath,
+                            )
+                        last_response_text = ""  # reset for next turn
+                        continue
                     entry = {
                         "source": handle,
                         "content": chunk.text,

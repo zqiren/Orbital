@@ -7,7 +7,7 @@
 Verifies that:
 1. SDKTransport emits a turn_complete TransportEvent after consuming a response
 2. CLIAdapter.read_stream() intercepts turn_complete and sets _idle = True
-3. turn_complete is NOT yielded to consumers
+3. turn_complete IS yielded as OutputChunk(chunk_type="turn_complete") for ProcessManager
 4. _idle resets to False on dispatch
 5. Multiple turn_complete cycles work correctly
 """
@@ -93,17 +93,19 @@ async def test_turn_complete_sets_idle():
     async for chunk in adapter.read_stream():
         chunks.append(chunk)
 
-    # turn_complete must NOT appear in consumer output
-    assert len(chunks) == 1
+    # Message chunk + turn_complete sentinel chunk
+    assert len(chunks) == 2
     assert chunks[0].text == "Hello"
+    assert chunks[1].chunk_type == "turn_complete"
+    assert chunks[1].text == ""
 
     # Adapter should now be idle
     assert adapter.is_idle()
 
 
 @pytest.mark.asyncio
-async def test_turn_complete_not_yielded():
-    """turn_complete is internal and must not be yielded to consumers."""
+async def test_turn_complete_yielded_as_sentinel():
+    """turn_complete is yielded as a sentinel OutputChunk for ProcessManager."""
     transport = FakeSDKTransport()
     adapter = _make_adapter(transport)
 
@@ -115,9 +117,11 @@ async def test_turn_complete_not_yielded():
     async for chunk in adapter.read_stream():
         chunks.append(chunk)
 
-    # No chunks should be yielded
-    assert chunks == []
-    # But adapter should be idle
+    # turn_complete sentinel should be yielded
+    assert len(chunks) == 1
+    assert chunks[0].chunk_type == "turn_complete"
+    assert chunks[0].text == ""
+    # Adapter should be idle
     assert adapter.is_idle()
 
 
@@ -179,10 +183,12 @@ async def test_multiple_turn_complete_cycles():
     async for chunk in adapter2.read_stream():
         all_chunks.append(chunk)
 
-    # Should get exactly 2 message chunks (no turn_complete chunks)
-    assert len(all_chunks) == 2
+    # Should get 2 message chunks + 2 turn_complete sentinels
+    assert len(all_chunks) == 4
     assert all_chunks[0].text == "msg1"
-    assert all_chunks[1].text == "msg2"
+    assert all_chunks[1].chunk_type == "turn_complete"
+    assert all_chunks[2].text == "msg2"
+    assert all_chunks[3].chunk_type == "turn_complete"
 
     # After processing both cycles, adapter should be idle
     assert adapter2.is_idle()
@@ -229,7 +235,8 @@ async def test_error_event_followed_by_turn_complete():
     async for chunk in adapter.read_stream():
         chunks.append(chunk)
 
-    # Error chunk should be yielded, turn_complete should not
-    assert len(chunks) == 1
+    # Error chunk + turn_complete sentinel should both be yielded
+    assert len(chunks) == 2
     assert "something broke" in chunks[0].text
+    assert chunks[1].chunk_type == "turn_complete"
     assert adapter.is_idle()

@@ -171,7 +171,7 @@ class CLIAdapter(AgentAdapter):
             async for event in self._transport.read_stream():
                 if event.event_type == "turn_complete":
                     self._idle = True
-                    # Don't yield turn_complete to consumers — it's internal
+                    yield OutputChunk(text="", chunk_type="turn_complete")
                     continue
                 chunk = transport_event_to_chunk(event)
                 yield chunk
