@@ -156,15 +156,77 @@ def wait_for_daemon(port: int, timeout: int = 15) -> bool:
 def resolve_icon_path() -> str:
     if getattr(sys, "frozen", False):
         base = _frozen_base_dir()
-        # Use .png on macOS (.ico is Windows-only)
-        if sys.platform == "darwin":
-            icon = os.path.join(base, "assets", "icon.png")
-        else:
-            icon = os.path.join(base, "assets", "icon.ico")
     else:
-        ext = "icon.png" if sys.platform == "darwin" else "icon.ico"
-        icon = os.path.join(os.path.dirname(__file__), "..", "..", "assets", ext)
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    # Always use .png — higher quality, works cross-platform
+    icon = os.path.join(base, "assets", "icon.png")
     return os.path.abspath(icon)
+
+
+def _png_to_hicon(png_path: str, size: int):
+    """Convert a PNG file to a Windows HICON handle at the given size."""
+    import ctypes
+    from PIL import Image as PILImage
+
+    img = PILImage.open(png_path).convert("RGBA").resize((size, size), PILImage.LANCZOS)
+    # BGRA byte order for Windows HBITMAP
+    pixels = img.tobytes("raw", "BGRA")
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", ctypes.c_uint32),
+            ("biWidth", ctypes.c_int32),
+            ("biHeight", ctypes.c_int32),
+            ("biPlanes", ctypes.c_uint16),
+            ("biBitCount", ctypes.c_uint16),
+            ("biCompression", ctypes.c_uint32),
+            ("biSizeImage", ctypes.c_uint32),
+            ("biXPelsPerMeter", ctypes.c_int32),
+            ("biYPelsPerMeter", ctypes.c_int32),
+            ("biClrUsed", ctypes.c_uint32),
+            ("biClrImportant", ctypes.c_uint32),
+        ]
+
+    class ICONINFO(ctypes.Structure):
+        _fields_ = [
+            ("fIcon", ctypes.c_bool),
+            ("xHotspot", ctypes.c_uint32),
+            ("yHotspot", ctypes.c_uint32),
+            ("hbmMask", ctypes.c_void_p),
+            ("hbmColor", ctypes.c_void_p),
+        ]
+
+    gdi32 = ctypes.windll.gdi32
+    user32 = ctypes.windll.user32
+
+    bmi = BITMAPINFOHEADER()
+    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bmi.biWidth = size
+    bmi.biHeight = -size  # top-down
+    bmi.biPlanes = 1
+    bmi.biBitCount = 32
+    bmi.biCompression = 0  # BI_RGB
+
+    # Create color bitmap
+    dc = user32.GetDC(0)
+    data_ptr = ctypes.c_void_p()
+    hbm_color = gdi32.CreateDIBSection(
+        dc, ctypes.byref(bmi), 0, ctypes.byref(data_ptr), None, 0)
+    ctypes.memmove(data_ptr, pixels, len(pixels))
+    user32.ReleaseDC(0, dc)
+
+    # Create mask bitmap (all zeros = fully opaque, alpha in color bitmap)
+    hbm_mask = gdi32.CreateBitmap(size, size, 1, 1, None)
+
+    ii = ICONINFO()
+    ii.fIcon = True
+    ii.hbmMask = hbm_mask
+    ii.hbmColor = hbm_color
+    hicon = user32.CreateIconIndirect(ctypes.byref(ii))
+
+    gdi32.DeleteObject(hbm_color)
+    gdi32.DeleteObject(hbm_mask)
+    return hicon
 
 
 def _set_window_icon():
@@ -175,19 +237,22 @@ def _set_window_icon():
         icon_path = resolve_icon_path()
         if not os.path.exists(icon_path):
             return
-        IMAGE_ICON = 1
-        LR_LOADFROMFILE = 0x0010
-        LR_DEFAULTSIZE = 0x0040
         WM_SETICON = 0x0080
-        hicon = user32.LoadImageW(0, icon_path, IMAGE_ICON, 0, 0,
-                                  LR_LOADFROMFILE | LR_DEFAULTSIZE)
-        if not hicon:
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        sm_cxsmicon = user32.GetSystemMetrics(49)  # SM_CXSMICON
+        sm_cxicon = user32.GetSystemMetrics(11)     # SM_CXICON
+        hicon_sm = _png_to_hicon(icon_path, sm_cxsmicon)
+        hicon_lg = _png_to_hicon(icon_path, sm_cxicon)
+        if not hicon_sm and not hicon_lg:
             return
         for _ in range(50):
             hwnd = user32.FindWindowW(None, "Orbital")
             if hwnd:
-                user32.SendMessageW(hwnd, WM_SETICON, 0, hicon)
-                user32.SendMessageW(hwnd, WM_SETICON, 1, hicon)
+                if hicon_sm:
+                    user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_sm)
+                if hicon_lg:
+                    user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_lg)
                 break
             time.sleep(0.1)
     except Exception:

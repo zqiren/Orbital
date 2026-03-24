@@ -31,9 +31,7 @@ def create_tray_icon() -> Image.Image:
         base = _frozen_base_dir()
     else:
         base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    # Use .ico on Windows, .png elsewhere
-    ext = "icon.ico" if sys.platform == "win32" else "icon.png"
-    icon_path = os.path.join(base, "assets", ext)
+    icon_path = os.path.join(base, "assets", "icon.png")
     return Image.open(icon_path)
 
 
