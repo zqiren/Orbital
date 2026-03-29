@@ -77,7 +77,7 @@ async def update_settings(req: UpdateSettingsRequest):
         prefs_path = current.user_preferences_path
         if not prefs_path:
             # Default path
-            prefs_path = os.path.join(os.path.expanduser("~"), ".agent-os", "user_preferences.md")
+            prefs_path = os.path.join(os.path.expanduser("~"), "orbital", "user_preferences.md")
             current.user_preferences_path = prefs_path
         os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
         with open(prefs_path, "w", encoding="utf-8") as f:

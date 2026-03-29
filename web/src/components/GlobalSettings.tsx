@@ -116,7 +116,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
               type="text"
               value={scratchWorkspace}
               onChange={(e) => setScratchWorkspace(e.target.value)}
-              placeholder="Default: ~/.agent-os/scratch/"
+              placeholder="Default: ~/orbital/scratch/"
               disabled={loading}
               className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
             />

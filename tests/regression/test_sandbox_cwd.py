@@ -39,7 +39,7 @@ def _run_production_style(working_dir: str, ps_command: str, *, skip_tmp: bool =
         stdout_path = os.path.join(os.environ.get("TEMP", ""), "test_stdout.txt")
         stderr_path = os.path.join(os.environ.get("TEMP", ""), "test_stderr.txt")
     else:
-        tmp_dir = os.path.join(working_dir, ".agent-os", ".tmp")
+        tmp_dir = os.path.join(working_dir, "orbital", ".tmp")
         os.makedirs(tmp_dir, exist_ok=True)
         stdout_path = os.path.join(tmp_dir, "test_stdout.txt")
         stderr_path = os.path.join(tmp_dir, "test_stderr.txt")

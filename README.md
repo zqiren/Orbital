@@ -297,7 +297,7 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 <p align="center"><em>Browse, preview, and upload files in each project's workspace</em></p>
 
 ```
-~/.agent-os/
+~/orbital/
 +-- daemon.pid                          # Singleton enforcement
 +-- projects.json                       # All project configs
 +-- settings.json                       # Global settings

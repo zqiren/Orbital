@@ -42,7 +42,7 @@ from agent_os.agent.transports.base import TransportEvent
 @pytest.fixture
 def data_dir(tmp_path):
     """Temporary data directory for project store."""
-    d = tmp_path / "agent-os-data"
+    d = tmp_path / "orbital-data"
     d.mkdir()
     return str(d)
 

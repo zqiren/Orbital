@@ -4,7 +4,7 @@
 
 """Workspace file management and session-end routine.
 
-Manages the 6 workspace files in {workspace}/.agent-os/:
+Manages the 6 workspace files in {workspace}/orbital/:
   AGENT.md, PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md, LESSONS.md, CONTEXT.md
 
 Provides:
@@ -22,7 +22,7 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE_DIR = ".agent-os"
+WORKSPACE_DIR = "orbital"
 
 FILE_NAMES: dict[str, str] = {
     "agent": "AGENT.md",
@@ -75,15 +75,15 @@ class WorkspaceFileManager:
         return self._dir
 
     def ensure_dir(self) -> None:
-        """Create .agent-os/ (and project subdirectory if namespaced)."""
+        """Create orbital/ (and project subdirectory if namespaced)."""
         os.makedirs(self._dir, exist_ok=True)
-        # Also ensure the base .agent-os/ dir exists for shared AGENT.md
+        # Also ensure the base orbital/ dir exists for shared AGENT.md
         if self._project_ns:
             os.makedirs(os.path.join(self._workspace, WORKSPACE_DIR), exist_ok=True)
             self._migrate_flat_to_namespaced()
 
     def _migrate_flat_to_namespaced(self) -> None:
-        """One-time migration of flat .agent-os/ files into the project namespace.
+        """One-time migration of flat orbital/ files into the project namespace.
 
         Runs only once per project directory.  Writes a ``.migrated`` marker
         to skip on subsequent starts.  Moves (not copies) flat files so stale
@@ -122,12 +122,12 @@ class WorkspaceFileManager:
         except OSError:
             pass
 
-        logger.info("Migrated flat .agent-os/ files into %s/ namespace", self._project_ns)
+        logger.info("Migrated flat orbital/ files into %s/ namespace", self._project_ns)
 
     def _file_path(self, file_key: str) -> str:
         """Return the full path for a workspace file key.
 
-        AGENT.md is always at workspace/.agent-os/AGENT.md (shared).
+        AGENT.md is always at workspace/orbital/AGENT.md (shared).
         All other files use the project-namespaced directory.
         """
         if file_key == "agent":
@@ -149,7 +149,7 @@ class WorkspaceFileManager:
             return None
 
     def write(self, file_key: str, content: str) -> None:
-        """Write (overwrite) a workspace file. Creates .agent-os/ if needed."""
+        """Write (overwrite) a workspace file. Creates orbital/ if needed."""
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
         self.ensure_dir()

@@ -74,7 +74,7 @@ class TestGlobalPreferences:
 
 class TestStandingRules:
     def test_standing_rules_included_when_file_exists(self, tmp_path):
-        rules_dir = tmp_path / ".agent-os" / "instructions"
+        rules_dir = tmp_path / "orbital" / "instructions"
         rules_dir.mkdir(parents=True)
         (rules_dir / "user_directives.md").write_text("Never commit to main directly")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -145,7 +145,7 @@ class TestMemoryManagementInstructions:
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=False, global_preferences_path="")
         _, dynamic = builder.build(ctx)
-        assert "~/.agent-os/user_preferences.md" in dynamic
+        assert "~/orbital/user_preferences.md" in dynamic
 
 
 class TestAutonomyDirective:

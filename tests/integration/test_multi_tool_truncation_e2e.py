@@ -175,7 +175,7 @@ async def test_all_disk_backups_created(
     )
 
     tool_results_dir = os.path.join(
-        workspace, ".agent-os", "tool-results", "multi-tool-e2e",
+        workspace, "orbital", "tool-results", "multi-tool-e2e",
     )
 
     messages = session.get_messages()

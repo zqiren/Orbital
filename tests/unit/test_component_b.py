@@ -489,8 +489,8 @@ class TestShellToolTruncation:
             )
             result = tool.execute(command="some-long-command")
 
-        # Check that a tempfile was saved under workspace/.agent-os/shell_output/
-        shell_output_dir = tmp_path / ".agent-os" / "shell_output"
+        # Check that a tempfile was saved under workspace/orbital-output/{project}/shell-output/
+        shell_output_dir = tmp_path / "orbital-output" / "shell-output"
         if shell_output_dir.exists():
             saved_files = list(shell_output_dir.iterdir())
             assert len(saved_files) >= 1

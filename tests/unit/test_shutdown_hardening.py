@@ -35,7 +35,7 @@ def _make_manager(tmp_path, platform_provider=None, project_store=None,
         settings_store=settings_store,
         credential_store=credential_store,
     )
-    # Redirect state file to tmp_path so tests don't touch real ~/.agent-os
+    # Redirect state file to tmp_path so tests don't touch real ~/orbital
     mgr._state_file = tmp_path / "daemon-state.json"
     return mgr
 

@@ -133,7 +133,7 @@ def _export_to_disk(
     tool_call_id = msg.get("tool_call_id", "unknown")
     content = msg.get("content", "")
 
-    # Derive tool-results directory (sibling to sessions/ under .agent-os/)
+    # Derive tool-results directory (sibling to sessions/ under orbital/)
     sessions_dir = os.path.dirname(session._filepath)
     parent = os.path.dirname(sessions_dir)
     tool_results_dir = os.path.join(parent, "tool-results", session.session_id)

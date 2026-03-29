@@ -1,6 +1,6 @@
 # Learning Capture
 
-Log corrections, errors, and discoveries to .agent-os/LESSONS.md so future sessions avoid repeating mistakes.
+Log corrections, errors, and discoveries to orbital/LESSONS.md so future sessions avoid repeating mistakes.
 
 ## When to Use
 
@@ -21,7 +21,7 @@ Activate this skill whenever one of three triggers fires:
 ### Read before act
 
 Before starting any task type you have attempted in a previous session,
-read `.agent-os/LESSONS.md` with the `read` tool and scan for entries
+read `orbital/LESSONS.md` with the `read` tool and scan for entries
 whose category or keywords match the current task. Apply any relevant
 lessons before your first action.
 
@@ -40,7 +40,7 @@ Categories (pick one): `correction`, `error-recovery`, `discovery`.
 
 ### Writing the entry
 
-- Use the `edit` tool to append to `.agent-os/LESSONS.md`.
+- Use the `edit` tool to append to `orbital/LESSONS.md`.
   If the file does not exist, create it with the `write` tool.
 - Keep each entry under 100 words. Precision beats length.
 - Include enough context that a future agent session can act on the

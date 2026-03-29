@@ -117,9 +117,9 @@ class ShellTool(Tool):
 
         # Save full output to tempfile
         if self._project_dir_name:
-            output_dir = os.path.join(workspace, ".agent-os", self._project_dir_name, "shell_output")
+            output_dir = os.path.join(workspace, "orbital-output", self._project_dir_name, "shell-output")
         else:
-            output_dir = os.path.join(workspace, ".agent-os", "shell_output")
+            output_dir = os.path.join(workspace, "orbital-output", "shell-output")
         os.makedirs(output_dir, exist_ok=True)
         filename = f"{uuid4().hex[:12]}.txt"
         filepath = os.path.join(output_dir, filename)

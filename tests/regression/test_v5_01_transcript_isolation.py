@@ -32,12 +32,12 @@ class TestSubAgentTranscript:
 
     def test_directory_creation(self, tmp_path):
         t = SubAgentTranscript(str(tmp_path), "deep-agent", "t002")
-        assert os.path.isdir(os.path.join(str(tmp_path), ".agent-os", "sub_agents", "deep-agent"))
+        assert os.path.isdir(os.path.join(str(tmp_path), "orbital", "sub_agents", "deep-agent"))
         assert os.path.isfile(t.filepath)
 
     def test_latest_pointer_updated(self, tmp_path):
         t1 = SubAgentTranscript(str(tmp_path), "claude-code", "first")
-        latest_path = os.path.join(str(tmp_path), ".agent-os", "sub_agents", "claude-code", ".latest")
+        latest_path = os.path.join(str(tmp_path), "orbital", "sub_agents", "claude-code", ".latest")
         assert os.path.isfile(latest_path)
         with open(latest_path) as f:
             assert f.read().strip() == "first.jsonl"

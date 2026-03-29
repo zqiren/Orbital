@@ -266,7 +266,7 @@ class TestE2EAgentIsolation:
             assert "hello_world" in content
 
             # Session JSONL directory is writable by sandbox user
-            sessions_dir = os.path.join(sandbox_workspace, ".agent-os", "sessions")
+            sessions_dir = os.path.join(sandbox_workspace, "orbital", "sessions")
             os.makedirs(sessions_dir, exist_ok=True)
 
             session_file = os.path.join(sessions_dir, "test.jsonl")

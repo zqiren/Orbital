@@ -67,7 +67,7 @@ class TestLessonsLayer1Injection:
 
     def test_lessons_md_injected_as_layer1(self, tmp_path):
         """LESSONS.md read every iteration alongside PROJECT_STATE and DECISIONS."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir()
         (agent_os_dir / "LESSONS.md").write_text(
             "## Don't use rm -rf\n**Problem:** Deleted everything"
@@ -101,7 +101,7 @@ class TestLessonsLayer1Injection:
 
     def test_lessons_md_updates_visible_next_iteration(self, tmp_path):
         """Write LESSONS.md between two prepare() calls -> second sees new content."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir()
 
         session = Session.new("lessons-live", str(tmp_path))

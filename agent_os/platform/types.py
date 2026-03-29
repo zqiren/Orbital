@@ -12,7 +12,8 @@ SANDBOX_USERNAME = "AgentOS-Worker"
 CREDENTIAL_KEY_PREFIX = "AgentOS"
 SANDBOX_PASSWORD_KEY = "AgentOS/sandbox_password"
 DEFAULT_PROXY_HOST = "127.0.0.1"
-WORKSPACE_AGENT_DIR = ".agent-os"
+WORKSPACE_AGENT_DIR = "orbital"
+WORKSPACE_OUTPUT_DIR = "orbital-output"
 
 # --- C1: Sandbox Account ---
 

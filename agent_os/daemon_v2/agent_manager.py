@@ -79,7 +79,7 @@ class AgentManager:
         self._provider_registry = provider_registry or ProviderRegistry()
         self._handles: dict[str, ProjectHandle] = {}
         self._idle_poll_tasks: dict[str, asyncio.Task] = {}  # project_id -> poll task
-        self._state_file: Path = Path.home() / ".agent-os" / "daemon-state.json"
+        self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
 
@@ -353,7 +353,7 @@ class AgentManager:
     def _record_approval_decision(self, project_id: str, tool_name: str,
                                    tool_args: dict, decision: str,
                                    deny_reason: str | None = None) -> None:
-        """Append approval/denial record to {workspace}/.agent-os/approval_history.jsonl."""
+        """Append approval/denial record to {workspace}/orbital/approval_history.jsonl."""
         handle = self._handles.get(project_id)
         if handle is None:
             return
@@ -364,7 +364,7 @@ class AgentManager:
         dir_name = handle.project_dir_name
         if not dir_name:
             return
-        history_dir = os.path.join(workspace, ".agent-os", dir_name)
+        history_dir = os.path.join(workspace, "orbital", dir_name)
         os.makedirs(history_dir, exist_ok=True)
         history_file = os.path.join(history_dir, "approval_history.jsonl")
         args_hash = hashlib.sha256(json.dumps(tool_args, sort_keys=True).encode()).hexdigest()[:12]

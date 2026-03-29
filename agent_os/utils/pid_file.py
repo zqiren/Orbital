@@ -17,7 +17,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PID_PATH = Path.home() / ".agent-os" / "daemon.pid"
+_DEFAULT_PID_PATH = Path.home() / "orbital" / "daemon.pid"
 _active_pid_path: Path | None = None
 
 
@@ -58,7 +58,7 @@ def acquire_pid_file(pid_path: Path | None = None) -> None:
     """Write PID file, refusing to start if another instance is alive.
 
     Args:
-        pid_path: Path for the PID file. Defaults to ~/.agent-os/daemon.pid.
+        pid_path: Path for the PID file. Defaults to ~/orbital/daemon.pid.
 
     Raises:
         DaemonAlreadyRunning: If an existing daemon process is alive.

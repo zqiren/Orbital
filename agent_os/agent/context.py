@@ -69,7 +69,7 @@ class ContextManager:
             return
 
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
         state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
 
@@ -175,7 +175,7 @@ class ContextManager:
 
         # Read Layer 1 files from disk
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
 
         layer_messages: list[dict] = []
 

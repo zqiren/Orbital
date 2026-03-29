@@ -38,7 +38,7 @@ def _create_project(client, workspace: str) -> str:
 
 def _seed_project_files(ws, project_id: str):
     """Create the typical file tree a project accumulates."""
-    agent_os = ws / ".agent-os"
+    agent_os = ws / "orbital"
 
     # Per-project session dir
     sessions = agent_os / project_id / "sessions"
@@ -47,18 +47,19 @@ def _seed_project_files(ws, project_id: str):
     (agent_os / project_id / "PROJECT_STATE.md").write_text("# State")
     (agent_os / project_id / "LESSONS.md").write_text("# Lessons")
 
-    # Browser screenshots
-    shots = agent_os / "browser-screenshots" / "default"
+    # Browser screenshots (output path)
+    output_dir = ws / "orbital-output" / project_id
+    shots = output_dir / "screenshots"
     shots.mkdir(parents=True)
     (shots / "step_0001.png").write_bytes(b"PNG")
 
-    # Browser PDFs
-    pdfs = agent_os / "browser-pdfs"
+    # Browser PDFs (output path)
+    pdfs = output_dir / "pdfs"
     pdfs.mkdir(parents=True)
     (pdfs / "report.pdf").write_bytes(b"PDF")
 
-    # Shell output
-    shell = agent_os / "shell_output"
+    # Shell output (output path)
+    shell = output_dir / "shell-output"
     shell.mkdir(parents=True)
     (shell / "cmd_1.txt").write_text("output")
 
@@ -96,9 +97,10 @@ class TestDeleteCleansInternalFiles:
 
         # Internal data should be gone
         assert not (agent_os / pid).exists(), "project session dir should be removed"
-        assert not (agent_os / "browser-screenshots").exists()
-        assert not (agent_os / "browser-pdfs").exists()
-        assert not (agent_os / "shell_output").exists()
+        output_dir = ws / "orbital-output" / pid
+        assert not (output_dir / "screenshots").exists()
+        assert not (output_dir / "pdfs").exists()
+        assert not (output_dir / "shell-output").exists()
         assert not (agent_os / "instructions").exists()
         assert not (agent_os / "approval_history.jsonl").exists()
         assert not (agent_os / ".tmp").exists()
@@ -129,7 +131,8 @@ class TestDeleteWithClearOutput:
 
         # Everything including agent output should be gone
         assert not (agent_os / pid).exists()
-        assert not (agent_os / "browser-screenshots").exists()
+        output_dir = ws / "orbital-output" / pid
+        assert not (output_dir / "screenshots").exists()
         assert not (agent_os / "agent_output").exists(), \
             "agent_output should be removed when clear_output=true"
 

@@ -135,7 +135,7 @@ class TestChatCompositeEndpoint:
         """Management messages + transcript entries merged and sorted by timestamp."""
         with tempfile.TemporaryDirectory() as workspace:
             from agent_os.daemon_v2.project_store import project_dir_name
-            sessions_dir = os.path.join(workspace, ".agent-os", project_dir_name("test", "proj1"), "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", project_dir_name("test", "proj1"), "sessions")
             _write_session_jsonl(sessions_dir, [
                 {"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"},
                 {"role": "assistant", "content": "Hi there", "timestamp": "2026-03-10T10:00:03Z"},
@@ -176,7 +176,7 @@ class TestChatCompositeEndpoint:
         """No transcripts → returns management messages only."""
         with tempfile.TemporaryDirectory() as workspace:
             from agent_os.daemon_v2.project_store import project_dir_name
-            sessions_dir = os.path.join(workspace, ".agent-os", project_dir_name("test", "proj1"), "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", project_dir_name("test", "proj1"), "sessions")
             _write_session_jsonl(sessions_dir, [
                 {"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"},
             ])
@@ -194,7 +194,7 @@ class TestChatCompositeEndpoint:
             ])
 
             from agent_os.api.routes.agents_v2 import _read_chat_messages
-            sessions_dir = os.path.join(workspace, ".agent-os", "nonexistent", "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", "nonexistent", "sessions")
             mgmt_msgs, _ = _read_chat_messages(sessions_dir, 0, 0)
             assert mgmt_msgs == []
 
@@ -237,7 +237,7 @@ class TestChatCompositeEndpoint:
         """Transcript files on disk (not in _transcripts dict) are found."""
         with tempfile.TemporaryDirectory() as workspace:
             # Write transcript directly to disk without registering in manager
-            sub_dir = os.path.join(workspace, ".agent-os", "sub_agents", "old-agent")
+            sub_dir = os.path.join(workspace, "orbital", "sub_agents", "old-agent")
             os.makedirs(sub_dir, exist_ok=True)
             fpath = os.path.join(sub_dir, "old-session.jsonl")
             with open(fpath, "w", encoding="utf-8") as f:

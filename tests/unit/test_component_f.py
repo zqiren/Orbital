@@ -1039,7 +1039,7 @@ class TestRESTEndpoints:
         pid = resp.json()["project_id"]
 
         # Create session files on disk (namespaced by project_id)
-        sessions_dir = tmp_path / ".agent-os" / pid / "sessions"
+        sessions_dir = tmp_path / "orbital" / pid / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
         # Session 1 (older)
@@ -1081,7 +1081,7 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / ".agent-os" / pid / "sessions"
+        sessions_dir = tmp_path / "orbital" / pid / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = []
         for i in range(10):
@@ -1106,7 +1106,7 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / ".agent-os" / pid / "sessions"
+        sessions_dir = tmp_path / "orbital" / pid / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = []
         for i in range(10):
@@ -1131,7 +1131,7 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / ".agent-os" / pid / "sessions"
+        sessions_dir = tmp_path / "orbital" / pid / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})
@@ -1152,7 +1152,7 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / ".agent-os" / pid / "sessions"
+        sessions_dir = tmp_path / "orbital" / pid / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})

@@ -99,20 +99,20 @@ class TestRelayOptIn:
         env.pop("AGENT_OS_RELAY_URL", None)
         with patch.dict(os.environ, env, clear=True):
             from agent_os.api.app import create_app
-            app = create_app(data_dir=".agent-os-test-data")
+            app = create_app(data_dir="orbital-test-data")
             assert app.state.relay_client is None
 
     def test_relay_initialized_with_env(self, tmp_path, monkeypatch):
         """With AGENT_OS_RELAY_URL set, relay_client is created."""
         monkeypatch.setenv("AGENT_OS_RELAY_URL", "https://relay.example.com")
-        # Use tmp_path for device identity to avoid touching real ~/.agent-os
+        # Use tmp_path for device identity to avoid touching real ~/orbital
         monkeypatch.setattr(
             "agent_os.relay.device.get_or_create_device_identity",
             lambda: {"device_id": "dev_test", "device_secret": "secret"},
         )
 
         from agent_os.api.app import create_app
-        app = create_app(data_dir=".agent-os-test-data")
+        app = create_app(data_dir="orbital-test-data")
 
         assert app.state.relay_client is not None
         assert app.state.relay_client.relay_url == "https://relay.example.com"

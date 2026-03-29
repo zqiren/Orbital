@@ -95,7 +95,7 @@ class TestProjectSettingsJourney:
 
         # Verify file was created on disk
         goals_path = os.path.join(
-            workspace, ".agent-os", "instructions", "project_goals.md"
+            workspace, "orbital", "instructions", "project_goals.md"
         )
         assert os.path.exists(goals_path)
         with open(goals_path) as f:

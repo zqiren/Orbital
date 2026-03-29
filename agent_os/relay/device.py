@@ -5,7 +5,7 @@
 """Device identity management for cloud relay pairing.
 
 On first run, generates a unique device_id and device_secret and persists
-them to ~/.agent-os/device.json.  Subsequent calls return the same identity.
+them to ~/orbital/device.json.  Subsequent calls return the same identity.
 """
 
 import json
@@ -19,7 +19,7 @@ import httpx
 def get_or_create_device_identity(config_dir=None):
     """Return {device_id, device_secret}. Creates file on first run."""
     if config_dir is None:
-        config_dir = Path.home() / ".agent-os"
+        config_dir = Path.home() / "orbital"
     config_dir = Path(config_dir)
     config_dir.mkdir(parents=True, exist_ok=True)
     device_file = config_dir / "device.json"

@@ -30,9 +30,10 @@ Thumbs.db
 nul
 
 # Agent OS runtime
-.agent-os/
-.agent-os-data/
-.agent-os-test-data/
+orbital/
+orbital-data/
+orbital-test-data/
+orbital-output/
 device.json
 *.log
 

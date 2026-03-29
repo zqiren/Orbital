@@ -324,9 +324,9 @@ class TestSystemChromePreference:
 
     @pytest.mark.asyncio
     async def test_profile_dir_default(self):
-        """Default profile_dir is ~/.agent-os/browser-profile."""
+        """Default profile_dir is ~/orbital/browser-profile."""
         mgr = BrowserManager()
-        expected = Path.home() / ".agent-os" / "browser-profile"
+        expected = Path.home() / "orbital" / "browser-profile"
         assert mgr._profile_dir == expected
 
 

@@ -208,16 +208,16 @@ def _read_file_or_empty(path: str) -> str:
 
 def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str) -> dict:
     """Attach project_goals_content and user_directives_content from disk files."""
-    goals_path = os.path.join(workspace, ".agent-os", dir_name, "instructions", "project_goals.md")
-    rules_path = os.path.join(workspace, ".agent-os", dir_name, "instructions", "user_directives.md")
+    goals_path = os.path.join(workspace, "orbital", dir_name, "instructions", "project_goals.md")
+    rules_path = os.path.join(workspace, "orbital", dir_name, "instructions", "user_directives.md")
     result["project_goals_content"] = _read_file_or_empty(goals_path)
     result["user_directives_content"] = _read_file_or_empty(rules_path)
     return result
 
 
 def _write_workspace_file(workspace: str, filename: str, content: str, dir_name: str) -> None:
-    """Write content to {workspace}/.agent-os/{dir_name}/instructions/{filename}."""
-    instructions_dir = os.path.join(workspace, ".agent-os", dir_name, "instructions")
+    """Write content to {workspace}/orbital/{dir_name}/instructions/{filename}."""
+    instructions_dir = os.path.join(workspace, "orbital", dir_name, "instructions")
     os.makedirs(instructions_dir, exist_ok=True)
     with open(os.path.join(instructions_dir, filename), "w", encoding="utf-8") as f:
         f.write(content)
@@ -363,13 +363,13 @@ _cleanup_logger = logging.getLogger(__name__)
 
 def _cleanup_project_files(workspace: str, project_id: str, clear_output: bool,
                            project_name: str = "") -> None:
-    """Remove project data files from the workspace .agent-os directory.
+    """Remove project data files from the workspace orbital directory.
 
-    All project-specific data lives under .agent-os/{dir_name}/.  Deleting that
+    All project-specific data lives under orbital/{dir_name}/.  Deleting that
     single directory is sufficient.  Legacy flat directories from pre-namespaced
     workspaces are also cleaned up (safe: they only exist in old workspaces).
     """
-    agent_os_dir = os.path.join(workspace, ".agent-os")
+    agent_os_dir = os.path.join(workspace, "orbital")
     if not os.path.isdir(agent_os_dir):
         return
 
@@ -804,7 +804,7 @@ async def chat_history(
 
     workspace = project["workspace"]
     dir_name = _project_dir_name(project.get("name", ""), project_id)
-    sessions_dir = os.path.join(workspace, ".agent-os", dir_name, "sessions")
+    sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
 
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []

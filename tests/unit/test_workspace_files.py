@@ -42,7 +42,7 @@ def ws(tmp_path):
 
 @pytest.fixture
 def ws_dir(tmp_path):
-    """Return the .agent-os directory path (not yet created)."""
+    """Return the orbital directory path (not yet created)."""
     return os.path.join(str(tmp_path), WORKSPACE_DIR)
 
 

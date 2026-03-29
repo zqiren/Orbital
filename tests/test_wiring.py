@@ -243,7 +243,7 @@ async def test_session_persistence(agent_loop, session, workspace):
     assert len(messages) >= 2
 
     # Find the JSONL file
-    sessions_dir = os.path.join(workspace, ".agent-os", "sessions")
+    sessions_dir = os.path.join(workspace, "orbital", "sessions")
     jsonl_files = [f for f in os.listdir(sessions_dir) if f.endswith(".jsonl")]
     assert len(jsonl_files) == 1, f"Expected 1 JSONL file, got {jsonl_files}"
 

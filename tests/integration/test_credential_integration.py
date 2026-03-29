@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def app_client(tmp_path):
     """Boot real FastAPI app with isolated data dir and mocked keyring."""
-    data_dir = str(tmp_path / "agent-os-data")
+    data_dir = str(tmp_path / "orbital-data")
     os.makedirs(data_dir, exist_ok=True)
 
     mock_keyring = MagicMock()

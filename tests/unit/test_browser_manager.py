@@ -281,7 +281,7 @@ class TestBrowserManager:
         """51 captures -> oldest deleted, max 50 remain."""
         workspace = str(tmp_path / "workspace")
         session_id = "sess_001"
-        screenshot_dir = Path(workspace) / ".agent-os" / "browser-screenshots" / session_id
+        screenshot_dir = Path(workspace) / "orbital-output" / session_id / "screenshots"
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Pre-create 49 screenshot files (step_0001 through step_0049)

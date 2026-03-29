@@ -71,13 +71,13 @@ async def test_lifecycle_to_session_injection():
 
     # Simulate on_completed
     await observer.on_completed("proj1", "claude-code", "Refactored auth module",
-                                 "/workspace/.agent-os/sub_agents/claude-code/abc.jsonl")
+                                 "/workspace/orbital/sub_agents/claude-code/abc.jsonl")
 
     # Verify system message was injected into session
     assert len(injected) == 1
     assert "[Sub-agent] claude-code completed" in injected[0]
     assert "Refactored auth" in injected[0]
-    assert "/workspace/.agent-os/sub_agents/claude-code/abc.jsonl" in injected[0]
+    assert "/workspace/orbital/sub_agents/claude-code/abc.jsonl" in injected[0]
 
     # Verify session has the message
     msgs = session.get_messages()
@@ -143,7 +143,7 @@ async def test_chat_composite_merges_session_and_transcripts():
 
         # Write management session
         dir_name = project_dir_name("test", "proj1")
-        sessions_dir = os.path.join(workspace, ".agent-os", dir_name, "sessions")
+        sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
         os.makedirs(sessions_dir, exist_ok=True)
         with open(os.path.join(sessions_dir, "s1.jsonl"), "w") as f:
             f.write(json.dumps({"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"}) + "\n")

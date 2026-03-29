@@ -61,7 +61,7 @@ def _make_config(**overrides):
 
 def _write_layer1_files(workspace: str, dir_name: str) -> dict:
     """Write Layer 1 files and return their contents for assertion."""
-    base = os.path.join(workspace, ".agent-os", dir_name)
+    base = os.path.join(workspace, "orbital", dir_name)
     os.makedirs(base, exist_ok=True)
     contents = {
         "PROJECT_STATE.md": "# Project State\nFeature X is 50% complete.",
@@ -76,7 +76,7 @@ def _write_layer1_files(workspace: str, dir_name: str) -> dict:
 def _write_session_file(workspace: str, dir_name: str, session_id: str,
                         messages: list[dict]) -> str:
     """Write a session JSONL file and return its path."""
-    sessions_dir = os.path.join(workspace, ".agent-os", dir_name, "sessions")
+    sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
     os.makedirs(sessions_dir, exist_ok=True)
     filepath = os.path.join(sessions_dir, f"{session_id}.jsonl")
     with open(filepath, "w") as f:
@@ -227,7 +227,7 @@ class TestNewSessionPreservesLayer1:
             await mgr.new_session(project_id)
 
             # Verify Layer 1 files are untouched
-            base = os.path.join(workspace, ".agent-os", dir_name)
+            base = os.path.join(workspace, "orbital", dir_name)
             for fname, expected_content in layer1.items():
                 with open(os.path.join(base, fname)) as f:
                     assert f.read() == expected_content
@@ -358,7 +358,7 @@ class TestNewSessionIsolation:
             assert json.loads(lines[0])["content"] == "from B"
 
             # Project B's layer1 files should be untouched
-            base_b = os.path.join(workspace, ".agent-os", dir_b)
+            base_b = os.path.join(workspace, "orbital", dir_b)
             for fname, expected in layer1_b.items():
                 with open(os.path.join(base_b, fname)) as f:
                     assert f.read() == expected

@@ -57,7 +57,7 @@ class TestGap4UserDirectivesExclusion:
 
     def test_user_directives_excluded_from_read_instructions(self, tmp_path):
         """_read_instructions must skip user_directives.md."""
-        instructions_dir = tmp_path / ".agent-os" / "instructions"
+        instructions_dir = tmp_path / "orbital" / "instructions"
         instructions_dir.mkdir(parents=True)
         (instructions_dir / "project_goals.md").write_text("goals content")
         (instructions_dir / "user_directives.md").write_text("directives content")
@@ -72,7 +72,7 @@ class TestGap4UserDirectivesExclusion:
 
     def test_project_goals_still_excluded(self, tmp_path):
         """project_goals.md must remain excluded (pre-existing behavior)."""
-        instructions_dir = tmp_path / ".agent-os" / "instructions"
+        instructions_dir = tmp_path / "orbital" / "instructions"
         instructions_dir.mkdir(parents=True)
         (instructions_dir / "project_goals.md").write_text("goals here")
         (instructions_dir / "other.md").write_text("other content")
@@ -84,7 +84,7 @@ class TestGap4UserDirectivesExclusion:
 
     def test_other_md_files_still_included(self, tmp_path):
         """Non-excluded .md files must still be read."""
-        instructions_dir = tmp_path / ".agent-os" / "instructions"
+        instructions_dir = tmp_path / "orbital" / "instructions"
         instructions_dir.mkdir(parents=True)
         (instructions_dir / "user_directives.md").write_text("directives")
         (instructions_dir / "coding_standards.md").write_text("standards")
@@ -98,7 +98,7 @@ class TestGap4UserDirectivesExclusion:
 
     def test_empty_after_exclusions_returns_none(self, tmp_path):
         """If only excluded files exist, _read_instructions returns None."""
-        instructions_dir = tmp_path / ".agent-os" / "instructions"
+        instructions_dir = tmp_path / "orbital" / "instructions"
         instructions_dir.mkdir(parents=True)
         (instructions_dir / "project_goals.md").write_text("goals")
         (instructions_dir / "user_directives.md").write_text("directives")

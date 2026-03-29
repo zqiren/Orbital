@@ -44,7 +44,7 @@ class PromptContext:
     trigger_name: str | None = None     # human-readable trigger name
     vision_enabled: bool = False        # model supports vision (image input)
     project_id: str = ""                # store-level project id
-    project_dir_name: str = ""          # slugified dir name under .agent-os/
+    project_dir_name: str = ""          # slugified dir name under orbital/
     active_sub_agents: list = None      # [{"handle": str, "status": str, ...}]
 
     def __post_init__(self):
@@ -344,7 +344,7 @@ class PromptBuilder:
     def _onboarding_or_directive(self, context: PromptContext) -> str:
         """Return onboarding prompt if project_goals.md missing, else directive."""
         goals_path = os.path.join(
-            context.workspace, ".agent-os", context.project_dir_name,
+            context.workspace, "orbital", context.project_dir_name,
             "instructions", "project_goals.md"
         )
         content = self._read_truncated(goals_path)
@@ -367,7 +367,7 @@ class PromptBuilder:
                 "4. Keep it to at most 5 exchanges. Do not over-ask. If the user gives short answers,\n"
                 "   work with what you have.\n"
                 "5. Once confirmed (user says ok/yes/looks good/any affirmative, OR you've hit 5 exchanges),\n"
-                f"   write project_goals.md to .agent-os/{context.project_dir_name}/instructions/project_goals.md using the structure:\n"
+                f"   write project_goals.md to orbital/{context.project_dir_name}/instructions/project_goals.md using the structure:\n"
                 "   Mission, Triggers, Scope, Rules, Preferences.\n"
                 "6. Keep project_goals.md under 1500 words. Distill, don't dump.\n\n"
                 "DO NOT use any tools (read, shell, write, edit, browser, etc.) until onboarding is complete.\n"
@@ -410,7 +410,7 @@ class PromptBuilder:
 
     def _standing_rules(self, context: PromptContext) -> str | None:
         path = os.path.join(
-            context.workspace, ".agent-os", context.project_dir_name,
+            context.workspace, "orbital", context.project_dir_name,
             "instructions", "user_directives.md"
         )
         content = self._read_truncated(path)
@@ -421,7 +421,7 @@ class PromptBuilder:
     def _memory(self, context: PromptContext) -> str:
         if context.is_scratch:
             return (
-                f"You can maintain notes in {context.workspace}/.agent-os/ if working on "
+                f"You can maintain notes in {context.workspace}/orbital/ if working on "
                 "something substantial across multiple messages. For quick questions and "
                 "one-off tasks, don't bother updating state files.\n\n"
                 "After completing a task or answering a question, end your response. "
@@ -432,19 +432,19 @@ class PromptBuilder:
             )
         ns = context.project_dir_name
         return (
-            f"You maintain your own long-term memory as files in {context.workspace}/.agent-os/{ns}/:\n"
+            f"You maintain your own long-term memory as files in {context.workspace}/orbital/{ns}/:\n"
             "- PROJECT_STATE.md: Living summary of project status, pending work, key files.\n"
             "  Update after completing significant work. Keep under 1K tokens.\n"
             "- DECISIONS.md: Key decisions with brief reasoning. Append when you make non-obvious choices.\n"
             "These files are your memory across sessions. If you don't maintain them, you'll lose context\n"
             "when the session restarts. Update them proactively.\n\n"
             f"When you produce deliverables the user will want to access (reports, generated code,\n"
-            f"exports, summaries, etc.), place them in {context.workspace}/.agent-os/{ns}/agent_output/.\n"
+            f"exports, summaries, etc.), place them in {context.workspace}/orbital-output/{ns}/agent_output/.\n"
             "Create the folder if it doesn't exist. Working files and intermediate artifacts\n"
             "can live anywhere in the workspace. Only final, user-facing output goes in agent_output/.\n\n"
             'When the user says "remember X", "always do X", or "don\'t do X":\n'
-            f"- If it's a rule for this project → append to .agent-os/{ns}/instructions/user_directives.md\n"
-            f"- If it's a personal/global preference → append to {context.global_preferences_path or '~/.agent-os/user_preferences.md'}\n"
+            f"- If it's a rule for this project → append to orbital/{ns}/instructions/user_directives.md\n"
+            f"- If it's a personal/global preference → append to {context.global_preferences_path or '~/orbital/user_preferences.md'}\n"
             '- If unclear → ask: "Should this apply to just this project or all your projects?"\n\n'
             'When the user says "forget X" or "stop doing X":\n'
             "- Remove the matching line from the appropriate file.\n\n"
@@ -569,7 +569,7 @@ class PromptBuilder:
         workspace = self._workspace or context.workspace
         if not workspace:
             return None
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         bootstrap_files = {
             "AGENT.md": "Agent Instructions",
             "USER.md": "User Preferences",

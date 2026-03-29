@@ -100,7 +100,7 @@ class TestPermissionManager:
             assert info.mode == "none"
 
     def test_setup_workspace(self, permission_manager):
-        """Creates directory and .agent-os/ subdir."""
+        """Creates directory and orbital/ subdir."""
         with tempfile.TemporaryDirectory() as base_dir:
             workspace_path = os.path.join(base_dir, "test_workspace")
 
@@ -115,7 +115,7 @@ class TestPermissionManager:
             assert result.success is True
             assert os.path.isdir(workspace_path)
             assert os.path.isdir(
-                os.path.join(workspace_path, ".agent-os")
+                os.path.join(workspace_path, "orbital")
             )
 
     @skip_no_sandbox

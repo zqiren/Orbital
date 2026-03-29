@@ -66,15 +66,15 @@ class Session:
             project_dir_name: str = "") -> Session:
         """Create a fresh session.
 
-        File at {workspace}/.agent-os/{project_dir_name}/sessions/{session_id}.jsonl
+        File at {workspace}/orbital/{project_dir_name}/sessions/{session_id}.jsonl
         when *project_dir_name* is provided (preferred), otherwise falls back to
         *project_id* for backward compat.
         """
         ns = project_dir_name or project_id
         if ns:
-            sessions_dir = os.path.join(workspace, ".agent-os", ns, "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", ns, "sessions")
         else:
-            sessions_dir = os.path.join(workspace, ".agent-os", "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", "sessions")
         os.makedirs(sessions_dir, exist_ok=True)
         filepath = os.path.join(sessions_dir, f"{session_id}.jsonl")
         session = cls(filepath)

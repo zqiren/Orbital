@@ -96,7 +96,7 @@ class UserCredentialStore:
 
     def __init__(self, meta_path: str | None = None):
         self._meta_path = meta_path or os.path.join(
-            os.path.expanduser("~"), ".agent-os", "credential-meta.json"
+            os.path.expanduser("~"), "orbital", "credential-meta.json"
         )
         self._meta = self._load_meta()
 

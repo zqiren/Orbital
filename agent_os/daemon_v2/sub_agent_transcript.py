@@ -17,7 +17,7 @@ class SubAgentTranscript:
     """Append-only JSONL log for one sub-agent's output within a project."""
 
     def __init__(self, workspace: str, handle: str, transcript_id: str):
-        self._dir = os.path.join(workspace, ".agent-os", "sub_agents", handle)
+        self._dir = os.path.join(workspace, "orbital", "sub_agents", handle)
         os.makedirs(self._dir, exist_ok=True)
         self._filename = f"{transcript_id}.jsonl"
         self._filepath = os.path.join(self._dir, self._filename)

@@ -6,7 +6,7 @@
 
 Allows starting a pairing flow, listing paired devices,
 and revoking paired devices.  Paired device state is persisted
-to ~/.agent-os/paired_devices.json.
+to ~/orbital/paired_devices.json.
 """
 
 import json
@@ -27,7 +27,7 @@ def configure(relay_client):
 
 
 def _devices_file() -> Path:
-    p = Path.home() / ".agent-os" / "paired_devices.json"
+    p = Path.home() / "orbital" / "paired_devices.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

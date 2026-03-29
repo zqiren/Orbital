@@ -30,7 +30,7 @@ class TestScratchAutoCreation:
         resp = client.get("/api/v2/projects")
         scratch = [p for p in resp.json() if p.get("is_scratch")][0]
         goals_path = os.path.join(
-            scratch["workspace"], ".agent-os", "instructions", "project_goals.md"
+            scratch["workspace"], "orbital", "instructions", "project_goals.md"
         )
         assert os.path.exists(goals_path)
         with open(goals_path) as f:

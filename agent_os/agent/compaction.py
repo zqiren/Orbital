@@ -86,7 +86,7 @@ def inject_reorientation(workspace: str, session) -> None:
     both sections. If both are missing or empty, injects nothing.
     Fault-tolerant: read errors produce empty strings, never crash.
     """
-    agent_os_dir = os.path.join(workspace, ".agent-os")
+    agent_os_dir = os.path.join(workspace, "orbital")
     goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
     state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
 

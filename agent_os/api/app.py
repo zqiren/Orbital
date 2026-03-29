@@ -78,7 +78,7 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "model": "",
         "api_key": "",
     })
-    goals_dir = os.path.join(scratch_workspace, ".agent-os", "instructions")
+    goals_dir = os.path.join(scratch_workspace, "orbital", "instructions")
     os.makedirs(goals_dir, exist_ok=True)
     with open(os.path.join(goals_dir, "project_goals.md"), "w", encoding="utf-8") as f:
         f.write(SCRATCH_PROJECT_GOALS)
@@ -104,7 +104,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.add_middleware(RelayRedactionMiddleware)
 
     # 1. Project store + credential store
-    store_dir = data_dir or ".agent-os-data"
+    store_dir = data_dir or "orbital-data"
     project_store = ProjectStore(data_dir=store_dir)
     credential_store = ApiKeyStore()
     user_credential_store = UserCredentialStore(

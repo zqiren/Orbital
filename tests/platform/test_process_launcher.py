@@ -250,7 +250,7 @@ class TestProcessLauncherSandbox:
             command="cmd", args=["/c", "echo cleanup_test"],
             working_dir=sandbox_workspace, timeout_sec=30
         )
-        tmp_dir = os.path.join(sandbox_workspace, ".agent-os", ".tmp")
+        tmp_dir = os.path.join(sandbox_workspace, "orbital", ".tmp")
         if os.path.exists(tmp_dir):
             leftover = glob.glob(os.path.join(tmp_dir, "cmd_*"))
             assert len(leftover) == 0, f"Temp files not cleaned up: {leftover}"

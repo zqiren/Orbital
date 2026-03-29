@@ -208,7 +208,7 @@ class TestSessionNewAndLoad:
     def test_new_creates_jsonl_file(self, tmp_path):
         """Session.new() should create a JSONL file at the expected path."""
         session = Session.new("test-sess", str(tmp_path))
-        expected_dir = tmp_path / ".agent-os" / "sessions"
+        expected_dir = tmp_path / "orbital" / "sessions"
         expected_file = expected_dir / "test-sess.jsonl"
         assert expected_file.exists()
 
@@ -220,7 +220,7 @@ class TestSessionNewAndLoad:
         session.append(msg1)
         session.append(msg2)
 
-        filepath = str(tmp_path / ".agent-os" / "sessions" / "rt.jsonl")
+        filepath = str(tmp_path / "orbital" / "sessions" / "rt.jsonl")
         loaded = Session.load(filepath)
         messages = loaded.get_messages()
         assert len(messages) == 2
@@ -238,7 +238,7 @@ class TestSessionNewAndLoad:
 
     def test_load_skips_corrupted_line(self, tmp_path):
         """A corrupted JSONL line should be skipped during load."""
-        filepath = tmp_path / ".agent-os" / "sessions" / "corrupt.jsonl"
+        filepath = tmp_path / "orbital" / "sessions" / "corrupt.jsonl"
         filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(json.dumps({"role": "user", "content": "good"}) + "\n")
@@ -331,7 +331,7 @@ class TestAppendToolResultMeta:
         session.append(tc_msg)
         session.append_tool_result("tc_p", "ok", meta={"network": True})
 
-        filepath = str(tmp_path / ".agent-os" / "sessions" / "metap.jsonl")
+        filepath = str(tmp_path / "orbital" / "sessions" / "metap.jsonl")
         loaded = Session.load(filepath)
         tool_msg = [m for m in loaded.get_messages() if m["role"] == "tool"][0]
         assert tool_msg["_meta"]["network"] is True
@@ -452,7 +452,7 @@ class TestResolvePendingToolCalls:
         session.append_tool_result("tc_r1", "ok")
         # tc_r2 is still pending
 
-        filepath = str(tmp_path / ".agent-os" / "sessions" / "rebuild.jsonl")
+        filepath = str(tmp_path / "orbital" / "sessions" / "rebuild.jsonl")
         loaded = Session.load(filepath)
         # Startup recovery heals orphaned tool calls
         assert len(loaded.pending_tool_calls) == 0
@@ -497,7 +497,7 @@ class TestSessionCompact:
                    "source": "management", "timestamp": "2026-01-01T00:00:00"}
         session._compact(summary, split_index=3)
 
-        filepath = str(tmp_path / ".agent-os" / "sessions" / "compactd.jsonl")
+        filepath = str(tmp_path / "orbital" / "sessions" / "compactd.jsonl")
         loaded = Session.load(filepath)
         msgs = loaded.get_messages()
         assert len(msgs) == 3  # summary + msg3 + msg4
@@ -1069,7 +1069,7 @@ class TestContextReadsLayerFiles:
 
     def test_reads_project_state_from_disk(self, tmp_path):
         """prepare() should read PROJECT_STATE.md and include it in context."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         state_file = agent_os_dir / "PROJECT_STATE.md"
         state_file.write_text("# Project State\nWorking on feature X.", encoding="utf-8")
@@ -1089,7 +1089,7 @@ class TestContextReadsLayerFiles:
 
     def test_picks_up_file_changes(self, tmp_path):
         """Modifying PROJECT_STATE.md between prepare() calls should be reflected."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         state_file = agent_os_dir / "PROJECT_STATE.md"
         state_file.write_text("Version 1", encoding="utf-8")
@@ -1546,7 +1546,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_no_injection_when_both_layer1_files_exist(self, tmp_path):
         """If project_goals.md AND PROJECT_STATE.md exist, no recovery injection."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         (agent_os_dir / "PROJECT_STATE.md").write_text("state", encoding="utf-8")
         instructions_dir = agent_os_dir / "instructions"
@@ -1573,7 +1573,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_injection_when_project_goals_missing(self, tmp_path):
         """If project_goals.md is missing and an archived session exists, inject recovery."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         # PROJECT_STATE.md exists but project_goals.md doesn't
         (agent_os_dir / "PROJECT_STATE.md").write_text("state", encoding="utf-8")
@@ -1600,7 +1600,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_injection_when_both_files_missing(self, tmp_path):
         """If both Layer 1 files missing and archived JSONL exists, inject recovery."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
 
         sessions_dir = agent_os_dir / "sessions"
@@ -1633,7 +1633,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_no_injection_on_session_with_existing_messages(self, tmp_path):
         """If session already has messages, skip recovery (not a fresh start)."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         sessions_dir = agent_os_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -1654,7 +1654,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_recovery_only_runs_once(self, tmp_path):
         """Recovery injection should only happen on the first prepare() call."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir(parents=True, exist_ok=True)
         sessions_dir = agent_os_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -1678,7 +1678,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_recovery_excludes_current_session_file(self, tmp_path):
         """Recovery should not read from the current session's own JSONL file."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         sessions_dir = agent_os_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1699,7 +1699,7 @@ class TestCrashRecoveryContextInjection:
 
     def test_recovery_formats_tool_calls(self, tmp_path):
         """Tool calls in archived messages should be formatted as 'Assistant used: tool_name'."""
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         sessions_dir = agent_os_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         old_msgs = [

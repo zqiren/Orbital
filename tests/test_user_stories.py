@@ -708,7 +708,7 @@ async def test_us7_session_persistence(client, workspace):
 
         # Find the JSONL file
         trace.step("VERIFY", "Looking for session JSONL file")
-        sessions_dir = os.path.join(workspace, ".agent-os", "sessions")
+        sessions_dir = os.path.join(workspace, "orbital", "sessions")
         trace.step("SESSIONS_DIR", sessions_dir)
 
         if not os.path.isdir(sessions_dir):

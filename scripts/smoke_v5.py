@@ -403,7 +403,7 @@ def scenario_5_session_isolation():
             # (GET /chat may normalize, so also check JSONL directly)
             from agent_os.daemon_v2.project_store import project_dir_name
             dir_name = project_dir_name("smoke-s5-isolation", pid)
-            sessions_dir = os.path.join(workspace, ".agent-os", dir_name, "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
             if os.path.isdir(sessions_dir):
                 for fname in os.listdir(sessions_dir):
                     if fname.endswith(".jsonl"):

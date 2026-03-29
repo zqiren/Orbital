@@ -5,7 +5,7 @@
 """Regression: full tool results are saved to disk when truncated to stubs.
 
 The disk backup ensures the agent can recall full results via read_file
-if needed. Files are stored at .agent-os/tool-results/{session_id}/.
+if needed. Files are stored at orbital/tool-results/{session_id}/.
 """
 
 import json
@@ -59,7 +59,7 @@ class TestToolResultDiskBackup:
 
         # Check file exists
         tool_results_dir = os.path.join(
-            workspace, ".agent-os", "tool-results", "disk-backup-test",
+            workspace, "orbital", "tool-results", "disk-backup-test",
         )
         expected_file = os.path.join(tool_results_dir, "turn_3_call_tc_disk1.json")
         assert os.path.exists(expected_file), f"Expected disk backup at {expected_file}"
@@ -76,7 +76,7 @@ class TestToolResultDiskBackup:
         truncate_consumed_tool_results(session, "Log output.", iteration=1)
 
         tool_results_dir = os.path.join(
-            workspace, ".agent-os", "tool-results", "disk-backup-test",
+            workspace, "orbital", "tool-results", "disk-backup-test",
         )
         backup_file = os.path.join(tool_results_dir, "turn_1_call_tc_schema.json")
 
@@ -104,7 +104,7 @@ class TestToolResultDiskBackup:
         truncate_consumed_tool_results(session, "Read the CSV.", iteration=2)
 
         tool_results_dir = os.path.join(
-            workspace, ".agent-os", "tool-results", "disk-backup-test",
+            workspace, "orbital", "tool-results", "disk-backup-test",
         )
         backup_file = os.path.join(tool_results_dir, "turn_2_call_tc_match.json")
 
@@ -130,7 +130,7 @@ class TestToolResultDiskBackup:
         truncate_consumed_tool_results(session, "Read all files.", iteration=5)
 
         tool_results_dir = os.path.join(
-            workspace, ".agent-os", "tool-results", "disk-backup-test",
+            workspace, "orbital", "tool-results", "disk-backup-test",
         )
         for i in range(3):
             path = os.path.join(tool_results_dir, f"turn_5_call_tc_multi_{i}.json")
@@ -175,7 +175,7 @@ class TestToolResultDiskBackup:
 
         # Disk backup still readable independently
         tool_results_dir = os.path.join(
-            workspace, ".agent-os", "tool-results", "disk-backup-test",
+            workspace, "orbital", "tool-results", "disk-backup-test",
         )
         backup_file = os.path.join(tool_results_dir, "turn_1_call_tc_reload.json")
         with open(backup_file, "r", encoding="utf-8") as f:

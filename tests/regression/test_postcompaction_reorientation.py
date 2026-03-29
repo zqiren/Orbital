@@ -29,8 +29,8 @@ def session(tmp_path):
 
 @pytest.fixture
 def workspace(tmp_path):
-    """Workspace with .agent-os directory structure."""
-    agent_os_dir = os.path.join(str(tmp_path), ".agent-os")
+    """Workspace with orbital directory structure."""
+    agent_os_dir = os.path.join(str(tmp_path), "orbital")
     instructions_dir = os.path.join(agent_os_dir, "instructions")
     os.makedirs(instructions_dir, exist_ok=True)
     return str(tmp_path)
@@ -41,7 +41,7 @@ class TestReorientationInjection:
 
     def test_injects_goals_and_state(self, session, workspace):
         """When both files exist, reorientation message contains both."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
 
         # Create project goals
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
@@ -76,7 +76,7 @@ class TestReorientationInjection:
 
     def test_goals_only(self, session, workspace):
         """When only goals file exists, state section shows fallback text."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
         with open(goals_path, "w") as f:
             f.write("Implement user authentication.")
@@ -91,7 +91,7 @@ class TestReorientationInjection:
 
     def test_state_only(self, session, workspace):
         """When only state file exists, goals section shows fallback text."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
         with open(state_path, "w") as f:
             f.write("Working on database schema.")
@@ -112,7 +112,7 @@ class TestReorientationInjection:
 
     def test_empty_files_inject_nothing(self, session, workspace):
         """When both files exist but are empty, no message is injected."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
         state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
 
@@ -127,7 +127,7 @@ class TestReorientationInjection:
 
     def test_large_files_truncated_at_3000(self, session, workspace):
         """Files larger than 3000 chars are truncated."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
         with open(goals_path, "w") as f:
             f.write("X" * 5000)
@@ -145,7 +145,7 @@ class TestReorientationInjection:
 
     def test_reorientation_after_compaction_message(self, session, workspace):
         """Reorientation messages must appear AFTER the compaction summary."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
         with open(goals_path, "w") as f:
             f.write("Build the API.")
@@ -183,7 +183,7 @@ class TestReorientationInjection:
 
     def test_persisted_to_jsonl(self, session, workspace):
         """Reorientation message must be persisted to JSONL."""
-        agent_os_dir = os.path.join(workspace, ".agent-os")
+        agent_os_dir = os.path.join(workspace, "orbital")
         state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
         with open(state_path, "w") as f:
             f.write("Current task: testing persistence.")

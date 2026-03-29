@@ -180,7 +180,7 @@ async def test_disk_backup_exists_after_read(
 
     # Check disk backup directory
     tool_results_dir = os.path.join(
-        workspace, ".agent-os", "tool-results", "lifecycle-e2e",
+        workspace, "orbital", "tool-results", "lifecycle-e2e",
     )
 
     if not os.path.exists(tool_results_dir):

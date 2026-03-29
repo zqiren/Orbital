@@ -43,7 +43,7 @@ Before writing code, ask yourself: is there a simpler approach?
   already available?
 
 If a simpler approach exists, use it. If not, proceed — but note the
-decision in `.agent-os/DECISIONS.md` so future sessions know why.
+decision in `orbital/DECISIONS.md` so future sessions know why.
 
 ### Plan communication
 

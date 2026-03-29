@@ -201,7 +201,7 @@ class BrowserManager:
     ]
 
     def __init__(self, profile_dir: str = None, headless: bool = True):
-        self._profile_dir = Path(profile_dir or Path.home() / ".agent-os" / "browser-profile")
+        self._profile_dir = Path(profile_dir or Path.home() / "orbital" / "browser-profile")
         self._headless = headless
         self._playwright = None
         self._browser = None
@@ -612,9 +612,9 @@ class BrowserManager:
         self._screenshot_counters[counter_key] = step
 
         if project_dir_name:
-            screenshot_dir = Path(workspace) / ".agent-os" / project_dir_name / "browser-screenshots" / session_id
+            screenshot_dir = Path(workspace) / "orbital-output" / project_dir_name / "screenshots" / session_id
         else:
-            screenshot_dir = Path(workspace) / ".agent-os" / "browser-screenshots" / session_id
+            screenshot_dir = Path(workspace) / "orbital-output" / "screenshots" / session_id
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Enforce retention (max 50)
@@ -632,7 +632,7 @@ class BrowserManager:
         """Remove screenshot files. Called on project deletion / daemon shutdown."""
         import shutil
 
-        base = Path(workspace) / ".agent-os" / "browser-screenshots"
+        base = Path(workspace) / "orbital-output" / "screenshots"
         if session_id:
             target = base / session_id
             if target.exists():

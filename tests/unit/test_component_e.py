@@ -214,7 +214,7 @@ class TestOSInstructions:
 class TestWorkspaceBootstrap:
 
     def test_agent_md_appears_in_dynamic_suffix(self, tmp_path):
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir()
         agent_md = agent_os_dir / "AGENT.md"
         agent_md.write_text("Custom agent instructions for this project.")
@@ -232,7 +232,7 @@ class TestWorkspaceBootstrap:
 class TestWorkspaceBootstrapTruncation:
 
     def test_large_agent_md_truncated(self, tmp_path):
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir()
         agent_md = agent_os_dir / "AGENT.md"
         # Write 25K chars
@@ -256,7 +256,7 @@ class TestWorkspaceBootstrapTruncation:
 class TestWorkspaceBootstrapMissing:
 
     def test_missing_agent_md_no_error(self, tmp_path):
-        # No .agent-os/AGENT.md file
+        # No orbital/AGENT.md file
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
         # Should not raise
@@ -440,7 +440,7 @@ class TestPromptBuilderWithWorkspace:
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the application.")
 
         # Set up agent bootstrap
-        agent_os_dir = tmp_path / ".agent-os"
+        agent_os_dir = tmp_path / "orbital"
         agent_os_dir.mkdir()
         (agent_os_dir / "AGENT.md").write_text("You are a deployment helper.")
 

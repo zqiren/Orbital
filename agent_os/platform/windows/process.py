@@ -559,7 +559,7 @@ class ProcessLauncher:
 
         Returns a CommandResult with exit_code, stdout, stderr, and timed_out flag.
         """
-        tmp_dir = os.path.join(working_dir, ".agent-os", ".tmp")
+        tmp_dir = os.path.join(working_dir, "orbital", ".tmp")
         os.makedirs(tmp_dir, exist_ok=True)
 
         run_id = uuid.uuid4().hex[:12]

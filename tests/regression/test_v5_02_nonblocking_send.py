@@ -67,7 +67,7 @@ class TestNonBlockingSend:
 
         result = await sam.send("proj1", "claude-code", "hello")
 
-        assert ".agent-os/sub_agents/" in result.replace("\\", "/")
+        assert "orbital/sub_agents/" in result.replace("\\", "/")
         assert "claude-code" in result
 
     @pytest.mark.asyncio
