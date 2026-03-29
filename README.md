@@ -158,7 +158,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.4/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.4)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.5)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
@@ -297,24 +297,32 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 <p align="center"><em>Browse, preview, and upload files in each project's workspace</em></p>
 
 ```
-~/orbital/
+{workspace}/
++-- orbital/                            # Operational metadata
+|   +-- AGENT.md                        # Shared agent directive
+|   +-- {project-slug-a3f2}/           # Per-project namespace
+|       +-- sessions/
+|       |   +-- {session_id}.jsonl      # Append-only session log
+|       +-- instructions/
+|       |   +-- project_goals.md
+|       |   +-- user_directives.md
+|       +-- PROJECT_STATE.md            # Current task state
+|       +-- DECISIONS.md                # Decision log
+|       +-- LESSONS.md                  # Learned patterns
+|       +-- SESSION_LOG.md              # Last 3 session summaries
+|       +-- CONTEXT.md                  # External reference material
++-- orbital-output/                     # Agent work artifacts
+    +-- {project-slug-a3f2}/
+        +-- screenshots/                # Browser screenshots
+        +-- pdfs/                       # Saved PDFs
+        +-- shell-output/               # Shell command output
+
+~/orbital/                              # Home global (daemon infrastructure)
 +-- daemon.pid                          # Singleton enforcement
-+-- projects.json                       # All project configs
-+-- settings.json                       # Global settings
-+-- credential-meta.json                # Credential metadata
++-- daemon-state.json                   # Agent heartbeat state
++-- device.json                         # Device identity
 +-- browser-profile/                    # Shared browser profile
-+-- AGENT.md                            # Shared agent directive
-+-- {project-slug-a3f2}/               # Per-project namespace
-    +-- sessions/
-    |   +-- {session_id}.jsonl          # Append-only session log
-    +-- instructions/
-    |   +-- project_goals.md
-    |   +-- user_directives.md
-    +-- PROJECT_STATE.md                # Current task state
-    +-- DECISIONS.md                    # Decision log
-    +-- LESSONS.md                      # Learned patterns
-    +-- SESSION_LOG.md                  # Last 3 session summaries
-    +-- CONTEXT.md                      # External reference material
++-- credential-meta.json                # Credential metadata
 ```
 
 **Session format**: One JSON line per message (role, source, content, timestamp, tool_calls). Append-only with file locks. Never modified except during compaction.
