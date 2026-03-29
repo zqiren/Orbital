@@ -142,7 +142,7 @@ Orbital treats AI agents as processes that need an **operating system** — proc
 
 ### Windows
 
-1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.3.3/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.3)
+1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.5)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 

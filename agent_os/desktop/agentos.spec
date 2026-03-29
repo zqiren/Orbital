@@ -22,6 +22,7 @@ a = Analysis(
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
+        (os.path.join(project_root, 'agent_os', 'default_skills'), 'agent_os/default_skills'),
     ] + ([(_patchright_driver_dir, 'patchright/driver')] if _patchright_driver_dir else []),
     hiddenimports=[
         'uvicorn.logging',
