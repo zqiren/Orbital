@@ -38,18 +38,18 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 
 ## How Orbital Compares
 
-| | Orbital | OpenClaw | Claude Cowork |
-| --- | --- | --- | --- |
-| Autonomous multi-hour sessions | ✅ | ✅ | ✅ (persistent sessions via Dispatch) |
-| Sandbox isolation | ✅ (OS-level) | ❌ | ✅ (local sandbox on macOS) |
-| Approval workflows | ✅ (configurable autonomy presets) | IM notifications only | ✅ (human-in-the-loop, per-action) |
-| Mobile dashboard | ✅ (approve, browse files, upload) | IM notifications | ✅ (Dispatch — control from phone) |
-| Sub-agent coordination | ✅ (PTY + Claude SDK; ACP supported) | ✅ (multi-session) | Partial (internal task decomposition) |
-| Budget controls | ✅ (per-project hard limits) | ❌ | ❌ (plan-level limits only) |
-| Credential management | ✅ (OS keychain, agent never sees raw secrets) | Plaintext config files | Anthropic account (Pro/Max) |
-| Cron + file-watch triggers | ✅ (natural language) | ❌ | ✅ (scheduled tasks) |
-| Local-first | ✅ | ✅ | ✅ (macOS only) |
-| Open source | GPL 3.0 | MIT | ❌ |
+| | Orbital | OpenClaw |
+| --- | --- | --- |
+| Autonomous multi-hour sessions | ✅ | ✅ |
+| Sandbox isolation | ✅ (OS-level) | ❌ |
+| Approval workflows | ✅ (configurable autonomy presets) | IM notifications only |
+| Mobile dashboard | ✅ (approve, browse files, upload) | IM notifications |
+| Sub-agent coordination | ✅ (PTY + Claude SDK; ACP supported) | ✅ (multi-session) |
+| Budget controls | ✅ (per-project hard limits) | ❌ |
+| Credential management | ✅ (OS keychain, agent never sees raw secrets) | Plaintext config files |
+| Cron + file-watch triggers | ✅ (natural language) | ✅ cron / ❌ file-watch |
+| Local-first | ✅ | ✅ |
+| Open source | GPL 3.0 | MIT |
 
 ---
 
