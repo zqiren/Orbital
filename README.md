@@ -11,7 +11,7 @@
 
 > Your AI agents can work for hours — reading files, running shell commands, browsing the web, delegating to sub-agents. But who's watching them?
 
-Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (via [ACP](https://agentcommunicationprotocol.dev/)), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
+Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (supports [ACP](https://agentcommunicationprotocol.dev/) transport), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
 
 ## Demo
 
@@ -32,7 +32,7 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 | Orbital **IS** | Orbital **IS NOT** |
 | --- | --- |
 | An autonomous agent with sandbox boundaries and approval gates | A cloud service — everything runs on your machine |
-| A sub-agent coordinator: Claude Code, Codex, Gemini CLI via [ACP](https://agentcommunicationprotocol.dev/) + [claude-agent-sdk](https://github.com/anthropics/anthropic-sdk-python) | An OpenClaw fork — custom agent loop, built from scratch |
+| A sub-agent coordinator: Claude Code, Codex, Gemini CLI (supports [ACP](https://agentcommunicationprotocol.dev/) transport) + [claude-agent-sdk](https://github.com/anthropics/anthropic-sdk-python) | An OpenClaw fork — custom agent loop, built from scratch |
 | Mobile management: approve actions, browse workspace files, upload from phone | A chat wrapper — agents run continuously via cron and file watchers |
 | Budget controls, autonomy presets, credential management (OS keychain) | Fully autonomous God Mode (yet) — scheduler-driven today, full autonomy on the roadmap |
 
@@ -44,7 +44,7 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 | Sandbox isolation | ✅ (OS-level) | ❌ | Cloud-side |
 | Approval workflows | ✅ (configurable autonomy presets) | IM notifications only | ❌ |
 | Mobile dashboard | ✅ (approve, browse files, upload) | IM notifications | ❌ |
-| Sub-agent coordination | ✅ (ACP + Claude SDK) | ✅ (multi-session) | ❌ |
+| Sub-agent coordination | ✅ (PTY + Claude SDK; ACP supported) | ✅ (multi-session) | ❌ |
 | Budget controls | ✅ (per-project hard limits) | ❌ | ❌ |
 | Credential management | ✅ (OS keychain, agent never sees raw secrets) | Plaintext config files | Cloud-managed |
 | Cron + file-watch triggers | ✅ (natural language) | ❌ | ❌ |
@@ -382,7 +382,9 @@ Orbital is not tied to a single AI tool. The management agent plans and delegate
 | **Pipe** | stdin/stdout subprocess, JSON streaming |
 | **PTY** | Pseudo-terminal for interactive agents |
 | **SDK** | Direct Claude SDK integration |
-| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — Codex, Gemini CLI, and other ACP-compatible agents |
+| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — available for ACP-compatible agents |
+
+> **Note:** ACP transport is implemented in the daemon but agent manifests currently default to PTY for stability. Switching any ACP-compatible agent (Gemini CLI, Codex, Copilot CLI, Cline, Goose) to ACP is a one-line manifest change — see `docs/acp-migration.md` (coming soon).
 
 ### Built-in Tool Suite
 
