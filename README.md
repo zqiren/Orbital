@@ -1,21 +1,48 @@
 # Orbital
 
 <p align="center">
+  <a href="https://youtu.be/D9l0r4gP_RQ">
+    <img src="https://img.youtube.com/vi/D9l0r4gP_RQ/maxresdefault.jpg" alt="Watch the demo — agent runs, phone approves, agent continues" width="800">
+  </a>
+</p>
+<p align="center"><em>Agent runs a task → pauses for approval → you approve from your phone → agent continues. <a href="https://youtu.be/D9l0r4gP_RQ">Watch the demo →</a></em></p>
+
+<p align="center">
   <img src="orbital-logo.png" alt="Orbital" width="120">
 </p>
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
 
+**Give your agent a project, not a prompt.**
+Define a workspace, a supervisor, sub-agents, and a budget. Leave the rest to your agents while you manage them remotely.
 
-**Autonomous agents, under your control.**
+**Download:**
+- [Windows Installer (.exe)](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe)
+- [macOS Installer (.dmg)](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg)
 
-> Your AI agents can work for hours — reading files, running shell commands, browsing the web, delegating to sub-agents. But who's watching them?
+Set up in under 5 minutes. No Python or Node required.
 
-Orbital is a local-first agent management system. It ships with a built-in autonomous agent, coordinates sub-agents like Claude Code, Codex, and Gemini CLI (supports [ACP](https://agentcommunicationprotocol.dev/) transport), and gates every dangerous action behind approval workflows you control from your phone. Sandbox isolation, budget limits, cron scheduling, persistent memory — all on your machine. Nothing uploaded. Nothing cloud-hosted.
+Watch the demo: [https://youtu.be/D9l0r4gP_RQ](https://youtu.be/D9l0r4gP_RQ)
 
-## Demo
+---
 
-[![Watch the demo](https://img.youtube.com/vi/Z_8CXPEl3dI/maxresdefault.jpg)](https://www.youtube.com/watch?v=Z_8CXPEl3dI)
+## What You Get
+
+- **Project-based agent management** — each project is a folder with its own workspace, instructions, budget, and autonomy level
+- **Sub-agent delegation** — the management agent monitors your workspace, evaluates progress against goals, and dispatches work to Claude Code, Codex, Gemini CLI, or any CLI agent
+- **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
+- **Approval workflows** — agents pause before risky actions; approve from desktop or phone
+- **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
+- **Mobile supervision** — manage agents from your phone via QR code pairing
+- **Budget controls** — per-project spending limits with configurable actions
+- **15+ LLM providers** — Anthropic, OpenAI, DeepSeek, Ollama, Moonshot, Groq, Gemini, and more
+- **Browser automation** — 23 browser actions via Patchright with anti-detection
+- **Persistent context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md maintained across sessions
+- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
+
+---
+
+## Screenshots
 
 <p align="center">
   <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple agents running in parallel" width="800">
@@ -23,11 +50,102 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 <p align="center"><em>Multiple agents running in parallel — each with its own project, triggers, and session history</em></p>
 
 <p align="center">
-  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve, deny, or redirect from your phone" width="350">
+  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve agent actions from your phone" width="350">
 </p>
 <p align="center"><em>An agent needs permission to run a command — approve or deny from your phone</em></p>
 
-## Orbital Is / Is Not
+<p align="center">
+  <img src="docs/screenshots/3B-subagent-delegation.png" alt="Sub-agent executing delegated work and reporting back" width="800">
+</p>
+<p align="center"><em>Management agent delegates Phase 1 to @claudecode, monitors progress, and reviews the result</em></p>
+
+---
+
+## Quick Start
+
+1. **Launch Orbital** — the setup wizard guides you through three steps:
+
+   **Step 1 — LLM Provider:** Connect your API key. Supports Anthropic, OpenAI, Moonshot, DeepSeek, and 15+ other providers.
+
+   <p align="center">
+     <img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1 — configure your LLM provider and API key" width="700">
+   </p>
+
+   **Step 2 — Sandbox:** Orbital creates an isolated user account so agents can't access your personal files or network without permission.
+
+   <p align="center">
+     <img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2 — sandbox isolation confirmation" width="700">
+   </p>
+
+   **Step 3 — Browser Warm-up:** Sign into sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs.
+
+   <p align="center">
+     <img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3 — browser warm-up for agent web access" width="700">
+   </p>
+
+2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
+
+<p align="center">
+  <img src="docs/screenshots/new-project-setting.png" alt="New project creation with workspace and autonomy settings" width="700">
+</p>
+
+3. **Chat** — type a task in the chat bar and the management agent handles it
+4. **Approve or automate** — review tool calls in the approval card, or set autonomy to hands-off
+
+---
+
+## How It Works
+
+Orbital treats each unit of agent work as a **project** — not a chat session. A project binds a workspace directory, evolving instructions, an autonomy preset, a budget, approval rules, and persistent state into one supervised unit. The agent works inside the project. You supervise from anywhere.
+
+```
++------------------------------------------------------+
+|                    Frontend (React SPA)               |
+|  Chat UI . Approval Cards . Project Settings . Files  |
++-------------------------+----------------------------+
+                          | REST + WebSocket
++-------------------------v----------------------------+
+|                  Daemon (FastAPI + uvicorn)            |
+|                                                       |
+|  +--------------+  +--------------+  +--------------+ |
+|  | AgentManager |  | SubAgentMgr  |  | TriggerMgr   | |
+|  | (lifecycle)  |  | (delegation) |  | (cron/watch) | |
+|  +------+-------+  +------+-------+  +--------------+ |
+|         |                 |                            |
+|  +------v-------+  +------v-------+                    |
+|  | Agent Loop   |  | Transports   |                    |
+|  | (streaming)  |  | Pipe/PTY/SDK |                    |
+|  +------+-------+  +--------------+                    |
+|         |                                              |
+|  +------v-------+  +--------------+  +--------------+  |
+|  | LLM Provider |  | Tool Registry|  | Autonomy     |  |
+|  | (multi-SDK)  |  | (shell,file, |  | Interceptor  |  |
+|  |              |  |  browser...) |  | (approve/deny|  |
+|  +--------------+  +--------------+  +--------------+  |
+|                                                        |
+|  +--------------------------------------------------+  |
+|  | Platform Layer (Windows sandbox / macOS / Linux)  |  |
+|  +--------------------------------------------------+  |
++-------------------------+----------------------------+
+                          | WebSocket tunnel
++-------------------------v----------------------------+
+|              Cloud Relay (Node.js)                     |
+|  REST proxy . Event forwarding . Push notifications   |
+|  Device pairing . Phone WebSocket bridge              |
++------------------------------------------------------+
+```
+
+**Key design decisions:**
+- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
+- **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
+- **Single daemon**: PID file enforcement prevents multiple instances
+
+---
+
+## Feature Deep Dives
+
+<details>
+<summary><strong>Orbital Is / Is Not</strong></summary>
 
 | Orbital **IS** | Orbital **IS NOT** |
 | --- | --- |
@@ -36,105 +154,326 @@ Orbital is a local-first agent management system. It ships with a built-in auton
 | Mobile management: approve actions, browse workspace files, upload from phone | A chat wrapper — agents run continuously via cron and file watchers |
 | Budget controls, autonomy presets, credential management (OS keychain) | Fully autonomous God Mode (yet) — scheduler-driven today, full autonomy on the roadmap |
 
-## How Orbital Compares
+</details>
 
-| | Orbital | OpenClaw |
-| --- | --- | --- |
-| Autonomous multi-hour sessions | ✅ | ✅ |
-| Sandbox isolation | ✅ (OS-level) | ❌ |
-| Approval workflows | ✅ (configurable autonomy presets) | IM notifications only |
-| Mobile dashboard | ✅ (approve, browse files, upload) | IM notifications |
-| Sub-agent coordination | ✅ (PTY + Claude SDK; ACP supported) | ✅ (multi-session) |
-| Budget controls | ✅ (per-project hard limits) | ❌ |
-| Credential management | ✅ (OS keychain, agent never sees raw secrets) | Plaintext config files |
-| Cron + file-watch triggers | ✅ (natural language) | ✅ cron / ❌ file-watch |
-| Local-first | ✅ | ✅ |
-| Open source | GPL 3.0 | MIT |
+<details>
+<summary><strong>How Orbital Compares</strong></summary>
 
----
+| | Orbital | OpenClaw | Claude Cowork |
+| --- | --- | --- | --- |
+| Workspace = folder on your machine | ✅ (project dir holds agent state, sessions, outputs — all version-controllable) | ✅ (agent workspace with memory files) | Partial (selected folder access, but agent runs in a sandboxed VM — state lives outside your project) |
+| Structured project state | ✅ (PROJECT_STATE.md, DECISIONS.md, LESSONS.md — maintained by the agent across sessions) | Partial (MEMORY.md + daily notes, but no structured project/decision tracking) | ❌ (session-scoped context) |
+| Sub-agent delegation to external tools | ✅ (dispatches to Claude Code, Codex, Gemini CLI, or any CLI agent) | Partial (child sessions on different models, but not external CLI agents) | ❌ (internal Claude sub-agents only) |
+| File-watch triggers | ✅ (agent reacts to file changes in workspace) | ❌ | ❌ |
+| Scheduled triggers | ✅ (cron via natural language) | ✅ (`openclaw cron` with per-job tool allowlists) | ✅ (`/schedule` for recurring tasks) |
+| Approval workflows | ✅ (configurable autonomy presets — hands-off, check-in, supervised) | Exec-only (shell command approvals via CLI or IM inline buttons) | ❌ |
+| Mobile supervision | ✅ (full dashboard — approve, deny, browse files, upload from phone) | Partial (Android app, Chrome extension) | Partial (Dispatch — send tasks from phone, no approval gate) |
+| Budget controls | ✅ (per-project hard limits in USD) | ❌ | ❌ (subscription-based) |
+| Sandbox isolation | ✅ (OS-level sandbox user, enabled by default) | Opt-in (Docker containers, not default — requires Docker) | ✅ (sandboxed VM, but Computer Use runs outside it) |
+| Local-first | ✅ | ✅ | ✅ (desktop app) |
+| Open source | GPL 3.0 | MIT | ❌ |
 
-## The Problem
+</details>
 
-AI agents are autonomous in capability but not in operation. The moment you look away, things break down.
+<details>
+<summary><strong>Project & Workspace Model</strong></summary>
 
-&nbsp;
+Each project maps to a workspace directory and maintains its own sessions, triggers, and configuration.
 
-**1. You are the operating system**
-<br>You use one agent for strategy, another for architecture, a third for implementation. You're the one threading them together — copy-pasting deliverables from one conversation into another, verifying outputs, sequencing who works on what. You do very little actual work, but you're trapped in the chores of being the process manager. Close the laptop and everything stops. Walk away and context is lost.
+<p align="center">
+  <img src="docs/screenshots/files.png" alt="File explorer — browse and upload files in the project workspace" width="800">
+</p>
+<p align="center"><em>Browse, preview, and upload files in each project's workspace</em></p>
 
-**2. Agents are destructive by default**
-<br>`rm -rf`. Leaked credentials. Data exfiltration. Current tools rely on agents "behaving well" — no sandbox, no network isolation, no approval gate the agent can't bypass.
+```
+{workspace}/
++-- orbital/                            # Operational metadata
+|   +-- AGENT.md                        # Shared agent directive
+|   +-- {project-slug-a3f2}/           # Per-project namespace
+|       +-- sessions/
+|       |   +-- {session_id}.jsonl      # Append-only session log
+|       +-- instructions/
+|       |   +-- project_goals.md
+|       |   +-- user_directives.md
+|       +-- PROJECT_STATE.md            # Current task state
+|       +-- DECISIONS.md                # Decision log
+|       +-- LESSONS.md                  # Learned patterns
+|       +-- SESSION_LOG.md              # Last 3 session summaries
+|       +-- CONTEXT.md                  # External reference material
++-- orbital-output/                     # Agent work artifacts
+    +-- {project-slug-a3f2}/
+        +-- screenshots/                # Browser screenshots
+        +-- pdfs/                       # Saved PDFs
+        +-- shell-output/               # Shell command output
 
-**3. Agents don't live where your work lives**
-<br>Most platforms ask you to upload files, copy-paste context, re-explain your project every session. But your code is on your machine. Agents should work in your environment, not ask you to relocate into theirs.
+~/orbital/                              # Home global (daemon infrastructure)
++-- daemon.pid                          # Singleton enforcement
++-- daemon-state.json                   # Agent heartbeat state
++-- device.json                         # Device identity
++-- browser-profile/                    # Shared browser profile
++-- credential-meta.json                # Credential metadata
+```
 
-**4. No centralized management**
-<br>Three agents means three terminals, three permission models, three context windows. No unified dashboard. No single approval queue.
+**Session format**: One JSON line per message (role, source, content, timestamp, tool_calls). Append-only with file locks. Never modified except during compaction.
 
-**5. Agent knowledge is ephemeral**
-<br>Every session starts from zero. The agent doesn't remember yesterday's decisions or last week's files. You re-explain the same context over and over.
+</details>
 
----
+<details>
+<summary><strong>Quick Tasks</strong></summary>
 
-## The Insight
+The sidebar includes a **Quick Task** section for fire-and-forget interactions. Scratch projects skip the full project creation flow — useful for one-off tasks that don't need a dedicated workspace.
 
-Orbital treats AI agents as processes that need an **operating system** — process management, permission enforcement, resource isolation, persistent state, and a supervision interface.
+<p align="center">
+  <img src="docs/screenshots/quick-task.png" alt="Quick Task — browsing Hacker News and returning structured results" width="800">
+</p>
 
-<table>
-<tr>
-<th width="40%">Problem</th>
-<th width="60%">How Orbital solves it</th>
-</tr>
-<tr>
-<td>Supervision = sitting at keyboard</td>
-<td>Agents run on your machine. Need a decision? The agent pauses and pings your phone. <br>Approve, deny, or redirect — from anywhere.</td>
-</tr>
-<tr>
-<td>No safety boundaries</td>
-<td>Sandboxed shell. File access restricted to granted folders. Fail-closed approval. <br>Credentials resolved at the execution boundary — the LLM never sees raw passwords.</td>
-</tr>
-<tr>
-<td>Work lives somewhere else</td>
-<td>Runs on your machine, your filesystem, your browser. <br>No cloud uploads. No context migration. The workspace IS the project.</td>
-</tr>
-<tr>
-<td>Fragmented management</td>
-<td>One dashboard, all agents. One approval queue. Desktop or phone.</td>
-</tr>
-<tr>
-<td>Cold starts every session</td>
-<td>Agent memory lives in workspace files: <code>PROJECT_STATE.md</code>, <code>DECISIONS.md</code>, <code>LESSONS.md</code>. <br>Plain text you can read, edit, and version-control.</td>
-</tr>
-</table>
+</details>
 
----
+<details>
+<summary><strong>Autonomy & Approval System</strong></summary>
 
-## Table of Contents
+Three autonomy presets control how much supervision agents receive:
 
-- [Orbital Is / Is Not](#orbital-is--is-not)
-- [How Orbital Compares](#how-orbital-compares)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Architecture Overview](#architecture-overview)
-- [Core Features](#core-features)
-  - [Project & Workspace Model](#project--workspace-model)
-  - [Quick Tasks](#quick-tasks)
-  - [Autonomy & Approval System](#autonomy--approval-system)
-  - [Sub-Agent Delegation](#sub-agent-delegation)
-  - [Built-in Tool Suite](#built-in-tool-suite)
-  - [Browser Automation](#browser-automation)
-  - [Continuous Operation & Triggers](#continuous-operation--triggers)
-  - [Context Management & Compaction](#context-management--compaction)
-  - [Mobile Remote Control](#mobile-remote-control)
-  - [Cost Controls & Budget Limits](#cost-controls--budget-limits)
-  - [Credential Management](#credential-management)
-  - [LLM Provider Routing & BYOK](#llm-provider-routing--byok)
-  - [Loop Safety Guards](#loop-safety-guards)
-  - [Desktop App & System Tray](#desktop-app--system-tray)
-- [Development](#development)
-- [Testing](#testing)
-- [Roadmap](#roadmap)
-- [License](#license)
+| Preset | Shell | File Write | Browser | Description |
+|--------|-------|-----------|---------|-------------|
+| **Hands-off** | Auto | Auto | Auto | Maximum autonomy. Only `request_access` requires approval. |
+| **Check-in** | Approval | Approval | Write only | Balanced. Default for external agents. |
+| **Supervised** | Approval | Approval | All except read | Maximum oversight. |
+
+<p align="center">
+  <img src="docs/screenshots/budget.png" alt="Project settings — autonomy presets and budget controls" width="700">
+</p>
+<p align="center"><em>Pick an autonomy level and set budget limits per project</em></p>
+
+**Approval flow:**
+1. Interceptor catches tool call based on autonomy rules
+2. Frontend shows an **Approval Card** with tool name, arguments, and context
+3. User can **Approve**, **Deny**, or **Auto-approve for 10 minutes**
+4. Per-action bypass: same tool+args auto-approved for 60 seconds
+
+<p align="center">
+  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve agent actions from your phone" width="350">
+</p>
+<p align="center"><em>Approve agent actions from your phone — with full context and optional guidance</em></p>
+
+</details>
+
+<details>
+<summary><strong>Sub-Agent Delegation</strong></summary>
+
+Orbital is not tied to a single AI tool. The management agent plans and delegates, while specialized sub-agents execute. Any CLI-based agent can be registered via a manifest file.
+
+<p align="center">
+  <img src="docs/screenshots/3A-chat-file-creation.png" alt="Management agent creating a plan and delegating to sub-agents" width="800">
+</p>
+<p align="center"><em>The management agent creates an implementation plan...</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/3B-subagent-delegation.png" alt="Sub-agent executing delegated work and reporting back" width="800">
+</p>
+<p align="center"><em>...delegates Phase 1 to @claudecode, monitors progress, and reviews the result</em></p>
+
+**Transport types:**
+
+| Transport | Use Case |
+|-----------|----------|
+| **Pipe** | stdin/stdout subprocess, JSON streaming |
+| **PTY** | Pseudo-terminal for interactive agents — Gemini CLI, Codex, Copilot CLI, Cline, Goose |
+| **SDK** | Direct Claude SDK integration |
+| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — supported but not the current default |
+
+> **Note:** ACP transport is implemented in the daemon but agent manifests currently default to PTY for stability. Switching any ACP-compatible agent (Gemini CLI, Codex, Copilot CLI, Cline, Goose) to ACP is a one-line manifest change — see `docs/acp-migration.md` (coming soon).
+
+</details>
+
+<details>
+<summary><strong>Built-in Tool Suite</strong></summary>
+
+The management agent has access to these tool categories:
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| **Shell** | `shell` | Command execution with network-aware detection |
+| **File** | `read`, `write`, `edit`, `glob`, `grep` | File operations within workspace |
+| **Browser** | 23 actions via Patchright | Navigate, click, type, extract, screenshot, multi-tab |
+| **Triggers** | `create_trigger`, `list_triggers`, `update_trigger`, `delete_trigger` | Schedule and file-watch triggers via natural language |
+| **Credentials** | `request_credential` | Agent-initiated credential request — opens secure modal |
+| **Delegation** | `delegate` | Route tasks to sub-agents |
+
+</details>
+
+<details>
+<summary><strong>Browser Automation</strong></summary>
+
+Built on **Patchright** (a Playwright fork with anti-bot-detection):
+
+- **Stealth mode**: Anti-automation detection scripts injected into every browser context
+- **Shared profile**: One browser profile across all projects — log into services once, all agents share cookies
+- **Accessibility-first**: `snapshot` returns an accessibility tree with `[ref=eN]` element references for reliable interaction
+- **23 browser actions**: navigate, click, type, fill, press, hover, select, drag, upload, snapshot, screenshot, extract, search, evaluate, tab management, PDF export, web search, URL fetch
+
+<p align="center">
+  <img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="Agent browsing arxiv.org and scanning research papers" width="350">
+</p>
+<p align="center"><em>An agent browsing arxiv.org — scanning for AI reasoning papers on a daily schedule</em></p>
+
+</details>
+
+<details>
+<summary><strong>Continuous Operation & Triggers</strong></summary>
+
+Agents run continuously via triggers — no manual intervention needed. Create triggers through **natural language** in the chat:
+
+> *"Watch the uploads/ folder for new .jpg files and analyze them"*
+> *"Run a research scan every morning at 6 AM"*
+
+The management agent translates this into a `create_trigger` tool call with the appropriate type and parameters.
+
+**Trigger types:**
+
+| Type | Configuration | Example |
+|------|--------------|---------|
+| **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
+| **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
+
+<p align="center">
+  <img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger — monitoring auth/ directory for .py changes" width="800">
+</p>
+<p align="center"><em>File watch trigger: monitors auth/ for .py changes, runs tests on every save. 22 runs so far.</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/scheduled-trigger.png" alt="Scheduled trigger — daily research scan at 6 AM" width="800">
+</p>
+<p align="center"><em>Scheduled trigger: scans arxiv, Hacker News, and tech blogs every day at 6 AM. 12 runs.</em></p>
+
+**Real-world example — Health Tracker with file watch:**
+
+<p align="center">
+  <img src="docs/screenshots/4B-mobile-meal-chat1.jpg" alt="Setting up a meal photo file watcher from phone" width="350">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/4B-mobile-meal-chat2.jpg" alt="Agent automatically analyzing a meal photo" width="350">
+</p>
+<p align="center"><em>Left: "Watch uploads/ for meal photos and track calories." Right: Drop a photo, get instant nutritional analysis.</em></p>
+
+</details>
+
+<details>
+<summary><strong>Context Management & Compaction</strong></summary>
+
+**Six workspace files** maintained by the LLM at session boundaries:
+
+| File | Purpose |
+|------|---------|
+| `AGENT.md` | Shared agent directive (global) |
+| `PROJECT_STATE.md` | Current task, in-progress work |
+| `DECISIONS.md` | Decision log with rationale |
+| `LESSONS.md` | Learned patterns and pitfalls |
+| `SESSION_LOG.md` | Last 3 session summaries |
+| `CONTEXT.md` | External references, API docs |
+
+**Cold resume**: On session start, these files are assembled into the system prompt to reorient the agent — no context lost between sessions.
+
+**Compaction** (when context usage exceeds 80%): memory flush, LLM-driven summarization of older messages, recent messages kept intact, post-compaction reorientation with project goals and current state.
+
+</details>
+
+<details>
+<summary><strong>Mobile Remote Control</strong></summary>
+
+Control agents from your phone on the local network or via a cloud relay.
+
+<p align="center">
+  <img src="docs/screenshots/4A-mobile-dashboard.png" alt="Mobile dashboard — all projects at a glance" width="350">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/5C-mobile-approved.png" alt="Agent completing work after mobile approval" width="350">
+</p>
+<p align="center"><em>Left: Project dashboard on phone. Right: Agent completes its research after you approve from anywhere.</em></p>
+
+**Local network**: Scan the QR code in Settings to open Orbital on your phone via LAN.
+
+<p align="center">
+  <img src="docs/screenshots/qr-code-lan-pairng.png" alt="QR code for mobile access on local network" width="700">
+</p>
+<p align="center"><em>Scan to open Orbital on your phone — same Wi-Fi network required</em></p>
+
+**Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests, budget alerts, and agent status changes.
+
+</details>
+
+<details>
+<summary><strong>Cost Controls & Budget Limits</strong></summary>
+
+Per-project budget limits prevent runaway spending:
+
+| Setting | Description |
+|---------|-------------|
+| `Budget Limit (USD)` | Maximum spend for the project |
+| `Budget Action` | `ask` (prompt user), `pause` (stop agent), or `deny` (block LLM calls) |
+| `Spent` | Running total with reset option |
+
+The agent loop tracks cumulative token usage and computes cost using per-model pricing from the provider registry. When the budget threshold is reached, the configured action fires and a push notification is sent.
+
+</details>
+
+<details>
+<summary><strong>Credential Management</strong></summary>
+
+<p align="center">
+  <img src="docs/screenshots/credential-store.png" alt="Credential store — website passwords stored in system keychain" width="700">
+</p>
+<p align="center"><em>Website credentials stored in your system keychain. Agents always ask permission before using them.</em></p>
+
+- **API keys**: Stored in OS keychain (`keyring`), masked in API responses, per-project BYOK override
+- **Website credentials**: Metadata in `credential-meta.json`, values in OS keychain. The `request_credential` tool lets agents request credentials mid-session via a secure modal — credentials never appear in chat history.
+
+</details>
+
+<details>
+<summary><strong>LLM Provider Routing & BYOK</strong></summary>
+
+**15+ providers** supported out of the box:
+
+Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, Azure OpenAI, Ollama, and more.
+
+- **SDK routing**: Anthropic SDK for Anthropic, OpenAI SDK for OpenAI-compatible providers
+- **Per-model metadata**: Display name, tier, context window, max output, capabilities (vision, tool use, streaming), pricing
+- **Fallback rotation**: When the primary provider fails, the loop rotates to fallback providers with error classification (transient, rate limit, abort)
+
+</details>
+
+<details>
+<summary><strong>Loop Safety Guards</strong></summary>
+
+The agent loop includes multiple safety mechanisms to prevent runaway execution:
+
+| Guard | Threshold | Behavior |
+|-------|-----------|----------|
+| **Token budget** | 500K tokens (configurable) | Hard stop on cumulative usage |
+| **Repetition detection** | 5 identical action hashes | Forces different approach |
+| **Ping-pong detection** | 3 identical consecutive pairs | Breaks alternating cycles |
+| **Circuit breaker** | 2 consecutive identical errors | Blocks tool until new user message |
+| **Context overflow** | 3 consecutive overflows | Hard stop after progressive reduction |
+
+</details>
+
+<details>
+<summary><strong>Desktop App & System Tray</strong></summary>
+
+Orbital ships as a desktop application bundled with PyInstaller:
+
+- **System tray**: Agent activity status, quick access menu, running port in tooltip
+- **Native window**: Embeds the React frontend via `pywebview` — no browser needed
+- **Daemon lifecycle**: Desktop app spawns the daemon on launch, manages port allocation, cleans up on exit
+- **Sleep prevention**: Blocks system sleep while agents are active (Windows `SetThreadExecutionState`), re-allows when idle
+
+**Skills system**: Each project can configure operational skills — patterns the agent follows before each task.
+
+<p align="center">
+  <img src="docs/screenshots/skills.png" alt="Skills — operational patterns the agent follows" width="700">
+</p>
+<p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how the agent works</em></p>
+
+</details>
 
 ---
 
@@ -203,347 +542,6 @@ Open `http://localhost:5173` in your browser. The setup wizard runs on first lau
 ### Note on Sleep/Shutdown
 
 Orbital prevents system sleep while agents are actively working (via OS-level sleep inhibition on Windows and macOS). When all agents are idle, sleep is re-allowed. The system tray icon shows current agent activity status.
-
----
-
-## Quick Start
-
-1. **Launch Orbital** — the setup wizard guides you through three steps:
-
-   **Step 1 — LLM Provider:** Connect your API key. Supports Anthropic, OpenAI, Moonshot, DeepSeek, and 15+ other providers.
-
-   <p align="center">
-     <img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1 — configure your LLM provider and API key" width="700">
-   </p>
-
-   **Step 2 — Sandbox:** Orbital creates an isolated user account so agents can't access your personal files or network without permission.
-
-   <p align="center">
-     <img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2 — sandbox isolation confirmation" width="700">
-   </p>
-
-   **Step 3 — Browser Warm-up:** Sign into sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs.
-
-   <p align="center">
-     <img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3 — browser warm-up for agent web access" width="700">
-   </p>
-
-2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
-
-<p align="center">
-  <img src="docs/screenshots/new-project-setting.png" alt="New project creation with workspace and autonomy settings" width="700">
-</p>
-
-3. **Chat** — type a task in the chat bar and the management agent handles it
-4. **Approve or automate** — review tool calls in the approval card, or set autonomy to hands-off
-
----
-
-## Architecture Overview
-
-```
-+------------------------------------------------------+
-|                    Frontend (React SPA)               |
-|  Chat UI . Approval Cards . Project Settings . Files  |
-+-------------------------+----------------------------+
-                          | REST + WebSocket
-+-------------------------v----------------------------+
-|                  Daemon (FastAPI + uvicorn)            |
-|                                                       |
-|  +--------------+  +--------------+  +--------------+ |
-|  | AgentManager |  | SubAgentMgr  |  | TriggerMgr   | |
-|  | (lifecycle)  |  | (delegation) |  | (cron/watch) | |
-|  +------+-------+  +------+-------+  +--------------+ |
-|         |                 |                            |
-|  +------v-------+  +------v-------+                    |
-|  | Agent Loop   |  | Transports   |                    |
-|  | (streaming)  |  | Pipe/PTY/SDK |                    |
-|  +------+-------+  +--------------+                    |
-|         |                                              |
-|  +------v-------+  +--------------+  +--------------+  |
-|  | LLM Provider |  | Tool Registry|  | Autonomy     |  |
-|  | (multi-SDK)  |  | (shell,file, |  | Interceptor  |  |
-|  |              |  |  browser...) |  | (approve/deny|  |
-|  +--------------+  +--------------+  +--------------+  |
-|                                                        |
-|  +--------------------------------------------------+  |
-|  | Platform Layer (Windows sandbox / macOS / Linux)  |  |
-|  +--------------------------------------------------+  |
-+-------------------------+----------------------------+
-                          | WebSocket tunnel
-+-------------------------v----------------------------+
-|              Cloud Relay (Node.js)                     |
-|  REST proxy . Event forwarding . Push notifications   |
-|  Device pairing . Phone WebSocket bridge              |
-+------------------------------------------------------+
-```
-
-**Key design decisions:**
-- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
-- **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
-- **Single daemon**: PID file enforcement prevents multiple instances
-
----
-
-## Core Features
-
-### Project & Workspace Model
-
-Each project maps to a workspace directory and maintains its own sessions, triggers, and configuration.
-
-<p align="center">
-  <img src="docs/screenshots/files.png" alt="File explorer — browse and upload files in the project workspace" width="800">
-</p>
-<p align="center"><em>Browse, preview, and upload files in each project's workspace</em></p>
-
-```
-{workspace}/
-+-- orbital/                            # Operational metadata
-|   +-- AGENT.md                        # Shared agent directive
-|   +-- {project-slug-a3f2}/           # Per-project namespace
-|       +-- sessions/
-|       |   +-- {session_id}.jsonl      # Append-only session log
-|       +-- instructions/
-|       |   +-- project_goals.md
-|       |   +-- user_directives.md
-|       +-- PROJECT_STATE.md            # Current task state
-|       +-- DECISIONS.md                # Decision log
-|       +-- LESSONS.md                  # Learned patterns
-|       +-- SESSION_LOG.md              # Last 3 session summaries
-|       +-- CONTEXT.md                  # External reference material
-+-- orbital-output/                     # Agent work artifacts
-    +-- {project-slug-a3f2}/
-        +-- screenshots/                # Browser screenshots
-        +-- pdfs/                       # Saved PDFs
-        +-- shell-output/               # Shell command output
-
-~/orbital/                              # Home global (daemon infrastructure)
-+-- daemon.pid                          # Singleton enforcement
-+-- daemon-state.json                   # Agent heartbeat state
-+-- device.json                         # Device identity
-+-- browser-profile/                    # Shared browser profile
-+-- credential-meta.json                # Credential metadata
-```
-
-**Session format**: One JSON line per message (role, source, content, timestamp, tool_calls). Append-only with file locks. Never modified except during compaction.
-
-### Quick Tasks
-
-The sidebar includes a **Quick Task** section for fire-and-forget interactions. Scratch projects skip the full project creation flow — useful for one-off tasks that don't need a dedicated workspace.
-
-<p align="center">
-  <img src="docs/screenshots/quick-task.png" alt="Quick Task — browsing Hacker News and returning structured results" width="800">
-</p>
-
-### Autonomy & Approval System
-
-Three autonomy presets control how much supervision agents receive:
-
-| Preset | Shell | File Write | Browser | Description |
-|--------|-------|-----------|---------|-------------|
-| **Hands-off** | Auto | Auto | Auto | Maximum autonomy. Only `request_access` requires approval. |
-| **Check-in** | Approval | Approval | Write only | Balanced. Default for external agents. |
-| **Supervised** | Approval | Approval | All except read | Maximum oversight. |
-
-<p align="center">
-  <img src="docs/screenshots/budget.png" alt="Project settings — autonomy presets and budget controls" width="700">
-</p>
-<p align="center"><em>Pick an autonomy level and set budget limits per project</em></p>
-
-**Approval flow:**
-1. Interceptor catches tool call based on autonomy rules
-2. Frontend shows an **Approval Card** with tool name, arguments, and context
-3. User can **Approve**, **Deny**, or **Auto-approve for 10 minutes**
-4. Per-action bypass: same tool+args auto-approved for 60 seconds
-
-<p align="center">
-  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve agent actions from your phone" width="350">
-</p>
-<p align="center"><em>Approve agent actions from your phone — with full context and optional guidance</em></p>
-
-### Sub-Agent Delegation
-
-Orbital is not tied to a single AI tool. The management agent plans and delegates, while specialized sub-agents execute. Any CLI-based agent can be registered via a manifest file.
-
-<p align="center">
-  <img src="docs/screenshots/3A-chat-file-creation.png" alt="Management agent creating a plan and delegating to sub-agents" width="800">
-</p>
-<p align="center"><em>The management agent creates an implementation plan...</em></p>
-
-<p align="center">
-  <img src="docs/screenshots/3B-subagent-delegation.png" alt="Sub-agent executing delegated work and reporting back" width="800">
-</p>
-<p align="center"><em>...delegates Phase 1 to @claudecode, monitors progress, and reviews the result</em></p>
-
-**Transport types:**
-
-| Transport | Use Case |
-|-----------|----------|
-| **Pipe** | stdin/stdout subprocess, JSON streaming |
-| **PTY** | Pseudo-terminal for interactive agents |
-| **SDK** | Direct Claude SDK integration |
-| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — available for ACP-compatible agents |
-
-> **Note:** ACP transport is implemented in the daemon but agent manifests currently default to PTY for stability. Switching any ACP-compatible agent (Gemini CLI, Codex, Copilot CLI, Cline, Goose) to ACP is a one-line manifest change — see `docs/acp-migration.md` (coming soon).
-
-### Built-in Tool Suite
-
-The management agent has access to these tool categories:
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Shell** | `shell` | Command execution with network-aware detection |
-| **File** | `read`, `write`, `edit`, `glob`, `grep` | File operations within workspace |
-| **Browser** | 23 actions via Patchright | Navigate, click, type, extract, screenshot, multi-tab |
-| **Triggers** | `create_trigger`, `list_triggers`, `update_trigger`, `delete_trigger` | Schedule and file-watch triggers via natural language |
-| **Credentials** | `request_credential` | Agent-initiated credential request — opens secure modal |
-| **Delegation** | `delegate` | Route tasks to sub-agents |
-
-### Browser Automation
-
-Built on **Patchright** (a Playwright fork with anti-bot-detection):
-
-- **Stealth mode**: Anti-automation detection scripts injected into every browser context
-- **Shared profile**: One browser profile across all projects — log into services once, all agents share cookies
-- **Accessibility-first**: `snapshot` returns an accessibility tree with `[ref=eN]` element references for reliable interaction
-- **23 browser actions**: navigate, click, type, fill, press, hover, select, drag, upload, snapshot, screenshot, extract, search, evaluate, tab management, PDF export, web search, URL fetch
-
-<p align="center">
-  <img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="Agent browsing arxiv.org and scanning research papers" width="350">
-</p>
-<p align="center"><em>An agent browsing arxiv.org — scanning for AI reasoning papers on a daily schedule</em></p>
-
-### Continuous Operation & Triggers
-
-Agents run continuously via triggers — no manual intervention needed. Create triggers through **natural language** in the chat:
-
-> *"Watch the uploads/ folder for new .jpg files and analyze them"*
-> *"Run a research scan every morning at 6 AM"*
-
-The management agent translates this into a `create_trigger` tool call with the appropriate type and parameters.
-
-**Trigger types:**
-
-| Type | Configuration | Example |
-|------|--------------|---------|
-| **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
-| **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
-
-<p align="center">
-  <img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger — monitoring auth/ directory for .py changes" width="800">
-</p>
-<p align="center"><em>File watch trigger: monitors auth/ for .py changes, runs tests on every save. 22 runs so far.</em></p>
-
-<p align="center">
-  <img src="docs/screenshots/scheduled-trigger.png" alt="Scheduled trigger — daily research scan at 6 AM" width="800">
-</p>
-<p align="center"><em>Scheduled trigger: scans arxiv, Hacker News, and tech blogs every day at 6 AM. 12 runs.</em></p>
-
-**Real-world example — Health Tracker with file watch:**
-
-<p align="center">
-  <img src="docs/screenshots/4B-mobile-meal-chat1.jpg" alt="Setting up a meal photo file watcher from phone" width="350">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/4B-mobile-meal-chat2.jpg" alt="Agent automatically analyzing a meal photo" width="350">
-</p>
-<p align="center"><em>Left: "Watch uploads/ for meal photos and track calories." Right: Drop a photo, get instant nutritional analysis.</em></p>
-
-### Context Management & Compaction
-
-**Six workspace files** maintained by the LLM at session boundaries:
-
-| File | Purpose |
-|------|---------|
-| `AGENT.md` | Shared agent directive (global) |
-| `PROJECT_STATE.md` | Current task, in-progress work |
-| `DECISIONS.md` | Decision log with rationale |
-| `LESSONS.md` | Learned patterns and pitfalls |
-| `SESSION_LOG.md` | Last 3 session summaries |
-| `CONTEXT.md` | External references, API docs |
-
-**Cold resume**: On session start, these files are assembled into the system prompt to reorient the agent — no context lost between sessions.
-
-**Compaction** (when context usage exceeds 80%): memory flush, LLM-driven summarization of older messages, recent messages kept intact, post-compaction reorientation with project goals and current state.
-
-### Mobile Remote Control
-
-Control agents from your phone on the local network or via a cloud relay.
-
-<p align="center">
-  <img src="docs/screenshots/4A-mobile-dashboard.png" alt="Mobile dashboard — all projects at a glance" width="350">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/5C-mobile-approved.png" alt="Agent completing work after mobile approval" width="350">
-</p>
-<p align="center"><em>Left: Project dashboard on phone. Right: Agent completes its research after you approve from anywhere.</em></p>
-
-**Local network**: Scan the QR code in Settings to open Orbital on your phone via LAN.
-
-<p align="center">
-  <img src="docs/screenshots/qr-code-lan-pairng.png" alt="QR code for mobile access on local network" width="700">
-</p>
-<p align="center"><em>Scan to open Orbital on your phone — same Wi-Fi network required</em></p>
-
-**Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests, budget alerts, and agent status changes.
-
-### Cost Controls & Budget Limits
-
-Per-project budget limits prevent runaway spending:
-
-| Setting | Description |
-|---------|-------------|
-| `Budget Limit (USD)` | Maximum spend for the project |
-| `Budget Action` | `ask` (prompt user), `pause` (stop agent), or `deny` (block LLM calls) |
-| `Spent` | Running total with reset option |
-
-The agent loop tracks cumulative token usage and computes cost using per-model pricing from the provider registry. When the budget threshold is reached, the configured action fires and a push notification is sent.
-
-### Credential Management
-
-<p align="center">
-  <img src="docs/screenshots/credential-store.png" alt="Credential store — website passwords stored in system keychain" width="700">
-</p>
-<p align="center"><em>Website credentials stored in your system keychain. Agents always ask permission before using them.</em></p>
-
-- **API keys**: Stored in OS keychain (`keyring`), masked in API responses, per-project BYOK override
-- **Website credentials**: Metadata in `credential-meta.json`, values in OS keychain. The `request_credential` tool lets agents request credentials mid-session via a secure modal — credentials never appear in chat history.
-
-### LLM Provider Routing & BYOK
-
-**15+ providers** supported out of the box:
-
-Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, Azure OpenAI, Ollama, and more.
-
-- **SDK routing**: Anthropic SDK for Anthropic, OpenAI SDK for OpenAI-compatible providers
-- **Per-model metadata**: Display name, tier, context window, max output, capabilities (vision, tool use, streaming), pricing
-- **Fallback rotation**: When the primary provider fails, the loop rotates to fallback providers with error classification (transient, rate limit, abort)
-
-### Loop Safety Guards
-
-The agent loop includes multiple safety mechanisms to prevent runaway execution:
-
-| Guard | Threshold | Behavior |
-|-------|-----------|----------|
-| **Token budget** | 500K tokens (configurable) | Hard stop on cumulative usage |
-| **Repetition detection** | 5 identical action hashes | Forces different approach |
-| **Ping-pong detection** | 3 identical consecutive pairs | Breaks alternating cycles |
-| **Circuit breaker** | 2 consecutive identical errors | Blocks tool until new user message |
-| **Context overflow** | 3 consecutive overflows | Hard stop after progressive reduction |
-
-### Desktop App & System Tray
-
-Orbital ships as a desktop application bundled with PyInstaller:
-
-- **System tray**: Agent activity status, quick access menu, running port in tooltip
-- **Native window**: Embeds the React frontend via `pywebview` — no browser needed
-- **Daemon lifecycle**: Desktop app spawns the daemon on launch, manages port allocation, cleans up on exit
-- **Sleep prevention**: Blocks system sleep while agents are active (Windows `SetThreadExecutionState`), re-allows when idle
-
-**Skills system**: Each project can configure operational skills — patterns the agent follows before each task.
-
-<p align="center">
-  <img src="docs/screenshots/skills.png" alt="Skills — operational patterns the agent follows" width="700">
-</p>
-<p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how the agent works</em></p>
 
 ---
 
