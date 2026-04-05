@@ -615,11 +615,9 @@ class AgentLoop:
             for msg in self._session.pop_deferred_messages():
                 self._session.append(msg)
             # Trigger session-end callback (e.g. workspace file generation)
+            # Fire-and-forget so idle broadcasts immediately.
             # Skip if LLM failed — the provider is unreachable so the
             # session-end LLM call would also fail.
             if self._on_session_end is not None and not self._llm_failed:
-                try:
-                    await self._on_session_end()
-                except Exception as e:
-                    logger.warning("Session-end routine failed: %s", e)
+                asyncio.create_task(self._on_session_end())
             self._running = False

@@ -19,8 +19,25 @@ import logging
 import os
 import re
 import shutil
+import sys
+import time
 
 logger = logging.getLogger(__name__)
+
+_IS_WINDOWS = sys.platform == "win32"
+
+
+def _atomic_replace(src: str, dst: str) -> None:
+    """os.replace with retry on Windows (target may be briefly open)."""
+    for attempt in range(5):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if not _IS_WINDOWS or attempt == 4:
+                raise
+            time.sleep(0.05)
+
 
 WORKSPACE_DIR = "orbital"
 
@@ -149,22 +166,32 @@ class WorkspaceFileManager:
             return None
 
     def write(self, file_key: str, content: str) -> None:
-        """Write (overwrite) a workspace file. Creates orbital/ if needed."""
+        """Write (overwrite) a workspace file atomically. Creates orbital/ if needed."""
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
         self.ensure_dir()
         filepath = self._file_path(file_key)
-        with open(filepath, "w", encoding="utf-8") as f:
+        tmp_path = filepath + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(content)
+        _atomic_replace(tmp_path, filepath)
 
     def append(self, file_key: str, content: str) -> None:
-        """Append to a workspace file. Creates file if needed."""
+        """Append to a workspace file atomically. Creates file if needed."""
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
         self.ensure_dir()
         filepath = self._file_path(file_key)
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(content)
+        existing = ""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                existing = f.read()
+        except OSError:
+            pass
+        tmp_path = filepath + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(existing + content)
+        _atomic_replace(tmp_path, filepath)
 
     def read_all(self) -> dict[str, str | None]:
         """Read all 6 files. Returns {key: content_or_None}."""
