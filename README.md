@@ -1,28 +1,27 @@
+<p align="center">
+  <img src="docs/approval.gif" alt="Agent pauses for approval — approve from your phone, agent continues" width="800">
+</p>
+<p align="center">
+  <img src="docs/subagent-dispatch.gif" alt="Management agent dispatches work to Claude Code, Codex, Gemini CLI" width="800">
+</p>
+
+<h2 align="center">Give your agent a project, not a prompt.</h2>
+<p align="center">Define a workspace, a supervisor, sub-agents, and a budget.<br>Leave the rest to your agents while you manage them remotely.</p>
+
+<p align="center">
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://youtu.be/D9l0r4gP_RQ"><strong>Watch the demo</strong></a>
+</p>
+<p align="center">Set up in under 5 minutes. No Python or Node required.</p>
+
+<p align="center">
+  <img src="orbital-logo.png" alt="Orbital" width="80">
+</p>
+
 # Orbital
 
-<p align="center">
-  <a href="https://youtu.be/D9l0r4gP_RQ">
-    <img src="https://img.youtube.com/vi/D9l0r4gP_RQ/maxresdefault.jpg" alt="Watch the demo — agent runs, phone approves, agent continues" width="800">
-  </a>
-</p>
-<p align="center"><em>Agent runs a task → pauses for approval → you approve from your phone → agent continues. <a href="https://youtu.be/D9l0r4gP_RQ">Watch the demo →</a></em></p>
-
-<p align="center">
-  <img src="orbital-logo.png" alt="Orbital" width="120">
-</p>
-
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
-
-**Give your agent a project, not a prompt.**
-Define a workspace, a supervisor, sub-agents, and a budget. Leave the rest to your agents while you manage them remotely.
-
-**Download:**
-- [Windows Installer (.exe)](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe)
-- [macOS Installer (.dmg)](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg)
-
-Set up in under 5 minutes. No Python or Node required.
-
-Watch the demo: [https://youtu.be/D9l0r4gP_RQ](https://youtu.be/D9l0r4gP_RQ)
 
 ---
 
