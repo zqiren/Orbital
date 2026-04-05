@@ -19,7 +19,7 @@
 <p align="center">Set up in under 5 minutes. No Python or Node required.</p>
 
 <p align="center">
-  <img src="orbital-logo.png" alt="Orbital" width="80">
+  <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
 </p>
 
 # Orbital
