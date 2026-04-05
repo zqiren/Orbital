@@ -1,9 +1,12 @@
 <p align="center">
-  <img src="docs/approval.gif" alt="Agent pauses for approval — approve from your phone, agent continues" width="800">
+  <img src="docs/subagent-dispatch.gif" alt="Autonomous agent dispatching work to Claude Code on a scheduled trigger" width="800">
 </p>
+<p align="center"><em>Scheduled trigger fires → management agent dispatches a task to Claude Code autonomously</em></p>
+
 <p align="center">
-  <img src="docs/subagent-dispatch.gif" alt="Management agent dispatches work to Claude Code, Codex, Gemini CLI" width="800">
+  <img src="docs/approval.gif" alt="Claude Code requests approval to create a folder — approved from phone" width="800">
 </p>
+<p align="center"><em>Claude Code needs to create a folder → approval request sent to your phone → approved → work continues</em></p>
 
 <h2 align="center">Give your agent a project, not a prompt.</h2>
 <p align="center">Define a workspace, a supervisor, sub-agents, and a budget.<br>Leave the rest to your agents while you manage them remotely.</p>
