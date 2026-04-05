@@ -15,6 +15,7 @@ import re
 import shutil
 import socket
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 
@@ -846,13 +847,21 @@ async def chat_history(
 
 # ---- Agent Registry / Setup Endpoints ----
 
+_available_cache: dict = {"result": None, "expires_at": 0.0}
+_AVAILABLE_CACHE_TTL = 60  # seconds
+
 
 @router.get("/agents/available")
 async def available_agents():
     """Return setup status for all registered agents."""
     if _setup_engine is None:
         return []
-    statuses = _setup_engine.check_all()
+
+    now = time.time()
+    if _available_cache["result"] is not None and now < _available_cache["expires_at"]:
+        return _available_cache["result"]
+
+    statuses = await asyncio.to_thread(_setup_engine.check_all)
     result = []
     for s in statuses:
         entry = {
@@ -872,6 +881,9 @@ async def available_agents():
             ],
         }
         result.append(entry)
+
+    _available_cache["result"] = result
+    _available_cache["expires_at"] = time.time() + _AVAILABLE_CACHE_TTL
     return result
 
 
