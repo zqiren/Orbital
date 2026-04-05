@@ -1151,14 +1151,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
             className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed"
           />
           {(agentStatus === 'running' || agentStatus === 'waiting') ? (
-            <button
-              type="button"
-              onClick={() => stopAgent(projectId)}
-              onTouchEnd={(e) => { e.preventDefault(); stopAgent(projectId); }}
-              className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
-            >
-              <Square size={18} />
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => stopAgent(projectId)}
+                onTouchEnd={(e) => { e.preventDefault(); stopAgent(projectId); }}
+                className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+              >
+                <Square size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={handleSend}
+                onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
+                disabled={!inputText.trim()}
+                className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
+                  inputText.trim()
+                    ? 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
+                    : 'bg-secondary/20 text-secondary/40 cursor-default'
+                }`}
+              >
+                Queue
+              </button>
+            </>
           ) : (
             <button
               type="button"
