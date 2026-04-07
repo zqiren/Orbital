@@ -396,10 +396,32 @@ class AgentLoop:
 
                         if should_intercept:
                             reasoning = response.text if response.text and response.text.strip() else None
-                            self._interceptor.on_intercept(
-                                tc, self._session.recent_activity(),
-                                reasoning=reasoning,
-                            )
+                            try:
+                                self._interceptor.on_intercept(
+                                    tc, self._session.recent_activity(),
+                                    reasoning=reasoning,
+                                )
+                            except Exception as e:
+                                # on_intercept failed (e.g. WS broadcast hook
+                                # crashed). Without this guard the exception
+                                # would escape run(), leave the orphan tool
+                                # call as CANCELLED, and end the loop task in
+                                # error state — leaving the user with no
+                                # approval card and no recovery path.
+                                # Treat the failure as a denial: append an
+                                # error tool result so the agent can react,
+                                # and continue the dispatch loop.
+                                logger.exception(
+                                    "Interceptor.on_intercept raised for "
+                                    "tool_call_id=%s tool=%s",
+                                    tc.get("id"), tc.get("name"),
+                                )
+                                self._session.append_tool_result(
+                                    tc["id"],
+                                    f"Error requesting approval: {e}. "
+                                    "The tool was not executed.",
+                                )
+                                continue
                             intercepted_tc_id = tc["id"]
                             self._session._paused_for_approval = True
                             self._session.pause()

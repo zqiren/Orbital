@@ -700,6 +700,74 @@ class TestLoopInterceptor:
         # Tool should NOT have been executed
         assert len(registry.execute_calls) == 0
 
+    @pytest.mark.asyncio
+    async def test_on_intercept_raise_does_not_crash_loop(self, tmp_path):
+        """Regression: if interceptor.on_intercept() raises, the loop must
+        survive and append an error tool result for the intercepted call.
+
+        Previously, an exception inside on_intercept (e.g. WS broadcast hook
+        failure) escaped the dispatch try/except and propagated out of run(),
+        ending the loop task in error state. The session's finally block
+        wrote 'CANCELLED: This tool call was not executed.' for the orphan
+        and the user saw 'agent.status: error' with no approval card."""
+        session = Session.new("intercept_raise", str(tmp_path))
+
+        tc = [{"id": "call_boom", "type": "function",
+               "function": {"name": "shell", "arguments": '{"command": "ls"}'}}]
+        # Provider returns the tool call once, then a text response so the
+        # loop can settle cleanly after recovery.
+        resp1 = _make_tool_response(tc, text="trying shell")
+        resp2 = _make_text_response("recovered after intercept failure")
+        provider = MockProvider(responses=[resp1, resp2])
+
+        registry = MockToolRegistry(results={"shell": ToolResult(content="ok")})
+
+        # Interceptor that ALWAYS raises in on_intercept
+        class _BrokenInterceptor:
+            def __init__(self):
+                self.should_intercept_calls = 0
+                self.on_intercept_calls = 0
+
+            def should_intercept(self, tool_call):
+                self.should_intercept_calls += 1
+                return True
+
+            def on_intercept(self, tool_call, recent_context, reasoning=None):
+                self.on_intercept_calls += 1
+                raise RuntimeError("simulated broadcast hook failure")
+
+        interceptor = _BrokenInterceptor()
+        builder = MockPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, builder, ctx)
+
+        loop = AgentLoop(session, provider, registry, context_mgr,
+                         interceptor=interceptor)
+
+        # The loop must not raise — this is the core regression assertion.
+        await loop.run(initial_message="run shell")
+
+        # The intercepted call must have a tool result (not pending, not
+        # CANCELLED-as-orphan), and that result must indicate the failure.
+        msgs = session.get_messages()
+        tool_results = [m for m in msgs
+                        if m.get("role") == "tool"
+                        and m.get("tool_call_id") == "call_boom"]
+        assert len(tool_results) == 1, (
+            "expected exactly one tool result for the failed intercept"
+        )
+        content = tool_results[0]["content"]
+        assert "Error" in content or "error" in content
+        assert "call_boom" not in session.pending_tool_calls
+
+        # Loop must NOT be stuck waiting for approval that will never come.
+        assert not session._paused_for_approval
+
+        # The tool itself must NEVER have been executed (intercept took effect
+        # logically, even though the broadcast failed).
+        assert len(registry.execute_calls) == 0
+        assert interceptor.on_intercept_calls == 1
+
 
 # ===========================================================================
 # AC-12: After pause: session.resume(), new run() -> resolve_pending ->
