@@ -434,7 +434,7 @@ class AgentManager:
 
         # 2. Tool registry
         dir_name = _project_dir_name(config.project_name, project_id)
-        registry = ToolRegistry()
+        registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
                              vision_enabled=model_info.capabilities.vision,
                              project_dir_name=dir_name)
