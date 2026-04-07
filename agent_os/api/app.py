@@ -10,6 +10,7 @@ v2 API only. JSON-based project storage.
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import sys
 
@@ -84,9 +85,57 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         f.write(SCRATCH_PROJECT_GOALS)
 
 
+def _configure_file_logging(data_dir: str) -> None:
+    """Attach a rotating file handler to the root logger.
+
+    The daemon writes to ``{data_dir}/logs/daemon.log`` so that exceptions
+    raised inside the agent loop, dispatch path, or background tasks leave a
+    durable trace. Without this, uvicorn's stderr only reaches whichever
+    terminal launched the process — and on Windows, when the daemon is
+    started detached, that stream is lost. Idempotent: skips installation
+    if a daemon FileHandler is already attached (e.g. on factory reload).
+    """
+    log_dir = os.path.join(data_dir, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        # If we can't create the log dir, fall back to stderr only.
+        return
+
+    log_path = os.path.join(log_dir, "daemon.log")
+    root = logging.getLogger()
+
+    # Avoid duplicate handlers on factory reload
+    for h in root.handlers:
+        if (isinstance(h, logging.handlers.RotatingFileHandler)
+                and getattr(h, "_orbital_daemon_log", False)):
+            return
+
+    handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=5 * 1024 * 1024,  # 5 MB per file
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler._orbital_daemon_log = True  # type: ignore[attr-defined]
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    ))
+    root.addHandler(handler)
+    if root.level == logging.NOTSET or root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    logger.info("Daemon file logging enabled at %s", log_path)
+
+
 def create_app(data_dir: str | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="Orbital", version="2.0")
+
+    # 0. File logging — install before anything else so subsequent setup
+    # errors land in the daemon log instead of disappearing to a detached
+    # stderr.
+    _configure_file_logging(data_dir or "orbital-data")
 
     # 0. Singleton enforcement via PID file
     acquire_pid_file()
