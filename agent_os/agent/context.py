@@ -21,6 +21,16 @@ from agent_os.agent.prompt_builder import PromptContext
 from agent_os.agent.token_utils import estimate_message_tokens
 
 
+# Layer 1 workspace file keys (matching WorkspaceFileManager.FILE_NAMES)
+# paired with their on-disk filenames, in the order they should appear
+# in the context window.
+_LAYER1_FILES: tuple[tuple[str, str], ...] = (
+    ("state", "PROJECT_STATE.md"),
+    ("decisions", "DECISIONS.md"),
+    ("lessons", "LESSONS.md"),
+)
+
+
 class ContextManager:
     """Assembles context for each LLM call: system prompt + layers + sliding window."""
 
@@ -180,9 +190,14 @@ class ContextManager:
         layer_messages: list[dict] = []
 
         # Layer 1: PROJECT_STATE.md, DECISIONS.md, LESSONS.md
-        for filename in ("PROJECT_STATE.md", "DECISIONS.md", "LESSONS.md"):
-            filepath = os.path.join(agent_os_dir, filename)
-            content = self._read_file(filepath)
+        # Prefer WorkspaceFileManager (knows the project-namespaced path).
+        # Fall back to the flat path only in scratch mode (no workspace_files).
+        for key, filename in _LAYER1_FILES:
+            if self._workspace_files is not None:
+                content = self._workspace_files.read(key)
+            else:
+                filepath = os.path.join(agent_os_dir, filename)
+                content = self._read_file(filepath)
             if content:
                 layer_messages.append({
                     "role": "system",

@@ -331,6 +331,13 @@ async def update_project(project_id: str, body: ProjectUpdate):
     dir_name = _project_dir_name(project.get("name", ""), project_id)
     goals_content = updates.pop("project_goals_content", None)
     rules_content = updates.pop("user_directives_content", None)
+    # The Settings UI writes to the `instructions` field. Sync it to
+    # instructions/project_goals.md so the prompt builder (which reads from
+    # disk) sees it. If project_goals_content is also present, the explicit
+    # field wins. The `instructions` key itself stays in `updates` so it is
+    # still persisted in projects.json for backward compatibility.
+    if goals_content is None and updates.get("instructions") is not None:
+        goals_content = updates["instructions"]
     if goals_content is not None:
         _write_workspace_file(workspace, "project_goals.md", goals_content, dir_name)
     if rules_content is not None:
