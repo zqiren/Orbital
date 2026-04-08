@@ -221,12 +221,12 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
   );
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden min-h-0">
       {/* File Tree - left panel on desktop, full screen on mobile when no preview */}
       <div
         className={`
           w-full md:w-[260px] md:min-w-[260px] md:block
-          border-r border-border flex flex-col
+          border-r border-border flex flex-col min-h-0
           ${mobileShowPreview ? 'hidden md:flex' : 'flex'}
         `}
       >

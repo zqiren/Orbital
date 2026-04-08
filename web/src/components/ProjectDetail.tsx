@@ -89,7 +89,7 @@ export default function ProjectDetail({
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-hidden">{children}</div>
+      <div className="flex-1 overflow-hidden min-h-0">{children}</div>
     </div>
   );
 }
