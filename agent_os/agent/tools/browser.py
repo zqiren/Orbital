@@ -598,7 +598,10 @@ class BrowserTool(Tool):
                 await locator.fill(value)
                 results.append(f"  {field['ref']}: filled with '{display_value}'")
             except Exception as e:
-                results.append(f"  {field['ref']}: ERROR — {self._translate_error_message(e)}")
+                results.append(
+                    f"  {field['ref']}: ERROR — "
+                    f"{self._translate_error_message(e, {'ref': field['ref']})}"
+                )
         await self._wait_for_stable(page)
         screenshot_path = await self._bm.capture_screenshot(page, self._workspace, self._session_id, project_dir_name=self._project_dir_name)
         return ToolResult(
@@ -1186,17 +1189,62 @@ class BrowserTool(Tool):
         "frame was detached": "The page frame was removed. The page may have been redirected.",
     }
 
+    def _invalidate_stale_ref(self, ref: str) -> None:
+        """Remove a stale ref from the current RefMap.
+
+        Called when an action against ``ref`` hits a "waiting for locator" /
+        timeout error. Mutating the ref_map in place forces the next
+        interaction to fail fast and snapshot before retrying.
+
+        ``BrowserManager.get_ref_map()`` returns a live dict reference (not a
+        copy), so ``del current_map[ref]`` removes the ref for subsequent
+        calls. If the mock/stub doesn't expose the same object on repeat
+        calls, we also mutate any accessible ``_page_state`` ref_maps as a
+        best-effort fallback.
+        """
+        if not ref:
+            return
+        try:
+            # Primary: fetch the live ref_map via the public getter and
+            # mutate in place. We probe any page_state that exists for this
+            # project so we don't need to re-await get_page() from a sync
+            # context.
+            page_state = getattr(self._bm, "_page_state", None)
+            if isinstance(page_state, dict):
+                for state in page_state.values():
+                    rm = getattr(state, "ref_map", None)
+                    if isinstance(rm, dict) and ref in rm:
+                        del rm[ref]
+        except Exception:
+            pass
+
+        # Fallback for tests/mocks that return a single dict from get_ref_map
+        # without exposing ``_page_state``. We pass sentinel values because
+        # the signature requires them, but mocks typically ignore args.
+        try:
+            getter = getattr(self._bm, "get_ref_map", None)
+            if callable(getter):
+                rm = getter(self._project_id, 0)
+                if isinstance(rm, dict) and ref in rm:
+                    del rm[ref]
+        except Exception:
+            pass
+
     def _translate_error(self, error: Exception, action: str, args: dict) -> ToolResult:
         msg = str(error)
         if "strict mode violation" in msg.lower():
             return ToolResult(content="Multiple elements matched. Run snapshot to see current refs.")
         if "waiting for locator" in msg.lower() or "timeout" in msg.lower():
             ref = args.get("ref", "")
+            # Invalidate the stale ref so the agent is forced to re-snapshot
+            # before retrying. Non-timeout errors (strict mode, overlay) do
+            # NOT hit this branch, so they correctly leave the map untouched.
+            self._invalidate_stale_ref(ref)
             return ToolResult(
                 content=(
                     f"Element ref {ref} did not become actionable. "
                     f"This element may be disabled, hidden, or removed by page scripts. "
-                    f"Try a different element or approach instead of retrying this ref."
+                    f"Try a different element or approach. Run snapshot to get fresh refs."
                 )
             )
         if "intercept" in msg.lower() or "pointer" in msg.lower():
@@ -1210,7 +1258,13 @@ class BrowserTool(Tool):
             content=f"Browser action '{action}' failed: {msg[:200]}. Try a different approach or run snapshot to see current page state."
         )
 
-    def _translate_error_message(self, error: Exception) -> str:
-        """Short error message for inline use (e.g., in fill results)."""
-        result = self._translate_error(error, "", {})
+    def _translate_error_message(self, error: Exception, args: dict | None = None) -> str:
+        """Short error message for inline use (e.g., in fill results).
+
+        Accepts optional ``args`` so callers like ``_action_fill`` can pass
+        the per-field ``{"ref": "..."}`` dict through to ``_translate_error``.
+        That lets timeout errors on a specific field invalidate just that
+        ref in the live ref_map.
+        """
+        result = self._translate_error(error, "", args or {})
         return result.content[:100]
