@@ -9,6 +9,15 @@ interface ActionResult {
   status: string;
 }
 
+export interface InjectResult extends ActionResult {
+  /** True when inject_message auto-denied a pending approval because the
+   *  user sent a new message while the agent was paused. */
+  approval_dismissed?: boolean;
+  /** tool_call_id of the approval that was dismissed (present when
+   *  approval_dismissed is true). */
+  dismissed_tool_call_id?: string;
+}
+
 export function useAgent() {
   const startAgent = useCallback(
     async (projectId: string, initialMessage?: string) => {
@@ -39,7 +48,7 @@ export function useAgent() {
 
   const injectMessage = useCallback(
     async (projectId: string, content: string, target?: string, nonce?: string) => {
-      return api<ActionResult>(
+      return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
         {
           method: 'POST',

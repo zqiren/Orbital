@@ -728,11 +728,14 @@ class AgentManager:
         handle.session.defer_message(content, role="system", source="daemon")
         return "deferred"
 
-    async def inject_message(self, project_id: str, content: str, *, nonce: str | None = None) -> str:
-        """Inject a message. Three cases:
-        1. Loop running -> queue
-        2. Loop idle + session alive -> hot resume
-        3. No session -> auto-start agent with message
+    async def inject_message(self, project_id: str, content: str, *, nonce: str | None = None) -> "str | dict":
+        """Inject a message. Four cases:
+        1. Loop running -> queue (returns "queued")
+        1b. Loop paused for approval -> auto-deny pending, deliver, resume
+            (returns dict with status="delivered", approval_dismissed=True,
+            dismissed_tool_call_id=<id>)
+        2. Loop idle + session alive -> hot resume (returns "delivered")
+        3. No session -> auto-start agent with message (returns "started")
         """
         handle = self._handles.get(project_id)
         if handle is None:
@@ -797,12 +800,101 @@ class AgentManager:
             handle.session.queue_message(content, nonce=nonce)
             return "queued"
 
-        # Case 1b: loop done but paused for approval — queue, don't
-        # interleave a user message between tool_calls and their results.
+        # Case 1b: loop done but paused for approval — auto-deny the
+        # pending approval, deliver the new user message, and restart the
+        # loop. Queuing here previously caused silent message loss because
+        # the loop had already exited and nothing would drain the queue.
         if handle.session._paused_for_approval:
-            logger.info("inject_message(%s): paused for approval, queuing message", project_id)
-            handle.session.queue_message(content, nonce=nonce)
-            return "queued"
+            logger.info(
+                "inject_message(%s): paused for approval, auto-denying and delivering",
+                project_id,
+            )
+
+            # 1. Find the pending approval (typically only one).
+            dismissed_tc_id: str | None = None
+            dismissed_tool_name: str | None = None
+            if handle.interceptor is not None:
+                for tc_id, data in handle.interceptor._pending_approvals.items():
+                    dismissed_tc_id = tc_id
+                    dismissed_tool_name = data.get("tool_name", "unknown")
+                    break
+
+            if dismissed_tc_id and handle.interceptor is not None:
+                # 2. Write denial tool_result so the session stays
+                #    structurally valid (every tool_call has a result).
+                if not handle.session.has_result_for(dismissed_tc_id):
+                    handle.session.append_tool_result(
+                        dismissed_tc_id,
+                        "DISMISSED: User sent a new message, cancelling this approval request.",
+                    )
+
+                # 3. Record in approval history.
+                pending = handle.interceptor.get_pending(dismissed_tc_id)
+                if pending:
+                    self._record_approval_decision(
+                        project_id,
+                        pending["tool_name"],
+                        pending.get("tool_args", {}),
+                        "denied",
+                        deny_reason="User sent a new message while approval was pending",
+                    )
+
+                # 4. Clean up interceptor state.
+                handle.interceptor.remove_pending(dismissed_tc_id)
+
+            # 5. Resume session (clears _paused flag; loop.run() clears
+            #    _paused_for_approval on entry).
+            handle.session.resume()
+
+            # 6. Append a visible system message so the user sees what
+            #    happened — the approval card transition alone is not
+            #    enough context.
+            handle.session.append({
+                "role": "system",
+                "content": (
+                    f"[Pending approval for {dismissed_tool_name or 'tool'} "
+                    f"was dismissed because you sent a new message. "
+                    f"The agent will continue without it.]"
+                ),
+                "source": "daemon",
+            })
+
+            # 7. Drain any previously queued messages so they don't get
+            #    lost between the dismissal and the new message.
+            stale = handle.session.pop_queued_messages()
+            for s_item in stale:
+                if isinstance(s_item, tuple):
+                    s_content, s_nonce = s_item
+                else:
+                    s_content, s_nonce = s_item, None
+                s_msg: dict = {"role": "user", "content": s_content, "source": "user"}
+                if s_nonce:
+                    s_msg["nonce"] = s_nonce
+                handle.session.append(s_msg)
+
+            # 8. Append the new user message.
+            user_msg: dict = {"role": "user", "content": content, "source": "user"}
+            if nonce:
+                user_msg["nonce"] = nonce
+            handle.session.append(user_msg)
+
+            # 9. Broadcast approval resolved so the approval card can show
+            #    "Denied" via the normal WS path.
+            if dismissed_tc_id:
+                self._ws.broadcast(project_id, {
+                    "type": "approval.resolved",
+                    "project_id": project_id,
+                    "tool_call_id": dismissed_tc_id,
+                    "resolution": "denied",
+                })
+
+            # 10. Restart the loop to process the new user message.
+            await self._start_loop(project_id)
+            return {
+                "status": "delivered",
+                "approval_dismissed": True,
+                "dismissed_tool_call_id": dismissed_tc_id,
+            }
 
         # Case 2: loop idle — append message and hot-resume
         if handle is not None and handle.session.is_stopped():

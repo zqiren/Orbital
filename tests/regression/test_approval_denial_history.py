@@ -143,7 +143,12 @@ class TestToolResultAfterUserMessage:
 
 
 # ---------------------------------------------------------------------------
-# Fix B: inject_message queues during pending approval
+# Fix B (historical): inject_message used to queue during pending approval.
+# This was superseded by TASK-inject-auto-deny-on-approval-pause — the new
+# behavior auto-denies the pending approval and delivers the message instead
+# of silently queuing it. The current tests below verify the NEW behavior.
+# See tests/regression/test_inject_auto_denies_approval.py for the full
+# auto-deny regression suite.
 # ---------------------------------------------------------------------------
 
 
@@ -168,21 +173,44 @@ def manager():
 
 
 class TestInjectMessageDuringApproval:
-    """inject_message must queue (not direct-append) when paused for approval."""
+    """inject_message auto-denies the pending approval when paused and
+    delivers the new user message. (Previously this test verified the
+    old queuing behavior — see TASK-inject-auto-deny-on-approval-pause.)"""
 
     @pytest.mark.asyncio
-    async def test_inject_queues_when_paused_for_approval(self, manager):
+    async def test_inject_auto_denies_when_paused_for_approval(self, manager):
         """When session._paused_for_approval is True, inject_message must
-        queue the message instead of appending it directly."""
+        auto-deny the pending approval, deliver the new user message, and
+        restart the loop. The old behavior (queue silently) would drop the
+        message because the loop had already exited."""
         session = MagicMock()
         session.is_stopped.return_value = False
         session._paused_for_approval = True
-        session.queue_message = MagicMock()
+        session.has_result_for = MagicMock(return_value=False)
+        session.append_tool_result = MagicMock()
         session.append = MagicMock()
+        session.queue_message = MagicMock()
+        session.pop_queued_messages = MagicMock(return_value=[])
+        session.resume = MagicMock()
+
+        interceptor = MagicMock()
+        interceptor._pending_approvals = {
+            "tc_42": {
+                "tool_name": "write_file",
+                "tool_args": {"path": "foo.txt"},
+                "what": "write_file(foo.txt)",
+                "tool_call_id": "tc_42",
+                "recent_activity": [],
+            }
+        }
+        interceptor.get_pending = MagicMock(
+            side_effect=lambda tc_id: interceptor._pending_approvals.get(tc_id)
+        )
+        interceptor.remove_pending = MagicMock()
 
         handle = MagicMock()
         handle.session = session
-        handle.interceptor = MagicMock()
+        handle.interceptor = interceptor
 
         task_mock = MagicMock()
         task_mock.done.return_value = True  # loop is done
@@ -190,12 +218,27 @@ class TestInjectMessageDuringApproval:
         handle.task = task_mock
 
         manager._handles["proj_test"] = handle
+        manager._start_loop = AsyncMock()
+        manager._record_approval_decision = MagicMock()
 
         result = await manager.inject_message("proj_test", "next task please")
 
-        assert result == "queued"
-        session.queue_message.assert_called_once_with("next task please", nonce=None)
-        session.append.assert_not_called()
+        # New return shape: dict with dismissal info
+        assert isinstance(result, dict)
+        assert result["status"] == "delivered"
+        assert result["approval_dismissed"] is True
+        assert result["dismissed_tool_call_id"] == "tc_42"
+
+        # queue_message must NOT be called (old behavior)
+        session.queue_message.assert_not_called()
+
+        # User message must be appended directly
+        user_appends = [
+            c for c in session.append.call_args_list
+            if c[0][0].get("role") == "user"
+            and c[0][0].get("content") == "next task please"
+        ]
+        assert len(user_appends) == 1
 
     @pytest.mark.asyncio
     async def test_inject_direct_appends_when_not_paused(self, manager):

@@ -789,7 +789,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     if (target) setSubAgentLoading(target);
     setInjectError(null);
     try {
-      await injectMessage(projectId, content, target, nonce);
+      const result = await injectMessage(projectId, content, target, nonce);
+      // If the backend auto-denied a pending approval because we sent this
+      // message while paused, immediately mark the approval card as denied
+      // so the user sees the transition without waiting for the WS echo.
+      // The system message ("[Pending approval ... was dismissed]") arrives
+      // via the normal message stream — no extra UI work needed here.
+      if (
+        result &&
+        typeof result === 'object' &&
+        'approval_dismissed' in result &&
+        result.approval_dismissed &&
+        result.dismissed_tool_call_id
+      ) {
+        const dismissedId = result.dismissed_tool_call_id;
+        setApprovals((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(dismissedId);
+          if (existing) {
+            next.set(dismissedId, { ...existing, resolved: 'denied' });
+          }
+          return next;
+        });
+      }
     } catch {
       setInjectError('Failed to send message. Please try again.');
     } finally {

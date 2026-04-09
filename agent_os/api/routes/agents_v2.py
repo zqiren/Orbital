@@ -633,6 +633,11 @@ async def inject_message(project_id: str, req: InjectRequest):
         result = await _agent_manager.inject_message(
             project_id, req.content, nonce=req.nonce,
         )
+        # inject_message returns either a str (legacy: "queued"/"delivered"/
+        # "started") or a dict (new: auto-deny-on-paused-approval branch,
+        # includes status + approval_dismissed + dismissed_tool_call_id).
+        if isinstance(result, dict):
+            return result
         return {"status": result}
 
 
