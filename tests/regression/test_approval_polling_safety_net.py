@@ -219,3 +219,82 @@ class TestPollConditional:
         # After resolve: poll returns None (no stale card)
         result = manager.get_pending_approval("proj_resolve")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 4. Reconnect recovery contract: status shows pending_approval AND
+#    /pending-approval returns the full payload
+# ---------------------------------------------------------------------------
+
+class TestReconnectRecoveryContract:
+    """Codifies the backend contract the frontend reconnect-recovery path
+    relies on: after a WebSocket reconnect (page reload, mobile foreground,
+    relay tunnel drop) the frontend calls /run-status and, upon seeing
+    'pending_approval', calls /pending-approval to fetch the card data.
+
+    If either endpoint stops returning the expected shape, the frontend's
+    immediate-fetch recovery silently breaks. This test guards both sides."""
+
+    def test_pending_approval_recoverable_after_status_shows_pending(self, manager, ws):
+        """Simulate the reconnect recovery flow end-to-end at the backend
+        layer:
+
+        1. A supervised run has hit an approval gate — the handle is alive,
+           the session is paused, and an approval sits in the interceptor.
+        2. The frontend, having just reconnected, calls get_run_status()
+           (the REST counterpart used by /run-status) and MUST see
+           'pending_approval'.
+        3. On seeing that status, the frontend calls get_pending_approval()
+           (the REST counterpart used by /pending-approval) and MUST
+           receive the full payload with tool_call_id, tool_name,
+           tool_args, recent_activity, and reasoning intact.
+
+        This proves the frontend has a deterministic recovery path that
+        does not depend on the WebSocket broadcast."""
+        interceptor = AutonomyInterceptor(
+            preset=Autonomy.SUPERVISED,
+            ws_manager=ws,
+            project_id="proj_reconnect",
+        )
+        tool_call = {
+            "id": "call_reconnect_1",
+            "name": "shell",
+            "arguments": {"command": "rm -rf build"},
+        }
+        recent_activity = [
+            {"role": "user", "content": "Please clean the build dir"},
+            {"role": "assistant", "content": "Removing build artifacts"},
+        ]
+        interceptor.on_intercept(
+            tool_call,
+            recent_activity,
+            reasoning="User explicitly requested a clean build",
+        )
+
+        handle = _make_handle(paused=True, interceptor=interceptor)
+        manager._handles["proj_reconnect"] = handle
+
+        # Step 1: after reconnect, the frontend polls /run-status.
+        # The backend MUST report the paused state as 'pending_approval'
+        # so the frontend knows to fetch the approval card.
+        status = manager.get_run_status("proj_reconnect")
+        assert status == "pending_approval", (
+            f"Expected 'pending_approval' status for a paused handle, "
+            f"got {status!r}. Frontend reconnect recovery depends on "
+            f"this status so the approval card can be surfaced."
+        )
+
+        # Step 2: having seen pending_approval, the frontend fetches
+        # /pending-approval to get the full payload. The backend MUST
+        # return every field the frontend needs to render the card.
+        payload = manager.get_pending_approval("proj_reconnect")
+        assert payload is not None, (
+            "Expected a non-None approval payload for a paused handle."
+        )
+        assert payload["tool_call_id"] == "call_reconnect_1"
+        assert payload["tool_name"] == "shell"
+        assert payload["tool_args"] == {"command": "rm -rf build"}
+        assert payload["reasoning"] == "User explicitly requested a clean build"
+        # recent_activity must be preserved so the reconnected client can
+        # render the same context the original WS event would have carried
+        assert payload["recent_activity"] == recent_activity

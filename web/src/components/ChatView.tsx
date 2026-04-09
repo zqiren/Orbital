@@ -94,7 +94,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
-  const { on, off } = useWebSocket();
+  const { on, off, connectionState } = useWebSocket();
   const { injectMessage, startAgent, stopAgent, newSession } = useAgent();
   const autoStarted = useRef(false);
 
@@ -166,6 +166,49 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       });
     }
   }, []);
+
+  /**
+   * Shared approval-recovery fetch used by:
+   *  1. Component mount (page reload)
+   *  2. WebSocket reconnect (relay tunnel drop, mobile foreground)
+   *  3. agentStatus transitioning to 'pending_approval'
+   *  4. Existing 5s steady-state polls
+   *
+   * Calls GET /pending-approval and adds the approval to the Map if not
+   * already present (dedup by tool_call_id). No-ops on network error.
+   */
+  const fetchPendingApproval = useCallback(() => {
+    api<{
+      pending: boolean;
+      tool_call_id?: string;
+      tool_name?: string;
+      tool_args?: Record<string, unknown>;
+      what?: string;
+      recent_activity?: ChatMessageType[];
+      reasoning?: string;
+    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`)
+      .then((result) => {
+        if (!result.pending || !result.tool_call_id) return;
+        setApprovals((prev) => {
+          // Dedup: skip if a card already exists for this tool_call_id
+          if (prev.has(result.tool_call_id!)) return prev;
+          const next = new Map(prev);
+          next.set(result.tool_call_id!, {
+            what: result.what ?? '',
+            tool_name: result.tool_name ?? '',
+            tool_call_id: result.tool_call_id!,
+            tool_args: result.tool_args ?? {},
+            recent_activity: result.recent_activity ?? [],
+            reasoning: result.reasoning,
+          });
+          return next;
+        });
+        scrollToBottom();
+      })
+      .catch(() => {
+        // REST fetch failed — best effort
+      });
+  }, [projectId, scrollToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,31 +301,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       wasRunningRef.current = true;
       setShowThinking(true);
     } else if (agentStatus === 'pending_approval') {
-      // Fetch pending approval via REST in case the WS event was missed
-      api<{ pending: boolean; tool_call_id?: string; tool_name?: string; tool_args?: Record<string, unknown>; what?: string; recent_activity?: ChatMessageType[]; reasoning?: string }>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`,
-      )
-        .then((result) => {
-          if (!result.pending || !result.tool_call_id) return;
-          setApprovals((prev) => {
-            // Skip if already present (WS event arrived first)
-            if (prev.has(result.tool_call_id!)) return prev;
-            const next = new Map(prev);
-            next.set(result.tool_call_id!, {
-              what: result.what ?? '',
-              tool_name: result.tool_name ?? '',
-              tool_call_id: result.tool_call_id!,
-              tool_args: result.tool_args ?? {},
-              recent_activity: result.recent_activity ?? [],
-              reasoning: result.reasoning,
-            });
-            return next;
-          });
-          scrollToBottom();
-        })
-        .catch(() => {
-          // REST fetch failed — best effort
-        });
+      // Fetch pending approval via REST in case the WS event was missed.
+      // Covers status poll discovering a stale approval after reconnect.
+      fetchPendingApproval();
     } else if (agentStatus === 'new_session') {
       // WS event is the single source of truth for session swap
       wasRunningRef.current = false;
@@ -300,35 +321,39 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       setTotalMessages(0);
       setLoadedOffset(0);
     }
-  }, [agentStatus, statusTick, projectId, fetchLatestMessage, scrollToBottom]);
+  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval]);
 
   // On mount, always check for pending approvals via REST.
   // Handles the case where ChatView was unmounted (tab switch to files)
   // and remounted with a stale agentStatus that doesn't trigger the
-  // status-change effect above.
+  // status-change effect above. Also covers page reload — the initial
+  // fetch runs before the first WS event arrives.
   useEffect(() => {
-    api<{ pending: boolean; tool_call_id?: string; tool_name?: string; tool_args?: Record<string, unknown>; what?: string; recent_activity?: ChatMessageType[]; reasoning?: string }>(
-      `/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`,
-    )
-      .then((result) => {
-        if (!result.pending || !result.tool_call_id) return;
-        setApprovals((prev) => {
-          if (prev.has(result.tool_call_id!)) return prev;
-          const next = new Map(prev);
-          next.set(result.tool_call_id!, {
-            what: result.what ?? '',
-            tool_name: result.tool_name ?? '',
-            tool_call_id: result.tool_call_id!,
-            tool_args: result.tool_args ?? {},
-            recent_activity: result.recent_activity ?? [],
-            reasoning: result.reasoning,
-          });
-          return next;
-        });
-        scrollToBottom();
-      })
-      .catch(() => {});
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchPendingApproval();
+  }, [projectId, fetchPendingApproval]);
+
+  // Reconnect-triggered fetch: whenever the WebSocket transitions into
+  // the 'connected' state (relay tunnel drop / mobile foreground), fetch
+  // pending approvals immediately so approval cards surface without
+  // waiting up to 5 seconds for the next steady-state poll cycle.
+  //
+  // A ref tracks the prior connection state so the first mount (which
+  // also runs the effect above) doesn't issue a duplicate fetch — we
+  // only fire on an actual transition INTO 'connected'.
+  const prevConnectionStateRef = useRef<typeof connectionState>(connectionState);
+  useEffect(() => {
+    const prev = prevConnectionStateRef.current;
+    prevConnectionStateRef.current = connectionState;
+    if (connectionState === 'connected' && prev !== 'connected') {
+      // Skip the very first render's transition from initial
+      // 'disconnected' → 'connected': the mount effect above already
+      // issued a fetch, and the setApprovals dedup would no-op anyway.
+      // But firing it here is still safe (idempotent), and covers the
+      // case where the mount fetch raced ahead of the server becoming
+      // ready. Let it run — the dedup Map guarantees no duplicates.
+      fetchPendingApproval();
+    }
+  }, [connectionState, fetchPendingApproval]);
 
   // Fix 2B: Status poll fallback — if agent appears stuck as "running"
   // with no stream activity for 15 seconds, poll REST for actual status.
@@ -353,74 +378,27 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
             );
           } else if (result.status === 'pending_approval') {
             // Same status but might be a NEW approval — fetch if needed
-            api<{ pending: boolean; tool_call_id?: string; tool_name?: string; tool_args?: Record<string, unknown>; what?: string; recent_activity?: ChatMessageType[]; reasoning?: string }>(
-              `/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`,
-            ).then((pa) => {
-              if (!pa.pending || !pa.tool_call_id) return;
-              setApprovals((prev) => {
-                if (prev.has(pa.tool_call_id!)) return prev;
-                const next = new Map(prev);
-                next.set(pa.tool_call_id!, {
-                  what: pa.what ?? '',
-                  tool_name: pa.tool_name ?? '',
-                  tool_call_id: pa.tool_call_id!,
-                  tool_args: pa.tool_args ?? {},
-                  recent_activity: pa.recent_activity ?? [],
-                  reasoning: pa.reasoning,
-                });
-                return next;
-              });
-              scrollToBottom();
-            }).catch(() => {});
+            fetchPendingApproval();
           }
         })
         .catch(() => {});
     }, 5_000);
     return () => clearInterval(timer);
-  }, [agentStatus, projectId, scrollToBottom]);
+  }, [agentStatus, projectId, fetchPendingApproval]);
 
   // Polling safety net: while the agent is running, poll /pending-approval
   // every 5 seconds so approvals surface even if the WS event was missed
   // (relay disconnect, transient drop). This is a fallback — the WebSocket
-  // handler `handleApprovalRequest` remains the primary path.
+  // handler `handleApprovalRequest` remains the primary path. The reconnect
+  // and mount effects above handle the immediate-recovery case without
+  // waiting up to 5 seconds for this cycle.
   useEffect(() => {
     if (agentStatus !== 'running') return;
-
     const timer = setInterval(() => {
-      api<{
-        pending: boolean;
-        tool_call_id?: string;
-        tool_name?: string;
-        tool_args?: Record<string, unknown>;
-        what?: string;
-        source?: string;
-        recent_activity?: ChatMessageType[];
-        reasoning?: string;
-      }>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`,
-      )
-        .then((result) => {
-          if (!result.pending || !result.tool_call_id) return;
-          setApprovals((prev) => {
-            if (prev.has(result.tool_call_id!)) return prev; // dedup
-            const next = new Map(prev);
-            next.set(result.tool_call_id!, {
-              what: result.what ?? '',
-              tool_name: result.tool_name ?? '',
-              tool_call_id: result.tool_call_id!,
-              tool_args: result.tool_args ?? {},
-              recent_activity: result.recent_activity ?? [],
-              reasoning: result.reasoning,
-            });
-            return next;
-          });
-          scrollToBottom();
-        })
-        .catch(() => {});
+      fetchPendingApproval();
     }, 5_000);
-
     return () => clearInterval(timer);
-  }, [agentStatus, projectId, scrollToBottom]);
+  }, [agentStatus, fetchPendingApproval]);
 
   useEffect(() => {
     function handleStreamDelta(event: WebSocketEvent) {
