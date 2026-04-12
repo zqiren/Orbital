@@ -12,7 +12,7 @@
 <p align="center">Define a workspace, a supervisor, sub-agents, and a budget.<br>Leave the rest to your agents while you manage them remotely.</p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.4.1/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://youtu.be/D9l0r4gP_RQ"><strong>Watch the demo</strong></a>
 </p>
@@ -40,6 +40,7 @@
 - **15+ LLM providers** — Anthropic, OpenAI, DeepSeek, Ollama, Moonshot, Groq, Gemini, and more
 - **Browser automation** — 23 browser actions via Patchright with anti-detection
 - **Persistent context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md maintained across sessions
+- **Self-improving skills** — agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
 - **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
 
 ---
@@ -468,7 +469,7 @@ Orbital ships as a desktop application bundled with PyInstaller:
 - **Daemon lifecycle**: Desktop app spawns the daemon on launch, manages port allocation, cleans up on exit
 - **Sleep prevention**: Blocks system sleep while agents are active (Windows `SetThreadExecutionState`), re-allows when idle
 
-**Skills system**: Each project can configure operational skills — patterns the agent follows before each task.
+**Skills system**: Agents create reusable skills from multi-step workflows and consult matching skills before starting similar tasks. Skills are stored as SKILL.md files in the workspace and managed through the Settings UI.
 
 <p align="center">
   <img src="docs/screenshots/skills.png" alt="Skills — operational patterns the agent follows" width="700">
@@ -483,7 +484,7 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 ### Windows
 
-1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.5)
+1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.4.1/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.1)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
@@ -499,7 +500,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.3.5)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.1)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
