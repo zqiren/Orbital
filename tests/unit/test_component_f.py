@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 import pytest
 import pytest_asyncio
 
+from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+
 # ---------------------------------------------------------------------------
 # models.py tests
 # ---------------------------------------------------------------------------
@@ -1038,8 +1040,9 @@ class TestRESTEndpoints:
         })
         pid = resp.json()["project_id"]
 
-        # Create session files on disk (namespaced by project_id)
-        sessions_dir = tmp_path / "orbital" / pid / "sessions"
+        # Create session files on disk (namespaced by slug-based dir name)
+        dir_name = _project_dir_name("MultiSession", pid)
+        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
         # Session 1 (older)
@@ -1081,7 +1084,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / "orbital" / pid / "sessions"
+        dir_name = _project_dir_name("PagTail", pid)
+        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = []
         for i in range(10):
@@ -1106,7 +1110,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / "orbital" / pid / "sessions"
+        dir_name = _project_dir_name("PagOffset", pid)
+        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = []
         for i in range(10):
@@ -1131,7 +1136,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / "orbital" / pid / "sessions"
+        dir_name = _project_dir_name("PagEmpty", pid)
+        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})
@@ -1152,7 +1158,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        sessions_dir = tmp_path / "orbital" / pid / "sessions"
+        dir_name = _project_dir_name("PagAll", pid)
+        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
         sessions_dir.mkdir(parents=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})

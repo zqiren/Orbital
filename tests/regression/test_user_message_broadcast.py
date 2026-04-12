@@ -125,6 +125,7 @@ class TestInjectNoncePropagation:
         # Create a mock handle with an idle (done) task and a real-ish session
         mock_session = MagicMock()
         mock_session._paused_for_approval = False
+        mock_session.is_stopped.return_value = False
         mock_session.pop_queued_messages = MagicMock(return_value=[])
         appended_messages = []
         mock_session.append = MagicMock(side_effect=lambda m: appended_messages.append(m))
@@ -164,6 +165,7 @@ class TestInjectNoncePropagation:
 
         mock_session = MagicMock()
         mock_session._paused_for_approval = False
+        mock_session.is_stopped.return_value = False
         mock_session.pop_queued_messages = MagicMock(return_value=[])
         appended = []
         mock_session.append = MagicMock(side_effect=lambda m: appended.append(m))

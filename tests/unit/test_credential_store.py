@@ -71,6 +71,7 @@ class TestKeyringHappyPath:
     @patch("agent_os.daemon_v2.credential_store._KEYRING_AVAILABLE", True)
     @patch("agent_os.daemon_v2.credential_store.keyring")
     def test_set_api_key_stores_to_keyring(self, mock_kr, store):
+        mock_kr.get_password.return_value = "new-key"
         result = store.set_api_key("new-key")
         mock_kr.set_password.assert_called_once_with("agent-os", "llm-api-key", "new-key")
         assert result == {"source": "keychain"}

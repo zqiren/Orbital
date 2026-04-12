@@ -38,17 +38,17 @@ class TestAgentTransportABC:
         d = Dummy()
         assert d.session_id is None
 
-    def test_respond_to_permission_default_noop(self):
+    @pytest.mark.asyncio
+    async def test_respond_to_permission_default_noop(self):
         class Dummy(AgentTransport):
             async def start(self, command, args, workspace, env=None): pass
             async def send(self, message): return None
             async def read_stream(self): yield
             async def stop(self): pass
             def is_alive(self): return False
-        import asyncio
         d = Dummy()
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(d.respond_to_permission("p1", True))
+        await d.respond_to_permission("p1", True)
 
 
 from agent_os.agent.transports.pty_transport import PTYTransport

@@ -14,7 +14,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -148,16 +148,18 @@ class TestBug001_BrowserWarmupAPI:
     """Hit POST /api/v2/platform/browser/warmup and verify flags."""
 
     def test_warmup_endpoint_calls_launch_warmup(self, client):
-        """POST /browser/warmup → BrowserManager.launch_warmup() is called."""
+        """POST /browser/warmup → returns 'launched' when warmup_active transitions."""
         test_client, deps = client
         bm = deps["browser_manager"]
 
-        # Mock launch_warmup to capture the call
+        # Mock launch_warmup (background task won't actually run in TestClient)
         bm.launch_warmup = AsyncMock()
+        # warmup_active: False on first check (not already active), True after sleep
+        type(bm).warmup_active = PropertyMock(side_effect=[False, True])
 
         resp = test_client.post("/api/v2/platform/browser/warmup")
         assert resp.status_code == 200
-        bm.launch_warmup.assert_awaited_once_with("https://accounts.google.com")
+        assert resp.json()["status"] == "launched"
 
     def test_warmup_launch_uses_full_flags(self, client):
         """When launch_warmup runs, it passes all CHROME_FLAGS to playwright."""
@@ -173,9 +175,12 @@ class TestBug001_BrowserWarmupAPI:
             captured_args.extend(launch_kwargs_args)
 
         bm.launch_warmup = capture_warmup
+        # warmup_active: False on first check, True after sleep
+        type(bm).warmup_active = PropertyMock(side_effect=[False, True])
 
         resp = test_client.post("/api/v2/platform/browser/warmup")
         assert resp.status_code == 200
+        assert resp.json()["status"] == "launched"
         assert "--disable-blink-features=AutomationControlled" in captured_args
         for flag in BrowserManager.CHROME_FLAGS:
             assert flag in captured_args, f"Missing flag: {flag}"

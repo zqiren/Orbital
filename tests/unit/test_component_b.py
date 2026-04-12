@@ -389,7 +389,9 @@ class TestShellToolBasic:
 
     def test_echo_hello(self, tmp_path):
         workspace = str(tmp_path)
-        tool = ShellTool(workspace=workspace, os_type="windows")
+        import platform as _platform
+        os_type = "windows" if _platform.system() == "Windows" else "linux"
+        tool = ShellTool(workspace=workspace, os_type=os_type)
 
         result = tool.execute(command="echo hello")
 

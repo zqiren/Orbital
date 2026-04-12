@@ -155,7 +155,7 @@ class TestOnLoopDoneWaiting:
         assert payload["type"] == "agent.status"
         assert payload["status"] == "stopped"
 
-    def test_no_broadcast_when_session_stopped(self):
+    def test_broadcasts_stopped_when_session_stopped(self):
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
@@ -167,7 +167,11 @@ class TestOnLoopDoneWaiting:
         callback = mgr._on_loop_done("proj")
         callback(mock_task)
 
-        ws.broadcast.assert_not_called()
+        ws.broadcast.assert_called_once()
+        event = ws.broadcast.call_args[0][1]
+        assert event["status"] == "stopped"
+        # Handle should be cleaned up
+        assert "proj" not in mgr._handles
 
 
 class TestCheckSubAgentsDone:

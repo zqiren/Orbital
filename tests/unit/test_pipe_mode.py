@@ -213,9 +213,9 @@ class TestPipeTransportLifecycle:
         assert transport._workspace == "/tmp"
         assert transport._env == {"FOO": "bar"}
 
-    def test_is_alive_always_true(self):
+    def test_is_alive_false_before_start(self):
         transport = PipeTransport()
-        assert transport.is_alive() is True
+        assert transport.is_alive() is False
 
     @pytest.mark.asyncio
     async def test_stop_clears_session_id(self):

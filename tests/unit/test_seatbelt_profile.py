@@ -73,8 +73,8 @@ class TestProfileBasics:
     def test_tmpdir_detection(self):
         """/var/folders/ or TMPDIR parent added to write allowlist (mock os.environ for TMPDIR)."""
         profile = generate_profile("/tmp/workspace")
-        # /var/folders/ is always included
-        assert '(allow file-write* (subpath "/var/folders/"))' in profile
+        # /private/var/folders/ is always included (macOS resolves symlinks)
+        assert '(allow file-write* (subpath "/private/var/folders"))' in profile
 
         # Custom TMPDIR is also added
         custom_tmpdir = "/Users/testuser/custom_tmp"

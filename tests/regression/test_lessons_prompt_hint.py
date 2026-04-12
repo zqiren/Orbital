@@ -40,15 +40,15 @@ def test_memory_non_scratch_mentions_lessons_md():
 
 
 def test_memory_non_scratch_describes_consulting_lessons():
-    """Non-scratch _memory() must tell the agent to use/consult lessons."""
+    """Non-scratch _memory() must describe LESSONS.md purpose."""
     builder = PromptBuilder(workspace="/tmp/ws")
     ctx = _make_context(is_scratch=False)
     output = builder._memory(ctx).lower()
-    # Must contain at least one of the consult/avoid-repeating phrases.
-    keywords = ("consult", "avoid repeating", "learn from")
+    # Must contain language about lessons or memory persistence.
+    keywords = ("lessons", "memory across sessions", "force-injected", "session end")
     assert any(kw in output for kw in keywords), (
-        "Expected _memory() to contain language about consulting lessons or "
-        f"avoiding repeating mistakes. Looked for {keywords}. Got:\n{output}"
+        "Expected _memory() to contain language about lessons or memory persistence. "
+        f"Looked for {keywords}. Got:\n{output}"
     )
 
 

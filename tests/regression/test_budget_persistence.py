@@ -224,9 +224,9 @@ class TestPricingLookup:
     def test_exact_match(self):
         """Known model returns exact pricing."""
         input_rate, output_rate = get_cost_rates("gpt-5.2", "openai")
-        # providers.json: gpt-5.2 => 1.25/10.00 per 1M => 0.00125/0.01 per 1K
-        assert abs(input_rate - 0.00125) < 0.00001
-        assert abs(output_rate - 0.01) < 0.00001
+        # providers.json: gpt-5.2 => 1.75/14.00 per 1M => 0.00175/0.014 per 1K
+        assert abs(input_rate - 0.00175) < 0.00001
+        assert abs(output_rate - 0.014) < 0.00001
 
     def test_prefix_match(self):
         """Model with date suffix matches by prefix."""

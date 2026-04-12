@@ -902,20 +902,52 @@ class AgentManager:
             handle = None
 
         if handle is None:
-            # Auto-start a fresh agent (stale stopped session was cleaned up)
+            # Auto-start a fresh agent (stale stopped session was cleaned up).
+            # Re-derive config from the project store — this path is reached
+            # when the original handle existed but the session was stopped,
+            # so the variables from the early handle-is-None block are absent.
+            from agent_os.agent.prompt_builder import Autonomy as _Autonomy
+
+            proj = self._project_store.get_project(project_id)
+            if proj is None:
+                raise KeyError(f"No project found for '{project_id}'")
+
+            autonomy_str = proj.get("autonomy", "hands_off")
+            try:
+                _autonomy = _Autonomy(autonomy_str)
+            except ValueError:
+                _autonomy = _Autonomy.HANDS_OFF
+
+            _enabled_sub = proj.get("enabled_sub_agents", None)
+            if _enabled_sub is None and self._setup_engine is not None:
+                available = self._setup_engine.check_all()
+                _enabled_sub = [
+                    a.slug for a in available
+                    if a.installed and a.slug != "built-in"
+                ]
+
+            global_settings = self._settings_store.get() if self._settings_store else None
+            cred_key = self._credential_store.get_api_key() if self._credential_store else None
+            _api_key = (proj.get("api_key")
+                        or cred_key
+                        or (global_settings.llm.api_key if global_settings else None)
+                        or "")
+            _base_url = proj.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+            _model = proj.get("model") or (global_settings.llm.model if global_settings else None) or ""
+
             config = AgentConfig(
-                workspace=project["workspace"],
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                autonomy=autonomy,
-                sdk=project.get("sdk", "openai"),
-                provider=project.get("provider", "custom"),
-                project_name=project.get("name", ""),
-                project_instructions=project.get("instructions", ""),
-                enabled_sub_agents=enabled_sub_agents or [],
-                budget_limit_usd=project.get("budget_limit_usd"),
-                budget_action=project.get("budget_action", "ask"),
+                workspace=proj["workspace"],
+                model=_model,
+                api_key=_api_key,
+                base_url=_base_url,
+                autonomy=_autonomy,
+                sdk=proj.get("sdk", "openai"),
+                provider=proj.get("provider", "custom"),
+                project_name=proj.get("name", ""),
+                project_instructions=proj.get("instructions", ""),
+                enabled_sub_agents=_enabled_sub or [],
+                budget_limit_usd=proj.get("budget_limit_usd"),
+                budget_action=proj.get("budget_action", "ask"),
             )
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce)
