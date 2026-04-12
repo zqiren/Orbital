@@ -188,3 +188,113 @@ class TestSubAgentVerification:
         ctx = make_context(enabled_agents=[])
         _, dynamic = builder.build(ctx)
         assert "Verifying Sub-Agent Output" not in dynamic
+
+
+# ===========================================================================
+# Skill Injection Strength — Change 1: Skill creation trigger in _memory
+# ===========================================================================
+
+
+class TestSkillCreationTrigger:
+
+    def test_skill_creation_in_normal_project(self):
+        """Non-scratch prompt contains skill creation instructions."""
+        builder = PromptBuilder()
+        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        _, dynamic = builder.build(ctx)
+        assert "Skill creation:" in dynamic
+
+    def test_skill_creation_not_in_scratch(self):
+        """Scratch prompt does NOT contain skill creation instructions."""
+        builder = PromptBuilder()
+        ctx = make_context(is_scratch=True)
+        _, dynamic = builder.build(ctx)
+        assert "Skill creation:" not in dynamic
+
+
+# ===========================================================================
+# Skill Injection Strength — Change 2: MUST language in skills section
+# ===========================================================================
+
+
+class TestSkillConsultationStrength:
+
+    def test_must_read_when_skills_exist(self, tmp_path):
+        """When skills exist, prompt uses mandatory 'MUST read' language."""
+        skills_dir = tmp_path / "skills" / "deploy"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the app.")
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = make_context(workspace=str(tmp_path))
+        _, dynamic = builder.build(ctx)
+        assert "you MUST read" in dynamic
+
+    def test_planning_discipline_fallback_when_no_skills(self, tmp_path):
+        """When no skills exist, fallback to Planning Discipline (unchanged)."""
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = make_context(workspace=str(tmp_path))
+        _, dynamic = builder.build(ctx)
+        assert "Planning Discipline" in dynamic
+
+    def test_skill_names_still_listed(self, tmp_path):
+        """Skill index still lists skill names after preamble change."""
+        skills_dir = tmp_path / "skills" / "my-deploy"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("# My Deploy\nDeploys things.")
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = make_context(workspace=str(tmp_path))
+        _, dynamic = builder.build(ctx)
+        assert "My Deploy" in dynamic
+        assert "Deploys things" in dynamic
+
+
+# ===========================================================================
+# Skill Injection Strength — Change 3: Context budget reflection
+# ===========================================================================
+
+
+class TestContextBudgetReflection:
+
+    def test_70pct_includes_skill_reflection(self):
+        """At 75% context, reflection prompt about skills is present."""
+        builder = PromptBuilder()
+        ctx = make_context(context_usage_pct=0.75)
+        _, dynamic = builder.build(ctx)
+        assert "workflow worth saving as a skill" in dynamic
+
+    def test_50pct_no_skill_reflection(self):
+        """At 50% context, no reflection prompt about skills."""
+        builder = PromptBuilder()
+        ctx = make_context(context_usage_pct=0.50)
+        _, dynamic = builder.build(ctx)
+        assert "workflow worth saving as a skill" not in dynamic
+
+    def test_85pct_still_has_urgent(self):
+        """At 90% context, URGENT warning still present (not broken)."""
+        builder = PromptBuilder()
+        ctx = make_context(context_usage_pct=0.90)
+        _, dynamic = builder.build(ctx)
+        assert "URGENT" in dynamic
+        assert "workflow worth saving as a skill" in dynamic
+
+
+# ===========================================================================
+# Skill Injection Strength — Change 4: LESSONS.md instruction updated
+# ===========================================================================
+
+
+class TestLessonsInstructionUpdate:
+
+    def test_append_mid_session_instruction(self):
+        """Normal project prompt says agent may append to LESSONS.md mid-session."""
+        builder = PromptBuilder()
+        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        _, dynamic = builder.build(ctx)
+        assert "You may append mid-session" in dynamic
+
+    def test_old_do_not_write_removed(self):
+        """Old contradictory 'do NOT need to read or write' instruction is gone."""
+        builder = PromptBuilder()
+        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        _, dynamic = builder.build(ctx)
+        assert "do NOT need to read or write" not in dynamic

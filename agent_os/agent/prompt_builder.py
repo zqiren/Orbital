@@ -436,9 +436,9 @@ class PromptBuilder:
             "- PROJECT_STATE.md: Living summary of project status, pending work, key files.\n"
             "  Update after completing significant work. Keep under 1K tokens.\n"
             "- DECISIONS.md: Key decisions with brief reasoning. Append when you make non-obvious choices.\n"
-            "- LESSONS.md: Injected automatically into your context each turn. Contains lessons\n"
-            "  learned from past sessions. Consult before starting work to avoid repeating mistakes.\n"
-            "  You do NOT need to read or write this file — it is maintained automatically at session end.\n"
+            "- LESSONS.md: Force-injected every turn. Auto-consolidated at session end.\n"
+            "  You may append mid-session when you recover from errors or discover non-obvious\n"
+            "  workarounds. Keep entries under 100 words. Session-end routine handles dedup.\n"
             "These files are your memory across sessions. If you don't maintain them, you'll lose context\n"
             "when the session restarts. Update them proactively.\n\n"
             f"When you produce deliverables the user will want to access (reports, generated code,\n"
@@ -451,7 +451,14 @@ class PromptBuilder:
             '- If unclear → ask: "Should this apply to just this project or all your projects?"\n\n'
             'When the user says "forget X" or "stop doing X":\n'
             "- Remove the matching line from the appropriate file.\n\n"
-            "Keep each directive to one line. Max 30 directives per file."
+            "Keep each directive to one line. Max 30 directives per file.\n\n"
+            "Skill creation:\n"
+            "- After completing a task with 3+ distinct tool-call steps that is likely to recur,\n"
+            "  offer to save it as a reusable skill in skills/{task-name}/SKILL.md.\n"
+            "  In hands-off autonomy, create automatically without asking.\n"
+            "- Before creating, check skills/ for existing coverage. Update rather than duplicate.\n"
+            "- Keep skills under 80 lines. Use {placeholder} for variable inputs.\n"
+            "- Do NOT create skills for trivial or one-off tasks."
         )
 
     def _sub_agents(self, context: PromptContext) -> str | None:
@@ -557,10 +564,11 @@ class PromptBuilder:
             "",
             "## Skills",
             "",
-            "Before attempting any non-trivial task (file creation, data processing, web scraping,",
-            "multi-step workflows), check if a relevant skill exists below. If one matches, read",
-            "the full SKILL.md with the read tool before your first action. Follow its patterns",
-            "rather than inventing your own approach.",
+            "Before your first action on any multi-step task, scan the skill list below.",
+            "If a skill name or description matches your current task, you MUST read its",
+            "SKILL.md with the read tool before proceeding. The skill contains validated",
+            "steps, known pitfalls, and anti-patterns discovered from previous runs.",
+            "Skipping a relevant skill means repeating mistakes the system already solved.",
             "",
             "Skills available:",
         ]
@@ -600,7 +608,8 @@ class PromptBuilder:
         lines = [f"Context usage: ~{pct}%."]
         if context.context_usage_pct > 0.70:
             lines.append(
-                "You are using significant context. Consider updating PROJECT_STATE.md now."
+                "You are using significant context. Consider updating PROJECT_STATE.md now.\n"
+                "Reflection: did this session produce a multi-step workflow worth saving as a skill?"
             )
         if context.context_usage_pct > 0.85:
             lines.append(

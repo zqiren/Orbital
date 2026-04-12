@@ -480,15 +480,15 @@ class TestPromptBuilderWithWorkspace:
 
 class TestSkillsDisciplineInjection:
 
-    def test_skills_present_includes_check_instruction(self, tmp_path):
-        """When skills exist, output contains 'check if a relevant skill exists'."""
+    def test_skills_present_includes_must_read_instruction(self, tmp_path):
+        """When skills exist, output contains mandatory read instruction."""
         skills_dir = tmp_path / "skills" / "my-skill"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Skill\nA test skill.")
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
         _, dynamic = builder.build(ctx)
-        assert "check if a relevant skill exists" in dynamic
+        assert "you MUST read" in dynamic
 
     def test_no_skills_includes_planning_discipline(self, tmp_path):
         """When no skills exist, output contains 'Planning Discipline'."""
