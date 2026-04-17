@@ -33,14 +33,17 @@ from agent_os.agent.providers.types import TokenUsage
 
 
 class _StubPromptBuilder:
-    """Returns a known cached_prefix and dynamic_suffix for testing."""
+    """Returns a known cached_prefix, semi_stable, and truly_dynamic for testing."""
 
-    def __init__(self, cached="Cached system prompt.", dynamic="Current time: 2026-04-16T12:00:00\nContext usage: ~25%."):
+    def __init__(self, cached="Cached system prompt.",
+                 semi_stable="Semi-stable session content.",
+                 dynamic="Current time: 2026-04-16T12:00:00\nContext usage: ~25%."):
         self._cached = cached
+        self._semi_stable = semi_stable
         self._dynamic = dynamic
 
     def build(self, context):
-        return (self._cached, self._dynamic)
+        return (self._cached, self._semi_stable, self._dynamic)
 
 
 def _make_base_ctx(workspace: str) -> PromptContext:
@@ -146,14 +149,62 @@ class TestDynamicContentPosition:
             )
 
     def test_empty_dynamic_suffix_not_appended(self, tmp_path):
-        """If dynamic_suffix is empty, no extra system message should be appended."""
-        ctx_mgr = _make_context_manager(tmp_path, _StubPromptBuilder(dynamic=""))
+        """If truly_dynamic is empty, no extra system message should be appended at end."""
+        ctx_mgr = _make_context_manager(tmp_path, _StubPromptBuilder(semi_stable="", dynamic=""))
         messages = ctx_mgr.prepare()
 
         system_messages = [m for m in messages if m["role"] == "system"]
         # Only the cached prefix system message
         assert len(system_messages) == 1
         assert system_messages[0]["content"] == "Cached system prompt."
+
+
+    def test_semi_stable_before_history(self, tmp_path):
+        """Semi-stable content must appear BEFORE conversation history."""
+        ctx_mgr = _make_context_manager(tmp_path)
+        messages = ctx_mgr.prepare()
+
+        # Find semi-stable message
+        semi_idx = -1
+        for i, m in enumerate(messages):
+            if m["role"] == "system" and "Semi-stable" in m.get("content", ""):
+                semi_idx = i
+                break
+
+        # Find first history message
+        history_idx = -1
+        for i, m in enumerate(messages):
+            if m["role"] in ("user", "assistant", "tool"):
+                history_idx = i
+                break
+
+        assert semi_idx >= 0, "No semi-stable message found"
+        assert history_idx >= 0, "No history message found"
+        assert semi_idx < history_idx, (
+            f"Semi-stable (idx={semi_idx}) must come before history (idx={history_idx})"
+        )
+
+    def test_three_part_message_structure(self, tmp_path):
+        """Message order: static prefix -> semi-stable -> layers -> history -> truly dynamic."""
+        ctx_mgr = _make_context_manager(tmp_path)
+        messages = ctx_mgr.prepare()
+
+        # First system message is cached prefix
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "Cached system prompt."
+
+        # Second system message is semi-stable
+        assert messages[1]["role"] == "system"
+        assert messages[1]["content"] == "Semi-stable session content."
+
+        # Last message is truly dynamic
+        assert messages[-1]["role"] == "system"
+        assert "Current time:" in messages[-1]["content"]
+        assert "Context usage:" in messages[-1]["content"]
+
+        # Semi-stable should NOT contain dynamic markers
+        assert "Current time:" not in messages[1]["content"]
+        assert "Context usage:" not in messages[1]["content"]
 
 
 # ── Change 2: Non-spec field stripping ──────────────────────────────────

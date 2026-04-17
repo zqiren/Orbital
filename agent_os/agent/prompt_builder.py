@@ -200,8 +200,14 @@ class PromptBuilder:
         self._workspace = workspace
         self._skill_loader = SkillLoader(workspace) if workspace else None
 
-    def build(self, context: PromptContext) -> tuple[str, str]:
-        """Return (cached_prefix, dynamic_suffix)."""
+    def build(self, context: PromptContext) -> tuple[str, str, str]:
+        """Return (cached_prefix, semi_stable, truly_dynamic).
+
+        Three-part split for optimal prefix caching:
+        - cached_prefix: static prompt sections, always cacheable
+        - semi_stable: session-stable sections, cacheable when unchanged
+        - truly_dynamic: per-turn content (timestamp, context %), never cached
+        """
         cached = _SEP.join(filter(None, [
             self._identity(context),
             self._autonomy_directive(context),
@@ -210,7 +216,7 @@ class PromptBuilder:
             self._status_reporting(),
             self._error_recovery(),
         ]))
-        dynamic = _SEP.join(filter(None, [
+        semi_stable = _SEP.join(filter(None, [
             self._trigger_context(context),
             self._global_preferences(context),
             self._onboarding_or_directive(context),
@@ -221,11 +227,13 @@ class PromptBuilder:
             self._browser_section(context),
             self._skills(context),
             self._workspace_bootstrap(context),
-            self._runtime(context),
-            self._context_budget(context),
             self._os_instructions(context),
         ]))
-        return (cached, dynamic)
+        truly_dynamic = _SEP.join(filter(None, [
+            self._runtime(context),
+            self._context_budget(context),
+        ]))
+        return (cached, semi_stable, truly_dynamic)
 
     # -- Cached prefix sections (1-5) --
 
@@ -382,7 +390,7 @@ class PromptBuilder:
             "to reflect the change."
         )
 
-    # -- Dynamic suffix sections (6-12) --
+    # -- Semi-stable sections (placed before history for caching) --
 
     def _trigger_context(self, context: PromptContext) -> str | None:
         """If this run was started by a trigger, tell the agent."""

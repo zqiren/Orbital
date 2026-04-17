@@ -544,21 +544,21 @@ class TestPromptBuilderSubAgentsSection:
             datetime_now="2026-01-01T00:00:00",
         )
 
-        _cached, dynamic = builder.build(context)
+        _cached, semi_stable, _dynamic = builder.build(context)
 
         # Section header
-        assert "Sub-Agents Available" in dynamic
+        assert "Sub-Agents Available" in semi_stable
         # Agent handle appears
-        assert "claude-code" in dynamic
+        assert "claude-code" in semi_stable
         # Tool name referenced
-        assert "agent_message" in dynamic
+        assert "agent_message" in semi_stable
         # Skills listed
-        assert "code generation" in dynamic
-        assert "debugging" in dynamic
+        assert "code generation" in semi_stable
+        assert "debugging" in semi_stable
         # Routing hint
-        assert "Use for coding tasks" in dynamic
+        assert "Use for coding tasks" in semi_stable
         # Prohibition against shell
-        assert "Do NOT" in dynamic
+        assert "Do NOT" in semi_stable
 
     def test_sub_agents_section_absent_when_no_agents(self, tmp_path):
         from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
@@ -574,8 +574,8 @@ class TestPromptBuilderSubAgentsSection:
             datetime_now="2026-01-01T00:00:00",
         )
 
-        _cached, dynamic = builder.build(context)
-        assert "Sub-Agents Available" not in dynamic
+        _cached, semi_stable, _dynamic = builder.build(context)
+        assert "Sub-Agents Available" not in semi_stable
 
     def test_sub_agents_section_without_optional_fields(self, tmp_path):
         """Agent without skills or routing_hint should still render correctly."""
@@ -598,9 +598,9 @@ class TestPromptBuilderSubAgentsSection:
             datetime_now="2026-01-01T00:00:00",
         )
 
-        _cached, dynamic = builder.build(context)
+        _cached, semi_stable, _dynamic = builder.build(context)
 
-        assert "Sub-Agents Available" in dynamic
-        assert "my-agent" in dynamic
-        assert "agent_message" in dynamic
-        assert "Do NOT" in dynamic
+        assert "Sub-Agents Available" in semi_stable
+        assert "my-agent" in semi_stable
+        assert "agent_message" in semi_stable
+        assert "Do NOT" in semi_stable

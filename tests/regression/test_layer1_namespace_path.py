@@ -25,7 +25,7 @@ from agent_os.agent.workspace_files import WorkspaceFileManager
 
 class _StubPromptBuilder:
     def build(self, context):
-        return ("cached-prefix", "dynamic-suffix")
+        return ("cached-prefix", "semi-stable-suffix", "dynamic-runtime")
 
 
 def _make_base_ctx(workspace: str) -> PromptContext:

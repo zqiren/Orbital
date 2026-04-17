@@ -194,10 +194,10 @@ async def test_system_prompt_contains_skill_triggers(client, workspace):
         datetime_now="2026-01-01T00:00:00",
         project_dir_name="smoke-test-0000",
     )
-    _, dynamic = builder.build(ctx)
+    _, semi_stable, _ = builder.build(ctx)
 
-    assert "Skill creation:" in dynamic, "Skill creation trigger missing from prompt"
-    assert "You may append mid-session" in dynamic, "LESSONS.md mid-session append missing"
+    assert "Skill creation:" in semi_stable, "Skill creation trigger missing from prompt"
+    assert "You may append mid-session" in semi_stable, "LESSONS.md mid-session append missing"
 
 
 # ---------------------------------------------------------------------------

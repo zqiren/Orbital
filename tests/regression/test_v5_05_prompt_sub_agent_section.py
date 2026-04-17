@@ -36,19 +36,19 @@ class TestSubAgentAwarenessSection:
             {"handle": "claude-code", "status": "running"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "Sub-Agent Coordination" in dynamic
-        assert "claude-code" in dynamic
-        assert "running" in dynamic
+        assert "Sub-Agent Coordination" in semi_stable
+        assert "claude-code" in semi_stable
+        assert "running" in semi_stable
 
     def test_section_omitted_when_no_sub_agents(self):
         """Section is absent when no sub-agents are active."""
         ctx = _make_context(active_sub_agents=[])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "Sub-Agent Coordination" not in dynamic
+        assert "Sub-Agent Coordination" not in semi_stable
 
     def test_section_describes_nonblocking_model(self):
         """Section describes the non-blocking dispatch model."""
@@ -56,10 +56,10 @@ class TestSubAgentAwarenessSection:
             {"handle": "claude-code", "status": "running"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "returns IMMEDIATELY" in dynamic
-        assert "does NOT wait" in dynamic
+        assert "returns IMMEDIATELY" in semi_stable
+        assert "does NOT wait" in semi_stable
 
     def test_section_shows_multiple_agents(self):
         """Multiple sub-agents listed with correct states."""
@@ -68,12 +68,12 @@ class TestSubAgentAwarenessSection:
             {"handle": "aider", "status": "idle"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "claude-code" in dynamic
-        assert "running" in dynamic
-        assert "aider" in dynamic
-        assert "idle" in dynamic
+        assert "claude-code" in semi_stable
+        assert "running" in semi_stable
+        assert "aider" in semi_stable
+        assert "idle" in semi_stable
 
     def test_section_includes_last_activity(self):
         """Last activity info is shown when present."""
@@ -81,9 +81,9 @@ class TestSubAgentAwarenessSection:
             {"handle": "claude-code", "status": "running", "last_activity": "refactoring auth"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "refactoring auth" in dynamic
+        assert "refactoring auth" in semi_stable
 
     def test_prompt_context_defaults_empty_list(self):
         """PromptContext.active_sub_agents defaults to empty list."""
@@ -96,9 +96,9 @@ class TestSubAgentAwarenessSection:
             {"handle": "claude-code", "status": "running"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "transcript" in dynamic.lower()
+        assert "transcript" in semi_stable.lower()
 
     def test_section_mentions_system_messages(self):
         """Section mentions [Sub-agent] system message notifications."""
@@ -106,6 +106,6 @@ class TestSubAgentAwarenessSection:
             {"handle": "claude-code", "status": "running"},
         ])
         builder = PromptBuilder()
-        _, dynamic = builder.build(ctx)
+        _, semi_stable, _ = builder.build(ctx)
 
-        assert "[Sub-agent]" in dynamic
+        assert "[Sub-agent]" in semi_stable
