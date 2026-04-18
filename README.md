@@ -12,7 +12,7 @@
 <p align="center">Define a workspace, a supervisor, sub-agents, and a budget.<br>Leave the rest to your agents while you manage them remotely.</p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.4.1/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.4.2/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://youtu.be/D9l0r4gP_RQ"><strong>Watch the demo</strong></a>
 </p>
@@ -484,7 +484,7 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 ### Windows
 
-1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.4.1/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.1)
+1. Download [`Orbital-Setup-1.0.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.4.2/Orbital-Setup-1.0.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.2)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
@@ -500,7 +500,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.1)
+1. Download [`Orbital-1.0.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.3.5/Orbital-1.0.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.4.2)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
