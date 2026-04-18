@@ -105,7 +105,7 @@ class TestWebAccessInstructions:
     def test_browser_shows_search_fetch_actions(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, tool_names=["read", "write", "browser"])
-        cached, _ = builder.build(ctx)
+        cached, _, _ = builder.build(ctx)
         assert "### Web Access" in cached
         assert 'action="search"' in cached
         assert 'action="fetch"' in cached
@@ -113,5 +113,5 @@ class TestWebAccessInstructions:
     def test_no_browser_no_web_section(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, tool_names=["read", "write", "shell"])
-        cached, _ = builder.build(ctx)
+        cached, _, _ = builder.build(ctx)
         assert "### Web Access" not in cached

@@ -69,8 +69,8 @@ def _make_base_prompt_context(workspace: str) -> PromptContext:
 class MockPromptBuilder:
     """Mock PromptBuilder satisfying the Protocol."""
 
-    def build(self, context: PromptContext) -> tuple[str, str]:
-        return ("cached-system-prefix", "dynamic-suffix")
+    def build(self, context: PromptContext) -> tuple[str, str, str]:
+        return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
 
 
 def _make_text_response(text: str, input_tok: int = 100, output_tok: int = 50) -> LLMResponse:

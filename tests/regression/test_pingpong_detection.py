@@ -49,8 +49,8 @@ def _make_base_prompt_context(workspace: str) -> PromptContext:
 
 
 class MockPromptBuilder:
-    def build(self, context: PromptContext) -> tuple[str, str]:
-        return ("cached-system-prefix", "dynamic-suffix")
+    def build(self, context: PromptContext) -> tuple[str, str, str]:
+        return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
 
 
 def _make_text_response(text: str) -> LLMResponse:

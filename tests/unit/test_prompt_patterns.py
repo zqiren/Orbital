@@ -38,8 +38,8 @@ def _make_base_prompt_context(workspace: str) -> PromptContext:
 
 
 class MockPromptBuilder:
-    def build(self, context: PromptContext) -> tuple[str, str]:
-        return ("cached-system-prefix", "dynamic-suffix")
+    def build(self, context: PromptContext) -> tuple[str, str, str]:
+        return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
 
 
 def make_context(**overrides) -> PromptContext:
@@ -169,10 +169,10 @@ class TestSubAgentVerification:
         ctx = make_context(enabled_agents=[
             {"handle": "claudecode", "display_name": "Claude Code", "type": "cli"}
         ])
-        _, dynamic = builder.build(ctx)
-        assert "Verifying Sub-Agent Output" in dynamic
-        assert "read" in dynamic.split("Verifying")[1]
-        assert "shell" in dynamic.split("Verifying")[1]
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Verifying Sub-Agent Output" in semi_stable
+        assert "read" in semi_stable.split("Verifying")[1]
+        assert "shell" in semi_stable.split("Verifying")[1]
 
     def test_verification_multiple_sub_agents(self):
         builder = PromptBuilder()
@@ -180,14 +180,14 @@ class TestSubAgentVerification:
             {"handle": "claudecode", "display_name": "Claude Code", "type": "cli"},
             {"handle": "aider", "display_name": "Aider", "type": "cli"},
         ])
-        _, dynamic = builder.build(ctx)
-        assert dynamic.count("Verifying Sub-Agent Output") == 1
+        _, semi_stable, _ = builder.build(ctx)
+        assert semi_stable.count("Verifying Sub-Agent Output") == 1
 
     def test_no_verification_without_sub_agents(self):
         builder = PromptBuilder()
         ctx = make_context(enabled_agents=[])
-        _, dynamic = builder.build(ctx)
-        assert "Verifying Sub-Agent Output" not in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Verifying Sub-Agent Output" not in semi_stable
 
 
 # ===========================================================================
@@ -201,15 +201,15 @@ class TestSkillCreationTrigger:
         """Non-scratch prompt contains skill creation instructions."""
         builder = PromptBuilder()
         ctx = make_context(is_scratch=False, project_dir_name="test-proj")
-        _, dynamic = builder.build(ctx)
-        assert "Skill creation:" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Skill creation:" in semi_stable
 
     def test_skill_creation_not_in_scratch(self):
         """Scratch prompt does NOT contain skill creation instructions."""
         builder = PromptBuilder()
         ctx = make_context(is_scratch=True)
-        _, dynamic = builder.build(ctx)
-        assert "Skill creation:" not in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Skill creation:" not in semi_stable
 
 
 # ===========================================================================
@@ -226,15 +226,15 @@ class TestSkillConsultationStrength:
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the app.")
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
-        _, dynamic = builder.build(ctx)
-        assert "you MUST read" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "you MUST read" in semi_stable
 
     def test_planning_discipline_fallback_when_no_skills(self, tmp_path):
         """When no skills exist, fallback to Planning Discipline (unchanged)."""
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
-        _, dynamic = builder.build(ctx)
-        assert "Planning Discipline" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Planning Discipline" in semi_stable
 
     def test_skill_names_still_listed(self, tmp_path):
         """Skill index still lists skill names after preamble change."""
@@ -243,9 +243,9 @@ class TestSkillConsultationStrength:
         (skills_dir / "SKILL.md").write_text("# My Deploy\nDeploys things.")
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
-        _, dynamic = builder.build(ctx)
-        assert "My Deploy" in dynamic
-        assert "Deploys things" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "My Deploy" in semi_stable
+        assert "Deploys things" in semi_stable
 
 
 # ===========================================================================
@@ -259,21 +259,21 @@ class TestContextBudgetReflection:
         """At 75% context, reflection prompt about skills is present."""
         builder = PromptBuilder()
         ctx = make_context(context_usage_pct=0.75)
-        _, dynamic = builder.build(ctx)
+        _, _, dynamic = builder.build(ctx)
         assert "workflow worth saving as a skill" in dynamic
 
     def test_50pct_no_skill_reflection(self):
         """At 50% context, no reflection prompt about skills."""
         builder = PromptBuilder()
         ctx = make_context(context_usage_pct=0.50)
-        _, dynamic = builder.build(ctx)
+        _, _, dynamic = builder.build(ctx)
         assert "workflow worth saving as a skill" not in dynamic
 
     def test_85pct_still_has_urgent(self):
         """At 90% context, URGENT warning still present (not broken)."""
         builder = PromptBuilder()
         ctx = make_context(context_usage_pct=0.90)
-        _, dynamic = builder.build(ctx)
+        _, _, dynamic = builder.build(ctx)
         assert "URGENT" in dynamic
         assert "workflow worth saving as a skill" in dynamic
 
@@ -289,12 +289,12 @@ class TestLessonsInstructionUpdate:
         """Normal project prompt says agent may append to LESSONS.md mid-session."""
         builder = PromptBuilder()
         ctx = make_context(is_scratch=False, project_dir_name="test-proj")
-        _, dynamic = builder.build(ctx)
-        assert "You may append mid-session" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "You may append mid-session" in semi_stable
 
     def test_old_do_not_write_removed(self):
         """Old contradictory 'do NOT need to read or write' instruction is gone."""
         builder = PromptBuilder()
         ctx = make_context(is_scratch=False, project_dir_name="test-proj")
-        _, dynamic = builder.build(ctx)
-        assert "do NOT need to read or write" not in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "do NOT need to read or write" not in semi_stable

@@ -207,21 +207,21 @@ def test_prompt_awareness_reflects_active_agents():
     )
 
     builder = PromptBuilder()
-    cached, dynamic = builder.build(ctx)
+    cached, semi_stable, dynamic = builder.build(ctx)
 
     # Full system prompt
-    system_prompt = cached + "\n\n" + dynamic
+    system_prompt = cached + "\n\n" + semi_stable + "\n\n" + dynamic
 
     # Should have both the static sub-agents listing and the dynamic awareness section
     assert "Sub-Agents Available" in system_prompt
     assert "Sub-Agent Coordination" in system_prompt
     assert "returns IMMEDIATELY" in system_prompt
 
-    # Dynamic section should list both agents with states
-    assert "claude-code" in dynamic
-    assert "running" in dynamic
-    assert "aider" in dynamic
-    assert "idle" in dynamic
+    # Semi-stable section should list both agents with states
+    assert "claude-code" in semi_stable
+    assert "running" in semi_stable
+    assert "aider" in semi_stable
+    assert "idle" in semi_stable
 
 
 def test_sanitize_roles_drops_agent_messages():

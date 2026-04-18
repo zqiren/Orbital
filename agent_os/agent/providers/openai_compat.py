@@ -26,6 +26,8 @@ from agent_os.agent.providers.types import (
     LLMError,
 )
 
+_cache_logger = logging.getLogger("orbital.cache_audit")
+
 
 def _extract_status(text: str | None) -> str | None:
     if not text:
@@ -35,7 +37,12 @@ def _extract_status(text: str | None) -> str | None:
 
 
 def _extract_cache_read_tokens(usage_obj) -> int:
-    return getattr(usage_obj, "cache_read_input_tokens", 0) or 0
+    """Extract cached token count — handles Anthropic, OpenAI, and Kimi field names."""
+    for attr in ("cache_read_input_tokens", "prompt_cache_hit_tokens", "cached_tokens"):
+        val = getattr(usage_obj, attr, None)
+        if isinstance(val, (int, float)) and val > 0:
+            return int(val)
+    return 0
 
 
 def _make_token_usage(usage_obj) -> TokenUsage:
@@ -43,6 +50,18 @@ def _make_token_usage(usage_obj) -> TokenUsage:
         input_tokens=usage_obj.prompt_tokens,
         output_tokens=usage_obj.completion_tokens,
         cache_read_tokens=_extract_cache_read_tokens(usage_obj),
+    )
+
+
+def _log_cache_audit(model: str, usage: TokenUsage) -> None:
+    """Log cache efficiency metrics after each LLM call."""
+    input_tokens = usage.input_tokens
+    cached_tokens = usage.cache_read_tokens
+    output_tokens = usage.output_tokens
+    cache_rate = cached_tokens / input_tokens if input_tokens > 0 else 0.0
+    _cache_logger.info(
+        "[CACHE_AUDIT] model=%s input=%d cached=%d output=%d cache_rate=%.1f%%",
+        model, input_tokens, cached_tokens, output_tokens, cache_rate * 100,
     )
 
 
@@ -81,6 +100,15 @@ def _flatten_multimodal_content(content):
     return "\n".join(parts) if parts else ""
 
 
+# OpenAI chat-completion spec fields — everything else is internal metadata
+OPENAI_MESSAGE_FIELDS = {"role", "content", "name", "tool_calls", "tool_call_id"}
+
+
+def _strip_to_spec(message: dict) -> dict:
+    """Strip non-OpenAI-spec fields from a message dict."""
+    return {k: v for k, v in message.items() if k in OPENAI_MESSAGE_FIELDS}
+
+
 class LLMProvider:
     """Dual-SDK LLM client: OpenAI or Anthropic."""
 
@@ -113,22 +141,15 @@ class LLMProvider:
             self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key)
 
     def _prepare_messages_openai(self, messages: list) -> list:
-        """Prepare messages for OpenAI SDK: handle multimodal content based on vision capability."""
+        """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal content."""
         result = []
         has_vision = self.capabilities and self.capabilities.vision
         for msg in messages:
             content = msg.get("content")
-            if isinstance(content, list):
-                if has_vision:
-                    # Vision model: preserve multimodal content (images) in all roles
-                    result.append(msg)
-                else:
-                    # Non-vision model: flatten image blocks to text descriptions
-                    msg = dict(msg)
-                    msg["content"] = _flatten_multimodal_content(content)
-                    result.append(msg)
-            else:
-                result.append(msg)
+            if isinstance(content, list) and not has_vision:
+                msg = dict(msg)
+                msg["content"] = _flatten_multimodal_content(content)
+            result.append(_strip_to_spec(msg))
         return result
 
     async def stream(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
@@ -192,9 +213,11 @@ class LLMProvider:
         async for chunk in response_iter:
             if not chunk.choices:
                 if chunk.usage is not None:
+                    usage = _make_token_usage(chunk.usage)
+                    _log_cache_audit(self.model, usage)
                     yield StreamChunk(
                         is_final=True,
-                        usage=_make_token_usage(chunk.usage),
+                        usage=usage,
                     )
                 continue
 
@@ -205,23 +228,28 @@ class LLMProvider:
             reasoning = getattr(delta, "reasoning_content", None) or ""
 
             if choice.finish_reason is not None and chunk.usage is not None:
+                usage = _make_token_usage(chunk.usage)
+                _log_cache_audit(self.model, usage)
                 yield StreamChunk(
                     text=text,
                     tool_calls_delta=tc_delta,
                     is_final=True,
-                    usage=_make_token_usage(chunk.usage),
+                    usage=usage,
                     reasoning_content=reasoning,
                 )
             elif chunk.usage is not None and not text and not tc_delta and not reasoning:
+                usage = _make_token_usage(chunk.usage)
+                _log_cache_audit(self.model, usage)
                 yield StreamChunk(
                     is_final=True,
-                    usage=_make_token_usage(chunk.usage),
+                    usage=usage,
                 )
             else:
                 yield StreamChunk(text=text, tool_calls_delta=tc_delta, reasoning_content=reasoning)
 
     async def _stream_anthropic(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Anthropic SDK streaming path with adapter translation."""
+        messages = [_strip_to_spec(m) for m in messages]
         from agent_os.agent.providers.anthropic_adapter import (
             translate_messages_to_anthropic,
             translate_stream_event,
@@ -290,6 +318,7 @@ class LLMProvider:
             tool_calls = []
         finish_reason = choice.finish_reason
         usage = _make_token_usage(response.usage)
+        _log_cache_audit(self.model, usage)
         status_text = _extract_status(text)
 
         return LLMResponse(
@@ -304,6 +333,7 @@ class LLMProvider:
 
     async def _complete_anthropic(self, messages, tools=None) -> LLMResponse:
         """Anthropic SDK non-streaming path with adapter translation."""
+        messages = [_strip_to_spec(m) for m in messages]
         from agent_os.agent.providers.anthropic_adapter import (
             translate_messages_to_anthropic,
             translate_response_to_openai,

@@ -626,10 +626,10 @@ class TestPromptBuilderTriggerContext:
             trigger_source="schedule",
             trigger_name="Morning PDF summary",
         )
-        _, dynamic = builder.build(ctx)
-        assert "Trigger Context" in dynamic
-        assert "Morning PDF summary" in dynamic
-        assert "schedule" in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Trigger Context" in semi_stable
+        assert "Morning PDF summary" in semi_stable
+        assert "schedule" in semi_stable
 
     def test_trigger_context_absent_when_no_trigger(self):
         from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
@@ -643,8 +643,8 @@ class TestPromptBuilderTriggerContext:
             os_type="linux",
             datetime_now="2026-02-27T10:00:00",
         )
-        _, dynamic = builder.build(ctx)
-        assert "Trigger Context" not in dynamic
+        _, semi_stable, _ = builder.build(ctx)
+        assert "Trigger Context" not in semi_stable
 
 
 # ===========================================================================

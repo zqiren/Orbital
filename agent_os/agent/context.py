@@ -179,9 +179,11 @@ class ContextManager:
         )
 
         # Build system prompt
-        cached_prefix, dynamic_suffix = self._prompt_builder.build(ctx)
-        system_prompt = cached_prefix + "\n\n" + dynamic_suffix
+        cached_prefix, semi_stable, truly_dynamic = self._prompt_builder.build(ctx)
+        system_prompt = cached_prefix
         system_tokens = self._estimate_tokens(system_prompt)
+        semi_stable_tokens = self._estimate_tokens(semi_stable)
+        dynamic_tokens = self._estimate_tokens(truly_dynamic)
 
         # Read Layer 1 files from disk
         workspace = self._base_ctx.workspace
@@ -233,7 +235,7 @@ class ContextManager:
         )
 
         # Calculate remaining budget for sliding window
-        remaining = available_budget - system_tokens - layer_tokens - cold_resume_tokens
+        remaining = available_budget - system_tokens - semi_stable_tokens - dynamic_tokens - layer_tokens - cold_resume_tokens
         remaining = max(0, int(remaining * self._window_factor))
 
         # Get sliding window from session
@@ -248,8 +250,12 @@ class ContextManager:
         # Assemble final context
         result: list[dict] = []
 
-        # System prompt
+        # System prompt (static, always cached)
         result.append({"role": "system", "content": system_prompt})
+
+        # Semi-stable content (cached when session state unchanged)
+        if semi_stable:
+            result.append({"role": "system", "content": semi_stable})
 
         # Layer 3 instructions come before Layer 1 state
         for msg in layer_messages:
@@ -270,6 +276,11 @@ class ContextManager:
         # Validate tool results: ensure every tool_call has a matching result
         result = self._validate_tool_results(result)
 
+        # Truly dynamic runtime context (timestamps, context budget) — appended
+        # last so it doesn't break prefix caching for everything before it.
+        if truly_dynamic:
+            result.append({"role": "system", "content": truly_dynamic})
+
         # Update usage percentage
         total_tokens = sum(estimate_message_tokens(m) for m in result)
         if available_budget > 0:
@@ -279,6 +290,14 @@ class ContextManager:
 
         # Reset window factor after use
         self._window_factor = 1.0
+
+        logger.debug(
+            "[CONTEXT_AUDIT] messages=%d system_msgs=%d history_msgs=%d total_chars=%d",
+            len(result),
+            sum(1 for m in result if m.get("role") == "system"),
+            sum(1 for m in result if m.get("role") in ("user", "assistant", "tool")),
+            sum(len(str(m.get("content", ""))) for m in result),
+        )
 
         return result
 
