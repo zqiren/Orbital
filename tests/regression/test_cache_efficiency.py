@@ -24,7 +24,7 @@ from agent_os.agent.providers.openai_compat import (
     LLMProvider,
     _strip_to_spec,
     _log_cache_audit,
-    OPENAI_MESSAGE_FIELDS,
+    ORBITAL_INTERNAL_FIELDS,
 )
 from agent_os.agent.providers.types import TokenUsage
 
@@ -214,32 +214,62 @@ class TestFieldStripping:
     """Verify non-OpenAI-spec fields are stripped before API call."""
 
     def test_strip_to_spec_removes_internal_fields(self):
-        """_strip_to_spec should remove timestamp, session_id, source, _meta, _stubbed."""
+        """All Orbital-internal bookkeeping fields must be stripped before wire send."""
         msg = {
             "role": "user",
-            "content": "Hello",
-            "timestamp": "2026-04-16T10:00:00",
-            "session_id": "sess_123",
-            "source": "management",
-            "_meta": {"foo": "bar"},
-            "_stubbed": False,
+            "content": "hi",
+            "timestamp": "2026-04-18T10:00:00Z",
+            "session_id": "sess_abc",
+            "source": "user",
+            "_meta": {"image_info": {}},
+            "_stubbed": True,
+            "_status": "Using read",
+            "_activity_descriptions": {"call_1": "Reading file"},
+            "nonce": "abc123",
+            "target": "@claudecode",
         }
         stripped = _strip_to_spec(msg)
-        assert set(stripped.keys()) == {"role", "content"}
+        for internal_field in [
+            "timestamp", "session_id", "source", "_meta", "_stubbed",
+            "_status", "_activity_descriptions", "nonce", "target",
+        ]:
+            assert internal_field not in stripped, f"{internal_field} should be stripped"
         assert stripped["role"] == "user"
-        assert stripped["content"] == "Hello"
+        assert stripped["content"] == "hi"
 
-    def test_strip_to_spec_preserves_spec_fields(self):
-        """All OpenAI-spec fields should be preserved."""
+    def test_strip_to_spec_preserves_provider_native_fields(self):
+        """Provider-native fields (including future extensions) must pass through."""
         msg = {
             "role": "assistant",
-            "content": "Hi",
-            "name": "agent",
-            "tool_calls": [{"id": "tc1"}],
-            "tool_call_id": "tc1",
+            "content": "hello",
+            "tool_calls": [{"id": "t1", "type": "function"}],
+            "reasoning_content": "thinking...",           # Moonshot/DeepSeek
+            "reasoning": {"effort": "high"},              # OpenAI o1/o3
+            "x_future_provider_extension": "preserved",   # Forward-compat
         }
         stripped = _strip_to_spec(msg)
-        assert set(stripped.keys()) == {"role", "content", "name", "tool_calls", "tool_call_id"}
+        assert stripped["reasoning_content"] == "thinking..."
+        assert stripped["reasoning"] == {"effort": "high"}
+        assert stripped["x_future_provider_extension"] == "preserved"
+        assert stripped["role"] == "assistant"
+        assert stripped["content"] == "hello"
+        assert stripped["tool_calls"] == [{"id": "t1", "type": "function"}]
+
+    def test_strip_to_spec_passes_unknown_fields(self):
+        """Regression guard: fields not in ORBITAL_INTERNAL_FIELDS must pass through
+        unchanged. This test guards against reverting to an allowlist approach,
+        which silently breaks provider extensions (see ORBITAL_INTERNAL_FIELDS
+        docstring).
+        """
+        msg = {
+            "role": "assistant",
+            "content": "test",
+            "this_field_does_not_exist_yet": "value",
+            "some_future_provider_key": {"nested": True},
+        }
+        stripped = _strip_to_spec(msg)
+        assert stripped["this_field_does_not_exist_yet"] == "value"
+        assert stripped["some_future_provider_key"] == {"nested": True}
 
     def test_strip_to_spec_handles_tool_results(self):
         """Tool result messages keep only spec fields."""
@@ -285,8 +315,8 @@ class TestFieldStripping:
         prepared = provider._prepare_messages_openai(input_messages)
 
         for msg in prepared:
-            extra_fields = set(msg.keys()) - OPENAI_MESSAGE_FIELDS
-            assert not extra_fields, f"Non-spec fields not stripped: {extra_fields}"
+            leaked_internal = set(msg.keys()) & ORBITAL_INTERNAL_FIELDS
+            assert not leaked_internal, f"Orbital-internal fields leaked to wire: {leaked_internal}"
 
 
 # ── Change 3: Cache audit logging ───────────────────────────────────────
