@@ -622,6 +622,16 @@ class AgentManager:
         except ImportError:
             pass
         try:
+            from agent_os.agent.tools.glob_tool import GlobTool
+            registry.register(GlobTool(workspace=config.workspace))
+        except ImportError:
+            pass
+        try:
+            from agent_os.agent.tools.grep_tool import GrepTool
+            registry.register(GrepTool(workspace=config.workspace))
+        except ImportError:
+            pass
+        try:
             from agent_os.agent.tools.shell import ShellTool
             registry.register(ShellTool(
                 workspace=config.workspace,

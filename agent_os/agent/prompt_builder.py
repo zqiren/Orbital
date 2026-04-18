@@ -60,6 +60,8 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "read": "Read file contents or directory listing",
     "write": "Create or overwrite a file",
     "edit": "Find and replace text in a file",
+    "glob": "Find files matching a pattern (e.g., '**/*.py')",
+    "grep": "Search for text in files within the workspace",
     "shell": "Execute a shell command",
     "request_access": "Request access to a folder outside your workspace",
     "agent_message": "Send messages to sub-agents",
@@ -283,6 +285,11 @@ class PromptBuilder:
         for name in context.tool_names:
             desc = _TOOL_DESCRIPTIONS.get(name, name)
             lines.append(f"- {name}: {desc}")
+
+        # Prefer native glob/grep over approval-gated shell fallbacks
+        if "glob" in context.tool_names or "grep" in context.tool_names:
+            lines.append("")
+            lines.append("Prefer `glob` and `grep` over shelling out to `find` or `rg`.")
 
         # Web access instructions — browser tool handles search/fetch natively
         if "browser" in context.tool_names:

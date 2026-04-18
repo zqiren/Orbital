@@ -128,6 +128,8 @@ export type ActivityCategory =
   | 'file_read'
   | 'file_write'
   | 'file_edit'
+  | 'file_search'
+  | 'content_search'
   | 'command_exec'
   | 'web_search'
   | 'web_fetch'
