@@ -86,10 +86,12 @@ class AutonomyInterceptor:
             return name == "request_access"
 
         if self._preset == Autonomy.CHECK_IN:
+            # glob and grep are strictly read-only, treat them like read.
             return name in ("shell", "request_access", "write")
 
         if self._preset == Autonomy.SUPERVISED:
-            return name != "read"
+            # glob and grep are read-only; auto-approve alongside read.
+            return name not in ("read", "glob", "grep")
 
         return False
 

@@ -71,6 +71,8 @@ const TOOL_NAME_TO_CATEGORY: Record<string, ActivityCategory> = {
   read: 'file_read',
   write: 'file_write',
   edit: 'file_edit',
+  glob: 'file_search',
+  grep: 'content_search',
   shell: 'command_exec',
   web_search: 'web_search',
   web_fetch: 'web_fetch',
@@ -107,6 +109,12 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
       break;
     case 'file_edit':
       description = `Edited ${args.path ?? args.file_path ?? name}`;
+      break;
+    case 'file_search':
+      description = `Searching files: ${args.pattern ?? '?'}`;
+      break;
+    case 'content_search':
+      description = `Searching for "${args.pattern ?? '?'}"${args.path ? ` in ${args.path}` : ''}`;
       break;
     case 'command_exec':
       if (workspace && typeof args.command === 'string' && containsExternalPaths(args.command, workspace)) {

@@ -315,7 +315,7 @@ The management agent has access to these tool categories:
 | Category | Tools | Description |
 |----------|-------|-------------|
 | **Shell** | `shell` | Command execution with network-aware detection |
-| **File** | `read`, `write`, `edit` | File operations within workspace |
+| **File** | `read`, `write`, `edit`, `glob`, `grep` | File operations and search within workspace |
 | **Browser** | 26 actions via Patchright | Navigate, click, type, extract, screenshot, multi-tab, PDF, web search, URL fetch |
 | **Triggers** | `create_trigger`, `list_triggers`, `update_trigger`, `delete_trigger` | Schedule and file-watch triggers via natural language |
 | **Credentials** | `request_credential` | Agent-initiated credential request — opens secure modal |

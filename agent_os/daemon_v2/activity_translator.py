@@ -23,6 +23,8 @@ _TOOL_CATEGORY_MAP = {
     "read": "file_read",
     "write": "file_write",
     "edit": "file_edit",
+    "glob": "file_search",
+    "grep": "content_search",
     "shell": "command_exec",
     "request_access": "request_access",
     "agent_message": "agent_message",
@@ -73,6 +75,18 @@ def _describe_tool(tool_name: str, args: dict) -> str:
         return f"Writing {args.get('path', 'file')}"
     if tool_name == "edit":
         return f"Editing {args.get('path', 'file')}"
+    if tool_name == "glob":
+        pattern = args.get("pattern", "?")
+        path = args.get("path", "")
+        if path and path != ".":
+            return f"Searching for files matching '{pattern}' in {path}"
+        return f"Searching for files matching '{pattern}'"
+    if tool_name == "grep":
+        pattern = args.get("pattern", "?")
+        path = args.get("path", "")
+        if path and path != ".":
+            return f"Searching for '{pattern}' in {path}"
+        return f"Searching for '{pattern}'"
     if tool_name == "shell":
         cmd = args.get("command", "")
         if _SENSITIVE_PATH_RE.search(cmd):

@@ -22,6 +22,8 @@ export const CATEGORY_ICON: Record<string, string> = {
   file_read: 'FileText',
   file_write: 'FilePlus',
   file_edit: 'Pencil',
+  file_search: 'FileSearch',
+  content_search: 'SearchCode',
   command_exec: 'Terminal',
   web_search: 'Search',
   web_fetch: 'Globe',
@@ -110,6 +112,12 @@ export function summarizeActivities(
         break;
       case 'file_edit':
         counts['files edited'] = (counts['files edited'] ?? 0) + 1;
+        break;
+      case 'file_search':
+        counts['file searches'] = (counts['file searches'] ?? 0) + 1;
+        break;
+      case 'content_search':
+        counts['content searches'] = (counts['content searches'] ?? 0) + 1;
         break;
       case 'command_exec':
         counts['commands run'] = (counts['commands run'] ?? 0) + 1;
