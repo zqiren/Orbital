@@ -8,14 +8,13 @@ Read-only. Auto-approved under all autonomy presets. Paths are validated against
 the workspace root before ripgrep is invoked.
 
 Ripgrep binary resolution:
-    1. Bundled binary at agent_os/vendor/rg/{platform}/rg[.exe]
-    2. System PATH via shutil.which("rg")
-    3. Graceful error if neither is available
+    1. PyInstaller bundle — sys._MEIPASS/agent_os/vendor/rg/rg[.exe]
+    2. Dev source tree — agent_os/vendor/rg/rg[.exe]
+    3. System PATH via shutil.which("rg")
+    4. Graceful error if none are available
 
-MVP limitation: the bundled-binary path is an optional file; the installer
-bundling step (packaging/bundle_rg.py) is deferred. In the interim the tool
-falls back to the user's system ripgrep. On machines without `rg` on PATH, the
-tool returns a clear error rather than crashing — see 'ripgrep not found' test.
+Windows installers bundle ripgrep via agent_os/desktop/agentos.spec datas.
+macOS bundling is pending a separate task.
 """
 
 import os
@@ -33,22 +32,34 @@ _TIMEOUT_SECONDS = 10
 
 
 def _find_ripgrep() -> str | None:
-    """Locate ripgrep binary. Prefer bundled over system."""
-    # Walk up from this file to find agent_os/vendor/rg/
-    here = Path(__file__).resolve()
-    vendor = here.parent.parent.parent / "vendor" / "rg"
-    if vendor.is_dir():
-        # Try platform-specific subdir first
-        if sys.platform == "win32":
-            candidates = [vendor / "rg.exe", vendor / "windows" / "rg.exe"]
-        elif sys.platform == "darwin":
-            candidates = [vendor / "rg", vendor / "macos" / "rg"]
-        else:
-            candidates = [vendor / "rg", vendor / "linux" / "rg"]
-        for c in candidates:
-            if c.is_file() and os.access(str(c), os.X_OK):
-                return str(c)
+    """Locate ripgrep binary. Order: PyInstaller bundle, dev vendor dir, system PATH."""
+    if sys.platform == "win32":
+        names = ["rg.exe", "windows/rg.exe"]
+    elif sys.platform == "darwin":
+        names = ["rg", "macos/rg"]
+    else:
+        names = ["rg", "linux/rg"]
 
+    search_roots: list[Path] = []
+
+    # 1. PyInstaller frozen bundle — datas=[] entries get extracted here
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        search_roots.append(Path(meipass) / "agent_os" / "vendor" / "rg")
+
+    # 2. Dev source tree — walk up from this file to agent_os/vendor/rg/
+    here = Path(__file__).resolve()
+    search_roots.append(here.parent.parent.parent / "vendor" / "rg")
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for name in names:
+            candidate = root / name
+            if candidate.is_file() and os.access(str(candidate), os.X_OK):
+                return str(candidate)
+
+    # 3. System PATH
     return shutil.which("rg")
 
 
