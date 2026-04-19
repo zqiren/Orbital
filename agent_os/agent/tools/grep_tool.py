@@ -8,16 +8,20 @@ Read-only. Auto-approved under all autonomy presets. Paths are validated against
 the workspace root before ripgrep is invoked.
 
 Ripgrep binary resolution:
-    1. PyInstaller bundle — sys._MEIPASS/agent_os/vendor/rg/rg[.exe]
-    2. Dev source tree — agent_os/vendor/rg/rg[.exe]
-    3. System PATH via shutil.which("rg")
-    4. Graceful error if none are available
+    1. PyInstaller bundle — sys._MEIPASS/agent_os/vendor/rg/{platform}/rg[.exe]
+    2. Dev source tree — agent_os/vendor/rg/{platform}/rg[.exe]
+    3. Legacy fallback paths (agent_os/vendor/rg/rg, .../macos/rg)
+    4. System PATH via shutil.which("rg")
+    5. Graceful error if none are available
 
-Windows installers bundle ripgrep via agent_os/desktop/agentos.spec datas.
-macOS bundling is pending a separate task.
+On macOS the platform subdir is arch-specific: macos-arm64 or macos-x86_64.
+Windows installers bundle ripgrep via agent_os/desktop/agentos.spec datas;
+macOS installers bundle both arches via agentos-macos.spec.
 """
 
+import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -25,18 +29,37 @@ from pathlib import Path
 
 from .base import Tool, ToolResult
 
+logger = logging.getLogger(__name__)
+
 _MAX_MATCHES = 100
 _MAX_COLUMNS = 500
 _MAX_COUNT_PER_FILE = 50
 _TIMEOUT_SECONDS = 10
 
 
+def _macos_arch_subdir() -> str:
+    """Return the macos-{arch} subdirectory name for the current machine."""
+    # FOLLOW-UP: x86_64 (Intel) path has not been smoke-tested on Intel hardware
+    # yet — ad-hoc signed binary vendored and bundled, runtime selection covers
+    # it, but end-to-end grep on an Intel Mac is still pending. Remove this
+    # comment once verified.
+    machine = platform.machine()
+    if machine == "arm64":
+        return "macos-arm64"
+    if machine == "x86_64":
+        return "macos-x86_64"
+    return f"macos-{machine}"
+
+
 def _find_ripgrep() -> str | None:
     """Locate ripgrep binary. Order: PyInstaller bundle, dev vendor dir, system PATH."""
     if sys.platform == "win32":
+        # Windows: flat windows/ layout, rg.exe also kept at vendor root for legacy.
         names = ["rg.exe", "windows/rg.exe"]
     elif sys.platform == "darwin":
-        names = ["rg", "macos/rg"]
+        arch_dir = _macos_arch_subdir()
+        # Prefer the arch-specific dir; keep legacy paths for backward compat.
+        names = [f"{arch_dir}/rg", "rg", "macos/rg"]
     else:
         names = ["rg", "linux/rg"]
 
@@ -57,10 +80,17 @@ def _find_ripgrep() -> str | None:
         for name in names:
             candidate = root / name
             if candidate.is_file() and os.access(str(candidate), os.X_OK):
+                logger.info(
+                    "[ripgrep] resolved to: %s (arch=%s, frozen=%s)",
+                    candidate, platform.machine(), bool(meipass),
+                )
                 return str(candidate)
 
     # 3. System PATH
-    return shutil.which("rg")
+    fallback = shutil.which("rg")
+    if fallback:
+        logger.info("[ripgrep] falling back to system PATH: %s", fallback)
+    return fallback
 
 
 class GrepTool(Tool):

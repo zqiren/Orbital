@@ -102,6 +102,44 @@ def _inherit_shell_path():
         pass  # Fall back to existing PATH silently
 
 
+def _prepare_bundled_ripgrep():
+    """Ensure the bundled macOS ripgrep binary is executable and dequarantined.
+
+    PyInstaller's datas= copies files verbatim but may not preserve the execute
+    bit on Unix, and macOS may attach a com.apple.quarantine xattr to files
+    that arrive via .dmg. Both would cause the grep tool to fail.
+
+    Idempotent — safe to run even if the bit is already set or the xattr is
+    not present. Swallows all errors: grep will fall back to system PATH.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        from agent_os.agent.tools.grep_tool import _find_ripgrep
+    except Exception:
+        return
+    try:
+        rg_path = _find_ripgrep()
+    except Exception:
+        rg_path = None
+    if not rg_path or not os.path.isfile(rg_path):
+        return
+    try:
+        mode = os.stat(rg_path).st_mode
+        if not (mode & 0o111):
+            os.chmod(rg_path, mode | 0o755)
+    except Exception:
+        pass
+    try:
+        import subprocess as _sp
+        _sp.run(
+            ["xattr", "-d", "com.apple.quarantine", rg_path],
+            check=False, capture_output=True,
+        )
+    except Exception:
+        pass
+
+
 def _disable_app_nap():
     """Disable App Nap at daemon startup on macOS (defense-in-depth).
 
@@ -468,6 +506,7 @@ def main():
     run_migrations()
     _inherit_shell_path()
     _disable_app_nap()
+    _prepare_bundled_ripgrep()
 
     if is_already_running(PORT):
         port = PORT
