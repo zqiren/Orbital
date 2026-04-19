@@ -100,13 +100,38 @@ def _flatten_multimodal_content(content):
     return "\n".join(parts) if parts else ""
 
 
-# OpenAI chat-completion spec fields — everything else is internal metadata
-OPENAI_MESSAGE_FIELDS = {"role", "content", "name", "tool_calls", "tool_call_id"}
+# Orbital-internal bookkeeping fields that must not be sent to LLM providers.
+# These are added by Orbital during session management and would bust provider
+# prefix caches if sent on the wire.
+#
+# ARCHITECTURAL NOTE: This is a DENYLIST, not an allowlist, on purpose.
+# Provider extensions like Moonshot/DeepSeek `reasoning_content` or future
+# provider-specific fields must pass through untouched. Replacing this with
+# an allowlist has historically caused silent breakage on multi-turn
+# tool-calling with reasoning models (see TASK-strip-spec-fix.md).
+# Do not "simplify" back to an allowlist without reading that spec.
+ORBITAL_INTERNAL_FIELDS = {
+    "timestamp",               # ISO-8601 append time (session.py)
+    "session_id",              # Owning session ID (session.py)
+    "source",                  # user / management / sub-agent slug (loop.py, session.py)
+    "_meta",                   # Tool-result metadata (session.py)
+    "_stubbed",                # Placeholder tool-result marker (session.py)
+    "_status",                 # Human-readable "Using X" label for UI (loop.py)
+    "_activity_descriptions",  # Tool_call_id → description map for UI (activity_translator.py)
+    "nonce",                   # Dedup key on injected user messages (loop.py)
+    "target",                  # Sub-agent @mention routing target (agent_manager.py)
+}
 
 
 def _strip_to_spec(message: dict) -> dict:
-    """Strip non-OpenAI-spec fields from a message dict."""
-    return {k: v for k, v in message.items() if k in OPENAI_MESSAGE_FIELDS}
+    """Strip Orbital-internal fields from a message before sending to provider.
+
+    Preserves all provider-native fields including provider-specific extensions
+    like `reasoning_content` (Moonshot/DeepSeek), `reasoning` (OpenAI o1/o3),
+    and any future extensions. Only explicitly-enumerated Orbital bookkeeping
+    fields are removed.
+    """
+    return {k: v for k, v in message.items() if k not in ORBITAL_INTERNAL_FIELDS}
 
 
 class LLMProvider:
