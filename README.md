@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.5.0/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.5.0/Orbital-1.0.0-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://youtu.be/D9l0r4gP_RQ"><strong>Watch the demo</strong></a>
+  <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>Watch the demo</strong></a>
 </p>
 <p align="center">Set up in under 5 minutes. No Python or Node required.</p>
 
