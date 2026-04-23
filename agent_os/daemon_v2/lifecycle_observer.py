@@ -69,6 +69,23 @@ class LifecycleObserver:
             "error": error,
         })
 
+    def on_failed(self, project_id: str, handle: str, reason: str) -> None:
+        """Sub-agent adapter transitioned into broken state (e.g. background_send exception).
+
+        Synchronous by design — safe to call from exception handlers without
+        requiring an event loop context. Broadcasts a failure event so the
+        frontend can release the idle indicator and surface a loud failure
+        state. No transcript injection here because _inject is async and the
+        caller path is a narrow exception branch; the error log plus the
+        WebSocket event are the authoritative signals.
+        """
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.failed",
+            "project_id": project_id,
+            "handle": handle,
+            "reason": reason,
+        })
+
     async def _inject(self, project_id: str, content: str) -> None:
         """Inject a system message into the management agent's session."""
         if self._agent_manager is None:

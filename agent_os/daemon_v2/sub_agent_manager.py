@@ -359,10 +359,67 @@ class SubAgentManager:
                             summary=response[:200] if response else "(no output)",
                             transcript_path=transcript.filepath,
                         )
-            except Exception as e:
-                logger.warning("Background send to %s failed: %s", handle, e)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error(
+                    "_background_send failed for project=%s handle=%s",
+                    project_id, handle, exc_info=True,
+                )
+                adapter._broken = True
+                if self._lifecycle_observer is not None:
+                    try:
+                        self._lifecycle_observer.on_failed(
+                            project_id, handle,
+                            reason="background_send_exception",
+                        )
+                    except Exception:
+                        logger.exception(
+                            "lifecycle_observer.on_failed raised for project=%s handle=%s",
+                            project_id, handle,
+                        )
+                return
 
-        asyncio.create_task(_background_send())
+        adapter._background_send_task = asyncio.create_task(
+            _background_send(),
+            name=f"bgsend-{project_id}-{handle}",
+        )
+        adapter._background_send_task.add_done_callback(
+            lambda t: self._on_bg_send_done(adapter, project_id, handle, t)
+        )
+
+    def _on_bg_send_done(self, adapter, project_id: str, handle: str, task: asyncio.Task) -> None:
+        """Done-callback for the background send task.
+
+        Clears the strong reference on the adapter and defensively marks the
+        adapter broken if the task raised an exception that the inner handler
+        somehow missed. Must not itself raise — it runs on the event loop
+        during task finalization.
+        """
+        try:
+            if task.cancelled():
+                logger.debug(
+                    "_background_send cancelled for project=%s handle=%s",
+                    project_id, handle,
+                )
+            else:
+                exc = task.exception()
+                if exc is not None:
+                    # Inner handler should already have set _broken. Defensive
+                    # fallback in case the exception escaped the inner try.
+                    adapter._broken = True
+                    logger.error(
+                        "_background_send task ended with exception for "
+                        "project=%s handle=%s",
+                        project_id, handle, exc_info=exc,
+                    )
+        except Exception:
+            logger.exception(
+                "_on_bg_send_done callback raised for project=%s handle=%s",
+                project_id, handle,
+            )
+        finally:
+            adapter._background_send_task = None
 
     async def stop(self, project_id: str, handle: str) -> str:
         """Stop adapter, deregister from process_manager."""
