@@ -539,6 +539,7 @@ class AgentManager:
                 provider=provider,
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
+                session_id=session.session_id,
             )
 
         # 11b. Budget persistence callback
@@ -1223,6 +1224,7 @@ class AgentManager:
                     session=handle.session,
                     provider=handle.provider,
                     workspace_files=workspace_files,
+                    session_id=handle.session.session_id,
                 ),
                 timeout=30.0,
             )

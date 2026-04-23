@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = sys.platform == "win32"
 
+# In-memory idempotency guard for run_session_end_routine. Keyed by session_id.
+# Not persisted across daemon restarts — a restart archives sessions anyway.
+# GIL makes set.add/contains effectively atomic for short operations; we do not
+# need an asyncio.Lock unless tests show flakiness under concurrent dispatch.
+_completed_session_ends: set[str] = set()
+
 
 def _atomic_replace(src: str, dst: str) -> None:
     """os.replace with retry on Windows (target may be briefly open)."""
@@ -338,12 +344,26 @@ async def run_session_end_routine(
     provider,
     workspace_files: WorkspaceFileManager,
     utility_provider=None,
+    *,
+    session_id: str,
 ) -> None:
     """Generate and write workspace files at session end.
 
     Uses utility_provider (cheaper model) if available.
     This runs AFTER the agent loop exits but BEFORE session archival.
+
+    session_id is required (keyword-only). Used to short-circuit duplicate
+    invocations for the same session — both the loop.py fire-and-forget
+    path and agent_manager.new_session() pre-archival path can fire for
+    the same boundary, and we must not double-write SESSION_LOG / DECISIONS
+    / CONTEXT. The completion set is only updated AFTER all writes succeed,
+    so a failed run allows a second caller to retry.
     """
+    # Idempotency guard: short-circuit if this session already completed.
+    if session_id in _completed_session_ends:
+        logger.info("session_end skipped: already completed for %s", session_id)
+        return
+
     # 1. Gather session summary
     summary = _build_session_summary(session)
 
@@ -384,6 +404,10 @@ async def run_session_end_routine(
     # CONTEXT: append only if new context
     if result.get("context", "").strip():
         workspace_files.append("context", "\n" + result["context"])
+
+    # Mark complete only AFTER all writes succeeded. If any write raised,
+    # this line is skipped and a retry from the second caller will run.
+    _completed_session_ends.add(session_id)
 
 
 def _build_session_summary(session) -> dict:

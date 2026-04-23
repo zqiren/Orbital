@@ -278,10 +278,10 @@ async def test_session_end_routine_writes_files(tmp_path):
     session = _mock_session([
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi there."},
-    ])
+    ], session_id="sess_writes_files")
     provider = _mock_provider(llm_response)
 
-    await run_session_end_routine(session, provider, ws)
+    await run_session_end_routine(session, provider, ws, session_id=session.session_id)
 
     # state is written (overwritten)
     assert ws.read("state") == "# Project State\nEverything is great."
@@ -306,11 +306,11 @@ async def test_session_end_routine_bad_json(tmp_path, caplog):
     # Pre-write a state file to ensure it's not modified
     ws.write("state", "original state")
 
-    session = _mock_session([{"role": "user", "content": "Hello"}])
+    session = _mock_session([{"role": "user", "content": "Hello"}], session_id="sess_bad_json")
     provider = _mock_provider("This is not JSON at all, sorry!")
 
     with caplog.at_level(logging.WARNING):
-        await run_session_end_routine(session, provider, ws)
+        await run_session_end_routine(session, provider, ws, session_id=session.session_id)
 
     # state should be unchanged
     assert ws.read("state") == "original state"
@@ -338,10 +338,10 @@ async def test_session_end_routine_empty_optionals(tmp_path):
         "context": "",
     })
 
-    session = _mock_session([{"role": "user", "content": "Go"}])
+    session = _mock_session([{"role": "user", "content": "Go"}], session_id="sess_empty_opt")
     provider = _mock_provider(llm_response)
 
-    await run_session_end_routine(session, provider, ws)
+    await run_session_end_routine(session, provider, ws, session_id=session.session_id)
 
     # state written
     assert ws.read("state") == "# State\nDoing well."
@@ -402,11 +402,15 @@ async def test_session_end_uses_utility_provider(tmp_path):
         "context": "",
     })
 
-    session = _mock_session([{"role": "user", "content": "Hi"}])
+    session = _mock_session([{"role": "user", "content": "Hi"}], session_id="sess_util_prov")
     main_provider = _mock_provider("should not be called")
     utility_provider = _mock_provider(llm_response)
 
-    await run_session_end_routine(session, main_provider, ws, utility_provider=utility_provider)
+    await run_session_end_routine(
+        session, main_provider, ws,
+        utility_provider=utility_provider,
+        session_id=session.session_id,
+    )
 
     # utility_provider should have been called, not main_provider
     utility_provider.complete.assert_called_once()
