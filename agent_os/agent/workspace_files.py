@@ -69,8 +69,15 @@ _SECTION_HEADERS: dict[str, str] = {
     "session_log": "Session Log (Recent)",
 }
 
-# Max number of sessions to include from SESSION_LOG
+# Max number of sessions to include from SESSION_LOG when building the
+# cold resume context or the session-end prompt (READ-time cap).
 _SESSION_LOG_MAX_SESSIONS = 3
+
+# Max number of sessions kept on disk in SESSION_LOG.md after an append
+# at session-end (WRITE-time cap). Kept distinct from the read cap so
+# future readers cannot confuse the two: read-cap trims what the agent
+# sees, write-cap prunes what is persisted.
+_SESSION_LOG_WRITE_CAP = 10
 
 
 class WorkspaceFileManager:
@@ -254,6 +261,17 @@ class WorkspaceFileManager:
         existing_lessons = self.read("lessons") or "(no existing lessons)"
         existing_context = self.read("context") or "(no existing context)"
 
+        # SESSION_LOG tail (in-memory truncation; disk unchanged here).
+        # Apply the READ-cap so the LLM sees only the most recent entries
+        # for cross-session continuity when writing project_state/lessons.
+        _session_log_raw = self.read("session_log")
+        if _session_log_raw and _session_log_raw.strip():
+            existing_session_log_tail = _truncate_session_log(
+                _session_log_raw, _SESSION_LOG_MAX_SESSIONS
+            ).strip() or "(no prior session log)"
+        else:
+            existing_session_log_tail = "(no prior session log)"
+
         # Format recent messages
         recent_lines: list[str] = []
         for msg in session_summary.get("recent_messages", []):
@@ -346,6 +364,9 @@ LESSONS.md:
 CONTEXT.md:
 {existing_context}
 
+SESSION_LOG.md (last 3 entries):
+{existing_session_log_tail}
+
 --- THIS SESSION ({message_count} messages, {tool_calls_count} tool calls) ---
 Files modified: {files_modified}
 Recent conversation:
@@ -431,9 +452,30 @@ async def run_session_end_routine(
     else:
         logger.info("session_end: no updates for decisions, preserving existing file")
 
-    # SESSION_LOG: always append
+    # SESSION_LOG: always append, then mechanically cap on disk.
+    # Read cap lives in build_cold_resume_context / build_session_end_prompt;
+    # this block enforces the WRITE cap so the file does not grow without
+    # bound. Reuses _truncate_session_log verbatim — no format changes.
+    #
+    # Guard: only invoke truncation when the marker count genuinely
+    # exceeds the write cap. _truncate_session_log's split on '## Session'
+    # also discards any pre-header preamble as a side effect; gating on
+    # count keeps malformed-but-harmless files intact when no pruning is
+    # required.
     if result.get("session_log_entry"):
         workspace_files.append("session_log", "\n" + result["session_log_entry"])
+
+        current = workspace_files.read("session_log") or ""
+        before_count = len(re.findall(r'(?m)^## Session ', current))
+        if before_count > _SESSION_LOG_WRITE_CAP:
+            truncated = _truncate_session_log(current, _SESSION_LOG_WRITE_CAP)
+            if truncated != current:
+                after_count = len(re.findall(r'(?m)^## Session ', truncated))
+                workspace_files.write("session_log", truncated)
+                logger.info(
+                    "session_log truncated: %d → %d entries",
+                    before_count, after_count,
+                )
 
     # LESSONS: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file.
