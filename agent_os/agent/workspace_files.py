@@ -274,29 +274,63 @@ Given the session information below, produce a JSON object with these fields:
    Include: what was accomplished, what's in progress, blockers, next steps.
    This REPLACES the previous state file entirely.
 
-2. "decisions" (string, empty if none): Any significant technical or strategic
-   decisions made THIS SESSION. Include rationale and rejected alternatives.
-   Format each as: ## date: title\\n**Chose:** ...\\n**Reason:** ...\\n**Rejected:** ...
+2. "decisions" (string, empty to preserve existing): The COMPLETE updated
+   DECISIONS.md file. This REPLACES the existing file entirely.
+   Scope: significant technical, architectural, or strategic decisions
+   with rationale and rejected alternatives.
+   - Carry forward every still-relevant prior decision
+   - Add any new decisions made THIS SESSION
+   - Drop decisions that have been superseded or are now obsolete
+   - Merge duplicates or closely related decisions into single entries
+   - Cap: 30 entries. Prioritize architectural over tactical; recent over old
+     when contested.
+   - Format each entry: ## YYYY-MM-DD: Title
+                        **Chose:** ...
+                        **Reason:** ...
+                        **Rejected:** ...
+   - Return empty string "" ONLY to indicate "no updates needed, preserve
+     existing file." Do NOT return empty to mean "drop everything."
 
 3. "session_log_entry" (REQUIRED): A log entry for this session.
    Format: ## Session {{id}} -- {{date}} {{start}}--{{end}}\\n- Completed: ...\\n- Attempted: ...
 
-4. "lessons" (string): The COMPLETE updated lessons file. This REPLACES
-   the existing LESSONS.md entirely (same as project_state).
-   - Include genuinely new learnings from THIS session
-   - Carry forward still-relevant lessons from the existing file
-   - Drop lessons that are now obsolete (e.g., the underlying issue was resolved)
-   - Merge duplicates or closely related lessons into single entries
-   - Cap at 20 entries. Prioritize recent and frequently relevant.
-   - Return empty string "" ONLY if there are truly zero lessons (existing or new)
+4. "lessons" (string, empty to preserve existing): The COMPLETE updated
+   LESSONS.md file. This REPLACES the existing file entirely.
+   Scope: generalizable patterns, pitfalls, and operating rules discovered
+   through experience. Not: session facts, one-shot errors, or decisions.
+   - Include every still-relevant prior entry verbatim or in equivalent form.
+     Do not drop a lesson unless it is genuinely obsolete (the underlying
+     issue was resolved, the advice no longer applies, or an equivalent
+     lesson already exists).
+   - Add any new lessons from THIS SESSION
+   - Merge near-duplicates into single entries
+   - Cap: 20 entries
+   - Return empty string "" ONLY to indicate "no updates needed, preserve
+     existing file."
 
-5. "context" (string, empty if none): Any NEW external entities, people, services,
-   or environment details discovered THIS SESSION. Only include genuinely new info.
+5. "context" (string, empty to preserve existing): The COMPLETE updated
+   CONTEXT.md file. This REPLACES the existing file entirely.
+   Scope: external entities relevant to this project — people, services,
+   platforms, third-party APIs, persistent environmental constraints.
+   Exclusions (do NOT include):
+     - Workspace files or internal project artifacts
+     - One-shot session errors or transient tool failures
+     - In-progress work or current task state (belongs in PROJECT_STATE)
+     - Decisions or rationale (belongs in DECISIONS)
+     - Patterns or advice (belongs in LESSONS)
+   - Carry forward every still-relevant entry
+   - Add genuinely new external entities discovered THIS SESSION
+   - Drop entries not referenced in the last 10 sessions
+   - Merge duplicates
+   - Cap: 25 entries
+   - Return empty string "" ONLY to indicate "no updates needed, preserve
+     existing file."
 
 IMPORTANT:
-- For decisions, lessons, and context: return empty string "" if nothing new.
-  Do NOT fabricate entries. Only include what actually happened.
-- For project_state: always produce a complete snapshot even if not much changed.
+- For decisions, lessons, context: if you return a non-empty string, it
+  must be the COMPLETE updated file (not just new entries). Return empty
+  string "" to preserve the existing file unchanged.
+- For project_state: always produce a complete snapshot.
 - Respond with ONLY valid JSON. No markdown fences. No explanation.
 
 --- EXISTING FILES (for context, DO NOT duplicate existing content) ---
@@ -389,21 +423,31 @@ async def run_session_end_routine(
     if result.get("project_state"):
         workspace_files.write("state", result["project_state"])
 
-    # DECISIONS: append only if new decisions
+    # DECISIONS: full overwrite (LLM returns COMPLETE updated file).
+    # Empty string => preserve existing file (safer than blanking on a
+    # forgetful LLM response).
     if result.get("decisions", "").strip():
-        workspace_files.append("decisions", "\n" + result["decisions"])
+        workspace_files.write("decisions", result["decisions"])
+    else:
+        logger.info("session_end: no updates for decisions, preserving existing file")
 
     # SESSION_LOG: always append
     if result.get("session_log_entry"):
         workspace_files.append("session_log", "\n" + result["session_log_entry"])
 
-    # LESSONS: full overwrite (consolidation replaces entire file)
+    # LESSONS: full overwrite (LLM returns COMPLETE updated file).
+    # Empty string => preserve existing file.
     if result.get("lessons", "").strip():
         workspace_files.write("lessons", result["lessons"])
+    else:
+        logger.info("session_end: no updates for lessons, preserving existing file")
 
-    # CONTEXT: append only if new context
+    # CONTEXT: full overwrite (LLM returns COMPLETE updated file).
+    # Empty string => preserve existing file.
     if result.get("context", "").strip():
-        workspace_files.append("context", "\n" + result["context"])
+        workspace_files.write("context", result["context"])
+    else:
+        logger.info("session_end: no updates for context, preserving existing file")
 
     # Mark complete only AFTER all writes succeeded. If any write raised,
     # this line is skipped and a retry from the second caller will run.
