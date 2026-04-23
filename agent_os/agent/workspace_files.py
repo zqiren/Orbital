@@ -79,6 +79,175 @@ _SESSION_LOG_MAX_SESSIONS = 3
 # sees, write-cap prunes what is persisted.
 _SESSION_LOG_WRITE_CAP = 10
 
+# Entry-boundary regexes per sanity-checked file. The session-end prompt
+# instructs the LLM to emit entries in these formats; the code-side sanity
+# checks (_dedupe_exact + _cap_entries) use these patterns to split the
+# LLM output into discrete entries before enforcing dedup and cap. If the
+# LLM ignores the format contract (e.g. emits a plain paragraph with no
+# markers), the splitter yields <2 entries and the helpers return the
+# content unchanged — the caller then writes the LLM output verbatim and
+# logs a parse-failure warning.
+_LESSONS_ENTRY_PATTERN = r"^\d+\.\s+"      # "1. ", "2. ", ...
+_DECISIONS_ENTRY_PATTERN = r"^##\s+"        # "## 2026-04-22: ..."
+_CONTEXT_ENTRY_PATTERN = r"^-\s+"           # "- **Tencent:** ..."
+
+# Entry caps per file. Code-side backstop matching the prompt's stated caps.
+_LESSONS_CAP = 20
+_DECISIONS_CAP = 30
+_CONTEXT_CAP = 25
+
+
+def _split_entries(content: str, entry_pattern: str) -> tuple[str, list[str]]:
+    """Split content on entry-marker regex, preserving separator text.
+
+    Returns (preamble, entries) where:
+      - preamble is any text before the first entry marker (may be empty)
+      - entries is a list of strings, each containing the full entry text
+        (marker + body, including any trailing whitespace up to the next
+        marker or end of file)
+
+    The split uses a capture group so re.split preserves the marker text
+    at split positions. Each entry is reconstructed as marker + body so
+    the original byte layout is preserved when the caller rejoins them.
+    """
+    parts = re.split(f"({entry_pattern})", content, flags=re.MULTILINE)
+    # parts = [preamble, marker1, body1, marker2, body2, ...]
+    if len(parts) < 3:
+        return content, []
+    preamble = parts[0]
+    entries: list[str] = []
+    i = 1
+    while i + 1 < len(parts):
+        entries.append(parts[i] + parts[i + 1])
+        i += 2
+    return preamble, entries
+
+
+def _dedupe_exact(content: str, entry_pattern: str) -> tuple[str, int]:
+    """Remove byte-identical duplicate entries, keeping the first occurrence.
+
+    Returns (deduped_content, dropped_count). Identity semantics:
+
+      - If parse fails (splitter yields <2 entries from non-empty content),
+        returns (content, 0) — the SAME input string object, unchanged.
+      - If no duplicates are found, returns (content, 0) — the SAME input
+        string object. The caller's byte-identity check is therefore cheap
+        and the main-agent prefix cache is preserved.
+      - If duplicates ARE found, returns a new string with dropped entries
+        removed and `dropped_count > 0`. Order of remaining entries and
+        inter-entry whitespace are preserved.
+
+    "Byte-identical" means equal after stripping trailing whitespace on
+    each entry (so `"1. a\\n"` and `"1. a\\n\\n"` are duplicates). The
+    first occurrence is kept verbatim with its original trailing bytes.
+    """
+    if not content.strip():
+        return content, 0
+
+    preamble, entries = _split_entries(content, entry_pattern)
+    if len(entries) < 2:
+        # Parse failure OR only one entry — nothing to dedup.
+        return content, 0
+
+    seen: set[str] = set()
+    kept: list[str] = []
+    dropped = 0
+    for entry in entries:
+        key = entry.rstrip()
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        kept.append(entry)
+
+    if dropped == 0:
+        return content, 0
+
+    return preamble + "".join(kept), dropped
+
+
+def _cap_entries(
+    content: str, entry_pattern: str, cap: int, keep: str = "last",
+) -> tuple[str, int]:
+    """Enforce a maximum entry count, keeping the first or last N entries.
+
+    Returns (capped_content, dropped_count). Identity semantics mirror
+    _dedupe_exact:
+
+      - Parse failure (<2 entries) OR entry_count <= cap → returns
+        (content, 0) — the SAME input string object, unchanged.
+      - entry_count > cap → returns new string with preamble preserved
+        and entries trimmed to the first N (keep="first") or last N
+        (keep="last"); inter-entry whitespace inside the kept slice is
+        preserved verbatim.
+
+    `keep` must be "first" or "last". "first" keeps entries[:cap];
+    "last" keeps entries[-cap:].
+    """
+    if keep not in ("first", "last"):
+        raise ValueError(f"keep must be 'first' or 'last', got {keep!r}")
+
+    if not content.strip():
+        return content, 0
+
+    preamble, entries = _split_entries(content, entry_pattern)
+    if len(entries) < 2:
+        return content, 0
+    if len(entries) <= cap:
+        return content, 0
+
+    dropped = len(entries) - cap
+    if keep == "first":
+        kept = entries[:cap]
+    else:
+        kept = entries[-cap:]
+
+    return preamble + "".join(kept), dropped
+
+
+def _apply_sanity_checks(
+    content: str,
+    entry_pattern: str,
+    cap: int,
+    keep: str,
+    filename: str,
+) -> str:
+    """Run dedup → cap on LLM output. Logs per-file INFO on changes or a
+    parse-failure WARNING when the content is non-empty but unparseable.
+
+    Dedup runs first so exact duplicates cannot consume cap slots that
+    unique entries could fill. Parse-failure is detected by asking the
+    splitter itself: if it yields <2 entries from non-trivial content
+    (>1 line after stripping), we treat the pattern as mismatched and
+    write the LLM output verbatim. Single-entry content is valid output
+    and must not trigger the warning.
+    """
+    stripped = content.strip()
+    if not stripped:
+        return content
+
+    # Detect parse failure once, up-front, so dedup and cap no-ops that
+    # are legitimate (single-entry content, no dups, under cap) don't
+    # emit a spurious warning.
+    _, entries = _split_entries(content, entry_pattern)
+    if len(entries) < 2 and "\n" in stripped:
+        logger.warning(
+            "session_end: entry parse failed for %s (pattern=%s), "
+            "skipping sanity checks",
+            filename, entry_pattern,
+        )
+        return content
+
+    deduped, dup_count = _dedupe_exact(content, entry_pattern)
+    if dup_count:
+        logger.info("%s: %d exact duplicates removed", filename, dup_count)
+
+    capped, cap_count = _cap_entries(deduped, entry_pattern, cap, keep=keep)
+    if cap_count:
+        logger.info("%s: cap enforced, %d dropped", filename, cap_count)
+
+    return capped
+
 
 class WorkspaceFileManager:
     """Reads and writes the 6 workspace files."""
@@ -448,7 +617,14 @@ async def run_session_end_routine(
     # Empty string => preserve existing file (safer than blanking on a
     # forgetful LLM response).
     if result.get("decisions", "").strip():
-        workspace_files.write("decisions", result["decisions"])
+        decisions_content = _apply_sanity_checks(
+            result["decisions"],
+            _DECISIONS_ENTRY_PATTERN,
+            _DECISIONS_CAP,
+            keep="last",
+            filename="decisions",
+        )
+        workspace_files.write("decisions", decisions_content)
     else:
         logger.info("session_end: no updates for decisions, preserving existing file")
 
@@ -480,14 +656,28 @@ async def run_session_end_routine(
     # LESSONS: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file.
     if result.get("lessons", "").strip():
-        workspace_files.write("lessons", result["lessons"])
+        lessons_content = _apply_sanity_checks(
+            result["lessons"],
+            _LESSONS_ENTRY_PATTERN,
+            _LESSONS_CAP,
+            keep="first",
+            filename="lessons",
+        )
+        workspace_files.write("lessons", lessons_content)
     else:
         logger.info("session_end: no updates for lessons, preserving existing file")
 
     # CONTEXT: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file.
     if result.get("context", "").strip():
-        workspace_files.write("context", result["context"])
+        context_content = _apply_sanity_checks(
+            result["context"],
+            _CONTEXT_ENTRY_PATTERN,
+            _CONTEXT_CAP,
+            keep="last",
+            filename="context",
+        )
+        workspace_files.write("context", context_content)
     else:
         logger.info("session_end: no updates for context, preserving existing file")
 
