@@ -31,6 +31,15 @@ DEFAULT_NOTIFICATION_PREFS = {
     "trigger_started": False,
 }
 
+# Default value for fields that are merged into every ``get_project`` response
+# so legacy records missing the key behave as if it were explicitly ``False``.
+# Keep this flat (top-level) — it is not a runtime-managed field; it persists
+# across daemon restarts and records an architectural decision about whether
+# the project has ever been reconciled with the bundled default skills.
+DEFAULT_PROJECT_FIELDS: dict = {
+    "default_skills_reconciled": False,
+}
+
 
 class ProjectStore:
     """CRUD for projects using JSON files on disk."""
@@ -70,6 +79,11 @@ class ProjectStore:
         if project is not None:
             prefs = project.get("notification_prefs", {})
             project["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
+            # Merge defaults for top-level project fields so legacy records
+            # surface the expected False/zero/empty default without requiring
+            # an explicit migration step.
+            for key, default_value in DEFAULT_PROJECT_FIELDS.items():
+                project.setdefault(key, default_value)
         return project
 
     @staticmethod

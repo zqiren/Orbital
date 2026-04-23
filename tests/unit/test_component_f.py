@@ -1381,6 +1381,7 @@ class TestSkillsCopyOnProjectCreation:
             "api_key": "sk-test",
         })
         assert resp.status_code == 201
+        pid = resp.json()["project_id"]
         skills_dir = workspace / "skills"
         assert skills_dir.is_dir()
         # Should have the 4 seed skills
@@ -1389,6 +1390,11 @@ class TestSkillsCopyOnProjectCreation:
         assert "efficient-execution" in subdirs
         assert "process-capture" in subdirs
         assert "task-planning" in subdirs
+        # Persistent flag marks the project as reconciled so the installer
+        # short-circuits on the next agent start.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.status_code == 200
+        assert get_resp.json().get("default_skills_reconciled") is True
 
     def test_create_project_does_not_overwrite_existing_skills(self, app_client, tmp_path):
         workspace = tmp_path / "workspace2"
@@ -1407,10 +1413,16 @@ class TestSkillsCopyOnProjectCreation:
             "api_key": "sk-test",
         })
         assert resp.status_code == 201
-        # skills/ should still only have the custom skill
-        subdirs = [d.name for d in skills_dir.iterdir() if d.is_dir()]
+        pid = resp.json()["project_id"]
+        # The custom skill is preserved; the 4 bundled defaults are added
+        # alongside it because they did not previously exist.
+        subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
         assert "my-custom" in subdirs
-        assert "learning-capture" not in subdirs
+        assert {"efficient-execution", "learning-capture",
+                "process-capture", "task-planning"}.issubset(subdirs)
+        # Reconciled flag is set on success.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.json().get("default_skills_reconciled") is True
 
     def test_scratch_project_does_not_get_skills(self, app_client, tmp_path):
         workspace = tmp_path / "workspace3"
@@ -1423,8 +1435,12 @@ class TestSkillsCopyOnProjectCreation:
             "is_scratch": True,
         })
         assert resp.status_code == 201
+        pid = resp.json()["project_id"]
         skills_dir = workspace / "skills"
         assert not skills_dir.exists()
+        # Scratch projects stay unreconciled — nothing to reconcile.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.json().get("default_skills_reconciled") is False
 
 
 class TestSkillsAPIEndpoints:

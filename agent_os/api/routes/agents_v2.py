@@ -24,7 +24,10 @@ from pydantic import BaseModel, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
+from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2")
 
@@ -273,14 +276,16 @@ async def create_project(req: CreateProjectRequest):
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
-    # Copy default skills into workspace
-    if not req.is_scratch:
-        default_skills_src = os.path.join(os.path.dirname(__file__), "..", "..", "default_skills")
-        default_skills_src = os.path.normpath(default_skills_src)
-        if os.path.isdir(default_skills_src):
-            dest_skills = os.path.join(req.workspace, "skills")
-            if not os.path.exists(dest_skills):
-                shutil.copytree(default_skills_src, dest_skills)
+    # Seed default skills via the shared installer. Any failure here must not
+    # fail project creation — missing skills will reconcile on first agent
+    # start because `default_skills_reconciled` stays False.
+    try:
+        install_default_skills(_project_store, pid)
+    except Exception:
+        logger.error(
+            "default skills install failed during create_project for %s",
+            pid, exc_info=True,
+        )
 
     project = _project_store.get_project(pid)
     return _redact_project(project)
