@@ -1209,11 +1209,11 @@ class AgentManager:
             except (asyncio.TimeoutError, Exception):
                 logger.warning("new_session(%s): loop did not stop gracefully", project_id)
 
-        # 2. Cancel idle poll / sub-agents
+        # 2. Cancel idle poll. Sub-agent stop_all is deferred to step 3b
+        # (after session-end) so summarization can read sub-agent transcripts.
         poll_task = self._idle_poll_tasks.pop(project_id, None)
         if poll_task and not poll_task.done():
             poll_task.cancel()
-        await self._sub_agent_manager.stop_all(project_id)
 
         # 3. Pre-flush: run session-end routine so workspace files are updated
         workspace = handle.config_snapshot.get("workspace", "")
@@ -1237,6 +1237,25 @@ class AgentManager:
             )
         except Exception:
             logger.warning("new_session(%s): pre-flush failed, proceeding", project_id, exc_info=True)
+
+        # 3b. Stop sub-agents AFTER session-end so transcripts are readable
+        # during summarization. Wrapped in a 10s budget to avoid blocking
+        # rotation indefinitely on a wedged adapter. (T06)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "new_session(%s): stop_all timed out; sub-agents may leak",
+                project_id,
+            )
+        except Exception:
+            logger.exception(
+                "new_session(%s): stop_all raised; continuing with rotation",
+                project_id,
+            )
 
         # 4. Save old session info
         old_session_id = handle.session.session_id
