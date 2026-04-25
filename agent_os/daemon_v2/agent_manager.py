@@ -1522,8 +1522,19 @@ class AgentManager:
                 })
                 return
 
-        # Max polls exceeded — force idle, something is stuck
-        logger.warning("Sub-agent poll timeout for project %s, forcing idle", project_id)
+        # Max polls exceeded — stop sub-agents, then force idle
+        logger.warning("Sub-agent poll timeout for project %s, forcing stop", project_id)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Watchdog stop_all timed out for project %s; sub-agents may leak", project_id
+            )
+        except Exception:
+            logger.exception("Watchdog stop_all raised for project %s", project_id)
         self._ws.broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
