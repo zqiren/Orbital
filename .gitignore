@@ -60,3 +60,6 @@ RESEARCH-*.md
 DIAGNOSIS-*.md
 ACTIVE-*.md
 ACTIVE-*/
+
+# Git worktrees
+.worktrees/
