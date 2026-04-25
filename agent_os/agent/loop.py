@@ -123,42 +123,50 @@ class AgentLoop:
         return self._budget_spent_usd
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
-        """Stream LLM response, accumulate into LLMResponse.
+        """Stream LLM response from the primary provider.
 
-        Uses provider.stream() to get streaming chunks and fires
-        session.notify_stream for each. Accumulates via StreamAccumulator.
+        Convenience wrapper preserved for tests that monkey-patch this
+        method. Delegates to the unified internal helper.
+        """
+        return await self._stream_response_internal(
+            self._provider, context, tool_schemas,
+        )
 
-        Publishes the accumulator on self._stream_accumulator so cancel_turn()
-        can inspect partial state. The async iteration is wrapped in a try/
-        finally so CancelledError reaches the generator's __aexit__ for clean
-        teardown of the underlying httpx connection.
+    async def _stream_response_with(self, provider, context, tool_schemas) -> LLMResponse:
+        """Stream LLM response using a specific provider (rotation).
+
+        Routes the primary provider through _stream_response so any test
+        monkey-patches on that method continue to fire; otherwise goes
+        directly to the unified internal helper. Both paths share the
+        same accumulator-publishing semantics so cancel_turn() can rely
+        on a consistent contract regardless of which provider is active.
+        """
+        if provider is self._provider:
+            return await self._stream_response(context, tool_schemas)
+        return await self._stream_response_internal(
+            provider, context, tool_schemas,
+        )
+
+    async def _stream_response_internal(self, provider, context, tool_schemas) -> LLMResponse:
+        """Single source-of-truth streaming implementation.
+
+        Publishes the accumulator on self._stream_accumulator before any
+        await so cancel_turn() can inspect partial state. The async
+        iteration is wrapped in a try/finally so CancelledError reaches
+        the underlying generator's cleanup path (its httpx context).
         """
         accumulator = StreamAccumulator()
         self._stream_accumulator = accumulator
         try:
-            async for chunk in self._provider.stream(context, tools=tool_schemas):
+            async for chunk in provider.stream(context, tools=tool_schemas):
                 accumulator.add(chunk)
                 self._session.notify_stream(chunk)
             return accumulator.finalize()
         finally:
-            # Don't clear self._stream_accumulator here — cancel_turn() needs
-            # to read it on its way out. The next turn will reassign it.
+            # Do not clear self._stream_accumulator here — cancel_turn()
+            # may still need to read it on its way out. The next turn
+            # will reassign it at the top of the next call.
             pass
-
-    async def _stream_response_with(self, provider, context, tool_schemas) -> LLMResponse:
-        """Stream LLM response using a specific provider.
-
-        Delegates to _stream_response when using the primary provider,
-        preserving compatibility with tests that monkey-patch _stream_response.
-        """
-        if provider is self._provider:
-            return await self._stream_response(context, tool_schemas)
-        accumulator = StreamAccumulator()
-        self._stream_accumulator = accumulator
-        async for chunk in provider.stream(context, tools=tool_schemas):
-            accumulator.add(chunk)
-            self._session.notify_stream(chunk)
-        return accumulator.finalize()
 
     @staticmethod
     def _rotate_provider(providers, current_idx, cooldowns):
@@ -747,17 +755,28 @@ class AgentLoop:
             self._turn_cancelled = True
             return
 
-        # Claim the inflight task atomically (synchronous reassignment).
-        # A second cancel_turn() call entering before this completes will
-        # find _inflight_stream is None and fall into the idle path.
+        # Claim the inflight task and capture the accumulator BEFORE any
+        # await. After we yield to the event loop in `wait_for` below, the
+        # loop's CancelledError handler may `continue` into iteration N+1
+        # which reassigns self._stream_accumulator. We must hold a local
+        # reference to the cancelled-turn's accumulator so the post-await
+        # cost debit reflects the cancelled turn — not iteration N+1's
+        # fresh empty accumulator (C1 race).
         inflight = self._inflight_stream
         self._inflight_stream = None
+        accumulator = self._stream_accumulator
 
         # Mark cancelled FIRST so any concurrent loop work observes it,
         # then mark "marker pending for this turn" to make further
         # cancel_turn() calls no-ops until a new turn starts.
         self._turn_cancelled = True
         self._cancellation_marker_appended_this_turn = True
+
+        # Persist the marker SYNCHRONOUSLY before the await so its JSONL
+        # position is adjacent to the cancelled turn — even if iteration
+        # N+1 races ahead and appends its own assistant message during
+        # our wait_for (C2 race).
+        self._persist_cancellation_marker_inner()
 
         inflight.cancel()
         try:
@@ -767,9 +786,9 @@ class AgentLoop:
         except Exception:
             logger.exception("inflight stream raised during cancel_turn")
 
-        # Persist partial content + debit cost (exactly once per cancel).
-        self._persist_cancellation_marker_inner()
-        self._debit_cancelled_turn_cost()
+        # Debit cost using the captured accumulator (immune to iteration
+        # N+1's reassignment of self._stream_accumulator during the await).
+        self._debit_cancelled_turn_cost(accumulator)
 
     async def terminate(self) -> None:
         """End the loop. Cancels current turn and exits the while True.
@@ -819,7 +838,7 @@ class AgentLoop:
             "cancelled_by_user": True,
         })
 
-    def _debit_cancelled_turn_cost(self) -> None:
+    def _debit_cancelled_turn_cost(self, accumulator=None) -> None:
         """Debit the cost of partial output tokens generated before cancel.
 
         Reads the streaming accumulator's collected usage (or estimates
@@ -827,8 +846,15 @@ class AgentLoop:
         cost path used after a successful turn (the on_cost_update
         callback at loop.py:103). Full debit per Moonshot's billing
         policy: tokens generated are billed even if undelivered.
+
+        Takes the accumulator as an explicit parameter so callers can pass
+        in a reference captured BEFORE any awaits — protecting against
+        the C1 race where iteration N+1 reassigns self._stream_accumulator
+        during cancel_turn's await wait_for. If no accumulator is supplied
+        (legacy call sites) we fall back to self._stream_accumulator.
         """
-        accumulator = self._stream_accumulator
+        if accumulator is None:
+            accumulator = self._stream_accumulator
         if accumulator is None:
             return
 
