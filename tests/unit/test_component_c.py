@@ -107,7 +107,7 @@ class TestProviderRouting:
             model="gpt-4", api_key="sk-test", base_url="https://my-proxy.example.com"
         )
         mock_openai_mod.AsyncOpenAI.assert_called_once_with(
-            base_url="https://my-proxy.example.com", api_key="sk-test"
+            base_url="https://my-proxy.example.com", api_key="sk-test", timeout=None
         )
         assert provider.base_url == "https://my-proxy.example.com"
 

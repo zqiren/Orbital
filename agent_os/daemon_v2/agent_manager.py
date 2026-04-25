@@ -1226,7 +1226,7 @@ class AgentManager:
                     workspace_files=workspace_files,
                     session_id=handle.session.session_id,
                 ),
-                timeout=30.0,
+                timeout=200.0,
             )
         except asyncio.TimeoutError:
             logger.warning("new_session(%s): pre-flush LLM call timed out, proceeding", project_id)

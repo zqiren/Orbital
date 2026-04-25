@@ -14,6 +14,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -600,7 +601,33 @@ async def run_session_end_routine(
         {"role": "system", "content": "You maintain workspace memory files for an AI agent. Respond with ONLY valid JSON."},
         {"role": "user", "content": prompt},
     ]
-    response = await llm.complete(messages)
+    # Retry up to 3 attempts on asyncio.TimeoutError.
+    # Per-attempt timeouts: 30s, 60s, 90s. No inter-attempt sleep.
+    _per_attempt_timeouts = [30.0, 60.0, 90.0]
+    last_exc: BaseException | None = None
+    for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
+        try:
+            response = await asyncio.wait_for(llm.complete(messages), timeout=_timeout)
+            break  # success
+        except asyncio.TimeoutError as _exc:
+            last_exc = _exc
+            if _attempt < len(_per_attempt_timeouts):
+                logger.info(
+                    "session_end LLM call: attempt %d timed out, retrying",
+                    _attempt,
+                )
+            else:
+                logger.error(
+                    "session_end LLM call: all %d attempts timed out, propagating",
+                    len(_per_attempt_timeouts),
+                )
+                raise
+        except Exception:
+            # Non-timeout exceptions are not retried.
+            raise
+    else:
+        # Should be unreachable (loop raises on final timeout), but satisfy type-checkers.
+        raise RuntimeError("session_end LLM retry loop exited without result or exception")
 
     # 4. Parse JSON response
     result = _parse_session_end_response(response.text)
