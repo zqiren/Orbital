@@ -26,6 +26,7 @@ from agent_os.agent.session import Session
 from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.config.provider_registry import ProviderRegistry
+from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import AgentConfig, detect_os, resolve_api_key
@@ -490,6 +491,20 @@ class AgentManager:
             project_dir_name=dir_name,
         )
 
+        # 4b. Reconcile default skills for legacy projects that never had them
+        # installed (or the first-install failed). The installer short-circuits
+        # on the persistent ``default_skills_reconciled`` flag, so the common
+        # path is a dict lookup and no disk I/O. Failures must not block agent
+        # start — the flag stays False and we will retry on the next start.
+        if self._project_store.get_project(project_id) is not None:
+            try:
+                install_default_skills(self._project_store, project_id)
+            except Exception:
+                logger.error(
+                    "default skills reconcile failed for project %s; continuing agent start",
+                    project_id, exc_info=True,
+                )
+
         # 5. Session
         sanitized = _sanitize_project_name(config.project_name)
         session_id = f"{sanitized}_{uuid4().hex[:8]}"
@@ -524,6 +539,7 @@ class AgentManager:
                 provider=provider,
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
+                session_id=session.session_id,
             )
 
         # 11b. Budget persistence callback
@@ -1208,6 +1224,7 @@ class AgentManager:
                     session=handle.session,
                     provider=handle.provider,
                     workspace_files=workspace_files,
+                    session_id=handle.session.session_id,
                 ),
                 timeout=30.0,
             )
