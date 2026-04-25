@@ -1305,7 +1305,16 @@ class AgentManager:
         if handle.task is None or handle.task.done():
             return {"status": "idle"}
 
+        # cancel_turn exceptions intentionally bubble: cancel_turn has its own
+        # internal exception handling (see loop.py:782-787) for the cross-task
+        # wait_for, so any exception escaping here indicates a real bug worth
+        # surfacing as an HTTP 500.
         await handle.loop.cancel_turn()
+        # Broadcast after cancel_turn returns: the cancellation marker is
+        # written synchronously inside cancel_turn before any await
+        # (loop.py:779), so the JSONL is durable by the time we reach this
+        # line. If cancel_turn is later refactored to defer the marker write,
+        # this ordering assumption needs to be revisited.
         self._ws.broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,

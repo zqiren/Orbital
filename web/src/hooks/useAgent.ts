@@ -32,7 +32,7 @@ export function useAgent() {
     [],
   );
 
-  // internal: full teardown, not used by UI
+  // kept for admin/debug use; UI Stop button uses cancelMessage (T05)
   const stopAgent = useCallback(async (projectId: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,

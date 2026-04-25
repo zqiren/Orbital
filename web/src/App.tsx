@@ -351,7 +351,7 @@ export default function App() {
     setMobileView('sidebar');
   }
 
-  async function handleStopAgent() {
+  async function handleCancelMessage() {
     if (!selectedProjectId) return;
     await cancelMessage(selectedProjectId);
   }
@@ -458,7 +458,7 @@ export default function App() {
             statusSummary={statusSummaries[selectedProject.project_id]}
             tab={tab}
             onTabChange={setTab}
-            onStopAgent={handleStopAgent}
+            onStopAgent={handleCancelMessage}
             triggers={triggers}
             onTriggerToggle={toggleTrigger}
             onTriggerDelete={deleteTrigger}

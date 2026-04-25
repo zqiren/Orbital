@@ -181,7 +181,7 @@ async def test_cancel_message_idempotent():
     assert result1 == {"status": "cancelled"}
     assert ws.broadcast.call_count == 1
 
-    # Now mark task as done (cancel_turn drove loop to idle)
+    # task cancelled externally to simulate post-cancel state
     task.cancel()
     try:
         await task
