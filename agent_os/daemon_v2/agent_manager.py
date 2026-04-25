@@ -1229,7 +1229,10 @@ class AgentManager:
                 timeout=200.0,
             )
         except asyncio.TimeoutError:
-            logger.warning("new_session(%s): pre-flush LLM call timed out, proceeding", project_id)
+            logger.warning(
+                "new_session(%s): pre-flush LLM call timed out after retries, proceeding without summary",
+                project_id,
+            )
         except Exception:
             logger.warning("new_session(%s): pre-flush failed, proceeding", project_id, exc_info=True)
 
