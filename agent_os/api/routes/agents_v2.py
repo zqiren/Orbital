@@ -25,7 +25,7 @@ from pydantic import BaseModel, field_validator
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+from agent_os.agent.project_paths import ProjectPaths
 
 logger = logging.getLogger(__name__)
 
@@ -378,37 +378,16 @@ async def update_project(project_id: str, body: ProjectUpdate):
 
 _cleanup_logger = logging.getLogger(__name__)
 
-def _cleanup_project_files(workspace: str, project_id: str, clear_output: bool,
-                           project_name: str = "") -> None:
-    """Remove project data files from the workspace orbital directory.
 
-    All project-specific data lives under orbital/{dir_name}/.  Deleting that
-    single directory is sufficient.  Legacy flat directories from pre-namespaced
-    workspaces are also cleaned up (safe: they only exist in old workspaces).
+def _cleanup_project_files(workspace: str) -> None:
+    """Remove all Orbital data for the project at this workspace.
+
+    Deletes {workspace}/orbital/ and nothing else. User files in the
+    workspace directory (including agent-authored deliverables placed
+    contextually outside orbital/) are preserved.
     """
-    agent_os_dir = os.path.join(workspace, "orbital")
-    if not os.path.isdir(agent_os_dir):
-        return
-
-    # Delete the project's namespace directory (all project data)
-    dir_name = _project_dir_name(project_name, project_id)
-    project_dir = os.path.join(agent_os_dir, dir_name)
-    _rmtree_safe(project_dir)
-
-    # Also try the raw project_id directory (backward compat)
-    old_project_dir = os.path.join(agent_os_dir, project_id)
-    _rmtree_safe(old_project_dir)
-
-    # Legacy flat cleanup (pre-migration workspaces).
-    # TODO: Remove after one release cycle.
-    for legacy_subdir in (
-        "browser-screenshots", "browser-pdfs", "shell_output",
-        "instructions", ".tmp",
-    ):
-        legacy_path = os.path.join(agent_os_dir, legacy_subdir)
-        if os.path.isdir(legacy_path):
-            _rmtree_safe(legacy_path)
-    _remove_safe(os.path.join(agent_os_dir, "approval_history.jsonl"))
+    paths = ProjectPaths(workspace)
+    _rmtree_safe(paths.orbital_dir)
 
 
 def _rmtree_safe(path: str) -> None:
@@ -471,8 +450,7 @@ async def bulk_delete_projects(
                 await _agent_manager.stop_agent(pid)
             workspace = p.get("workspace", "")
             if workspace:
-                _cleanup_project_files(workspace, pid, delete_workspace,
-                                       project_name=p.get("name", ""))
+                _cleanup_project_files(workspace)
             _sub_agent_sessions.pop(pid, None)
             _project_store.delete_project(pid)
             deleted += 1
@@ -494,8 +472,7 @@ async def delete_project(project_id: str, clear_output: bool = False):
     # Clean up project files on disk
     workspace = project.get("workspace", "")
     if workspace:
-        _cleanup_project_files(workspace, project_id, clear_output,
-                               project_name=project.get("name", ""))
+        _cleanup_project_files(workspace)
 
     # Clear in-memory caches
     _sub_agent_sessions.pop(project_id, None)

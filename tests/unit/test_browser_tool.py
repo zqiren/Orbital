@@ -76,7 +76,7 @@ def _make_browser_manager(page=None):
     if page is None:
         page = _make_mock_page()
     bm.get_page = AsyncMock(return_value=page)
-    bm.capture_screenshot = AsyncMock(return_value="/workspace/orbital-output/default/screenshots/step_0001.png")
+    bm.capture_screenshot = AsyncMock(return_value="/workspace/orbital/output/screenshots/step_0001.png")
     bm.new_tab = AsyncMock(return_value=page)
     bm.get_all_pages = AsyncMock(return_value=[page])
     bm.close_project_pages = AsyncMock()

@@ -134,8 +134,7 @@ class TestChatCompositeEndpoint:
     def test_chat_returns_merged_timeline(self):
         """Management messages + transcript entries merged and sorted by timestamp."""
         with tempfile.TemporaryDirectory() as workspace:
-            from agent_os.daemon_v2.project_store import project_dir_name
-            sessions_dir = os.path.join(workspace, "orbital", project_dir_name("test", "proj1"), "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", "sessions")
             _write_session_jsonl(sessions_dir, [
                 {"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"},
                 {"role": "assistant", "content": "Hi there", "timestamp": "2026-03-10T10:00:03Z"},
@@ -175,8 +174,7 @@ class TestChatCompositeEndpoint:
     def test_chat_works_with_no_transcripts(self):
         """No transcripts → returns management messages only."""
         with tempfile.TemporaryDirectory() as workspace:
-            from agent_os.daemon_v2.project_store import project_dir_name
-            sessions_dir = os.path.join(workspace, "orbital", project_dir_name("test", "proj1"), "sessions")
+            sessions_dir = os.path.join(workspace, "orbital", "sessions")
             _write_session_jsonl(sessions_dir, [
                 {"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"},
             ])

@@ -4,21 +4,32 @@
 
 """Integration tests for project deletion file cleanup.
 
-Verifies that DELETE /api/v2/projects/{id} removes project data files,
-and that the clear_output flag controls agent_output/ deletion.
+Verifies that DELETE /api/v2/projects/{id} removes {workspace}/orbital/ and
+nothing else. User files in the workspace directory are preserved.
 """
 
 import os
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
+
 from agent_os.api.app import create_app
 
 
 @pytest.fixture
 def setup(tmp_path):
-    """Boot a fresh app with isolated data dir and workspace."""
+    """Boot a fresh app with isolated data dir and workspace.
+
+    Patches the singleton PID guard so tests can run alongside a live daemon.
+    """
     data_dir = str(tmp_path / "data")
-    app = create_app(data_dir=data_dir)
+    # Bypass the singleton daemon PID guard — a user may have a live daemon
+    # running on the dev machine, which would otherwise make these tests
+    # unrunnable locally.
+    with patch("agent_os.api.app.acquire_pid_file"):
+        app = create_app(data_dir=data_dir)
     client = TestClient(app)
     ws = tmp_path / "workspace"
     ws.mkdir()
@@ -36,105 +47,126 @@ def _create_project(client, workspace: str) -> str:
     return resp.json()["project_id"]
 
 
-def _seed_project_files(ws, project_id: str):
-    """Create the typical file tree a project accumulates."""
-    agent_os = ws / "orbital"
+def _seed_new_layout(ws: Path) -> Path:
+    """Create the new-layout file tree under {ws}/orbital/."""
+    orbital = ws / "orbital"
 
-    # Per-project session dir
-    sessions = agent_os / project_id / "sessions"
-    sessions.mkdir(parents=True)
-    (sessions / "session_abc.jsonl").write_text('{"role":"user"}')
-    (agent_os / project_id / "PROJECT_STATE.md").write_text("# State")
-    (agent_os / project_id / "LESSONS.md").write_text("# Lessons")
+    # Flat memory files
+    (orbital).mkdir(parents=True, exist_ok=True)
+    (orbital / "PROJECT_STATE.md").write_text("# State")
+    (orbital / "DECISIONS.md").write_text("# Decisions")
+    (orbital / "LESSONS.md").write_text("# Lessons")
+    (orbital / "SESSION_LOG.md").write_text("# Log")
+    (orbital / "CONTEXT.md").write_text("# Context")
+    (orbital / "approval_history.jsonl").write_text('{"approved":true}')
 
-    # Browser screenshots (output path)
-    output_dir = ws / "orbital-output" / project_id
-    shots = output_dir / "screenshots"
-    shots.mkdir(parents=True)
-    (shots / "step_0001.png").write_bytes(b"PNG")
+    # Instructions sub-dir
+    (orbital / "instructions").mkdir(parents=True, exist_ok=True)
+    (orbital / "instructions" / "project_goals.md").write_text("# Goals")
 
-    # Browser PDFs (output path)
-    pdfs = output_dir / "pdfs"
-    pdfs.mkdir(parents=True)
-    (pdfs / "report.pdf").write_bytes(b"PDF")
+    # Sessions
+    (orbital / "sessions").mkdir(parents=True, exist_ok=True)
+    (orbital / "sessions" / "sess_1.jsonl").write_text('{"role":"user"}')
 
-    # Shell output (output path)
-    shell = output_dir / "shell-output"
-    shell.mkdir(parents=True)
-    (shell / "cmd_1.txt").write_text("output")
+    # Sub-agents
+    (orbital / "sub_agents" / "claude-code").mkdir(parents=True, exist_ok=True)
+    (orbital / "sub_agents" / "claude-code" / "tr_1.jsonl").write_text('{}')
 
-    # Instructions
-    instr = agent_os / "instructions"
-    instr.mkdir(parents=True)
-    (instr / "project_goals.md").write_text("# Goals")
+    # Tool results
+    (orbital / "tool-results" / "sess_1").mkdir(parents=True, exist_ok=True)
+    (orbital / "tool-results" / "sess_1" / "turn_1_call_1.json").write_text('{}')
 
-    # Approval history
-    (agent_os / "approval_history.jsonl").write_text('{"approved":true}')
+    # Output sub-dirs
+    (orbital / "output" / "screenshots" / "sess_1").mkdir(parents=True, exist_ok=True)
+    (orbital / "output" / "screenshots" / "sess_1" / "step_0001.png").write_bytes(b"PNG")
+    (orbital / "output" / "pdfs").mkdir(parents=True, exist_ok=True)
+    (orbital / "output" / "pdfs" / "doc.pdf").write_bytes(b"PDF")
+    (orbital / "output" / "shell-output").mkdir(parents=True, exist_ok=True)
+    (orbital / "output" / "shell-output" / "ls.txt").write_text("output")
+
+    # Skills
+    (orbital / "skills" / "my-skill").mkdir(parents=True, exist_ok=True)
+    (orbital / "skills" / "my-skill" / "SKILL.md").write_text("# Skill")
 
     # Temp files
-    tmp = agent_os / ".tmp"
-    tmp.mkdir(parents=True)
-    (tmp / "scratch.txt").write_text("temp")
+    (orbital / ".tmp").mkdir(parents=True, exist_ok=True)
+    (orbital / ".tmp" / "cmd_x_stdout.txt").write_text("temp")
 
-    # Agent output (user-facing artifacts)
-    output = agent_os / "agent_output"
-    output.mkdir(parents=True)
-    (output / "report.md").write_text("# Report")
+    # User files (must NOT be deleted)
+    (ws / "my-code.py").write_text("# user code")
+    (ws / "docs").mkdir(parents=True, exist_ok=True)
+    (ws / "docs" / "report.md").write_text("# User report")
 
-    return agent_os
+    return orbital
 
 
-class TestDeleteCleansInternalFiles:
-    """Default deletion (no clear_output) removes internal data but keeps agent_output."""
+class TestDeleteRemovesOrbitalDir:
+    """Project deletion removes {workspace}/orbital/ and nothing else."""
 
-    def test_internal_files_removed(self, setup):
+    def test_orbital_dir_removed(self, setup):
         client, ws, _ = setup
         pid = _create_project(client, str(ws))
-        agent_os = _seed_project_files(ws, pid)
+        orbital = _seed_new_layout(ws)
 
         resp = client.delete(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
 
-        # Internal data should be gone
-        assert not (agent_os / pid).exists(), "project session dir should be removed"
-        output_dir = ws / "orbital-output" / pid
-        assert not (output_dir / "screenshots").exists()
-        assert not (output_dir / "pdfs").exists()
-        assert not (output_dir / "shell-output").exists()
-        assert not (agent_os / "instructions").exists()
-        assert not (agent_os / "approval_history.jsonl").exists()
-        assert not (agent_os / ".tmp").exists()
+        assert not orbital.exists(), "orbital/ should be completely removed"
 
-    def test_agent_output_preserved(self, setup):
+    def test_user_file_preserved(self, setup):
         client, ws, _ = setup
         pid = _create_project(client, str(ws))
-        agent_os = _seed_project_files(ws, pid)
+        _seed_new_layout(ws)
 
         resp = client.delete(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
 
-        # Agent output should still be there
-        assert (agent_os / "agent_output" / "report.md").exists(), \
-            "agent_output should be preserved when clear_output is not set"
+        assert (ws / "my-code.py").exists(), "user my-code.py must not be deleted"
 
-
-class TestDeleteWithClearOutput:
-    """Deletion with clear_output=true also removes agent_output."""
-
-    def test_agent_output_cleared(self, setup):
+    def test_user_docs_dir_preserved(self, setup):
         client, ws, _ = setup
         pid = _create_project(client, str(ws))
-        agent_os = _seed_project_files(ws, pid)
+        _seed_new_layout(ws)
 
-        resp = client.delete(f"/api/v2/projects/{pid}?clear_output=true")
+        resp = client.delete(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
 
-        # Everything including agent output should be gone
-        assert not (agent_os / pid).exists()
-        output_dir = ws / "orbital-output" / pid
-        assert not (output_dir / "screenshots").exists()
-        assert not (agent_os / "agent_output").exists(), \
-            "agent_output should be removed when clear_output=true"
+        assert (ws / "docs" / "report.md").exists(), "user docs/report.md must not be deleted"
+
+    def test_workspace_dir_itself_preserved(self, setup):
+        client, ws, _ = setup
+        pid = _create_project(client, str(ws))
+        _seed_new_layout(ws)
+
+        resp = client.delete(f"/api/v2/projects/{pid}")
+        assert resp.status_code == 200
+
+        assert ws.exists(), "workspace directory itself must not be removed"
+
+    def test_orbital_output_sibling_not_created(self, setup):
+        """Delete path must not create an orbital-output/ sibling tree."""
+        client, ws, _ = setup
+        pid = _create_project(client, str(ws))
+        _seed_new_layout(ws)
+
+        resp = client.delete(f"/api/v2/projects/{pid}")
+        assert resp.status_code == 200
+
+        assert not (ws / "orbital-output").exists(), \
+            "orbital-output/ must not be created by the delete path"
+
+    def test_raw_project_id_dir_not_created(self, setup):
+        """Delete path must not create a directory named after the raw project_id."""
+        client, ws, _ = setup
+        pid = _create_project(client, str(ws))
+        _seed_new_layout(ws)
+
+        resp = client.delete(f"/api/v2/projects/{pid}")
+        assert resp.status_code == 200
+
+        # No directory matching the project_id should be created at workspace level
+        assert not (ws / pid).exists(), \
+            "raw project_id directory must not appear in workspace after delete"
 
 
 class TestDeleteWithNoFiles:

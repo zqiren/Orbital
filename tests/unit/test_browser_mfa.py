@@ -48,7 +48,7 @@ def _make_browser_manager(page=None):
     if page is None:
         page = _make_mock_page()
     bm.get_page = AsyncMock(return_value=page)
-    bm.capture_screenshot = AsyncMock(return_value="/workspace/orbital-output/default/screenshots/step_0001.png")
+    bm.capture_screenshot = AsyncMock(return_value="/workspace/orbital/output/screenshots/step_0001.png")
     bm.clear_ref_map = MagicMock()
     bm.get_ref_map = MagicMock(return_value=None)
     bm.store_ref_map = MagicMock()

@@ -10,19 +10,6 @@ import re
 from uuid import uuid4
 
 
-def project_dir_name(project_name: str, project_id: str) -> str:
-    """Build a slugified directory name: ``my-web-scraper-a3f2``.
-
-    *project_name* is the human-readable project name (e.g. "My Web Scraper").
-    *project_id* is the store-level id (e.g. "proj_a3f2b1c2d4e5").
-
-    The result is ``<slugified-name>-<short-id>`` where *short-id* is the
-    first 4 hex characters after the ``proj_`` prefix.
-    """
-    slug = re.sub(r'[^a-z0-9]+', '-', project_name.lower()).strip('-')
-    slug = slug[:40] or 'project'
-    short_id = project_id.replace('proj_', '')[:4]
-    return f"{slug}-{short_id}"
 
 DEFAULT_NOTIFICATION_PREFS = {
     "task_completed": True,
