@@ -107,17 +107,26 @@ class TestScratchMemoryVariant:
 
 
 class TestArtifactInstruction:
-    def test_agent_output_folder_mentioned_in_non_scratch(self, tmp_path):
-        # New layout: agent deliverables go to orbital/output/ (no slug subdir).
+    def test_deliverables_go_outside_orbital_in_non_scratch(self, tmp_path):
+        # Contract: user-facing deliverables go anywhere in the workspace OUTSIDE
+        # orbital/ so they survive a project reset. orbital/ is system state and
+        # is wiped on delete (TASK-05). Tool outputs (system-managed) go under
+        # orbital/output/ — but the agent does not write deliverables there.
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
+        # The prompt must instruct the agent NOT to put user-facing deliverables under orbital/.
+        assert "DO NOT place user-facing deliverables under orbital/" in semi_stable
+        # The prompt must reference the tool-output directory so the agent knows it exists.
         assert "orbital/output/" in semi_stable
 
-    def test_agent_output_folder_not_in_scratch(self, tmp_path):
+    def test_deliverable_instruction_absent_in_scratch(self, tmp_path):
+        # Scratch mode uses a lightweight memory section that does not include
+        # the deliverable-placement guidance.
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=True)
         _, semi_stable, _ = builder.build(ctx)
+        assert "DO NOT place user-facing deliverables under orbital/" not in semi_stable
         assert "orbital/output/" not in semi_stable
 
 

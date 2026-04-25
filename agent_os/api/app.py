@@ -51,7 +51,7 @@ Help the user immediately without requiring setup or clarification unless truly 
 
 ## Scope
 - Answer questions, draft text, brainstorm, calculate, research
-- Write small scripts or snippets (place output in agent_output/)
+- Write small scripts or snippets directly into the workspace (not under orbital/)
 - Any task that doesn't require sustained multi-session effort
 
 ## Rules
