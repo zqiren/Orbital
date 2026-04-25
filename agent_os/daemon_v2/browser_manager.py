@@ -604,7 +604,6 @@ class BrowserManager:
     async def capture_screenshot(
         self, page, workspace: str, session_id: str,
         max_width: int = 1400, max_height: int = 900,
-        project_dir_name: str = "",
     ) -> str:
         """Capture screenshot, save to workspace, return file path."""
         from agent_os.agent.project_paths import ProjectPaths

@@ -63,6 +63,15 @@ Help the user immediately without requiring setup or clarification unless truly 
 """
 
 
+def _write_scratch_project_goals(scratch_workspace: str) -> None:
+    """Write the canned SCRATCH_PROJECT_GOALS into the new orbital/ layout."""
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(scratch_workspace)
+    os.makedirs(pp.instructions_dir, exist_ok=True)
+    with open(pp.project_goals, "w", encoding="utf-8") as f:
+        f.write(SCRATCH_PROJECT_GOALS)
+
+
 def _ensure_scratch_project(project_store, settings_store, data_dir):
     """Auto-create the Quick Tasks scratch project if none exists."""
     if project_store.find_scratch_project() is not None:
@@ -79,11 +88,7 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "model": "",
         "api_key": "",
     })
-    from agent_os.agent.project_paths import ProjectPaths
-    _pp = ProjectPaths(scratch_workspace)
-    os.makedirs(_pp.instructions_dir, exist_ok=True)
-    with open(_pp.project_goals, "w", encoding="utf-8") as f:
-        f.write(SCRATCH_PROJECT_GOALS)
+    _write_scratch_project_goals(scratch_workspace)
 
 
 def _configure_file_logging(data_dir: str) -> None:

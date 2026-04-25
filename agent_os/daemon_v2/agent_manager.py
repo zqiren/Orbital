@@ -435,8 +435,7 @@ class AgentManager:
         dir_name = _project_dir_name(config.project_name, project_id)
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
-                             vision_enabled=model_info.capabilities.vision,
-                             project_dir_name=dir_name)
+                             vision_enabled=model_info.capabilities.vision)
 
         # 3. Prompt builder
         prompt_builder = PromptBuilder(workspace=config.workspace)
@@ -617,8 +616,7 @@ class AgentManager:
         self._write_state()
 
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
-                        project_id: str = "", vision_enabled: bool = False,
-                        project_dir_name: str = "") -> None:
+                        project_id: str = "", vision_enabled: bool = False) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
         try:
             from agent_os.agent.tools.read import ReadTool
@@ -652,7 +650,6 @@ class AgentManager:
                 os_type=detect_os(),
                 platform_provider=self._platform_provider,
                 project_id=project_id,
-                project_dir_name=project_dir_name,
             ))
         except ImportError:
             pass
@@ -676,7 +673,6 @@ class AgentManager:
                     autonomy_preset=config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
                     user_credential_store=self._user_credential_store,
                     vision_enabled=vision_enabled,
-                    project_dir_name=project_dir_name,
                 ))
         except ImportError:
             logger.warning("BrowserTool not available (playwright not installed)")

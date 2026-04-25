@@ -247,8 +247,7 @@ def _apply_sanity_checks(
 class WorkspaceFileManager:
     """Reads and writes the 5 workspace files under {workspace}/orbital/."""
 
-    def __init__(self, workspace: str, project_id: str = "",
-                 project_dir_name: str = ""):
+    def __init__(self, workspace: str):
         from agent_os.agent.project_paths import ProjectPaths
         self._workspace = workspace
         self._paths = ProjectPaths(workspace)
@@ -280,7 +279,7 @@ class WorkspaceFileManager:
     def read(self, file_key: str) -> str | None:
         """Read a workspace file. Returns None if file doesn't exist.
 
-        file_key is one of: agent, state, decisions, session_log, lessons, context
+        file_key is one of: state, decisions, session_log, lessons, context
         """
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
@@ -320,7 +319,7 @@ class WorkspaceFileManager:
         _atomic_replace(tmp_path, filepath)
 
     def read_all(self) -> dict[str, str | None]:
-        """Read all 6 files. Returns {key: content_or_None}."""
+        """Read all 5 files. Returns {key: content_or_None}."""
         return {key: self.read(key) for key in FILE_NAMES}
 
     def exists(self, file_key: str) -> bool:
@@ -334,12 +333,11 @@ class WorkspaceFileManager:
         """Assemble cold resume context from available files.
 
         Read order (skip missing files):
-        1. AGENT.md      - "what am I supposed to do"
-        2. PROJECT_STATE  - "where did I leave off"
-        3. DECISIONS      - "what's already been decided"
-        4. LESSONS        - "what should I avoid"
-        5. CONTEXT        - "who/what am I working with"
-        6. SESSION_LOG    - "what's the history" (last 3 sessions only)
+        1. PROJECT_STATE  - "where did I leave off"
+        2. DECISIONS      - "what's already been decided"
+        3. LESSONS        - "what should I avoid"
+        4. CONTEXT        - "who/what am I working with"
+        5. SESSION_LOG    - "what's the history" (last 3 sessions only)
 
         Returns assembled markdown string with section headers.
         """

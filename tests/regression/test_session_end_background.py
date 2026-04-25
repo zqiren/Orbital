@@ -140,7 +140,7 @@ async def test_session_end_still_executes():
 def test_atomic_write_no_partial_reads():
     """Concurrent reads during write must see either old or new content."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         # Write initial content
@@ -180,7 +180,7 @@ def test_atomic_write_no_partial_reads():
 def test_atomic_write_tmp_file_cleaned_up():
     """No .tmp files should remain after a successful write."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         wfm.write("state", "test content")
@@ -188,7 +188,7 @@ def test_atomic_write_tmp_file_cleaned_up():
         wfm.write("lessons", "lesson learned")
 
         # Check for leftover .tmp files
-        workspace_dir = os.path.join(tmpdir, "orbital", "test-proj")
+        workspace_dir = os.path.join(tmpdir, "orbital")
         for f in os.listdir(workspace_dir):
             assert not f.endswith(".tmp"), f"Leftover tmp file: {f}"
 
@@ -200,7 +200,7 @@ def test_atomic_write_tmp_file_cleaned_up():
 def test_new_loop_reads_valid_file_during_background_write():
     """A reader (context builder) must see valid content even during write."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         # Write initial state

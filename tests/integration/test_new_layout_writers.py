@@ -260,18 +260,24 @@ def test_skill_loader_scans_orbital_skills(ws):
 # ---------------------------------------------------------------------------
 
 def test_scratch_project_goals_written_to_orbital(ws):
-    """Verify the scratch goal-file write targets the new path."""
-    from agent_os.api.app import SCRATCH_PROJECT_GOALS
-    from agent_os.agent.project_paths import ProjectPaths
+    """Invoke the real scratch goals helper from app.py and verify the path.
 
-    pp = ProjectPaths(ws)
-    os.makedirs(pp.instructions_dir, exist_ok=True)
-    with open(pp.project_goals, "w", encoding="utf-8") as f:
-        f.write(SCRATCH_PROJECT_GOALS)
+    Calls the production function directly (not a re-implementation) so this
+    test catches regressions to the helper itself.
+    """
+    from agent_os.api.app import _write_scratch_project_goals, SCRATCH_PROJECT_GOALS
+
+    _write_scratch_project_goals(ws)
 
     expected = Path(ws) / "orbital" / "instructions" / "project_goals.md"
     assert expected.is_file(), f"project_goals.md not written at {expected}"
-    assert expected.read_text().strip(), "project_goals.md is empty"
+    # Normalise line endings: open() on Windows reads CRLF as \n, but
+    # read_text() with the default encoding may not; strip and compare bytes
+    # of the stripped content to be platform-agnostic.
+    content = expected.read_bytes().decode("utf-8")
+    assert content.replace("\r\n", "\n") == SCRATCH_PROJECT_GOALS, (
+        "Scratch helper wrote different content than SCRATCH_PROJECT_GOALS"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -279,17 +285,22 @@ def test_scratch_project_goals_written_to_orbital(ws):
 # ---------------------------------------------------------------------------
 
 def test_agents_v2_write_workspace_file_writes_to_orbital(ws):
-    """_write_workspace_file must target {ws}/orbital/instructions/ (no slug)."""
-    from agent_os.agent.project_paths import ProjectPaths
+    """Invoke the real agents_v2._write_workspace_file and verify the path.
 
-    pp = ProjectPaths(ws)
-    os.makedirs(pp.instructions_dir, exist_ok=True)
-    with open(pp.project_goals, "w", encoding="utf-8") as f:
-        f.write("# Goals\nBe helpful.\n")
+    Calls the production function directly so a regression to it (e.g., a
+    revert to slug paths) would fail this test.
+    """
+    from agent_os.api.routes.agents_v2 import _write_workspace_file
 
-    expected = Path(ws) / "orbital" / "instructions" / "project_goals.md"
-    assert expected.is_file()
-    assert "Goals" in expected.read_text()
+    _write_workspace_file(ws, "project_goals.md", "# Goals\nBe helpful.\n")
+    _write_workspace_file(ws, "user_directives.md", "Be terse.\n")
+
+    goals = Path(ws) / "orbital" / "instructions" / "project_goals.md"
+    rules = Path(ws) / "orbital" / "instructions" / "user_directives.md"
+    assert goals.is_file(), f"project_goals.md not written at {goals}"
+    assert "Goals" in goals.read_text()
+    assert rules.is_file(), f"user_directives.md not written at {rules}"
+    assert "terse" in rules.read_text()
 
 
 # ---------------------------------------------------------------------------

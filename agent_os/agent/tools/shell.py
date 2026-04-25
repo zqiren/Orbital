@@ -41,13 +41,11 @@ class ShellTool(Tool):
     _ENV_VAR_RE = re.compile(r'(?:\$HOME|\$USERPROFILE|%USERPROFILE%|%APPDATA%|%LOCALAPPDATA%)')
 
     def __init__(self, workspace: str, os_type: str,
-                 platform_provider=None, project_id: str | None = None,
-                 project_dir_name: str = ""):
+                 platform_provider=None, project_id: str | None = None):
         self._workspace = workspace
         self._os_type = os_type
         self._platform_provider = platform_provider
         self._project_id = project_id
-        self._project_dir_name = project_dir_name
         self.name = "shell"
         self.description = "Execute a shell command in the workspace."
         self.parameters = {

@@ -66,9 +66,7 @@ class TestLayer1NamespacedPath:
 
         session = Session.new("layer1ns", workspace)
         session.append({"role": "user", "content": "hi", "source": "user"})
-        wf = WorkspaceFileManager(
-            workspace=workspace, project_dir_name=project_dir_name
-        )
+        wf = WorkspaceFileManager(workspace=workspace)
         ctx_mgr = ContextManager(
             session,
             _StubPromptBuilder(),
@@ -103,9 +101,7 @@ class TestLayer1NamespacedPath:
 
         session = Session.new("layer1ns2", workspace)
         session.append({"role": "user", "content": "hi", "source": "user"})
-        wf = WorkspaceFileManager(
-            workspace=workspace, project_dir_name=project_dir_name
-        )
+        wf = WorkspaceFileManager(workspace=workspace)
         ctx_mgr = ContextManager(
             session,
             _StubPromptBuilder(),
