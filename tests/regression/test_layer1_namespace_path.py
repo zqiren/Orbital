@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Regression test: context.prepare() must read Layer 1 state files
-from the namespaced path (workspace/orbital/{project_dir_name}/PROJECT_STATE.md)
-when a WorkspaceFileManager is provided.
+from the canonical flat orbital/ path via ProjectPaths.
 
-Bug: context.py previously read from the flat path workspace/orbital/PROJECT_STATE.md
-always, ignoring the project_dir_name. WorkspaceFileManager writes state files
-to the namespaced path, so after the fix context.py must read from the same
-path -- otherwise the agent has amnesia across sessions for namespaced projects.
+History: Originally this test enforced reads from a slug-namespaced path
+(workspace/orbital/{project_dir_name}/PROJECT_STATE.md). After TASK-02 collapsed
+the on-disk layout to a single flat orbital/ tree, the namespaced layout no
+longer exists. After TASK-03, all readers route through ProjectPaths so the
+flat tree is the only valid location. Tests below now seed the flat layout
+and assert prepare() picks it up — both with an explicit WorkspaceFileManager
+and with the default (which ContextManager auto-constructs).
 """
 from __future__ import annotations
 
@@ -42,24 +44,16 @@ def _make_base_ctx(workspace: str) -> PromptContext:
 
 
 class TestLayer1NamespacedPath:
-    """context.prepare() must read namespaced Layer 1 files via WorkspaceFileManager."""
+    """context.prepare() must read Layer 1 files from the flat orbital/ tree."""
 
-    def test_reads_namespaced_state_file(self, tmp_path):
-        """prepare() should include PROJECT_STATE.md content from the namespaced
-        directory when a WorkspaceFileManager is provided."""
+    def test_reads_state_file_with_workspace_file_manager(self, tmp_path):
+        """prepare() should include PROJECT_STATE.md content from
+        workspace/orbital/PROJECT_STATE.md when an explicit WFM is provided."""
         workspace = str(tmp_path)
-        project_dir_name = "my-project-abc1"
 
-        # Create the namespaced state file
-        ns_dir = tmp_path / "orbital" / project_dir_name
-        ns_dir.mkdir(parents=True)
-        (ns_dir / "PROJECT_STATE.md").write_text(
-            "namespaced state content", encoding="utf-8"
-        )
-
-        # Also create a flat state file with different content to make sure
-        # we do NOT accidentally read from it.
+        # Create the flat state file (only valid post-TASK-02 location).
         flat_dir = tmp_path / "orbital"
+        flat_dir.mkdir()
         (flat_dir / "PROJECT_STATE.md").write_text(
             "flat state content", encoding="utf-8"
         )
@@ -79,25 +73,20 @@ class TestLayer1NamespacedPath:
             m.get("content", "") for m in result if m.get("role") == "system"
         )
 
-        assert "namespaced state content" in system_blob, (
-            "Expected Layer 1 reader to pick up the namespaced PROJECT_STATE.md"
-        )
-        assert "flat state content" not in system_blob, (
-            "Layer 1 reader must NOT read the flat fallback when a namespaced"
-            " WorkspaceFileManager is provided"
+        assert "flat state content" in system_blob, (
+            "Expected Layer 1 reader to pick up the flat PROJECT_STATE.md"
         )
 
-    def test_reads_namespaced_decisions_and_lessons_as_layer1(self, tmp_path):
+    def test_reads_decisions_and_lessons_as_layer1(self, tmp_path):
         """All three Layer 1 files (state, decisions, lessons) should be
-        read from the namespaced directory AND appear as Layer 1 messages
+        read from workspace/orbital/ AND appear as Layer 1 messages
         (with the [FILENAME.md] header), not just as cold-resume context."""
         workspace = str(tmp_path)
-        project_dir_name = "testproj-beef"
-        ns_dir = tmp_path / "orbital" / project_dir_name
-        ns_dir.mkdir(parents=True)
-        (ns_dir / "PROJECT_STATE.md").write_text("ns-state", encoding="utf-8")
-        (ns_dir / "DECISIONS.md").write_text("ns-decisions", encoding="utf-8")
-        (ns_dir / "LESSONS.md").write_text("ns-lessons", encoding="utf-8")
+        flat_dir = tmp_path / "orbital"
+        flat_dir.mkdir()
+        (flat_dir / "PROJECT_STATE.md").write_text("ns-state", encoding="utf-8")
+        (flat_dir / "DECISIONS.md").write_text("ns-decisions", encoding="utf-8")
+        (flat_dir / "LESSONS.md").write_text("ns-lessons", encoding="utf-8")
 
         session = Session.new("layer1ns2", workspace)
         session.append({"role": "user", "content": "hi", "source": "user"})
@@ -125,8 +114,7 @@ class TestLayer1NamespacedPath:
         )
 
         assert "ns-state" in layer1_blob, (
-            "PROJECT_STATE.md content missing from Layer 1 messages; "
-            "the Layer 1 reader is not using the namespaced path"
+            "PROJECT_STATE.md content missing from Layer 1 messages"
         )
         assert "ns-decisions" in layer1_blob, (
             "DECISIONS.md content missing from Layer 1 messages"
@@ -135,9 +123,10 @@ class TestLayer1NamespacedPath:
             "LESSONS.md content missing from Layer 1 messages"
         )
 
-    def test_flat_fallback_when_no_workspace_files(self, tmp_path):
-        """Backward compatibility: if no WorkspaceFileManager is provided
-        (scratch mode / legacy tests), fall back to the flat path."""
+    def test_default_workspace_file_manager_used_when_none_passed(self, tmp_path):
+        """When workspace_files=None is passed, ContextManager builds its own
+        WorkspaceFileManager from the prompt context's workspace, and Layer 1
+        files at the flat orbital/ path are still read."""
         workspace = str(tmp_path)
         flat_dir = tmp_path / "orbital"
         flat_dir.mkdir()

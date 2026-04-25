@@ -16,6 +16,7 @@ them so the agent resumes with context.
 
 import json
 import os
+import re
 
 import pytest
 
@@ -113,6 +114,3 @@ class TestColdResumeNewLayout:
         # No entry should look like a slug (e.g. 'my-project-a1b2')
         sluglike = [e for e in orbital_entries if re.match(r'^[a-z0-9-]+-[a-f0-9]{4}$', e)]
         assert not sluglike, f"Found slug-style directories in orbital/: {sluglike}"
-
-
-import re

@@ -104,6 +104,11 @@ class ProjectPaths:
     # Sub-agents
     # ------------------------------------------------------------------
 
+    @property
+    def sub_agents_dir(self) -> str:
+        """Parent directory containing all sub-agent transcript directories."""
+        return os.path.join(self.orbital_dir, _SUB_AGENTS)
+
     def sub_agent_dir(self, handle: str) -> str:
         return os.path.join(self.orbital_dir, _SUB_AGENTS, handle)
 

@@ -113,6 +113,9 @@ class TestSubAgents:
     def setup_method(self):
         self.pp = ProjectPaths(WS)
 
+    def test_sub_agents_dir(self):
+        assert os.path.normpath(self.pp.sub_agents_dir) == p("orbital", "sub_agents")
+
     def test_sub_agent_dir(self):
         assert os.path.normpath(self.pp.sub_agent_dir("claude-code")) == p("orbital", "sub_agents", "claude-code")
 

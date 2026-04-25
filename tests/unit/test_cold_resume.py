@@ -205,30 +205,40 @@ class TestColdResumeInjection:
 
     def test_context_budget_with_resume(self, tmp_path):
         """Large workspace files should reduce sliding window proportionally."""
-        wfm = WorkspaceFileManager(str(tmp_path))
-        wfm.ensure_dir()
+        # Two separate workspaces: one populated, one empty. Comparing usage
+        # across these isolates the effect of workspace file content on budget.
+        ws_with = tmp_path / "with_files"
+        ws_with.mkdir()
+        ws_without = tmp_path / "without_files"
+        ws_without.mkdir()
+
+        wfm_with = WorkspaceFileManager(str(ws_with))
+        wfm_with.ensure_dir()
         # Write a very large project state to consume budget
         large_content = "X" * 100_000
-        wfm.write("state", large_content)
+        wfm_with.write("state", large_content)
 
-        session = Session.new("cold5", str(tmp_path))
         builder = MockPromptBuilder()
-        ctx = _make_base_prompt_context(str(tmp_path))
 
-        # Small context limit to make the effect visible
+        # cm_with: workspace has a large state file
+        session_with = Session.new("cold5_with", str(ws_with))
+        ctx_with = _make_base_prompt_context(str(ws_with))
         cm_with = ContextManager(
-            session, builder, ctx,
+            session_with, builder, ctx_with,
             model_context_limit=50_000, response_reserve=5_000,
-            workspace_files=wfm,
-        )
-        cm_without = ContextManager(
-            session, builder, ctx,
-            model_context_limit=50_000, response_reserve=5_000,
-            workspace_files=None,
+            workspace_files=wfm_with,
         )
 
-        msgs_with = cm_with.prepare()
-        msgs_without = cm_without.prepare()
+        # cm_without: separate empty workspace, no state file
+        session_without = Session.new("cold5_without", str(ws_without))
+        ctx_without = _make_base_prompt_context(str(ws_without))
+        cm_without = ContextManager(
+            session_without, builder, ctx_without,
+            model_context_limit=50_000, response_reserve=5_000,
+        )
+
+        cm_with.prepare()
+        cm_without.prepare()
 
         # The version with large workspace files should have higher usage percentage
         assert cm_with.usage_percentage > cm_without.usage_percentage
