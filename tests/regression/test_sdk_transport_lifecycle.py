@@ -350,7 +350,7 @@ async def test_dispatch_overwrite_with_idle_prior(caplog):
     the preflight guard must skip cancel-and-gather entirely — only pending
     tasks need cancellation. The new task must run normally."""
     transport = SDKTransport()
-    _install_slow_client(transport, delay=0.01)
+    client = _install_slow_client(transport, delay=0.01)
 
     # First dispatch with a fast-finishing task. Manually cancel and await
     # it so it is done before the second dispatch.
@@ -368,6 +368,11 @@ async def test_dispatch_overwrite_with_idle_prior(caplog):
     assert second_task is not None
     assert second_task is not first_task
     assert not second_task.done(), "new bg_task should still be running"
+
+    # Positive proof the dispatch path actually ran end-to-end — both queries
+    # reached the SDK client. Without this, the negative caplog claim below
+    # could pass vacuously if caplog captured nothing.
+    assert client.query_calls == ["first", "second"]
 
     # Preflight branch must be SKIPPED (prior was already done) — no warning.
     assert not any(

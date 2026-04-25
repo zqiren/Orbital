@@ -140,13 +140,10 @@ class SDKTransport(AgentTransport):
         if self._needs_flush:
             await self._flush_stale_messages()
 
-        # Preflight: if a prior background task is still pending, cancel it
-        # and await its termination BEFORE committing the new query to the
-        # SDK client. Without this guard, the bare _bg_task assignment below
-        # would drop the strong reference to the prior task, causing
-        # "Task destroyed but it is pending" warnings at GC time. Doing this
-        # before query() also ensures the prior consumer cannot read events
-        # from the new query before being reaped.
+        # Without this guard, the bare _bg_task assignment below drops the
+        # strong reference to the prior task, causing "Task destroyed but it
+        # is pending" at GC time. Before query() also prevents the prior
+        # consumer from reading events from the new query before being reaped.
         if self._bg_task is not None and not self._bg_task.done():
             logger.warning("dispatch overwriting pending _bg_task; cancelling prior")
             self._bg_task.cancel()
