@@ -17,6 +17,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.prompt_builder import PromptContext
 from agent_os.agent.token_utils import estimate_message_tokens
 
@@ -79,16 +80,16 @@ class ContextManager:
             return
 
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, "orbital")
-        goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
-        state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
+        pp = ProjectPaths(workspace)
+        goals_path = pp.project_goals
+        state_path = pp.project_state
 
         # If both exist, normal cold resume - no injection needed
         if os.path.isfile(goals_path) and os.path.isfile(state_path):
             return
 
         # Find archived session files
-        sessions_dir = os.path.join(agent_os_dir, "sessions")
+        sessions_dir = pp.sessions_dir
         if not os.path.isdir(sessions_dir):
             return
 
@@ -187,19 +188,21 @@ class ContextManager:
 
         # Read Layer 1 files from disk
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, "orbital")
+        pp = ProjectPaths(workspace)
 
         layer_messages: list[dict] = []
 
         # Layer 1: PROJECT_STATE.md, DECISIONS.md, LESSONS.md
-        # Prefer WorkspaceFileManager (knows the project-namespaced path).
-        # Fall back to the flat path only in scratch mode (no workspace_files).
+        # Always read through WorkspaceFileManager when available (canonical path via
+        # ProjectPaths). When workspace_files is None (e.g. in some test paths),
+        # fall back to ProjectPaths directly — both resolve the same flat layout.
         for key, filename in _LAYER1_FILES:
             if self._workspace_files is not None:
                 content = self._workspace_files.read(key)
             else:
-                filepath = os.path.join(agent_os_dir, filename)
-                content = self._read_file(filepath)
+                content = self._read_file(pp.project_state if key == "state"
+                                          else pp.decisions if key == "decisions"
+                                          else pp.lessons)
             if content:
                 layer_messages.append({
                     "role": "system",
@@ -207,7 +210,7 @@ class ContextManager:
                 })
 
         # Layer 3: instructions/*.md
-        instructions_dir = os.path.join(agent_os_dir, "instructions")
+        instructions_dir = pp.instructions_dir
         instructions_content = self._read_instructions(instructions_dir)
         if instructions_content:
             layer_messages.append({

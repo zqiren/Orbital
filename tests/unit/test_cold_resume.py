@@ -115,10 +115,10 @@ class TestColdResumeInjection:
 
     def test_cold_resume_injected_on_first_prepare(self, tmp_path):
         """When workspace files exist, first prepare() includes resume context as system message."""
-        # Set up workspace files
+        # Set up workspace files — new layout uses the 5 standard keys via WorkspaceFileManager.
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent Directive\n\nRefactor the auth module.")
+        wfm.write("lessons", "# Lessons\n\nRefactor the auth module.")
         wfm.write("state", "# Project State\n\nWorking on token refresh.")
 
         session = Session.new("cold1", str(tmp_path))
@@ -134,7 +134,6 @@ class TestColdResumeInjection:
                        and "WORKSPACE MEMORY" in m.get("content", "")]
         assert len(resume_msgs) == 1
         content = resume_msgs[0]["content"]
-        assert "Agent Directive" in content
         assert "Refactor the auth module" in content
         assert "Project State" in content
         assert "token refresh" in content
@@ -143,7 +142,7 @@ class TestColdResumeInjection:
         """Second prepare() call should NOT include resume context again."""
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent Directive\n\nDo stuff.")
+        wfm.write("state", "# Project State\n\nDo stuff.")
 
         session = Session.new("cold2", str(tmp_path))
         builder = MockPromptBuilder()
@@ -180,10 +179,9 @@ class TestColdResumeInjection:
         assert len(resume_msgs) == 0
 
     def test_cold_resume_partial_files(self, tmp_path):
-        """Only AGENT.md + PROJECT_STATE exist. Only those two sections included."""
+        """Only PROJECT_STATE exists. Only that section is included in resume context."""
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent\n\nBuild the widget.")
         wfm.write("state", "# State\n\nWidget is 50% done.")
         # decisions, lessons, context, session_log are NOT written
 
@@ -198,7 +196,6 @@ class TestColdResumeInjection:
                        if "WORKSPACE MEMORY" in m.get("content", "")]
         assert len(resume_msgs) == 1
         content = resume_msgs[0]["content"]
-        assert "Build the widget" in content
         assert "Widget is 50% done" in content
         # Should NOT contain sections for missing files
         assert "Decisions" not in content
@@ -210,9 +207,9 @@ class TestColdResumeInjection:
         """Large workspace files should reduce sliding window proportionally."""
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        # Write a very large agent directive to consume budget
+        # Write a very large project state to consume budget
         large_content = "X" * 100_000
-        wfm.write("agent", large_content)
+        wfm.write("state", large_content)
 
         session = Session.new("cold5", str(tmp_path))
         builder = MockPromptBuilder()

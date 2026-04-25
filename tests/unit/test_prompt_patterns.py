@@ -221,7 +221,8 @@ class TestSkillConsultationStrength:
 
     def test_must_read_when_skills_exist(self, tmp_path):
         """When skills exist, prompt uses mandatory 'MUST read' language."""
-        skills_dir = tmp_path / "skills" / "deploy"
+        # Skills live at {workspace}/orbital/skills/ in the new layout (TASK-02).
+        skills_dir = tmp_path / "orbital" / "skills" / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the app.")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -238,7 +239,8 @@ class TestSkillConsultationStrength:
 
     def test_skill_names_still_listed(self, tmp_path):
         """Skill index still lists skill names after preamble change."""
-        skills_dir = tmp_path / "skills" / "my-deploy"
+        # Skills live at {workspace}/orbital/skills/ in the new layout (TASK-02).
+        skills_dir = tmp_path / "orbital" / "skills" / "my-deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Deploy\nDeploys things.")
         builder = PromptBuilder(workspace=str(tmp_path))

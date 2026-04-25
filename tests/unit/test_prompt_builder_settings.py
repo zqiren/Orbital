@@ -108,16 +108,17 @@ class TestScratchMemoryVariant:
 
 class TestArtifactInstruction:
     def test_agent_output_folder_mentioned_in_non_scratch(self, tmp_path):
+        # New layout: agent deliverables go to orbital/output/ (no slug subdir).
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
-        assert "agent_output/" in semi_stable
+        assert "orbital/output/" in semi_stable
 
     def test_agent_output_folder_not_in_scratch(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = _make_context(tmp_path, is_scratch=True)
         _, semi_stable, _ = builder.build(ctx)
-        assert "agent_output/" not in semi_stable
+        assert "orbital/output/" not in semi_stable
 
 
 class TestMemoryManagementInstructions:

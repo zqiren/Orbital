@@ -210,12 +210,12 @@ def _read_file_or_empty(path: str) -> str:
         return ""
 
 
-def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str) -> dict:
+def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str = "") -> dict:
     """Attach project_goals_content and user_directives_content from disk files."""
-    goals_path = os.path.join(workspace, "orbital", dir_name, "instructions", "project_goals.md")
-    rules_path = os.path.join(workspace, "orbital", dir_name, "instructions", "user_directives.md")
-    result["project_goals_content"] = _read_file_or_empty(goals_path)
-    result["user_directives_content"] = _read_file_or_empty(rules_path)
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(workspace)
+    result["project_goals_content"] = _read_file_or_empty(pp.project_goals)
+    result["user_directives_content"] = _read_file_or_empty(pp.user_directives)
     return result
 
 
@@ -828,8 +828,8 @@ async def chat_history(
         raise HTTPException(status_code=404, detail="Project not found")
 
     workspace = project["workspace"]
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
-    sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
+    from agent_os.agent.project_paths import ProjectPaths
+    sessions_dir = ProjectPaths(workspace).sessions_dir
 
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []

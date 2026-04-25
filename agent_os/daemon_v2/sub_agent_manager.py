@@ -550,7 +550,8 @@ class SubAgentManager:
             workspace = (project.get("workspace", "") if project else "")
 
         if workspace:
-            base = os.path.join(workspace, "orbital", "sub_agents")
+            from agent_os.agent.project_paths import ProjectPaths
+            base = os.path.join(ProjectPaths(workspace).orbital_dir, "sub_agents")
             if os.path.isdir(base):
                 for jsonl_path in globmod.glob(os.path.join(base, "*", "*.jsonl")):
                     norm = os.path.normpath(jsonl_path)

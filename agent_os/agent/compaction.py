@@ -13,6 +13,8 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from agent_os.agent.project_paths import ProjectPaths
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,9 +88,9 @@ def inject_reorientation(workspace: str, session) -> None:
     both sections. If both are missing or empty, injects nothing.
     Fault-tolerant: read errors produce empty strings, never crash.
     """
-    agent_os_dir = os.path.join(workspace, "orbital")
-    goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
-    state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
+    pp = ProjectPaths(workspace)
+    goals_path = pp.project_goals
+    state_path = pp.project_state
 
     goals = _safe_read(goals_path, max_chars=3000)
     state = _safe_read(state_path, max_chars=3000)
