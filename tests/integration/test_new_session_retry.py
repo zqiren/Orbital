@@ -162,119 +162,112 @@ def test_new_session_llm_retry_on_timeout_via_http(caplog):
             llm_response,
         ]
 
-        # ProjectHandle.task must be a completed Future on a live event loop.
-        # TestClient runs route handlers on its own loop via portal, so we
-        # build the future on a temporary loop just to construct the handle.
-        loop = asyncio.new_event_loop()
+        # task=None signals "idle agent" — agent_manager.new_session() at
+        # line 1203 short-circuits the loop-stop guard. Avoids cross-loop
+        # Future binding (TestClient runs handlers on its own anyio loop).
+        handle = ProjectHandle(
+            session=session,
+            loop=MagicMock(),
+            provider=mock_provider,
+            registry=MagicMock(),
+            context_manager=MagicMock(),
+            interceptor=MagicMock(),
+            task=None,
+            config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
+            project_dir_name=dir_name,
+        )
+        mgr._handles[project_id] = handle
+
+        project_store.get_project.return_value = {
+            "project_id": project_id,
+            "name": project_name,
+            "workspace": workspace,
+            "model": "gpt-4",
+            "api_key": "sk-test",
+            "provider": "custom",
+            "sdk": "openai",
+        }
+
+        # Wire the real agents_v2 router into a TestClient.
+        client, saved = _build_test_client(mgr, project_store)
         try:
-            done_task = loop.create_future()
-            done_task.set_result(None)
+            with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):
+                started = time.monotonic()
+                response = client.post(
+                    f"/api/v2/agents/{project_id}/new-session"
+                )
+                elapsed = time.monotonic() - started
 
-            handle = ProjectHandle(
-                session=session,
-                loop=MagicMock(),
-                provider=mock_provider,
-                registry=MagicMock(),
-                context_manager=MagicMock(),
-                interceptor=MagicMock(),
-                task=done_task,
-                config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-                project_dir_name=dir_name,
+            # ---- HTTP-level assertions ----
+            assert response.status_code == 200, (
+                f"Expected HTTP 200, got {response.status_code}: {response.text}"
             )
-            mgr._handles[project_id] = handle
+            assert elapsed < 200.0, (
+                f"new-session must return within 200s, took {elapsed:.2f}s"
+            )
 
-            project_store.get_project.return_value = {
-                "project_id": project_id,
-                "name": project_name,
-                "workspace": workspace,
-                "model": "gpt-4",
-                "api_key": "sk-test",
-                "provider": "custom",
-                "sdk": "openai",
-            }
+            body = response.json()
+            assert body.get("status") == "ok", (
+                f"Expected status 'ok' in body, got: {body}"
+            )
 
-            # Wire the real agents_v2 router into a TestClient.
-            client, saved = _build_test_client(mgr, project_store)
-            try:
-                with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):
-                    started = time.monotonic()
-                    response = client.post(
-                        f"/api/v2/agents/{project_id}/new-session"
-                    )
-                    elapsed = time.monotonic() - started
+            # ---- New session file on disk ----
+            new_handle = mgr._handles[project_id]
+            new_session_id = new_handle.session.session_id
+            assert new_session_id != "old_session_http_retry"
 
-                # ---- HTTP-level assertions ----
-                assert response.status_code == 200, (
-                    f"Expected HTTP 200, got {response.status_code}: {response.text}"
-                )
-                assert elapsed < 200.0, (
-                    f"new-session must return within 200s, took {elapsed:.2f}s"
-                )
+            new_session_path = os.path.join(
+                workspace, "orbital", dir_name, "sessions",
+                f"{new_session_id}.jsonl",
+            )
+            assert os.path.isfile(new_session_path), (
+                f"New session JSONL not found at {new_session_path}"
+            )
 
-                body = response.json()
-                assert body.get("status") == "ok", (
-                    f"Expected status 'ok' in body, got: {body}"
-                )
+            # ---- Workspace files reflect LLM's actual summary ----
+            from agent_os.agent.workspace_files import WorkspaceFileManager
+            wfm = WorkspaceFileManager(workspace, project_dir_name=dir_name)
 
-                # ---- New session file on disk ----
-                new_handle = mgr._handles[project_id]
-                new_session_id = new_handle.session.session_id
-                assert new_session_id != "old_session_http_retry"
+            state = wfm.read("state")
+            assert state is not None and "retry_success" in state, (
+                f"PROJECT_STATE.md should contain LLM summary, got: {state!r}"
+            )
 
-                new_session_path = os.path.join(
-                    workspace, "orbital", dir_name, "sessions",
-                    f"{new_session_id}.jsonl",
-                )
-                assert os.path.isfile(new_session_path), (
-                    f"New session JSONL not found at {new_session_path}"
-                )
+            session_log = wfm.read("session_log") or ""
+            assert "retry_success" in session_log, (
+                f"SESSION_LOG.md should contain LLM summary, got: {session_log!r}"
+            )
 
-                # ---- Workspace files reflect LLM's actual summary ----
-                from agent_os.agent.workspace_files import WorkspaceFileManager
-                wfm = WorkspaceFileManager(workspace, project_dir_name=dir_name)
+            # ---- Retry INFO logs appear ----
+            retry_logs = [
+                r for r in caplog.records
+                if "timed out, retrying" in r.message
+            ]
+            assert len(retry_logs) >= 2, (
+                f"Expected >=2 retry INFO logs, got: "
+                f"{[r.message for r in caplog.records]}"
+            )
+            assert all(r.levelno == logging.INFO for r in retry_logs), (
+                "Retry logs must be INFO level"
+            )
 
-                state = wfm.read("state")
-                assert state is not None and "retry_success" in state, (
-                    f"PROJECT_STATE.md should contain LLM summary, got: {state!r}"
-                )
+            # ---- Old "pre-flush LLM call timed out" WARNING absent ----
+            old_warning_logs = [
+                r for r in caplog.records
+                if "pre-flush LLM call timed out" in r.message
+                and r.levelno == logging.WARNING
+            ]
+            assert len(old_warning_logs) == 0, (
+                f"Old timeout WARNING should not appear: "
+                f"{[r.message for r in old_warning_logs]}"
+            )
 
-                session_log = wfm.read("session_log") or ""
-                assert "retry_success" in session_log, (
-                    f"SESSION_LOG.md should contain LLM summary, got: {session_log!r}"
-                )
-
-                # ---- Retry INFO logs appear ----
-                retry_logs = [
-                    r for r in caplog.records
-                    if "timed out, retrying" in r.message
-                ]
-                assert len(retry_logs) >= 2, (
-                    f"Expected >=2 retry INFO logs, got: "
-                    f"{[r.message for r in caplog.records]}"
-                )
-                assert all(r.levelno == logging.INFO for r in retry_logs), (
-                    "Retry logs must be INFO level"
-                )
-
-                # ---- Old "pre-flush LLM call timed out" WARNING absent ----
-                old_warning_logs = [
-                    r for r in caplog.records
-                    if "pre-flush LLM call timed out" in r.message
-                    and r.levelno == logging.WARNING
-                ]
-                assert len(old_warning_logs) == 0, (
-                    f"Old timeout WARNING should not appear: "
-                    f"{[r.message for r in old_warning_logs]}"
-                )
-
-                # ---- LLM was called exactly 3 times ----
-                assert mock_provider.complete.call_count == 3, (
-                    f"Expected exactly 3 LLM calls, got {mock_provider.complete.call_count}"
-                )
-            finally:
-                client.close()
-                _restore_agents_v2(saved)
+            # ---- LLM was called exactly 3 times ----
+            assert mock_provider.complete.call_count == 3, (
+                f"Expected exactly 3 LLM calls, got {mock_provider.complete.call_count}"
+            )
         finally:
-            loop.close()
+            client.close()
+            _restore_agents_v2(saved)
 
     wsf_module._completed_session_ends.clear()

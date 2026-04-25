@@ -151,8 +151,7 @@ class LLMProvider:
             self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
             self._openai_client = None
         else:
-            # No client-level timeout — callers use asyncio.wait_for() per-attempt.
-            self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=None)
+            self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
             self._anthropic_client = None
 
     def update_api_key(self, new_key: str) -> None:
@@ -164,7 +163,7 @@ class LLMProvider:
             import anthropic
             self._anthropic_client = anthropic.AsyncAnthropic(api_key=new_key)
         else:
-            self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key, timeout=None)
+            self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key)
 
     def _prepare_messages_openai(self, messages: list) -> list:
         """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal content."""
