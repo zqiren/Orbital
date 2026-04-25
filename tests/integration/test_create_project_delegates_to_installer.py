@@ -46,7 +46,7 @@ def test_create_project_installs_default_skills_and_sets_flag(client, tmp_path):
     pid = resp.json()["project_id"]
 
     # All 4 bundled skills materialized on disk.
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / "orbital" / "skills"
     assert skills_dir.is_dir()
     subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
     assert subdirs == EXPECTED_SKILLS

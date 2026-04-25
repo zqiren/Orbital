@@ -55,7 +55,7 @@ def test_partial_copy_failure_preserves_first_skill_and_does_not_set_flag(
 
     # Exactly one skill was successfully installed (the first), the second
     # raised before anything was created. Partial progress must remain.
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / "orbital" / "skills"
     installed = sorted(d.name for d in skills_dir.iterdir() if d.is_dir())
     assert len(installed) == 1, (
         f"expected exactly one successfully-installed skill to remain, got: {installed}"

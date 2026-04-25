@@ -48,7 +48,7 @@ def test_deleted_skill_stays_deleted_across_restart(client_and_data, tmp_path):
     assert resp.status_code == 201
     pid = resp.json()["project_id"]
 
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / "orbital" / "skills"
     assert (skills_dir / "learning-capture").is_dir()
 
     # Delete one skill via the API. Use the actual skills delete endpoint.

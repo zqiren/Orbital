@@ -16,8 +16,8 @@ def test_installer_does_not_overwrite_existing_skill_dir(tmp_path):
     data_dir.mkdir()
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    skills_dir = workspace / "skills"
-    skills_dir.mkdir()
+    skills_dir = workspace / "orbital" / "skills"
+    skills_dir.mkdir(parents=True)
 
     # User pre-customized learning-capture. The installer must not touch it.
     user_lc = skills_dir / "learning-capture"

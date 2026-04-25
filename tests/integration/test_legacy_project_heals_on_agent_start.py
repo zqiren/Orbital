@@ -62,7 +62,7 @@ def test_legacy_project_without_flag_heals_on_reconcile_call(
 
     # Force a legacy pre-fix state:
     # 1. Wipe the on-disk skills/ dir (as if the macOS build never shipped it).
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / "orbital" / "skills"
     if skills_dir.exists():
         shutil.rmtree(skills_dir)
 

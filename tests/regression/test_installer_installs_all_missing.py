@@ -36,7 +36,7 @@ def test_installer_installs_all_four_skills(tmp_path):
     assert set(result["installed"]) == EXPECTED_SKILLS
     assert result["skipped_existing"] == []
 
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / "orbital" / "skills"
     assert skills_dir.is_dir()
     subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
     assert subdirs == EXPECTED_SKILLS
