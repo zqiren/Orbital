@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+from agent_os.agent.project_paths import ProjectPaths
 
 
 # ---------------------------------------------------------------------------
@@ -59,26 +59,28 @@ def _make_config(**overrides):
     return AgentConfig(**defaults)
 
 
-def _write_layer1_files(workspace: str, dir_name: str) -> dict:
-    """Write Layer 1 files and return their contents for assertion."""
-    base = os.path.join(workspace, "orbital", dir_name)
-    os.makedirs(base, exist_ok=True)
-    contents = {
-        "PROJECT_STATE.md": "# Project State\nFeature X is 50% complete.",
-        "DECISIONS.md": "# Decisions\n## 2024-01-01: Use React\n**Chose:** React",
+def _write_layer1_files(workspace: str) -> dict:
+    """Write Layer 1 files at the flat orbital/ layout and return their
+    {absolute_path: content} mapping for assertion."""
+    pp = ProjectPaths(workspace)
+    os.makedirs(pp.orbital_dir, exist_ok=True)
+    files = {
+        pp.project_state: "# Project State\nFeature X is 50% complete.",
+        pp.decisions: "# Decisions\n## 2024-01-01: Use React\n**Chose:** React",
     }
-    for fname, content in contents.items():
-        with open(os.path.join(base, fname), "w") as f:
+    for path, content in files.items():
+        with open(path, "w") as f:
             f.write(content)
-    return contents
+    return files
 
 
-def _write_session_file(workspace: str, dir_name: str, session_id: str,
+def _write_session_file(workspace: str, session_id: str,
                         messages: list[dict]) -> str:
-    """Write a session JSONL file and return its path."""
-    sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
-    os.makedirs(sessions_dir, exist_ok=True)
-    filepath = os.path.join(sessions_dir, f"{session_id}.jsonl")
+    """Write a session JSONL file at the flat orbital/sessions/ layout and
+    return its absolute path."""
+    pp = ProjectPaths(workspace)
+    os.makedirs(pp.sessions_dir, exist_ok=True)
+    filepath = pp.session_file(session_id)
     with open(filepath, "w") as f:
         for msg in messages:
             f.write(json.dumps(msg) + "\n")
@@ -107,7 +109,6 @@ class TestNewSessionIdle:
             mgr, ws, project_store = _make_agent_manager()
             project_id = "proj_abc123def456"
             project_name = "Test Project"
-            dir_name = _project_dir_name(project_name, project_id)
 
             # Write existing session
             old_messages = [
@@ -115,11 +116,11 @@ class TestNewSessionIdle:
                 {"role": "assistant", "content": "hi there", "timestamp": "2024-01-01T00:00:01Z"},
             ]
             old_session_path = _write_session_file(
-                workspace, dir_name, "old_session_abc", old_messages
+                workspace, "old_session_abc", old_messages
             )
 
             # Write Layer 1 files
-            layer1 = _write_layer1_files(workspace, dir_name)
+            _write_layer1_files(workspace)
 
             # Simulate an idle handle (task done)
             from agent_os.daemon_v2.agent_manager import ProjectHandle
@@ -182,13 +183,12 @@ class TestNewSessionPreservesLayer1:
             mgr, ws, project_store = _make_agent_manager()
             project_id = "proj_abc123def456"
             project_name = "Test Project"
-            dir_name = _project_dir_name(project_name, project_id)
 
             # Write Layer 1 files
-            layer1 = _write_layer1_files(workspace, dir_name)
+            layer1 = _write_layer1_files(workspace)
 
             # Write session
-            _write_session_file(workspace, dir_name, "sess_001", [
+            _write_session_file(workspace, "sess_001", [
                 {"role": "user", "content": "test"},
             ])
 
@@ -224,10 +224,9 @@ class TestNewSessionPreservesLayer1:
 
             await mgr.new_session(project_id)
 
-            # Verify Layer 1 files are untouched
-            base = os.path.join(workspace, "orbital", dir_name)
-            for fname, expected_content in layer1.items():
-                with open(os.path.join(base, fname)) as f:
+            # Verify Layer 1 files are untouched at their flat-layout paths
+            for path, expected_content in layer1.items():
+                with open(path) as f:
                     assert f.read() == expected_content
 
 
@@ -241,9 +240,8 @@ class TestNewSessionBroadcasts:
             mgr, ws, project_store = _make_agent_manager()
             project_id = "proj_abc123def456"
             project_name = "Test Project"
-            dir_name = _project_dir_name(project_name, project_id)
 
-            _write_session_file(workspace, dir_name, "sess_old", [
+            _write_session_file(workspace, "sess_old", [
                 {"role": "user", "content": "hello"},
             ])
 
@@ -288,31 +286,27 @@ class TestNewSessionBroadcasts:
 
 
 class TestNewSessionIsolation:
-    """Two projects same workspace — /new on project A does not touch project B."""
+    """Two projects same workspace — /new on project A does not touch
+    project B's session file. (Layer 1 files are workspace-shared after
+    TASK-02's flat-layout migration, so per-project Layer 1 isolation
+    is no longer a meaningful invariant; only sessions are per-id.)"""
 
     @pytest.mark.asyncio
-    async def test_new_session_does_not_touch_other_project(self):
+    async def test_new_session_only_affects_target_project_session(self):
         with tempfile.TemporaryDirectory() as workspace:
             mgr, ws, project_store = _make_agent_manager()
 
             pid_a = "proj_aaaa11112222"
-            pid_b = "proj_bbbb33334444"
             name_a = "Project A"
-            name_b = "Project B"
-            dir_a = _project_dir_name(name_a, pid_a)
-            dir_b = _project_dir_name(name_b, pid_b)
 
-            # Write sessions for both
-            sess_a_path = _write_session_file(workspace, dir_a, "sess_a", [
+            # Write sessions for both projects (different session_ids share
+            # the flat orbital/sessions/ directory but have distinct files).
+            sess_a_path = _write_session_file(workspace, "sess_a", [
                 {"role": "user", "content": "from A"},
             ])
-            sess_b_path = _write_session_file(workspace, dir_b, "sess_b", [
+            sess_b_path = _write_session_file(workspace, "sess_b", [
                 {"role": "user", "content": "from B"},
             ])
-
-            # Write layer1 for both
-            _write_layer1_files(workspace, dir_a)
-            layer1_b = _write_layer1_files(workspace, dir_b)
 
             # Setup handle for A only
             from agent_os.daemon_v2.agent_manager import ProjectHandle
@@ -352,9 +346,3 @@ class TestNewSessionIsolation:
                 lines = f.readlines()
             assert len(lines) == 1
             assert json.loads(lines[0])["content"] == "from B"
-
-            # Project B's layer1 files should be untouched
-            base_b = os.path.join(workspace, "orbital", dir_b)
-            for fname, expected in layer1_b.items():
-                with open(os.path.join(base_b, fname)) as f:
-                    assert f.read() == expected

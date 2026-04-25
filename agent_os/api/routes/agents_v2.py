@@ -159,7 +159,7 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
 _sub_agent_sessions: dict = {}  # project_id -> Session
 
 
-def _get_or_create_session(project_id: str, workspace: str, project_name: str = ""):
+def _get_or_create_session(project_id: str, workspace: str):
     """Get or create a session for sub-agent-only projects.
 
     Management-agent projects use _agent_manager.get_session().
@@ -589,7 +589,7 @@ async def inject_message(project_id: str, req: InjectRequest):
     if req.target and _sub_agent_manager is not None:
         # Route to sub-agent (Path B: direct @mention)
         workspace = project.get("workspace", "")
-        session = _get_or_create_session(project_id, workspace, project.get("name", ""))
+        session = _get_or_create_session(project_id, workspace)
 
         # Persist user message BEFORE sending to sub-agent
         user_ts = datetime.now(timezone.utc).isoformat()
