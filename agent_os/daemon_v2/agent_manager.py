@@ -1297,6 +1297,22 @@ class AgentManager:
             "new_session_id": new_session_id,
         }
 
+    async def cancel_message(self, project_id: str) -> dict:
+        """Interrupt current turn for project. Agent stays alive; session preserved."""
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return {"status": "no_agent"}
+        if handle.task is None or handle.task.done():
+            return {"status": "idle"}
+
+        await handle.loop.cancel_turn()
+        self._ws.broadcast(project_id, {
+            "type": "agent.status",
+            "project_id": project_id,
+            "status": "idle",
+        })
+        return {"status": "cancelled"}
+
     async def stop_agent(self, project_id: str) -> None:
         """Stop agent and clean up."""
         handle = self._handles.get(project_id)

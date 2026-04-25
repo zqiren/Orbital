@@ -667,8 +667,17 @@ async def get_pending_approval(project_id: str):
     return {"pending": True, **approval}
 
 
+@router.post("/agents/{project_id}/cancel")
+async def cancel_message(project_id: str) -> dict:
+    """Cancel the current turn. Agent stays alive."""
+    return await _agent_manager.cancel_message(project_id)
+
+
 @router.post("/agents/{project_id}/stop")
 async def stop_agent(project_id: str):
+    """Internal/admin: full teardown of agent, session, and sub-agents.
+    NOT WIRED TO UI as of T05 — the Stop button now calls /cancel.
+    """
     try:
         await _agent_manager.stop_agent(project_id)
     except KeyError:

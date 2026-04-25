@@ -32,9 +32,17 @@ export function useAgent() {
     [],
   );
 
+  // internal: full teardown, not used by UI
   const stopAgent = useCallback(async (projectId: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,
+      { method: 'POST' },
+    );
+  }, []);
+
+  const cancelMessage = useCallback(async (projectId: string) => {
+    return api<ActionResult>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/cancel`,
       { method: 'POST' },
     );
   }, []);
@@ -96,5 +104,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, stopAgent, newSession, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, stopAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
 }

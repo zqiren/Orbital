@@ -54,7 +54,7 @@ export default function App() {
     updateProject,
     deleteProject,
   } = useProjects();
-  const { stopAgent } = useAgent();
+  const { cancelMessage } = useAgent();
   const ws = useWebSocket();
 
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -353,7 +353,7 @@ export default function App() {
 
   async function handleStopAgent() {
     if (!selectedProjectId) return;
-    await stopAgent(selectedProjectId);
+    await cancelMessage(selectedProjectId);
   }
 
   // First-run wizard (before setup gate)
