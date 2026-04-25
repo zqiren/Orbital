@@ -283,7 +283,9 @@ class TestWorkspaceBootstrapMissing:
 class TestSkillLoaderScan:
 
     def test_scan_finds_skill_md(self, tmp_path):
-        skills_dir = tmp_path / "skills" / "my-skill"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "my-skill"
         skills_dir.mkdir(parents=True)
         skill_md = skills_dir / "SKILL.md"
         skill_md.write_text("# My Skill\nA skill that does things.")
@@ -300,8 +302,11 @@ class TestSkillLoaderScan:
         assert str(skill_md) == skill["path"] or skill["path"].endswith("SKILL.md")
 
     def test_scan_multiple_skills(self, tmp_path):
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_root = Path(ProjectPaths(str(tmp_path)).skills_dir)
         for name in ["skill-a", "skill-b"]:
-            skill_dir = tmp_path / "skills" / name
+            skill_dir = skills_root / name
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(f"# {name.title()}\nDescription of {name}.")
 
@@ -438,14 +443,16 @@ class TestPromptContext:
 class TestPromptBuilderWithWorkspace:
 
     def test_builder_with_workspace_and_skills(self, tmp_path):
-        # Set up skill
-        skills_dir = tmp_path / "skills" / "deploy"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        # Set up skill under orbital/skills/
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the application.")
 
         # Set up agent bootstrap
         agent_os_dir = tmp_path / "orbital"
-        agent_os_dir.mkdir()
+        agent_os_dir.mkdir(exist_ok=True)
         (agent_os_dir / "AGENT.md").write_text("You are a deployment helper.")
 
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -486,7 +493,9 @@ class TestSkillsDisciplineInjection:
 
     def test_skills_present_includes_must_read_instruction(self, tmp_path):
         """When skills exist, output contains mandatory read instruction."""
-        skills_dir = tmp_path / "skills" / "my-skill"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "my-skill"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Skill\nA test skill.")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -503,7 +512,9 @@ class TestSkillsDisciplineInjection:
 
     def test_skills_section_has_header(self, tmp_path):
         """When skills exist, output contains '## Skills' header."""
-        skills_dir = tmp_path / "skills" / "deploy"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the application.")
         builder = PromptBuilder(workspace=str(tmp_path))
