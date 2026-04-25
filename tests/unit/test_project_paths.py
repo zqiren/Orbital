@@ -33,8 +33,9 @@ class TestConstruction:
             ProjectPaths("")
 
     def test_none_raises_value_error(self):
-        # None fails the truthiness check and raises ValueError
-        with pytest.raises((TypeError, ValueError)):
+        # Implementation choice: None raises ValueError via truthiness check.
+        # Test asserts ValueError only (not TypeError) to lock the contract.
+        with pytest.raises(ValueError):
             ProjectPaths(None)
 
     def test_windows_style_path(self):
