@@ -32,15 +32,6 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 PROJECT_ID = "proj-watchdog-test"
 
 
-def _make_done_task() -> asyncio.Task:
-    """Return a completed asyncio.Task (already done)."""
-    async def _noop():
-        pass
-    loop = asyncio.get_event_loop()
-    t = loop.create_task(_noop())
-    return t
-
-
 def _make_handle(task_done: bool = True) -> ProjectHandle:
     """Build a minimal ProjectHandle with a stopped-looking session."""
     mock_session = MagicMock()
@@ -183,6 +174,10 @@ async def test_watchdog_proceeds_on_stop_all_timeout(caplog):
         coro.close()  # clean up the coroutine object
         raise asyncio.TimeoutError
 
+    # We patch the module-level asyncio.wait_for rather than the specific call
+    # because there's no clean way to target one call site. Today the watchdog
+    # block is the only wait_for in _check_sub_agents_done; a future maintainer
+    # adding another wait_for here would need to revisit this stub.
     with caplog.at_level(logging.ERROR, logger="agent_os.daemon_v2.agent_manager"):
         with patch("agent_os.daemon_v2.agent_manager.asyncio.wait_for", new=_immediate_timeout):
             await _run_watchdog_fast(manager, PROJECT_ID)

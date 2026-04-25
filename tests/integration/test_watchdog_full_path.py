@@ -80,10 +80,6 @@ class _WedgedSubAgentManager:
         self.stop_all_calls.append(project_id)
         self._adapters.pop(project_id, None)
 
-    # Stub out any other attributes AgentManager may touch
-    def update_sub_agent_autonomy(self, *args, **kwargs):
-        pass
-
 
 # ------------------------------------------------------------------ #
 # Integration test
