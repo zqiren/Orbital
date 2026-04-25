@@ -10,11 +10,14 @@ Platform detection per BUG-001:
 """
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
 import sys
 import threading
+
+logger = logging.getLogger(__name__)
 
 try:
     import pty
@@ -32,6 +35,15 @@ ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[()][AB012]|\x1b\
 
 def strip_ansi(text: str) -> str:
     return ANSI_RE.sub('', text)
+
+
+class AdapterBrokenError(RuntimeError):
+    """Raised when send() is attempted on an adapter already marked broken.
+
+    Set on the adapter when a background_send coroutine raises. Signals
+    to the caller that the underlying transport state is unrecoverable
+    and the handle must be stopped/restarted — no silent retries.
+    """
 
 
 class CLIAdapter(AgentAdapter):
@@ -62,6 +74,9 @@ class CLIAdapter(AgentAdapter):
         self._last_response = None  # stores last pipe-mode response
         self._transport = transport  # Optional AgentTransport for delegation
         self._send_lock = asyncio.Lock()  # serialize concurrent send() calls
+        self._broken: bool = False  # set when background_send raises; adapter is unreusable
+        self._background_send_task: asyncio.Task | None = None  # strong-ref owned by SubAgentManager
+        self._inflight_send: asyncio.Task | None = None  # active transport.send() task; cancelled on stop()
 
     @property
     def _using_provider(self) -> bool:
@@ -142,28 +157,59 @@ class CLIAdapter(AgentAdapter):
             raise AdapterError("Process exited immediately")
 
     async def send(self, message: str) -> None:
+        if self._broken:
+            raise AdapterBrokenError(
+                f"adapter for {self.handle} is in broken state"
+            )
         async with self._send_lock:
             if self._transport:
                 self._idle = False
                 self._pending_response = True
-                response = await self._transport.send(message)
-                self._pending_response = False
-                if response is not None:
-                    self._last_response = response
-                    if self._on_output:
-                        self._on_output(response)
-                self._idle = True
+                self._inflight_send = asyncio.create_task(
+                    self._transport.send(message),
+                    name=f"send-{id(self)}",
+                )
+                try:
+                    response = await self._inflight_send
+                    if response is not None:
+                        self._last_response = response
+                        if self._on_output:
+                            self._on_output(response)
+                    self._idle = True
+                except asyncio.CancelledError:
+                    # Propagate cancellation — caller (typically stop()) is
+                    # tearing down. Do NOT log at ERROR; cleanup in finally.
+                    raise
+                except Exception:
+                    logger.error(
+                        "transport.send() raised for adapter %s",
+                        self.handle,
+                        exc_info=True,
+                    )
+                    # Reset so the adapter is released (not stuck busy).
+                    self._idle = True
+                    raise
+                finally:
+                    self._inflight_send = None
+                    self._pending_response = False
                 return
             data = (message + "\n").encode("utf-8")
             self._idle = False
-            if self._using_provider and self._proc_handle:
-                self._proc_handle.stdin.write(data)
-                self._proc_handle.stdin.flush()
-            elif _HAS_PTY and self._master_fd is not None:
-                os.write(self._master_fd, data)
-            elif self._process and self._process.stdin:
-                self._process.stdin.write(data)
-                self._process.stdin.flush()
+            try:
+                if self._using_provider and self._proc_handle:
+                    self._proc_handle.stdin.write(data)
+                    self._proc_handle.stdin.flush()
+                elif _HAS_PTY and self._master_fd is not None:
+                    os.write(self._master_fd, data)
+                elif self._process and self._process.stdin:
+                    self._process.stdin.write(data)
+                    self._process.stdin.flush()
+            finally:
+                # Subprocess/PTY path never sets _pending_response True (the
+                # response arrives asynchronously via read_stream). Clear
+                # defensively for parity with the transport path so any
+                # stale flag cannot leave the adapter stuck busy.
+                self._pending_response = False
 
     async def read_stream(self):
         if self._transport:
@@ -268,6 +314,20 @@ class CLIAdapter(AgentAdapter):
         return None
 
     async def stop(self) -> None:
+        # Cancel any in-flight send BEFORE tearing down the transport so the
+        # awaiting task releases _send_lock and doesn't wedge on a transport
+        # that is about to disappear. Bounded 2s wait — stop() must be fast.
+        if self._inflight_send is not None and not self._inflight_send.done():
+            self._inflight_send.cancel()
+            try:
+                await asyncio.wait_for(self._inflight_send, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.exception(
+                    "inflight send raised during stop cancellation"
+                )
+
         if self._transport:
             await self._transport.stop()
             self._idle = False
@@ -304,7 +364,7 @@ class CLIAdapter(AgentAdapter):
             self._master_fd = None
 
     def is_idle(self) -> bool:
-        return self._idle and not self._pending_response
+        return self._broken or (self._idle and not self._pending_response)
 
     def is_alive(self) -> bool:
         if self._transport:
