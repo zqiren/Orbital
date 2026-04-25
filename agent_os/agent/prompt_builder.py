@@ -44,7 +44,6 @@ class PromptContext:
     trigger_name: str | None = None     # human-readable trigger name
     vision_enabled: bool = False        # model supports vision (image input)
     project_id: str = ""                # store-level project id
-    project_dir_name: str = ""          # slugified dir name under orbital/ — DEPRECATED: use ProjectPaths(workspace) instead; field removal in TASK-04
     active_sub_agents: list = None      # [{"handle": str, "status": str, ...}]
 
     def __post_init__(self):
@@ -228,7 +227,6 @@ class PromptBuilder:
             self._sub_agent_awareness(context),
             self._browser_section(context),
             self._skills(context),
-            self._workspace_bootstrap(context),
             self._os_instructions(context),
         ]))
         truly_dynamic = _SEP.join(filter(None, [
@@ -589,26 +587,6 @@ class PromptBuilder:
         for skill in skills:
             lines.append(f"- {skill['name']}: {skill['description']} (at {skill['path']})")
         return "\n".join(lines)
-
-    def _workspace_bootstrap(self, context: PromptContext) -> str | None:
-        workspace = self._workspace or context.workspace
-        if not workspace:
-            return None
-        agent_os_dir = os.path.join(workspace, "orbital")
-        bootstrap_files = {
-            "AGENT.md": "Agent Instructions",
-            "USER.md": "User Preferences",
-            "TOOLS.md": "Tool Configuration",
-        }
-        sections = []
-        for filename, label in bootstrap_files.items():
-            filepath = os.path.join(agent_os_dir, filename)
-            content = self._read_truncated(filepath)
-            if content:
-                sections.append(f"[{label} — {filename}]\n{content}")
-        if not sections:
-            return None
-        return "\n\n".join(sections)
 
     def _runtime(self, context: PromptContext) -> str:
         return (

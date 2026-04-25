@@ -5,11 +5,11 @@
 """Regression: scratch project goals are written and read at new-layout paths.
 
 Bug (F6): The scratch project writes project_goals.md via ProjectPaths but
-prompt_builder.py read it using os.path.join(workspace, "orbital",
-context.project_dir_name, "instructions", "project_goals.md"), which
-includes a slug segment that doesn't exist in the new flat layout. The
-agent would enter ONBOARDING MODE every session because the reader couldn't
-find the file the writer had placed at the correct (flat) path.
+prompt_builder.py was previously reading it using a slug-based path that
+includes a project_dir_name segment which doesn't exist in the new flat
+layout. The agent would enter ONBOARDING MODE every session because the
+reader couldn't find the file the writer had placed at the correct (flat)
+path.
 
 Fix: prompt_builder._onboarding_or_directive() and ._standing_rules() now
 read via ProjectPaths, matching the writer's flat path.
@@ -37,12 +37,11 @@ def _build_scratch_context(workspace: str) -> PromptContext:
         os_type="linux",
         datetime_now="2026-04-25T00:00:00",
         project_name="Quick Tasks",
-        project_dir_name="",  # scratch: no slug dir name
         is_scratch=True,
     )
 
 
-def _build_project_context(workspace: str, project_dir_name: str = "") -> PromptContext:
+def _build_project_context(workspace: str) -> PromptContext:
     """Minimal PromptContext for a real project."""
     return PromptContext(
         workspace=workspace,
@@ -53,7 +52,6 @@ def _build_project_context(workspace: str, project_dir_name: str = "") -> Prompt
         os_type="linux",
         datetime_now="2026-04-25T00:00:00",
         project_name="My Project",
-        project_dir_name=project_dir_name,
         is_scratch=False,
     )
 
@@ -88,7 +86,7 @@ class TestScratchProjectGoalsLoaded:
             f.write(SCRATCH_GOAL_TEXT)
 
         builder = PromptBuilder(workspace=ws)
-        context = _build_project_context(ws, project_dir_name="")
+        context = _build_project_context(ws)
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 
@@ -105,7 +103,7 @@ class TestScratchProjectGoalsLoaded:
             f.write(SCRATCH_GOAL_TEXT)
 
         builder = PromptBuilder(workspace=ws)
-        context = _build_project_context(ws, project_dir_name="")
+        context = _build_project_context(ws)
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 
@@ -120,7 +118,7 @@ class TestScratchProjectGoalsLoaded:
         # Do NOT create project_goals.md
 
         builder = PromptBuilder(workspace=ws)
-        context = _build_project_context(ws, project_dir_name="")
+        context = _build_project_context(ws)
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 
@@ -137,12 +135,11 @@ class TestScratchProjectGoalsLoaded:
             f.write(SCRATCH_GOAL_TEXT)
 
         builder = PromptBuilder(workspace=ws)
-        # Use a project context with a non-empty project_dir_name to expose the bug
-        context = _build_project_context(ws, project_dir_name="my-project-a1b2")
+        context = _build_project_context(ws)
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 
-        # The old slug path must NOT appear in the prompt
+        # Slug-namespaced paths must never appear in the prompt
         assert "orbital/my-project-a1b2/" not in full_prompt, \
             "Prompt must not reference old slug-namespaced path orbital/{slug}/"
 
@@ -156,7 +153,7 @@ class TestScratchProjectGoalsLoaded:
             f.write(SCRATCH_GOAL_TEXT)
 
         builder = PromptBuilder(workspace=ws)
-        context = _build_project_context(ws, project_dir_name="my-project-a1b2")
+        context = _build_project_context(ws)
         cached, semi_stable, dynamic = builder.build(context)
         full_prompt = cached + semi_stable + dynamic
 

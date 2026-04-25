@@ -178,9 +178,8 @@ def _get_or_create_session(project_id: str, workspace: str, project_name: str = 
     from uuid import uuid4
     from agent_os.agent.session import Session
 
-    dir_name = _project_dir_name(project_name, project_id)
     session_id = f"subagent_{uuid4().hex[:8]}"
-    session = Session.new(session_id, workspace, project_dir_name=dir_name)
+    session = Session.new(session_id, workspace)
     _sub_agent_sessions[project_id] = session
     return session
 
@@ -210,7 +209,7 @@ def _read_file_or_empty(path: str) -> str:
         return ""
 
 
-def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str = "") -> dict:
+def _enrich_with_disk_content(result: dict, workspace: str) -> dict:
     """Attach project_goals_content and user_directives_content from disk files."""
     from agent_os.agent.project_paths import ProjectPaths
     pp = ProjectPaths(workspace)
@@ -219,7 +218,7 @@ def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str = "") 
     return result
 
 
-def _write_workspace_file(workspace: str, filename: str, content: str, dir_name: str = "") -> None:
+def _write_workspace_file(workspace: str, filename: str, content: str) -> None:
     """Write content to {workspace}/orbital/instructions/{filename}."""
     from agent_os.agent.project_paths import ProjectPaths
     pp = ProjectPaths(workspace)
@@ -314,9 +313,8 @@ async def get_project(project_id: str):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     workspace = project.get("workspace", "")
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
     result = _redact_project(project)
-    _enrich_with_disk_content(result, workspace, dir_name)
+    _enrich_with_disk_content(result, workspace)
     result.setdefault("agent_name", result.get("name", ""))
     result.setdefault("is_scratch", False)
     # Flatten runtime budget spend for frontend consumption
@@ -340,7 +338,6 @@ async def update_project(project_id: str, body: ProjectUpdate):
         _project_store.update_runtime(project_id, {"budget_spent_usd": runtime_budget_reset})
     # Handle workspace file content fields separately
     workspace = project.get("workspace", "")
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
     goals_content = updates.pop("project_goals_content", None)
     rules_content = updates.pop("user_directives_content", None)
     # The Settings UI writes to the `instructions` field. Sync it to
@@ -351,9 +348,9 @@ async def update_project(project_id: str, body: ProjectUpdate):
     if goals_content is None and updates.get("instructions") is not None:
         goals_content = updates["instructions"]
     if goals_content is not None:
-        _write_workspace_file(workspace, "project_goals.md", goals_content, dir_name)
+        _write_workspace_file(workspace, "project_goals.md", goals_content)
     if rules_content is not None:
-        _write_workspace_file(workspace, "user_directives.md", rules_content, dir_name)
+        _write_workspace_file(workspace, "user_directives.md", rules_content)
     # If api_key matches the current global key, store empty string so the
     # project inherits at runtime rather than snapshotting a stale copy.
     if "api_key" in updates and _credential_store is not None:
@@ -374,7 +371,7 @@ async def update_project(project_id: str, body: ProjectUpdate):
             pass  # invalid value already persisted — interceptor keeps old preset
     updated = _project_store.get_project(project_id)
     result = _redact_project(updated)
-    _enrich_with_disk_content(result, workspace, dir_name)
+    _enrich_with_disk_content(result, workspace)
     result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
     return result
 

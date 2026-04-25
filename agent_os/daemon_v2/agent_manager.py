@@ -27,7 +27,6 @@ from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import AgentConfig, detect_os, resolve_api_key
 
@@ -53,7 +52,6 @@ class ProjectHandle:
     trigger_source: str | None = None
     config_snapshot: dict = field(default_factory=dict)
     started_at: str = ""
-    project_dir_name: str = ""
 
 
 class AgentManager:
@@ -432,7 +430,6 @@ class AgentManager:
             utility_provider = provider
 
         # 2. Tool registry
-        dir_name = _project_dir_name(config.project_name, project_id)
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
                              vision_enabled=model_info.capabilities.vision)
@@ -485,7 +482,6 @@ class AgentManager:
             trigger_name=trigger_name,
             vision_enabled=model_info.capabilities.vision,
             project_id=project_id,
-            project_dir_name=dir_name,
         )
 
         # 4b. Reconcile default skills for legacy projects that never had them
@@ -590,7 +586,6 @@ class AgentManager:
                 "autonomy": config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
             },
             started_at=datetime.now(timezone.utc).isoformat(),
-            project_dir_name=dir_name,
         )
         self._handles[project_id] = project_handle
 

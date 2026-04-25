@@ -22,8 +22,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.app import create_app
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
 
 
 @pytest.fixture
@@ -53,11 +53,8 @@ def _create_project(client, workspace, **overrides):
     return resp.json()["project_id"], resp.json()
 
 
-def _goals_path(workspace: str, project_name: str, project_id: str) -> str:
-    dir_name = _project_dir_name(project_name, project_id)
-    return os.path.join(
-        workspace, "orbital", dir_name, "instructions", "project_goals.md"
-    )
+def _goals_path(workspace: str, project_name: str = "", project_id: str = "") -> str:
+    return ProjectPaths(workspace).project_goals
 
 
 class TestInstructionsSyncToDisk:

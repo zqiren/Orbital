@@ -192,7 +192,6 @@ async def test_system_prompt_contains_skill_triggers(client, workspace):
         tool_names=["read", "write", "edit", "shell"],
         os_type="windows",
         datetime_now="2026-01-01T00:00:00",
-        project_dir_name="smoke-test-0000",
     )
     _, semi_stable, _ = builder.build(ctx)
 

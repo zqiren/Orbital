@@ -199,7 +199,6 @@ def test_prompt_awareness_reflects_active_agents():
         datetime_now="2026-03-10T10:00:00Z",
         project_name="test-project",
         project_id="proj1",
-        project_dir_name="test-project_proj1",
         active_sub_agents=[
             {"handle": "claude-code", "status": "running"},
             {"handle": "aider", "status": "idle"},

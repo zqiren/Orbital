@@ -125,7 +125,7 @@ class TestNewSessionIdle:
             from agent_os.daemon_v2.agent_manager import ProjectHandle
             from agent_os.agent.session import Session
 
-            session = Session.new("old_session_abc", workspace, project_dir_name=dir_name)
+            session = Session.new("old_session_abc", workspace)
             for msg in old_messages:
                 session.append(msg)
 
@@ -148,7 +148,6 @@ class TestNewSessionIdle:
                 interceptor=mock_interceptor,
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-                project_dir_name=dir_name,
             )
             mgr._handles[project_id] = handle
 
@@ -197,7 +196,7 @@ class TestNewSessionPreservesLayer1:
             from agent_os.daemon_v2.agent_manager import ProjectHandle
             from agent_os.agent.session import Session
 
-            session = Session.new("sess_001", workspace, project_dir_name=dir_name)
+            session = Session.new("sess_001", workspace)
             done_task = asyncio.get_event_loop().create_future()
             done_task.set_result(None)
 
@@ -210,7 +209,6 @@ class TestNewSessionPreservesLayer1:
                 interceptor=MagicMock(),
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-                project_dir_name=dir_name,
             )
             mgr._handles[project_id] = handle
 
@@ -252,7 +250,7 @@ class TestNewSessionBroadcasts:
             from agent_os.daemon_v2.agent_manager import ProjectHandle
             from agent_os.agent.session import Session
 
-            session = Session.new("sess_old", workspace, project_dir_name=dir_name)
+            session = Session.new("sess_old", workspace)
             done_task = asyncio.get_event_loop().create_future()
             done_task.set_result(None)
 
@@ -265,7 +263,6 @@ class TestNewSessionBroadcasts:
                 interceptor=MagicMock(),
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-                project_dir_name=dir_name,
             )
             mgr._handles[project_id] = handle
 
@@ -321,7 +318,7 @@ class TestNewSessionIsolation:
             from agent_os.daemon_v2.agent_manager import ProjectHandle
             from agent_os.agent.session import Session
 
-            session_a = Session.new("sess_a", workspace, project_dir_name=dir_a)
+            session_a = Session.new("sess_a", workspace)
             done_task = asyncio.get_event_loop().create_future()
             done_task.set_result(None)
 
@@ -334,7 +331,6 @@ class TestNewSessionIsolation:
                 interceptor=MagicMock(),
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-                project_dir_name=dir_a,
             )
             mgr._handles[pid_a] = handle_a
 

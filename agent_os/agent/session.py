@@ -62,8 +62,7 @@ class Session:
     # ------------------------------------------------------------------
 
     @classmethod
-    def new(cls, session_id: str, workspace: str, project_id: str = "",
-            project_dir_name: str = "") -> Session:
+    def new(cls, session_id: str, workspace: str, project_id: str = "") -> Session:
         """Create a fresh session.
 
         File at {workspace}/orbital/sessions/{session_id}.jsonl.

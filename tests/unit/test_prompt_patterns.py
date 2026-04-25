@@ -200,7 +200,7 @@ class TestSkillCreationTrigger:
     def test_skill_creation_in_normal_project(self):
         """Non-scratch prompt contains skill creation instructions."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "Skill creation:" in semi_stable
 
@@ -290,13 +290,13 @@ class TestLessonsInstructionUpdate:
     def test_append_mid_session_instruction(self):
         """Normal project prompt says agent may append to LESSONS.md mid-session."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "You may append mid-session" in semi_stable
 
     def test_old_do_not_write_removed(self):
         """Old contradictory 'do NOT need to read or write' instruction is gone."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "do NOT need to read or write" not in semi_stable
