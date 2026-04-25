@@ -4,8 +4,8 @@
 
 """Workspace file management and session-end routine.
 
-Manages the 6 workspace files in {workspace}/orbital/:
-  AGENT.md, PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md, LESSONS.md, CONTEXT.md
+Manages the 5 workspace files in {workspace}/orbital/:
+  PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md, LESSONS.md, CONTEXT.md
 
 Provides:
   - WorkspaceFileManager: read/write/append workspace files, build cold resume context
@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import time
 
@@ -45,10 +44,7 @@ def _atomic_replace(src: str, dst: str) -> None:
             time.sleep(0.05)
 
 
-WORKSPACE_DIR = "orbital"
-
 FILE_NAMES: dict[str, str] = {
-    "agent": "AGENT.md",
     "state": "PROJECT_STATE.md",
     "decisions": "DECISIONS.md",
     "session_log": "SESSION_LOG.md",
@@ -57,11 +53,10 @@ FILE_NAMES: dict[str, str] = {
 }
 
 # Order for cold resume context assembly
-_RESUME_ORDER = ["agent", "state", "decisions", "lessons", "context", "session_log"]
+_RESUME_ORDER = ["state", "decisions", "lessons", "context", "session_log"]
 
 # Section headers for cold resume context
 _SECTION_HEADERS: dict[str, str] = {
-    "agent": "Agent Directive",
     "state": "Project State",
     "decisions": "Decisions",
     "lessons": "Lessons Learned",
@@ -250,20 +245,14 @@ def _apply_sanity_checks(
 
 
 class WorkspaceFileManager:
-    """Reads and writes the 6 workspace files."""
+    """Reads and writes the 5 workspace files under {workspace}/orbital/."""
 
     def __init__(self, workspace: str, project_id: str = "",
                  project_dir_name: str = ""):
+        from agent_os.agent.project_paths import ProjectPaths
         self._workspace = workspace
-        # Prefer project_dir_name (slugified); fall back to raw project_id
-        ns = project_dir_name or project_id
-        self._project_ns = ns
-        if ns:
-            self._dir = os.path.join(workspace, WORKSPACE_DIR, ns)
-        else:
-            self._dir = os.path.join(workspace, WORKSPACE_DIR)
-        # AGENT.md is always at workspace level (shared across projects)
-        self._agent_file = os.path.join(workspace, WORKSPACE_DIR, "AGENT.md")
+        self._paths = ProjectPaths(workspace)
+        self._dir = self._paths.orbital_dir
 
     @property
     def workspace(self) -> str:
@@ -274,64 +263,19 @@ class WorkspaceFileManager:
         return self._dir
 
     def ensure_dir(self) -> None:
-        """Create orbital/ (and project subdirectory if namespaced)."""
+        """Create orbital/ directory."""
         os.makedirs(self._dir, exist_ok=True)
-        # Also ensure the base orbital/ dir exists for shared AGENT.md
-        if self._project_ns:
-            os.makedirs(os.path.join(self._workspace, WORKSPACE_DIR), exist_ok=True)
-            self._migrate_flat_to_namespaced()
-
-    def _migrate_flat_to_namespaced(self) -> None:
-        """One-time migration of flat orbital/ files into the project namespace.
-
-        Runs only once per project directory.  Writes a ``.migrated`` marker
-        to skip on subsequent starts.  Moves (not copies) flat files so stale
-        data doesn't linger.  The first project to start in a shared workspace
-        claims the flat files; subsequent projects start fresh.
-
-        TODO: Remove this method after one release cycle.
-        """
-        marker = os.path.join(self._dir, ".migrated")
-        if os.path.exists(marker):
-            return
-
-        base = os.path.join(self._workspace, WORKSPACE_DIR)
-
-        _migrate_items = [
-            ("instructions", True),       # directory
-            ("shell_output", True),        # directory
-            ("browser-screenshots", True), # directory
-            ("browser-pdfs", True),        # directory
-            ("approval_history.jsonl", False),  # file
-        ]
-        for name, is_dir in _migrate_items:
-            flat = os.path.join(base, name)
-            ns = os.path.join(self._dir, name)
-            if is_dir:
-                if os.path.isdir(flat) and not os.path.isdir(ns):
-                    shutil.move(flat, ns)
-            else:
-                if os.path.isfile(flat) and not os.path.isfile(ns):
-                    shutil.move(flat, ns)
-
-        # Write marker
-        try:
-            with open(marker, "w") as f:
-                f.write("migrated\n")
-        except OSError:
-            pass
-
-        logger.info("Migrated flat orbital/ files into %s/ namespace", self._project_ns)
 
     def _file_path(self, file_key: str) -> str:
-        """Return the full path for a workspace file key.
-
-        AGENT.md is always at workspace/orbital/AGENT.md (shared).
-        All other files use the project-namespaced directory.
-        """
-        if file_key == "agent":
-            return self._agent_file
-        return os.path.join(self._dir, FILE_NAMES[file_key])
+        """Return the full path for a workspace file key."""
+        _key_to_path = {
+            "state": self._paths.project_state,
+            "decisions": self._paths.decisions,
+            "session_log": self._paths.session_log,
+            "lessons": self._paths.lessons,
+            "context": self._paths.context,
+        }
+        return _key_to_path[file_key]
 
     def read(self, file_key: str) -> str | None:
         """Read a workspace file. Returns None if file doesn't exist.

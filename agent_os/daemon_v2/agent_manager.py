@@ -355,6 +355,7 @@ class AgentManager:
                                    tool_args: dict, decision: str,
                                    deny_reason: str | None = None) -> None:
         """Append approval/denial record to {workspace}/orbital/approval_history.jsonl."""
+        from agent_os.agent.project_paths import ProjectPaths
         handle = self._handles.get(project_id)
         if handle is None:
             return
@@ -362,12 +363,9 @@ class AgentManager:
         workspace = handle.config_snapshot.get('workspace')
         if not workspace:
             return
-        dir_name = handle.project_dir_name
-        if not dir_name:
-            return
-        history_dir = os.path.join(workspace, "orbital", dir_name)
-        os.makedirs(history_dir, exist_ok=True)
-        history_file = os.path.join(history_dir, "approval_history.jsonl")
+        pp = ProjectPaths(workspace)
+        os.makedirs(pp.orbital_dir, exist_ok=True)
+        history_file = pp.approval_history
         args_hash = hashlib.sha256(json.dumps(tool_args, sort_keys=True).encode()).hexdigest()[:12]
         record = {
             "tool": tool_name,
@@ -508,14 +506,14 @@ class AgentManager:
         # 5. Session
         sanitized = _sanitize_project_name(config.project_name)
         session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        session = Session.new(session_id, config.workspace, project_dir_name=dir_name)
+        session = Session.new(session_id, config.workspace)
 
         # 6-7. Observers
         session.on_append = self._on_message(project_id)
         session.on_stream = self._on_stream(project_id)
 
         # 8. Workspace files
-        workspace_files = WorkspaceFileManager(config.workspace, project_dir_name=dir_name)
+        workspace_files = WorkspaceFileManager(config.workspace)
         workspace_files.ensure_dir()
 
         # 9. Context manager
@@ -1216,9 +1214,7 @@ class AgentManager:
         # 3. Pre-flush: run session-end routine so workspace files are updated
         workspace = handle.config_snapshot.get("workspace", "")
         try:
-            workspace_files = WorkspaceFileManager(
-                workspace, project_dir_name=handle.project_dir_name,
-            )
+            workspace_files = WorkspaceFileManager(workspace)
             await asyncio.wait_for(
                 run_session_end_routine(
                     session=handle.session,
@@ -1241,10 +1237,7 @@ class AgentManager:
         project_name = (project or {}).get("name", "")
         sanitized = _sanitize_project_name(project_name)
         new_session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        new_session = Session.new(
-            new_session_id, workspace,
-            project_dir_name=handle.project_dir_name,
-        )
+        new_session = Session.new(new_session_id, workspace)
 
         # 6. Wire observers
         new_session.on_append = self._on_message(project_id)

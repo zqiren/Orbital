@@ -105,7 +105,8 @@ def install_default_skills(project_store, project_id: str) -> dict:
         return {"status": "source_missing"}
 
     workspace = project.get("workspace", "")
-    dest_root = os.path.join(workspace, "skills")
+    from agent_os.agent.project_paths import ProjectPaths
+    dest_root = ProjectPaths(workspace).skills_dir
     os.makedirs(dest_root, exist_ok=True)
 
     installed: list[str] = []

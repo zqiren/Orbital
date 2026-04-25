@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.agent.workspace_files import (
-    WORKSPACE_DIR,
     FILE_NAMES,
     WorkspaceFileManager,
     run_session_end_routine,
@@ -43,7 +42,7 @@ def ws(tmp_path):
 @pytest.fixture
 def ws_dir(tmp_path):
     """Return the orbital directory path (not yet created)."""
-    return os.path.join(str(tmp_path), WORKSPACE_DIR)
+    return os.path.join(str(tmp_path), "orbital")
 
 
 def _mock_session(messages=None, session_id="sess_test123"):
@@ -81,7 +80,7 @@ def test_ensure_dir_creates(ws, ws_dir):
 def test_read_nonexistent_returns_none(ws):
     """Reading a missing file returns None."""
     assert ws.read("state") is None
-    assert ws.read("agent") is None
+    assert ws.read("decisions") is None
 
 
 # ---------------------------------------------------------------------------
@@ -115,17 +114,16 @@ def test_append_creates_then_appends(ws):
 def test_read_all_mixed(ws):
     """Some files exist, some don't -- correct dict with None for missing."""
     ws.write("state", "state content")
-    ws.write("agent", "agent content")
+    ws.write("lessons", "lessons content")
 
     result = ws.read_all()
 
     assert result["state"] == "state content"
-    assert result["agent"] == "agent content"
+    assert result["lessons"] == "lessons content"
     assert result["decisions"] is None
     assert result["session_log"] is None
-    assert result["lessons"] is None
     assert result["context"] is None
-    assert len(result) == 6
+    assert len(result) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +131,7 @@ def test_read_all_mixed(ws):
 # ---------------------------------------------------------------------------
 
 def test_build_cold_resume_context_all_files(ws):
-    """All 6 files exist -- assembled string with section headers in correct order."""
-    ws.write("agent", "Do the thing.")
+    """All 5 files exist -- assembled string with section headers in correct order."""
     ws.write("state", "In progress.")
     ws.write("decisions", "Chose X over Y.")
     ws.write("lessons", "Don't do Z.")
@@ -144,17 +141,15 @@ def test_build_cold_resume_context_all_files(ws):
     ctx = ws.build_cold_resume_context()
 
     # Check section order
-    agent_pos = ctx.index("## Agent Directive")
     state_pos = ctx.index("## Project State")
     decisions_pos = ctx.index("## Decisions")
     lessons_pos = ctx.index("## Lessons Learned")
     context_pos = ctx.index("## External Context")
     log_pos = ctx.index("## Session Log (Recent)")
 
-    assert agent_pos < state_pos < decisions_pos < lessons_pos < context_pos < log_pos
+    assert state_pos < decisions_pos < lessons_pos < context_pos < log_pos
 
     # Check content is included
-    assert "Do the thing." in ctx
     assert "In progress." in ctx
     assert "Chose X over Y." in ctx
     assert "Don't do Z." in ctx
@@ -167,16 +162,16 @@ def test_build_cold_resume_context_all_files(ws):
 # ---------------------------------------------------------------------------
 
 def test_build_cold_resume_context_minimal(ws):
-    """Only AGENT.md exists -- just that section."""
-    ws.write("agent", "I am an agent.")
+    """Only PROJECT_STATE.md exists -- just that section."""
+    ws.write("state", "I am the project state.")
 
     ctx = ws.build_cold_resume_context()
 
-    assert "## Agent Directive" in ctx
-    assert "I am an agent." in ctx
+    assert "## Project State" in ctx
+    assert "I am the project state." in ctx
     # No other sections
-    assert "## Project State" not in ctx
     assert "## Decisions" not in ctx
+    assert "## Lessons Learned" not in ctx
 
 
 # ---------------------------------------------------------------------------

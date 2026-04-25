@@ -1038,10 +1038,8 @@ class BrowserTool(Tool):
         page = await self._bm.get_page(self._project_id)
         file_path = args.get("file_path")
         if not file_path:
-            if self._project_dir_name:
-                pdf_dir = os.path.join(self._workspace, "orbital-output", self._project_dir_name, "pdfs")
-            else:
-                pdf_dir = os.path.join(self._workspace, "orbital-output", "pdfs")
+            from agent_os.agent.project_paths import ProjectPaths
+            pdf_dir = ProjectPaths(self._workspace).pdfs_dir
             os.makedirs(pdf_dir, exist_ok=True)
             title = await page.title()
             safe_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (title or "page"))

@@ -79,9 +79,10 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "model": "",
         "api_key": "",
     })
-    goals_dir = os.path.join(scratch_workspace, "orbital", "instructions")
-    os.makedirs(goals_dir, exist_ok=True)
-    with open(os.path.join(goals_dir, "project_goals.md"), "w", encoding="utf-8") as f:
+    from agent_os.agent.project_paths import ProjectPaths
+    _pp = ProjectPaths(scratch_workspace)
+    os.makedirs(_pp.instructions_dir, exist_ok=True)
+    with open(_pp.project_goals, "w", encoding="utf-8") as f:
         f.write(SCRATCH_PROJECT_GOALS)
 
 

@@ -219,11 +219,18 @@ def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str) -> di
     return result
 
 
-def _write_workspace_file(workspace: str, filename: str, content: str, dir_name: str) -> None:
-    """Write content to {workspace}/orbital/{dir_name}/instructions/{filename}."""
-    instructions_dir = os.path.join(workspace, "orbital", dir_name, "instructions")
-    os.makedirs(instructions_dir, exist_ok=True)
-    with open(os.path.join(instructions_dir, filename), "w", encoding="utf-8") as f:
+def _write_workspace_file(workspace: str, filename: str, content: str, dir_name: str = "") -> None:
+    """Write content to {workspace}/orbital/instructions/{filename}."""
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(workspace)
+    os.makedirs(pp.instructions_dir, exist_ok=True)
+    if filename == "project_goals.md":
+        filepath = pp.project_goals
+    elif filename == "user_directives.md":
+        filepath = pp.user_directives
+    else:
+        filepath = os.path.join(pp.instructions_dir, filename)
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -1110,7 +1117,8 @@ async def delete_skill(project_id: str, skill_name: str):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     workspace = project.get("workspace", "")
-    skills_base = os.path.realpath(os.path.join(workspace, "skills"))
+    from agent_os.agent.project_paths import ProjectPaths
+    skills_base = os.path.realpath(ProjectPaths(workspace).skills_dir)
     skill_path = os.path.realpath(os.path.join(skills_base, skill_name))
     if not skill_path.startswith(skills_base + os.sep):
         raise HTTPException(status_code=400, detail="Invalid skill name")
@@ -1174,11 +1182,12 @@ def _sanitize_skill_dir_name(name: str) -> str:
 
 def _handle_md_upload(workspace: str, content_bytes: bytes) -> dict:
     """Handle uploading a single .md file as a skill."""
+    from agent_os.agent.project_paths import ProjectPaths
     text = content_bytes.decode("utf-8", errors="replace")
     name, description = _validate_skill_content(text)
 
     dir_name = _sanitize_skill_dir_name(name)
-    skill_dir = os.path.join(workspace, "skills", dir_name)
+    skill_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
 
     if os.path.exists(skill_dir):
         raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
@@ -1234,7 +1243,8 @@ def _handle_zip_upload(workspace: str, content_bytes: bytes) -> dict:
         else:
             dir_name = os.path.basename(skill_src_dir)
 
-        dest_dir = os.path.join(workspace, "skills", dir_name)
+        from agent_os.agent.project_paths import ProjectPaths
+        dest_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
         if os.path.exists(dest_dir):
             raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
 

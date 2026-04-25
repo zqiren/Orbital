@@ -14,8 +14,9 @@ class SkillLoader:
     """Scan for skill definitions in the workspace."""
 
     def __init__(self, workspace: str):
+        from agent_os.agent.project_paths import ProjectPaths
         self.workspace = workspace
-        self._skills_dir = os.path.join(workspace, "skills")
+        self._skills_dir = ProjectPaths(workspace).skills_dir
 
     def scan(self) -> list[dict]:
         """Scan for SKILL.md files. Return metadata only (not full content).
