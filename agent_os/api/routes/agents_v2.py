@@ -410,10 +410,7 @@ def _remove_safe(path: str) -> None:
 
 
 @router.delete("/projects/bulk")
-async def bulk_delete_projects(
-    body: BulkDeleteRequest,
-    delete_workspace: bool = Query(default=False),
-):
+async def bulk_delete_projects(body: BulkDeleteRequest):
     """Delete multiple projects by filter criteria."""
     if not body.prefix and not body.project_ids and not body.before:
         raise HTTPException(
@@ -461,7 +458,7 @@ async def bulk_delete_projects(
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str, clear_output: bool = False):
+async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")

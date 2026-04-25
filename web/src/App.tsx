@@ -343,9 +343,9 @@ export default function App() {
     await updateProject(selectedProjectId, data);
   }
 
-  async function handleDeleteProject(clearOutput: boolean = false) {
+  async function handleDeleteProject() {
     if (!selectedProjectId) return;
-    await deleteProject(selectedProjectId, clearOutput);
+    await deleteProject(selectedProjectId);
     setSelectedProjectId(null);
     setView('list');
     setMobileView('sidebar');

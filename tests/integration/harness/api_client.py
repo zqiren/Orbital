@@ -130,11 +130,8 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def delete_project(self, project_id: str, clear_output: bool = False) -> None:
-        resp = await self.delete(
-            f"/api/v2/projects/{project_id}",
-            params={"clear_output": str(clear_output).lower()},
-        )
+    async def delete_project(self, project_id: str) -> None:
+        resp = await self.delete(f"/api/v2/projects/{project_id}")
         # 403 = scratch project (can't delete); let caller decide.
         resp.raise_for_status()
 
