@@ -1199,9 +1199,11 @@ class AgentManager:
         if handle is None:
             return {"status": "no_active_session"}
 
-        # 1. Stop loop if running
+        # 1. Stop loop if running. terminate() interrupts any in-flight LLM
+        # stream, sets the stop flag, and cancels the loop task. The shield
+        # wait below is the final reaper for the loop's finally block.
         if handle.task is not None and not handle.task.done():
-            handle.session.stop()
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
@@ -1320,14 +1322,19 @@ class AgentManager:
         if self._platform_provider is not None:
             await self._platform_provider.stop_process(project_id)
 
-        handle.session.stop()
-
-        # Wait for loop task
+        # terminate() interrupts any in-flight LLM stream and sets the stop
+        # flag; the shield-wait below is the final reaper for the loop's
+        # finally block.
         if handle.task is not None and not handle.task.done():
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+        else:
+            # Loop already done — preserve the legacy stop flag for any
+            # downstream code that observes it.
+            handle.session.stop()
 
         self._ws.broadcast(project_id, {
             "type": "agent.status",

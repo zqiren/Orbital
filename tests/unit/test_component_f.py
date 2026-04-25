@@ -790,11 +790,19 @@ class TestAgentManager:
         mock_task = asyncio.ensure_future(asyncio.sleep(0))
         await asyncio.sleep(0)  # let it complete
 
-        handle = MagicMock(session=mock_session, task=mock_task)
+        # T04: stop_agent now does `await handle.loop.terminate()` on the
+        # alive-task path; the awaitable must come back from an AsyncMock.
+        mock_loop = MagicMock(terminate=AsyncMock())
+        handle = MagicMock(session=mock_session, task=mock_task,
+                           loop=mock_loop)
         mgr._handles["proj_1"] = handle
 
         await mgr.stop_agent("proj_1")
-        mock_session.stop.assert_called_once()
+        # Task is still pending (one `await asyncio.sleep(0)` is not enough
+        # to mark a sleep(0) future done) ⇒ stop_agent takes the alive
+        # path and awaits handle.loop.terminate(). The terminate() call is
+        # what propagates the stop intent to the session in T04.
+        mock_loop.terminate.assert_awaited_once()
         ws.broadcast.assert_called()
 
     @pytest.mark.asyncio
