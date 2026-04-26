@@ -63,3 +63,11 @@ ACTIVE-*/
 
 # Git worktrees
 .worktrees/
+
+# Personal notes / WIP (local-only)
+.agent-os/
+*.bak
+*.mov
+bug-log.md
+qclaw-*.md
+orbital-marketing-bug-analysis.html
