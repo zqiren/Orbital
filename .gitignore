@@ -60,6 +60,7 @@ RESEARCH-*.md
 DIAGNOSIS-*.md
 ACTIVE-*.md
 ACTIVE-*/
+docs/superpowers/specs/
 
 # Git worktrees
 .worktrees/

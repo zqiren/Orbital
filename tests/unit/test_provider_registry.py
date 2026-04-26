@@ -138,8 +138,8 @@ class TestFallback:
 class TestRealProviders:
     def test_anthropic_claude_opus(self, registry):
         info = registry.get_model_info("anthropic", "claude-opus-4-6")
-        assert info.context_window == 200000
-        assert info.max_output == 16384
+        assert info.context_window == 1000000
+        assert info.max_output == 128000
         assert info.capabilities.vision is True
         assert info.capabilities.tool_use is True
 
@@ -156,7 +156,7 @@ class TestRealProviders:
 
     def test_openai_gpt5(self, registry):
         info = registry.get_model_info("openai", "gpt-5.2")
-        assert info.context_window == 200000
+        assert info.context_window == 400000
         assert info.max_output == 128000
 
     def test_deepseek_no_vision(self, registry):
@@ -171,7 +171,7 @@ class TestRealProviders:
     def test_moonshot_kimi_vision(self, registry):
         info = registry.get_model_info("moonshot", "kimi-k2.5")
         assert info.capabilities.vision is True
-        assert info.context_window == 256000
+        assert info.context_window == 262144
 
     def test_google_gemini_large_context(self, registry):
         info = registry.get_model_info("google", "gemini-3-pro-preview")
@@ -184,7 +184,8 @@ class TestRealProviders:
 
     def test_zhipu_glm5(self, registry):
         info = registry.get_model_info("zhipu", "glm-5")
-        assert info.capabilities.vision is True
+        # GLM-5 is text-only per docs.z.ai; vision is served by separate glm-5v-turbo / glm-4.6v.
+        assert info.capabilities.vision is False
         assert info.context_window == 200000
 
     def test_qwen35_max(self, registry):
