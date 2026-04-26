@@ -140,7 +140,17 @@ class SDKTransport(AgentTransport):
         if self._needs_flush:
             await self._flush_stale_messages()
 
+        # Without this guard, the bare _bg_task assignment below drops the
+        # strong reference to the prior task, causing "Task destroyed but it
+        # is pending" at GC time. Before query() also prevents the prior
+        # consumer from reading events from the new query before being reaped.
+        if self._bg_task is not None and not self._bg_task.done():
+            logger.warning("dispatch overwriting pending _bg_task; cancelling prior")
+            self._bg_task.cancel()
+            await asyncio.gather(self._bg_task, return_exceptions=True)
+
         await self._client.query(message)
+
         # Strongly reference the background task on self so it cannot be
         # garbage-collected mid-stream (which produced "Task was destroyed
         # but it is pending" warnings). The done-callback routes any

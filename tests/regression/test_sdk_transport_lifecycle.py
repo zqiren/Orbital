@@ -287,3 +287,153 @@ async def test_stop_is_idempotent():
     assert transport._bg_task is None
     assert transport._client is None
     assert transport._alive is False
+
+
+# --------------------------------------------------------------------- #
+# 6. dispatch() overwrites pending _bg_task — prior task is cancelled
+# --------------------------------------------------------------------- #
+
+
+async def test_dispatch_overwrite_cancels_prior_bg_task(caplog):
+    """A second dispatch() while the prior _bg_task is still pending must
+    cancel the prior task and await its termination before creating a new
+    one. Without the preflight guard the prior task loses its strong
+    reference and triggers 'Task was destroyed but it is pending'."""
+    transport = SDKTransport()
+    client = _install_slow_client(transport, delay=5.0)  # very slow — won't finish naturally
+
+    # First dispatch starts a slow background task.
+    await transport.dispatch("first")
+    prior_task = transport._bg_task
+    assert prior_task is not None
+    assert not prior_task.done()
+
+    # Wait until the background consumer has actually started iterating so
+    # we hit the mid-stream cancellation path.
+    await asyncio.wait_for(client._receive_started.wait(), timeout=2.0)
+
+    with caplog.at_level(logging.WARNING, logger="agent_os.agent.transports.sdk_transport"):
+        # Second dispatch — prior task should be cancelled inside dispatch().
+        await transport.dispatch("second")
+
+        # Force GC to surface any "Task destroyed but it is pending" warnings.
+        gc.collect()
+        await asyncio.sleep(0)  # let done callbacks fire
+
+    # Prior task must be cancelled, not just orphaned.
+    assert prior_task.done(), "prior bg_task must be done after second dispatch"
+    assert prior_task.cancelled(), "prior bg_task must be cancelled by dispatch preflight"
+
+    # New task is now referenced on the transport.
+    assert transport._bg_task is not None
+    assert transport._bg_task is not prior_task
+
+    # No "Task was destroyed" GC warning must appear.
+    destroyed_warnings = [
+        r for r in caplog.records
+        if "Task was destroyed but it is pending" in r.getMessage()
+    ]
+    assert not destroyed_warnings, "dispatch overwrite must not leak a GC warning"
+
+    # Clean up the second task.
+    transport._bg_task.cancel()
+    await asyncio.gather(transport._bg_task, return_exceptions=True)
+
+
+# --------------------------------------------------------------------- #
+# 7. dispatch() with idle (done) prior _bg_task — no cancel/gather called
+# --------------------------------------------------------------------- #
+
+
+async def test_dispatch_overwrite_with_idle_prior(caplog):
+    """If the prior _bg_task is already done when a second dispatch arrives,
+    the preflight guard must skip cancel-and-gather entirely — only pending
+    tasks need cancellation. The new task must run normally."""
+    transport = SDKTransport()
+    client = _install_slow_client(transport, delay=0.01)
+
+    # First dispatch with a fast-finishing task. Manually cancel and await
+    # it so it is done before the second dispatch.
+    await transport.dispatch("first")
+    first_task = transport._bg_task
+    first_task.cancel()
+    await asyncio.gather(first_task, return_exceptions=True)
+    assert first_task.done()
+
+    with caplog.at_level(logging.WARNING, logger="agent_os.agent.transports.sdk_transport"):
+        # Second dispatch — prior is already done, so no cancel/gather needed.
+        await transport.dispatch("second")
+
+    second_task = transport._bg_task
+    assert second_task is not None
+    assert second_task is not first_task
+    assert not second_task.done(), "new bg_task should still be running"
+
+    # Positive proof the dispatch path actually ran end-to-end — both queries
+    # reached the SDK client. Without this, the negative caplog claim below
+    # could pass vacuously if caplog captured nothing.
+    assert client.query_calls == ["first", "second"]
+
+    # Preflight branch must be SKIPPED (prior was already done) — no warning.
+    assert not any(
+        "dispatch overwriting pending _bg_task" in record.message
+        for record in caplog.records
+    ), "preflight should be skipped when prior task is already done"
+
+    # Clean up.
+    second_task.cancel()
+    await asyncio.gather(second_task, return_exceptions=True)
+
+
+# --------------------------------------------------------------------- #
+# 8. dispatch() while prior task is already cancel()-requested but not yet
+#    awaited — gather waits for cancellation to settle before proceeding
+# --------------------------------------------------------------------- #
+
+
+async def test_dispatch_overwrite_during_cancel_in_flight(caplog):
+    """If _bg_task.cancel() is called externally (e.g. by stop()) but not
+    yet awaited, a subsequent dispatch() must still call gather to let the
+    cancellation settle. No GC warning must appear."""
+    transport = SDKTransport()
+    client = _install_slow_client(transport, delay=5.0)
+
+    await transport.dispatch("first")
+    prior_task = transport._bg_task
+    assert prior_task is not None
+
+    # Wait until the consumer is actually iterating.
+    await asyncio.wait_for(client._receive_started.wait(), timeout=2.0)
+
+    # Externally cancel but do NOT await — mimic a partial stop().
+    prior_task.cancel()
+
+    with caplog.at_level(logging.WARNING, logger="agent_os.agent.transports.sdk_transport"):
+        # dispatch() must detect the pending (not-yet-done) cancelled task
+        # and gather it before assigning the new one.
+        await transport.dispatch("second")
+
+        gc.collect()
+        await asyncio.sleep(0)
+
+    # Prior task must be done (cancellation settled inside dispatch()).
+    assert prior_task.done(), "prior task must be done after dispatch preflight gather"
+
+    # Preflight branch MUST have executed — task was pending (cancel-requested
+    # but not yet done), so the warning log line must appear. This is the
+    # signal that distinguishes "preflight ran" from "preflight skipped".
+    assert any(
+        "dispatch overwriting pending _bg_task; cancelling prior" in record.message
+        for record in caplog.records
+    ), "preflight branch must execute when prior task is pending (even if cancel-requested)"
+
+    # No GC warning.
+    destroyed_warnings = [
+        r for r in caplog.records
+        if "Task was destroyed but it is pending" in r.getMessage()
+    ]
+    assert not destroyed_warnings, "in-flight cancel must not leak a GC warning"
+
+    # Clean up new task.
+    transport._bg_task.cancel()
+    await asyncio.gather(transport._bg_task, return_exceptions=True)

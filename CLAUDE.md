@@ -139,6 +139,14 @@ After making code changes to the daemon or backend services, ALWAYS restart the 
 
 - **Never rely on closure variables mutated inside `setState` updaters.** React 19 batching makes the read timing unpredictable — the updater may be deferred to the render phase, so a local variable set inside the updater can still be `false` when read outside it. Use `flushSync` if you need synchronous state computation, or restructure to avoid cross-boundary communication entirely. See the `toggleDirectory` fix in `FileExplorer.tsx` for a concrete example.
 
+## macOS Build Notes (`scripts/build-macos.sh`)
+
+- **Re-sign the bundle AFTER copying SPA/assets in.** PyInstaller ad-hoc signs the `.app` during its BUNDLE step. Steps that copy new files into `Contents/Resources/` (web SPA, icons) happen *after* that signing, so the new files aren't in `_CodeSignature/CodeResources` and the seal is broken (`codesign --verify` reports "a sealed resource is missing or invalid"). On macOS Sequoia+, Finder validates the seal when drag-installing from a DMG into `/Applications` and skips items whose hashes don't match — surfacing as **"The operation can't be completed because some items had to be skipped."** The app still launches fine from elsewhere (e.g. `~/Desktop`) because Gatekeeper doesn't re-validate there. Fix: `codesign --force --deep --sign - dist/Orbital.app` after asset copy, before DMG creation.
+- **Use `ditto`, not `cp -r`, when staging the `.app` for DMG packaging.** The bundle contains ~2,500 symlinks (dyld framework versioning like `Current -> A`); `cp -r` dereferences them into real copies, bloating the DMG ~2x (587 MB staging → 247 MB DMG vs. 274 MB → 122 MB with `ditto`).
+- **`com.apple.quarantine` xattrs should be stripped** (`xattr -cr dist/Orbital.app`) to avoid Gatekeeper nags. `com.apple.provenance` is a restricted kernel-added xattr on every Sequoia-built binary — it cannot be stripped by userspace and is **not** the cause of drag-install failures (the broken seal is).
+- The bundle is ad-hoc signed, so first launch triggers Gatekeeper. Users must right-click → **Open** once, or we need a Developer ID + notarization (stubs already in the script).
+- `create-dmg` (from Homebrew) produces nicer DMGs but isn't required; the `hdiutil` fallback path is what CI/users without brew hit — keep it correct.
+
 ## Known Issues
 
 - `tests/platform/test_consumer3_wiring.py` — pre-existing failures (Windows sandbox user not configured)

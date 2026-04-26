@@ -14,6 +14,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -542,7 +543,25 @@ async def run_session_end_routine(
         {"role": "system", "content": "You maintain workspace memory files for an AI agent. Respond with ONLY valid JSON."},
         {"role": "user", "content": prompt},
     ]
-    response = await llm.complete(messages)
+    # orbital-marketing 2026-04-22: a single Moonshot timeout produced an
+    # amnesiac session. Retry on TimeoutError only; non-timeout errors fail fast.
+    _per_attempt_timeouts = [30.0, 60.0, 90.0]
+    for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
+        try:
+            response = await asyncio.wait_for(llm.complete(messages), timeout=_timeout)
+            break
+        except asyncio.TimeoutError:
+            if _attempt < len(_per_attempt_timeouts):
+                logger.info(
+                    "session_end LLM call: attempt %d timed out, retrying",
+                    _attempt,
+                )
+            else:
+                logger.error(
+                    "session_end LLM call: all %d attempts timed out, propagating",
+                    len(_per_attempt_timeouts),
+                )
+                raise
 
     # 4. Parse JSON response
     result = _parse_session_end_response(response.text)

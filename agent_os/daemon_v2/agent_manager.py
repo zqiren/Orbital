@@ -1188,19 +1188,21 @@ class AgentManager:
         if handle is None:
             return {"status": "no_active_session"}
 
-        # 1. Stop loop if running
+        # 1. Stop loop if running. terminate() interrupts any in-flight LLM
+        # stream, sets the stop flag, and cancels the loop task. The shield
+        # wait below is the final reaper for the loop's finally block.
         if handle.task is not None and not handle.task.done():
-            handle.session.stop()
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
                 logger.warning("new_session(%s): loop did not stop gracefully", project_id)
 
-        # 2. Cancel idle poll / sub-agents
+        # 2. Cancel idle poll. Sub-agent stop_all is deferred to step 3b
+        # (after session-end) so summarization can read sub-agent transcripts.
         poll_task = self._idle_poll_tasks.pop(project_id, None)
         if poll_task and not poll_task.done():
             poll_task.cancel()
-        await self._sub_agent_manager.stop_all(project_id)
 
         # 3. Pre-flush: run session-end routine so workspace files are updated
         workspace = handle.config_snapshot.get("workspace", "")
@@ -1213,12 +1215,34 @@ class AgentManager:
                     workspace_files=workspace_files,
                     session_id=handle.session.session_id,
                 ),
-                timeout=30.0,
+                timeout=200.0,
             )
         except asyncio.TimeoutError:
-            logger.warning("new_session(%s): pre-flush LLM call timed out, proceeding", project_id)
+            logger.warning(
+                "new_session(%s): pre-flush LLM call timed out after retries, proceeding without summary",
+                project_id,
+            )
         except Exception:
             logger.warning("new_session(%s): pre-flush failed, proceeding", project_id, exc_info=True)
+
+        # 3b. Stop sub-agents AFTER session-end so transcripts are readable
+        # during summarization. Wrapped in a 10s budget to avoid blocking
+        # rotation indefinitely on a wedged adapter. (T06)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "new_session(%s): stop_all timed out; sub-agents may leak",
+                project_id,
+            )
+        except Exception:
+            logger.exception(
+                "new_session(%s): stop_all raised; continuing with rotation",
+                project_id,
+            )
 
         # 4. Save old session info
         old_session_id = handle.session.session_id
@@ -1276,6 +1300,31 @@ class AgentManager:
             "new_session_id": new_session_id,
         }
 
+    async def cancel_message(self, project_id: str) -> dict:
+        """Interrupt current turn for project. Agent stays alive; session preserved."""
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return {"status": "no_agent"}
+        if handle.task is None or handle.task.done():
+            return {"status": "idle"}
+
+        # cancel_turn exceptions intentionally bubble: cancel_turn has its own
+        # internal exception handling (see loop.py:782-787) for the cross-task
+        # wait_for, so any exception escaping here indicates a real bug worth
+        # surfacing as an HTTP 500.
+        await handle.loop.cancel_turn()
+        # Broadcast after cancel_turn returns: the cancellation marker is
+        # written synchronously inside cancel_turn before any await
+        # (loop.py:779), so the JSONL is durable by the time we reach this
+        # line. If cancel_turn is later refactored to defer the marker write,
+        # this ordering assumption needs to be revisited.
+        self._ws.broadcast(project_id, {
+            "type": "agent.status",
+            "project_id": project_id,
+            "status": "idle",
+        })
+        return {"status": "cancelled"}
+
     async def stop_agent(self, project_id: str) -> None:
         """Stop agent and clean up."""
         handle = self._handles.get(project_id)
@@ -1301,14 +1350,19 @@ class AgentManager:
         if self._platform_provider is not None:
             await self._platform_provider.stop_process(project_id)
 
-        handle.session.stop()
-
-        # Wait for loop task
+        # terminate() interrupts any in-flight LLM stream and sets the stop
+        # flag; the shield-wait below is the final reaper for the loop's
+        # finally block.
         if handle.task is not None and not handle.task.done():
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+        else:
+            # Loop already done — preserve the legacy stop flag for any
+            # downstream code that observes it.
+            handle.session.stop()
 
         self._ws.broadcast(project_id, {
             "type": "agent.status",
@@ -1506,8 +1560,19 @@ class AgentManager:
                 })
                 return
 
-        # Max polls exceeded — force idle, something is stuck
-        logger.warning("Sub-agent poll timeout for project %s, forcing idle", project_id)
+        # Max polls exceeded — stop sub-agents, then force idle
+        logger.warning("Sub-agent poll timeout for project %s, forcing stop", project_id)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Watchdog stop_all timed out for project %s; sub-agents may leak", project_id
+            )
+        except Exception:
+            logger.exception("Watchdog stop_all raised for project %s", project_id)
         self._ws.broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,

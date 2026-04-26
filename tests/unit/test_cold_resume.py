@@ -266,27 +266,12 @@ class TestColdResumeInjection:
 
 class TestSessionEndCallback:
 
-    @pytest.mark.asyncio
-    async def test_session_end_triggered_on_graceful_stop(self, tmp_path):
-        """Loop exits normally (text response) -> on_session_end fired as background task."""
-        session = Session.new("end1", str(tmp_path))
-        provider = MockProvider(responses=[_make_text_response("Done.")])
-        registry = MockToolRegistry()
-        builder = MockPromptBuilder()
-        ctx = _make_base_prompt_context(str(tmp_path))
-        context_mgr = ContextManager(session, builder, ctx)
-
-        callback = AsyncMock()
-        loop = AgentLoop(
-            session, provider, registry, context_mgr,
-            on_session_end=callback,
-        )
-        await loop.run(initial_message="hello")
-
-        # on_session_end is now fire-and-forget (asyncio.create_task),
-        # so yield control to let the background task execute.
-        await asyncio.sleep(0)
-        callback.assert_awaited_once()
+    # NOTE: test_session_end_triggered_on_graceful_stop was DELETED in
+    # TASK-cancel-arch-04. The fire-and-forget asyncio.create_task(
+    # self._on_session_end()) call site at the end of AgentLoop.run() was
+    # removed; the synchronous session-end inside agent_manager.new_session()
+    # is now the sole authoritative summarization path. The deleted test's
+    # premise no longer holds.
 
     @pytest.mark.asyncio
     async def test_session_end_skipped_on_llm_failure(self, tmp_path):
