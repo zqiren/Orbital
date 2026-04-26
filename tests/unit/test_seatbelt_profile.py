@@ -4,15 +4,26 @@
 
 """Unit tests for Seatbelt (SBPL) profile generation.
 
-These are pure string tests — no macOS required, runs on any platform.
+These are macOS-Seatbelt profile string assertions. The docstring once claimed
+"pure string tests, runs on any platform" — empirically several of them embed
+POSIX path expectations (forward slashes, quoted-space escapes, /tmp prefix
+detection) that don't match Windows path representations. Skipped on win32
+until either the assertions are platform-normalised or the suite is moved
+behind macOS-only CI.
 """
 
 import os
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from agent_os.platform.macos.sandbox import generate_profile
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Seatbelt path-string assertions are POSIX-shaped (see module docstring)",
+)
 
 
 class TestProfileBasics:

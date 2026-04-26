@@ -1246,9 +1246,18 @@ class TestRESTEndpoints:
         assert resp.status_code == 400
 
     def test_no_v1_routes(self, app_client):
-        """Zero /api/v1/ route registrations."""
+        """Zero /api/v1/ route registrations as JSON API.
+
+        Cannot rely on a 404 response: the SPA static handler now serves
+        index.html as a fallback for any unmatched GET path so deep-links work.
+        Instead, verify the response isn't a v1-style JSON API response.
+        """
         resp = app_client.get("/api/v1/projects")
-        assert resp.status_code == 404
+        ctype = resp.headers.get("content-type", "")
+        assert "application/json" not in ctype or resp.status_code == 404, (
+            f"/api/v1/projects served as JSON API ({resp.status_code} {ctype}) — "
+            "v1 routes are supposed to be gone"
+        )
 
     def test_no_sqlite_in_app(self):
         """No SQLite references in the app module."""
@@ -1383,7 +1392,7 @@ class TestSkillsCopyOnProjectCreation:
         })
         assert resp.status_code == 201
         pid = resp.json()["project_id"]
-        skills_dir = workspace / "skills"
+        skills_dir = workspace / "orbital" / "skills"
         assert skills_dir.is_dir()
         # Should have the 4 seed skills
         subdirs = [d.name for d in skills_dir.iterdir() if d.is_dir()]
@@ -1401,8 +1410,8 @@ class TestSkillsCopyOnProjectCreation:
         workspace = tmp_path / "workspace2"
         workspace.mkdir()
         # Pre-create a skills directory with custom content
-        skills_dir = workspace / "skills"
-        skills_dir.mkdir()
+        skills_dir = workspace / "orbital" / "skills"
+        skills_dir.mkdir(parents=True)
         custom_skill = skills_dir / "my-custom"
         custom_skill.mkdir()
         (custom_skill / "SKILL.md").write_text("# My Custom\nCustom skill.")
@@ -1437,7 +1446,7 @@ class TestSkillsCopyOnProjectCreation:
         })
         assert resp.status_code == 201
         pid = resp.json()["project_id"]
-        skills_dir = workspace / "skills"
+        skills_dir = workspace / "orbital" / "skills"
         assert not skills_dir.exists()
         # Scratch projects stay unreconciled — nothing to reconcile.
         get_resp = app_client.get(f"/api/v2/projects/{pid}")
@@ -1505,7 +1514,11 @@ class TestSkillsAPIEndpoints:
         workspace.mkdir()
         pid = self._create_project_with_skills(app_client, workspace)
         resp = app_client.delete(f"/api/v2/projects/{pid}/skills/..%2F..%2Fetc")
-        assert resp.status_code in (400, 404)
+        # 405 is also a valid block: FastAPI's path-parameter routing rejects
+        # the slash-bearing skill_name as an unmatchable DELETE route. Either
+        # way the path-traversal attack is blocked — server never invokes the
+        # delete handler with a traversed path.
+        assert resp.status_code in (400, 404, 405)
 
     def test_upload_md_skill(self, app_client, tmp_path):
         workspace = tmp_path / "ws5"

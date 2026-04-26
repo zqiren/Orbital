@@ -32,6 +32,7 @@ class TestActivityCategoryMap:
             "file_read", "file_write", "file_edit",
             "command_exec", "request_access", "agent_message",
             "browser_automation", "credential_request",
+            "file_search", "content_search",
         }
         actual = set(_TOOL_CATEGORY_MAP.values())
         # All mapped values should be recognized

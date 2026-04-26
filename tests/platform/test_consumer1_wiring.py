@@ -339,9 +339,14 @@ class TestProjectBudgetFields:
         assert config.token_budget == 1_000_000
 
     def test_agent_config_has_max_iterations(self):
-        """AgentConfig has max_iterations with default 50."""
+        """AgentConfig has max_iterations field; default is 0 (unlimited).
+
+        Default changed from 50 to 0 when the iteration cap was removed in
+        favour of token-budget-based termination. The field is retained so
+        per-config overrides still work (see test_agent_config_custom_max_iterations).
+        """
         config = _make_config()
-        assert config.max_iterations == 50
+        assert config.max_iterations == 0
 
     def test_agent_config_custom_max_iterations(self):
         """AgentConfig accepts custom max_iterations."""

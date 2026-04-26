@@ -38,7 +38,12 @@ def _make_mock_transport(pending_request_id: str | None = None,
     transport.respond_to_permission = AsyncMock()
 
     if pending_request_id:
-        future = asyncio.Future()
+        # Use a MagicMock as a presence indicator. asyncio.Future() requires a
+        # running event loop in modern Python and trips the "no current event
+        # loop" deprecation when constructed in sync test code from inside a
+        # full pytest run; the future is never awaited here, so a stand-in is
+        # sufficient.
+        future = MagicMock()
         transport._pending_approvals = {pending_request_id: future}
         transport._pending_approval_data = {
             pending_request_id: {
@@ -175,7 +180,7 @@ class TestGetPendingSubAgentApproval:
         still returns a result with empty tool info."""
         sam = _make_sub_agent_manager()
         transport = MagicMock()
-        transport._pending_approvals = {"req_003": asyncio.Future()}
+        transport._pending_approvals = {"req_003": MagicMock()}  # presence indicator (see _make_mock_transport note)
         # Deliberately no _pending_approval_data attribute
         del transport._pending_approval_data
         adapter = _make_mock_adapter(transport=transport)

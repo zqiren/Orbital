@@ -139,7 +139,9 @@ class TestSessionEndConsolidation:
             "recent_messages": [],
         })
         assert "REPLACES" in prompt or "REPLACE" in prompt
-        assert "Cap at 20" in prompt or "cap at 20" in prompt.lower()
+        # NOTE: a literal "Cap at 20" assertion was retired here. The wording
+        # has shifted with prompt rewrites; the cap is now enforced server-side
+        # at write time (see tests/regression/test_session_log_bounded.py).
         # The lessons field should NOT contain the old append-only wording
         # Extract just the lessons instruction (field 4) from the prompt
         lessons_section = prompt.split('"lessons"')[1].split('"context"')[0]

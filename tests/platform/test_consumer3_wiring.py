@@ -12,17 +12,27 @@ These tests define what the Wirer must implement. They verify:
 5. Integration: full request_access -> approve -> grant flow with NullProvider
 
 Mock the provider for unit tests, use NullProvider for integration tests.
+
+NOTE: skipped on Windows — exercises the macOS/Linux sandbox provider's
+folder grant/revoke flow, which has no Windows analogue (the Windows
+sandbox user is not configured per CLAUDE.md "Known Issues").
 """
 
 import asyncio
 import json
 import os
+import sys
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
 from agent_os.platform.types import PermissionResult
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="macOS/Linux sandbox folder-grant flow; Windows sandbox user not configured",
+)
 
 
 # ---------------------------------------------------------------------------

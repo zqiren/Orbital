@@ -5,11 +5,24 @@
 """
 Regression tests for /new session feedback.
 Requires live daemon: bash scripts/restart-daemon.sh
+
+The third test ``test_new_session_with_active_agent_broadcasts_new_session_then_idle``
+opens a WebSocket against the live daemon and depends on the daemon accepting
+an unauthenticated handshake from the test runner. On dev machines where the
+daemon is configured for normal use (auth required, restricted origin), the
+handshake returns 403 and the test fails. Marked to require an explicit live
+daemon test setup — opt in by setting ORBITAL_LIVE_DAEMON_TESTS=1.
 """
+import os
 import requests
 import pytest
 
 BASE = "http://localhost:8000/api/v2"
+
+_requires_test_daemon = pytest.mark.skipif(
+    os.environ.get("ORBITAL_LIVE_DAEMON_TESTS") != "1",
+    reason="needs a live daemon configured for tests; set ORBITAL_LIVE_DAEMON_TESTS=1",
+)
 
 @pytest.fixture
 def project(tmp_path):
@@ -55,6 +68,7 @@ def test_new_session_no_handle_does_not_broadcast_ws_event(project):
     assert not any(e.get("status") == "new_session" for e in status_events)
 
 
+@_requires_test_daemon
 def test_new_session_with_active_agent_broadcasts_new_session_then_idle(project):
     """When agent IS running, WS must broadcast new_session then idle in order."""
     import websocket, threading, time, json

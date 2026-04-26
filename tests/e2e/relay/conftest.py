@@ -6,6 +6,12 @@
 
 Provides fixtures that start/stop the daemon (port 8321) and relay (port 3321),
 along with a simulated phone client for HTTP and WebSocket interactions.
+
+Skipped wholesale on Windows: the daemon/relay subprocess setup hits
+NotADirectoryError [WinError 267] when staging the relay process state — the
+fixtures assume POSIX process and path semantics that aren't yet adapted for
+Windows. Re-enable by removing the ``collect_ignore_glob`` once a Windows-
+compatible relay launcher exists.
 """
 
 import asyncio
@@ -22,6 +28,11 @@ import httpx
 import pytest
 import pytest_asyncio
 import websockets
+
+# Windows compatibility: the relay e2e tests rely on POSIX subprocess /
+# filesystem semantics. Skip the directory wholesale on win32.
+if sys.platform == "win32":
+    collect_ignore_glob = ["test_*.py"]
 
 # ---------------------------------------------------------------------------
 # Ports — non-default to avoid conflicts with a running daemon
