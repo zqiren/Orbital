@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Send, Square, Loader2 } from 'lucide-react';
 import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -253,6 +253,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
 
   const hasMore = totalMessages > loadedOffset;
 
+  // Pending scroll-position compensation for prepend operations.
+  // Set BEFORE setItems(...) prepends history; the layout effect below
+  // reads it, applies scrollTop += (newHeight - prevHeight) synchronously
+  // after DOM commit (before paint), and clears it. Prevents the visible
+  // snap-to-bottom that would otherwise occur via the items auto-scroll
+  // effect.
+  const pendingPrependPrevHeightRef = useRef<number | null>(null);
+
   async function loadOlderMessages() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
@@ -264,12 +272,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       );
       if (messages.length === 0) return;
       const transformed = transformChatHistory(messages, project.workspace);
+      // Stash prevHeight; the useLayoutEffect on `items` will compensate
+      // synchronously after the prepended DOM has committed.
+      pendingPrependPrevHeightRef.current = prevHeight;
       setItems(prev => [...transformed, ...prev]);
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
-      // Preserve scroll position after prepending
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = el.scrollHeight - prevHeight;
-      });
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
     } finally {
@@ -618,8 +625,50 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     };
   }, [projectId, project.name, on, off, scrollToBottom]);
 
+  // Fingerprint for the last item. DisplayItem has no stable id; use a
+  // composite of type + tool_call_id (for approval_card) or timestamp +
+  // a content prefix to disambiguate. session_separator has only
+  // timestamp; agent_notify has type+timestamp+title.
+  function lastItemKey(item: DisplayItem | undefined): string | null {
+    if (!item) return null;
+    if (item.type === 'approval_card') return `approval_card:${item.tool_call_id}`;
+    if (item.type === 'session_separator') return `session_separator:${item.timestamp}`;
+    if (item.type === 'agent_notify') {
+      return `agent_notify:${item.timestamp}:${item.title}`;
+    }
+    if (item.type === 'activity_block') {
+      return `activity_block:${item.startTime}:${item.endTime}:${item.activities.length}`;
+    }
+    // user_message, agent_message, sub_agent_message — use timestamp +
+    // first 32 chars of content as a stable-enough fingerprint.
+    const contentPrefix = item.content?.slice(0, 32) ?? '';
+    return `${item.type}:${item.timestamp}:${contentPrefix}`;
+  }
+
+  // Compensate scroll position synchronously after a history prepend.
+  // Runs after DOM commit, before paint — so the user never sees the
+  // chat snap to bottom. Must run before the auto-scroll useEffect
+  // below would have fired (it's now gated and won't fire on prepend
+  // anyway, but the layout-vs-effect ordering also guarantees it).
+  useLayoutEffect(() => {
+    const prevHeight = pendingPrependPrevHeightRef.current;
+    if (prevHeight === null) return;
+    pendingPrependPrevHeightRef.current = null;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop += el.scrollHeight - prevHeight;
+  }, [items]);
+
+  // Auto-scroll to bottom only when a NEW message arrives at the tail.
+  // Gating on the last-item fingerprint prevents a snap-to-bottom when
+  // history is prepended at the head (loadOlderMessages).
+  const lastItemKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    scrollToBottom();
+    const key = lastItemKey(items[items.length - 1]);
+    if (key !== lastItemKeyRef.current) {
+      lastItemKeyRef.current = key;
+      scrollToBottom();
+    }
   }, [items, scrollToBottom]);
 
   function flushRealtimeBlock() {
