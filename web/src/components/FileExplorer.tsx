@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { api, BASE_URL, isRelayMode } from '../config';
 import type { FileEntry, DirectoryListing, FileContent } from '../types';
+import MarkdownContent from './MarkdownContent';
 
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -530,9 +531,15 @@ function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
         </div>
       )}
       <div className="flex-1 overflow-auto">
-        <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
-          {fileContent.content}
-        </pre>
+        {fileName.toLowerCase().endsWith('.md') ? (
+          <div className="bg-sidebar p-4 min-h-full">
+            <MarkdownContent content={fileContent.content} />
+          </div>
+        ) : (
+          <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
+            {fileContent.content}
+          </pre>
+        )}
       </div>
     </div>
   );
