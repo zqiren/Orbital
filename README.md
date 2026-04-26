@@ -209,23 +209,23 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 ```
 {workspace}/
 +-- orbital/                            # Operational metadata
-|   +-- AGENT.md                        # Shared agent directive
-|   +-- {project-slug-a3f2}/           # Per-project namespace
-|       +-- sessions/
-|       |   +-- {session_id}.jsonl      # Append-only session log
-|       +-- instructions/
-|       |   +-- project_goals.md
-|       |   +-- user_directives.md
-|       +-- PROJECT_STATE.md            # Current task state
-|       +-- DECISIONS.md                # Decision log
-|       +-- LESSONS.md                  # Learned patterns
-|       +-- SESSION_LOG.md              # Last 3 session summaries
-|       +-- CONTEXT.md                  # External reference material
-+-- orbital-output/                     # Agent work artifacts
-    +-- {project-slug-a3f2}/
-        +-- screenshots/                # Browser screenshots
-        +-- pdfs/                       # Saved PDFs
-        +-- shell-output/               # Shell command output
+    +-- sessions/
+    |   +-- {session_id}.jsonl          # Append-only session log
+    +-- instructions/
+    |   +-- project_goals.md
+    |   +-- user_directives.md
+    +-- skills/                         # Project skills
+    +-- sub_agents/                     # Sub-agent transcripts
+    +-- tool-results/                   # Tool output artifacts
+    +-- output/                         # Agent work artifacts
+    |   +-- screenshots/                # Browser screenshots
+    |   +-- pdfs/                       # Saved PDFs
+    |   +-- shell-output/               # Shell command output
+    +-- PROJECT_STATE.md                # Current task state
+    +-- DECISIONS.md                    # Decision log
+    +-- LESSONS.md                      # Learned patterns
+    +-- SESSION_LOG.md                  # Last 3 session summaries
+    +-- CONTEXT.md                      # External reference material
 
 ~/orbital/                              # Home global (daemon infrastructure)
 +-- daemon.pid                          # Singleton enforcement
@@ -382,11 +382,10 @@ The management agent translates this into a `create_trigger` tool call with the 
 <details>
 <summary><strong>Context Management & Compaction</strong></summary>
 
-**Six workspace files** maintained by the LLM at session boundaries:
+**Five workspace files** maintained by the LLM at session boundaries:
 
 | File | Purpose |
 |------|---------|
-| `AGENT.md` | Shared agent directive (global) |
 | `PROJECT_STATE.md` | Current task, in-progress work |
 | `DECISIONS.md` | Decision log with rationale |
 | `LESSONS.md` | Learned patterns and pitfalls |

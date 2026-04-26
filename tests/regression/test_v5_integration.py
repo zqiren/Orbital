@@ -139,11 +139,9 @@ async def test_chat_composite_merges_session_and_transcripts():
     """
     with tempfile.TemporaryDirectory() as workspace:
         from agent_os.api.routes.agents_v2 import _read_chat_messages
-        from agent_os.daemon_v2.project_store import project_dir_name
 
         # Write management session
-        dir_name = project_dir_name("test", "proj1")
-        sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
+        sessions_dir = os.path.join(workspace, "orbital", "sessions")
         os.makedirs(sessions_dir, exist_ok=True)
         with open(os.path.join(sessions_dir, "s1.jsonl"), "w") as f:
             f.write(json.dumps({"role": "user", "content": "Hello", "timestamp": "2026-03-10T10:00:01Z"}) + "\n")
@@ -199,7 +197,6 @@ def test_prompt_awareness_reflects_active_agents():
         datetime_now="2026-03-10T10:00:00Z",
         project_name="test-project",
         project_id="proj1",
-        project_dir_name="test-project_proj1",
         active_sub_agents=[
             {"handle": "claude-code", "status": "running"},
             {"handle": "aider", "status": "idle"},

@@ -32,9 +32,17 @@ export function useAgent() {
     [],
   );
 
+  // kept for admin/debug use; UI Stop button uses cancelMessage (T05)
   const stopAgent = useCallback(async (projectId: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,
+      { method: 'POST' },
+    );
+  }, []);
+
+  const cancelMessage = useCallback(async (projectId: string) => {
+    return api<ActionResult>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/cancel`,
       { method: 'POST' },
     );
   }, []);
@@ -96,5 +104,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, stopAgent, newSession, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, stopAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
 }

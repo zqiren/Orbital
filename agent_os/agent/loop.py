@@ -107,6 +107,13 @@ class AgentLoop:
         self._llm_failed = False
         self._on_session_end = on_session_end
 
+        # Cancellation state (cancel_turn / terminate)
+        self._task: asyncio.Task | None = None
+        self._inflight_stream: asyncio.Task | None = None
+        self._stream_accumulator: StreamAccumulator | None = None
+        self._turn_cancelled: bool = False
+        self._cancellation_marker_appended_this_turn: bool = False
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -116,30 +123,50 @@ class AgentLoop:
         return self._budget_spent_usd
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
-        """Stream LLM response, accumulate into LLMResponse.
+        """Stream LLM response from the primary provider.
 
-        Uses provider.stream() to get streaming chunks and fires
-        session.notify_stream for each. Accumulates via StreamAccumulator.
+        Convenience wrapper preserved for tests that monkey-patch this
+        method. Delegates to the unified internal helper.
         """
-        accumulator = StreamAccumulator()
-        async for chunk in self._provider.stream(context, tools=tool_schemas):
-            accumulator.add(chunk)
-            self._session.notify_stream(chunk)
-        return accumulator.finalize()
+        return await self._stream_response_internal(
+            self._provider, context, tool_schemas,
+        )
 
     async def _stream_response_with(self, provider, context, tool_schemas) -> LLMResponse:
-        """Stream LLM response using a specific provider.
+        """Stream LLM response using a specific provider (rotation).
 
-        Delegates to _stream_response when using the primary provider,
-        preserving compatibility with tests that monkey-patch _stream_response.
+        Routes the primary provider through _stream_response so any test
+        monkey-patches on that method continue to fire; otherwise goes
+        directly to the unified internal helper. Both paths share the
+        same accumulator-publishing semantics so cancel_turn() can rely
+        on a consistent contract regardless of which provider is active.
         """
         if provider is self._provider:
             return await self._stream_response(context, tool_schemas)
+        return await self._stream_response_internal(
+            provider, context, tool_schemas,
+        )
+
+    async def _stream_response_internal(self, provider, context, tool_schemas) -> LLMResponse:
+        """Single source-of-truth streaming implementation.
+
+        Publishes the accumulator on self._stream_accumulator before any
+        await so cancel_turn() can inspect partial state. The async
+        iteration is wrapped in a try/finally so CancelledError reaches
+        the underlying generator's cleanup path (its httpx context).
+        """
         accumulator = StreamAccumulator()
-        async for chunk in provider.stream(context, tools=tool_schemas):
-            accumulator.add(chunk)
-            self._session.notify_stream(chunk)
-        return accumulator.finalize()
+        self._stream_accumulator = accumulator
+        try:
+            async for chunk in provider.stream(context, tools=tool_schemas):
+                accumulator.add(chunk)
+                self._session.notify_stream(chunk)
+            return accumulator.finalize()
+        finally:
+            # Do not clear self._stream_accumulator here — cancel_turn()
+            # may still need to read it on its way out. The next turn
+            # will reassign it at the top of the next call.
+            pass
 
     @staticmethod
     def _rotate_provider(providers, current_idx, cooldowns):
@@ -156,6 +183,8 @@ class AgentLoop:
                   initial_nonce: str | None = None) -> None:
         """Main loop entry point."""
         self._running = True
+        # Capture our own task handle so terminate() can cancel us.
+        self._task = asyncio.current_task()
         try:
             # Resolve pending if not resuming from approval pause
             if self._session._paused_for_approval:
@@ -173,6 +202,8 @@ class AgentLoop:
                 if initial_nonce:
                     msg["nonce"] = initial_nonce
                 self._session.append(msg)
+                # Fresh user input on this run ⇒ clear sticky cancel flag.
+                self._cancellation_marker_appended_this_turn = False
 
             # Reset per-run state on all tools (e.g. send counters)
             self._tool_registry.reset_run_state()
@@ -203,6 +234,10 @@ class AgentLoop:
                 # Drain queued user messages before preparing context
                 queued = self._session.pop_queued_messages()
                 if queued:
+                    # New user input ⇒ a brand new "turn" begins. Reset the
+                    # cancellation marker flag so subsequent cancel_turn()
+                    # calls write a fresh marker.
+                    self._cancellation_marker_appended_this_turn = False
                     for q_item in queued:
                         if isinstance(q_item, tuple):
                             q_content, q_nonce = q_item
@@ -236,22 +271,45 @@ class AgentLoop:
 
                 iteration += 1
 
+                # Reset per-iteration cancellation flags. The
+                # cancellation-marker flag is sticky across cancelled
+                # iterations: it's only reset when a new user message has
+                # been drained (in the queue-drain block above) — so a
+                # cancel_turn() called twice with no intervening user
+                # message is idempotent.
+                self._turn_cancelled = False
+
                 # Prepare context
                 context = self._context_manager.prepare()
 
                 # Get tool schemas
                 tool_schemas = self._tool_registry.schemas()
 
-                # Stream LLM response (using active provider from rotation)
+                # Stream LLM response (using active provider from rotation).
+                # Wrap in asyncio.Task so cancel_turn() can interrupt it.
                 active_provider = _all_providers[_current_idx]
-                try:
-                    response = await self._stream_response_with(
+                self._inflight_stream = asyncio.create_task(
+                    self._stream_response_with(
                         active_provider, context, tool_schemas,
-                    )
+                    ),
+                    name=f"stream-{self._session.session_id}-{iteration}",
+                )
+                try:
+                    response = await self._inflight_stream
                     consecutive_overflows = 0
                     llm_retries = 0
                     _retries_on_current = 0
+                except asyncio.CancelledError:
+                    # cancel_turn() invoked while streaming. Marker + cost
+                    # debit handled by cancel_turn() before propagating.
+                    self._inflight_stream = None
+                    if self._session.is_stopped():
+                        # terminate() also fired — let outer cleanup run.
+                        raise
+                    # Bare cancel_turn: continue the outer while loop.
+                    continue
                 except ContextOverflowError:
+                    self._inflight_stream = None
                     consecutive_overflows += 1
                     if consecutive_overflows >= 3:
                         self._session.append_system(
@@ -261,6 +319,7 @@ class AgentLoop:
                     self._context_manager.reduce_window(0.5)
                     continue
                 except LLMError as e:
+                    self._inflight_stream = None
                     category = e.category
 
                     # Abort: non-recoverable errors (401, 403, 400)
@@ -309,6 +368,9 @@ class AgentLoop:
                         break
                     await asyncio.sleep(2 ** _retries_on_current)
                     continue
+
+                # Successful stream completion — clear inflight task handle.
+                self._inflight_stream = None
 
                 # Track token usage
                 if response.usage:
@@ -375,6 +437,11 @@ class AgentLoop:
                 intercepted_tc_id = None
 
                 for tc in tool_calls:
+                    # Cancellation check: if cancel_turn() fired between or
+                    # during tool execution, skip remaining tool calls.
+                    if self._turn_cancelled:
+                        break
+
                     # Post-normalization validation
                     if not tc["id"]:
                         tc["id"] = uuid4().hex
@@ -536,6 +603,20 @@ class AgentLoop:
                 for msg in self._session.pop_deferred_messages():
                     self._session.append(msg)
 
+                # Cancellation landed mid-tool-loop (cancel_turn fired between
+                # tool calls or during a tool's execution). Append marker if
+                # not already done, resolve any unstarted tool calls, then
+                # continue to the top of the while loop. terminate() also
+                # sets is_stopped(), so we let the next iteration of the
+                # outer loop handle the stop check.
+                if self._turn_cancelled:
+                    if not self._cancellation_marker_appended_this_turn:
+                        self._persist_cancellation_marker()
+                    # Resolve any tool calls that never got a result — these
+                    # are the ones we skipped via the per-tool break above.
+                    self._session.resolve_pending_tool_calls()
+                    continue
+
                 # Resolve unprocessed tool calls from this batch on intercept-break
                 if exit_outer and intercepted_tc_id is not None:
                     for tc in tool_calls:
@@ -636,10 +717,164 @@ class AgentLoop:
             # Drain any remaining deferred messages
             for msg in self._session.pop_deferred_messages():
                 self._session.append(msg)
-            # Trigger session-end callback (e.g. workspace file generation)
-            # Fire-and-forget so idle broadcasts immediately.
-            # Skip if LLM failed — the provider is unreachable so the
-            # session-end LLM call would also fail.
-            if self._on_session_end is not None and not self._llm_failed:
-                asyncio.create_task(self._on_session_end())
+            # NOTE: fire-and-forget asyncio.create_task(self._on_session_end())
+            # was previously here. Removed in TASK-cancel-arch-04: the
+            # synchronous session-end inside agent_manager.new_session() is
+            # now the sole authoritative summarization path. The fire-and-
+            # forget had no strong reference and would emit
+            # "Task was destroyed but it is pending" on cancel.
             self._running = False
+
+    # ------------------------------------------------------------------
+    # Cancellation API (cancel_turn / terminate)
+    # ------------------------------------------------------------------
+
+    async def cancel_turn(self) -> None:
+        """Interrupt the current turn. Loop returns to idle, agent stays alive.
+
+        Idempotent: safe to call when no turn is in flight, or twice in
+        rapid succession. Exactly one cancellation marker is written per
+        cancellation event regardless of when the cancel landed (during
+        stream, between stream and tools, or mid-tool-loop).
+
+        Reserved for the future /cancel HTTP verb. terminate() should be
+        used by stop_agent / new_session callers — not cancel_turn().
+        """
+        # Idempotency: if we have already initiated a cancel for the
+        # current turn (marker pending or appended), do nothing. The flag
+        # is reset at the top of each loop iteration once a new turn
+        # actually starts running.
+        if self._cancellation_marker_appended_this_turn:
+            return
+
+        if self._inflight_stream is None or self._inflight_stream.done():
+            # No turn in flight; possibly idle, possibly between LLM and
+            # tool exec, possibly mid-tool-loop. Set the flag so the loop
+            # body skips remaining tool calls and the post-tool block
+            # appends the marker if appropriate.
+            self._turn_cancelled = True
+            return
+
+        # Claim the inflight task and capture the accumulator BEFORE any
+        # await. After we yield to the event loop in `wait_for` below, the
+        # loop's CancelledError handler may `continue` into iteration N+1
+        # which reassigns self._stream_accumulator. We must hold a local
+        # reference to the cancelled-turn's accumulator so the post-await
+        # cost debit reflects the cancelled turn — not iteration N+1's
+        # fresh empty accumulator (C1 race).
+        inflight = self._inflight_stream
+        self._inflight_stream = None
+        accumulator = self._stream_accumulator
+
+        # Mark cancelled FIRST so any concurrent loop work observes it,
+        # then mark "marker pending for this turn" to make further
+        # cancel_turn() calls no-ops until a new turn starts.
+        self._turn_cancelled = True
+        self._cancellation_marker_appended_this_turn = True
+
+        # Persist the marker SYNCHRONOUSLY before the await so its JSONL
+        # position is adjacent to the cancelled turn — even if iteration
+        # N+1 races ahead and appends its own assistant message during
+        # our wait_for (C2 race).
+        self._persist_cancellation_marker_inner()
+
+        inflight.cancel()
+        try:
+            await asyncio.wait_for(inflight, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        except Exception:
+            logger.exception("inflight stream raised during cancel_turn")
+
+        # Debit cost using the captured accumulator (immune to iteration
+        # N+1's reassignment of self._stream_accumulator during the await).
+        self._debit_cancelled_turn_cost(accumulator)
+
+    async def terminate(self) -> None:
+        """End the loop. Cancels current turn and exits the while True.
+
+        Session JSONL preserved; agent task done; handle cleanup is the
+        caller's responsibility (caller awaits self._task or shields it).
+        Do NOT await self._task here — this would deadlock if terminate
+        was invoked from within the loop's own task.
+        """
+        await self.cancel_turn()
+        # Cooperative flag: loop's between-iterations check picks this up.
+        self._session.stop()
+        if self._task is not None and not self._task.done():
+            # If we're called from a different task (typical for /stop),
+            # cancel the loop task so it exits the inflight stream wait
+            # via the CancelledError -> is_stopped() raise branch.
+            cur = None
+            try:
+                cur = asyncio.current_task()
+            except RuntimeError:
+                pass
+            if cur is not self._task:
+                self._task.cancel()
+
+    def _persist_cancellation_marker(self) -> None:
+        """Append a system message indicating user cancellation.
+
+        Called exactly once per cancellation event. Sets the per-turn
+        flag so cancel_turn() and the post-tool-loop block do not double-
+        append. The flag is reset at the top of each loop iteration.
+        """
+        if self._cancellation_marker_appended_this_turn:
+            return
+        self._cancellation_marker_appended_this_turn = True
+        self._persist_cancellation_marker_inner()
+
+    def _persist_cancellation_marker_inner(self) -> None:
+        """Write the cancellation marker without re-checking the flag.
+
+        Internal helper used by cancel_turn() once it has already claimed
+        the per-turn marker slot via _cancellation_marker_appended_this_turn.
+        """
+        self._session.append({
+            "role": "system",
+            "content": "[cancelled by user]",
+            "source": "management",
+            "cancelled_by_user": True,
+        })
+
+    def _debit_cancelled_turn_cost(self, accumulator=None) -> None:
+        """Debit the cost of partial output tokens generated before cancel.
+
+        Reads the streaming accumulator's collected usage (or estimates
+        from text_parts when usage is unavailable). Mirrors the normal
+        cost path used after a successful turn (the on_cost_update
+        callback at loop.py:103). Full debit per Moonshot's billing
+        policy: tokens generated are billed even if undelivered.
+
+        Takes the accumulator as an explicit parameter so callers can pass
+        in a reference captured BEFORE any awaits — protecting against
+        the C1 race where iteration N+1 reassigns self._stream_accumulator
+        during cancel_turn's await wait_for. If no accumulator is supplied
+        (legacy call sites) we fall back to self._stream_accumulator.
+        """
+        if accumulator is None:
+            accumulator = self._stream_accumulator
+        if accumulator is None:
+            return
+
+        # Prefer the usage emitted by the provider's final/usage chunk.
+        usage = accumulator.usage
+        if usage is None:
+            # No final-usage chunk arrived (we cancelled before it). Fall
+            # back to a rough output-token estimate from the partial text.
+            partial_text = "".join(accumulator.text_parts)
+            output_tokens = max(1, len(partial_text) // 4) if partial_text else 0
+            if output_tokens == 0:
+                return
+            usage = TokenUsage(input_tokens=0, output_tokens=output_tokens)
+
+        delta = _estimate_cost_usd(
+            usage, self._cost_per_1k_input, self._cost_per_1k_output,
+        )
+        self._budget_spent_usd += delta
+        if self._on_cost_update is not None:
+            try:
+                self._on_cost_update(delta, self._budget_spent_usd)
+            except Exception:
+                logger.exception("on_cost_update callback raised during cancel")

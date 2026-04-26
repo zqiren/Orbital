@@ -54,7 +54,7 @@ export default function App() {
     updateProject,
     deleteProject,
   } = useProjects();
-  const { stopAgent } = useAgent();
+  const { cancelMessage } = useAgent();
   const ws = useWebSocket();
 
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -343,17 +343,17 @@ export default function App() {
     await updateProject(selectedProjectId, data);
   }
 
-  async function handleDeleteProject(clearOutput: boolean = false) {
+  async function handleDeleteProject() {
     if (!selectedProjectId) return;
-    await deleteProject(selectedProjectId, clearOutput);
+    await deleteProject(selectedProjectId);
     setSelectedProjectId(null);
     setView('list');
     setMobileView('sidebar');
   }
 
-  async function handleStopAgent() {
+  async function handleCancelMessage() {
     if (!selectedProjectId) return;
-    await stopAgent(selectedProjectId);
+    await cancelMessage(selectedProjectId);
   }
 
   // First-run wizard (before setup gate)
@@ -458,7 +458,7 @@ export default function App() {
             statusSummary={statusSummaries[selectedProject.project_id]}
             tab={tab}
             onTabChange={setTab}
-            onStopAgent={handleStopAgent}
+            onStopAgent={handleCancelMessage}
             triggers={triggers}
             onTriggerToggle={toggleTrigger}
             onTriggerDelete={deleteTrigger}

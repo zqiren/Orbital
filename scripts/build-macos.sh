@@ -55,9 +55,22 @@ mkdir -p "$APP_RESOURCES/assets"
 cp assets/icon.png "$APP_RESOURCES/assets/"
 cp assets/icon.icns "$APP_RESOURCES/assets/"
 
+# 4b. Re-sign bundle AFTER SPA/assets are copied in.
+# PyInstaller ad-hoc signs the .app during BUNDLE, but step 4 adds new files
+# that aren't in _CodeSignature/CodeResources. macOS Sequoia's Finder
+# validates the seal when drag-installing to /Applications and skips items
+# whose hashes don't match — surfacing as "some items had to be skipped".
+echo "[4b/5] Re-signing bundle ad-hoc after asset copy..."
+codesign --force --deep --sign - dist/Orbital.app
+codesign --verify --deep --strict dist/Orbital.app
+
 # 5. Create DMG
 echo "[5/5] Creating DMG..."
 DMG_NAME="Orbital-1.0.0-macOS.dmg"
+
+# Strip user-writable extended attributes (quarantine etc.).
+# com.apple.provenance is restricted and can't be stripped — harmless.
+xattr -cr dist/Orbital.app
 
 # Clean previous DMG
 rm -f "dist/$DMG_NAME"
@@ -79,8 +92,10 @@ if command -v create-dmg &>/dev/null; then
 else
     echo "  create-dmg not found, using hdiutil fallback..."
     # Simple DMG without fancy layout
+    # Use ditto (not cp -r) so symlinks inside the bundle stay as symlinks.
+    # cp -r dereferences them, bloating the DMG ~2x (bundle has ~2500 symlinks).
     mkdir -p dist/dmg_staging
-    cp -r dist/Orbital.app dist/dmg_staging/
+    ditto dist/Orbital.app dist/dmg_staging/Orbital.app
     ln -sf /Applications dist/dmg_staging/Applications
     hdiutil create -volname "Orbital" -srcfolder dist/dmg_staging -ov -format UDZO "dist/$DMG_NAME"
     rm -rf dist/dmg_staging

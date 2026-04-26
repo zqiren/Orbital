@@ -51,7 +51,7 @@ Help the user immediately without requiring setup or clarification unless truly 
 
 ## Scope
 - Answer questions, draft text, brainstorm, calculate, research
-- Write small scripts or snippets (place output in agent_output/)
+- Write small scripts or snippets directly into the workspace (not under orbital/)
 - Any task that doesn't require sustained multi-session effort
 
 ## Rules
@@ -61,6 +61,15 @@ Help the user immediately without requiring setup or clarification unless truly 
 - Keep workspace state maintenance light — only update PROJECT_STATE.md for
   substantial ongoing work, not one-off questions.
 """
+
+
+def _write_scratch_project_goals(scratch_workspace: str) -> None:
+    """Write the canned SCRATCH_PROJECT_GOALS into the new orbital/ layout."""
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(scratch_workspace)
+    os.makedirs(pp.instructions_dir, exist_ok=True)
+    with open(pp.project_goals, "w", encoding="utf-8") as f:
+        f.write(SCRATCH_PROJECT_GOALS)
 
 
 def _ensure_scratch_project(project_store, settings_store, data_dir):
@@ -79,10 +88,7 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "model": "",
         "api_key": "",
     })
-    goals_dir = os.path.join(scratch_workspace, "orbital", "instructions")
-    os.makedirs(goals_dir, exist_ok=True)
-    with open(os.path.join(goals_dir, "project_goals.md"), "w", encoding="utf-8") as f:
-        f.write(SCRATCH_PROJECT_GOALS)
+    _write_scratch_project_goals(scratch_workspace)
 
 
 def _configure_file_logging(data_dir: str) -> None:

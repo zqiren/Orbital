@@ -2,12 +2,14 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: session-end routine runs in background; idle broadcasts immediately.
+"""Regression: workspace file writes are atomic so concurrent readers never see partial content.
 
-After backgrounding _on_session_end() in loop.py, the idle status must
-broadcast without waiting for the session-end LLM call.  Workspace file
-writes must be atomic (write-to-tmp-then-replace) so concurrent readers
-never see partial content.
+Note: the older "session-end runs as background fire-and-forget" tests in
+this file were removed during the cancel-arch merge. Cancel-arch removed
+the fire-and-forget pattern from loop.py (it had no strong reference and
+emitted "Task was destroyed but it is pending" on cancel); the synchronous
+session-end inside agent_manager.new_session() is now the sole authoritative
+summarization path. See cancel-arch test_agent_loop_cancel.py::test_no_fire_and_forget_session_end.
 """
 
 import asyncio
@@ -23,124 +25,19 @@ from agent_os.agent.workspace_files import WorkspaceFileManager
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Idle broadcasts before session-end completes
+# (Removed: test_idle_broadcasts_before_session_end_completes / test_session_end_still_executes)
+# These tested the deleted fire-and-forget session-end pattern in AgentLoop.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_idle_broadcasts_before_session_end_completes():
-    """Loop run() must complete (allowing idle broadcast) before
-    the fire-and-forget session-end task finishes."""
-    session_end_started = asyncio.Event()
-    session_end_done = asyncio.Event()
-
-    async def slow_session_end():
-        session_end_started.set()
-        await asyncio.sleep(5)
-        session_end_done.set()
-
-    # Build a minimal AgentLoop that exits immediately
-    from agent_os.agent.loop import AgentLoop
-
-    session = MagicMock()
-    session._paused_for_approval = False
-    session.resolve_pending_tool_calls = MagicMock()
-    session.pop_deferred_messages = MagicMock(return_value=[])
-    session.pop_queued_messages = MagicMock(return_value=[])
-    session.get_messages = MagicMock(return_value=[])
-
-    provider = MagicMock()
-    context_manager = MagicMock()
-
-    loop = AgentLoop(
-        session=session,
-        provider=provider,
-        context_manager=context_manager,
-        tool_registry=MagicMock(),
-        on_session_end=slow_session_end,
-    )
-
-    # Make the loop exit on first iteration by raising StopIteration
-    # in the provider.complete call
-    provider.complete = AsyncMock(side_effect=Exception("force exit"))
-    context_manager.prepare = MagicMock(return_value=([], []))
-
-    # Run the loop — it should return quickly despite slow session-end
-    start = time.monotonic()
-    try:
-        await asyncio.wait_for(loop.run(), timeout=3.0)
-    except Exception:
-        pass  # Expected — provider.complete raises
-    elapsed = time.monotonic() - start
-
-    # The loop must return in well under 5s (the session-end sleep duration)
-    assert elapsed < 4.0, f"Loop took {elapsed:.1f}s — session-end is blocking"
-
-    # Give the background task a moment to start
-    await asyncio.sleep(0.1)
-    assert session_end_started.is_set(), "Session-end task was never started"
-
-    # Clean up: cancel the background session-end task
-    for task in asyncio.all_tasks():
-        if task is not asyncio.current_task() and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-
 # ---------------------------------------------------------------------------
-# Test 2: Session-end still executes in background
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_session_end_still_executes():
-    """Even though session-end is fire-and-forget, it must still run."""
-    completed = asyncio.Event()
-
-    async def session_end_with_flag():
-        completed.set()
-
-    from agent_os.agent.loop import AgentLoop
-
-    session = MagicMock()
-    session._paused_for_approval = False
-    session.resolve_pending_tool_calls = MagicMock()
-    session.pop_deferred_messages = MagicMock(return_value=[])
-    session.pop_queued_messages = MagicMock(return_value=[])
-    session.get_messages = MagicMock(return_value=[])
-
-    provider = MagicMock()
-    provider.complete = AsyncMock(side_effect=Exception("force exit"))
-    context_manager = MagicMock()
-    context_manager.prepare = MagicMock(return_value=([], []))
-
-    loop = AgentLoop(
-        session=session,
-        provider=provider,
-        context_manager=context_manager,
-        tool_registry=MagicMock(),
-        on_session_end=session_end_with_flag,
-    )
-
-    try:
-        await loop.run()
-    except Exception:
-        pass
-
-    # Wait for background task to complete
-    await asyncio.sleep(0.5)
-    assert completed.is_set(), "Session-end never executed"
-
-
-# ---------------------------------------------------------------------------
-# Test 3: Atomic write — no partial reads
+# Atomic write tests (cancel-arch additions): cover the file-write durability
+# story that replaced the old fire-and-forget session-end behaviour.
 # ---------------------------------------------------------------------------
 
 def test_atomic_write_no_partial_reads():
     """Concurrent reads during write must see either old or new content."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         # Write initial content
@@ -180,7 +77,7 @@ def test_atomic_write_no_partial_reads():
 def test_atomic_write_tmp_file_cleaned_up():
     """No .tmp files should remain after a successful write."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         wfm.write("state", "test content")
@@ -188,7 +85,7 @@ def test_atomic_write_tmp_file_cleaned_up():
         wfm.write("lessons", "lesson learned")
 
         # Check for leftover .tmp files
-        workspace_dir = os.path.join(tmpdir, "orbital", "test-proj")
+        workspace_dir = os.path.join(tmpdir, "orbital")
         for f in os.listdir(workspace_dir):
             assert not f.endswith(".tmp"), f"Leftover tmp file: {f}"
 
@@ -200,7 +97,7 @@ def test_atomic_write_tmp_file_cleaned_up():
 def test_new_loop_reads_valid_file_during_background_write():
     """A reader (context builder) must see valid content even during write."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        wfm = WorkspaceFileManager(tmpdir, "test-proj")
+        wfm = WorkspaceFileManager(tmpdir)
         wfm.ensure_dir()
 
         # Write initial state

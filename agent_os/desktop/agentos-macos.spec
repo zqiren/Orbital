@@ -24,6 +24,7 @@ a = Analysis(
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
+        (os.path.join(project_root, 'agent_os', 'default_skills'), 'agent_os/default_skills'),
         # Bundled ripgrep — both macOS archs; runtime picks via platform.machine().
         # Must use datas= (not binaries=) so PyInstaller does not rewrite the binary.
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'macos-arm64', 'rg'), 'agent_os/vendor/rg/macos-arm64'),

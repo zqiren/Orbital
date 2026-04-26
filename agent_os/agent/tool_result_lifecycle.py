@@ -133,7 +133,9 @@ def _export_to_disk(
     tool_call_id = msg.get("tool_call_id", "unknown")
     content = msg.get("content", "")
 
-    # Derive tool-results directory (sibling to sessions/ under orbital/)
+    # tool-results lives as a sibling of sessions under orbital/. Derived from
+    # session._filepath rather than ProjectPaths to keep this module decoupled,
+    # but it relies on ProjectPaths.tool_results_dir == dirname(sessions_dir)/tool-results.
     sessions_dir = os.path.dirname(session._filepath)
     parent = os.path.dirname(sessions_dir)
     tool_results_dir = os.path.join(parent, "tool-results", session.session_id)

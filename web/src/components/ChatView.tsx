@@ -95,7 +95,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, startAgent, stopAgent, newSession } = useAgent();
+  const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
   const autoStarted = useRef(false);
 
   /**
@@ -1154,8 +1154,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
             <>
               <button
                 type="button"
-                onClick={() => stopAgent(projectId)}
-                onTouchEnd={(e) => { e.preventDefault(); stopAgent(projectId); }}
+                onClick={() => cancelMessage(projectId)}
+                onTouchEnd={(e) => { e.preventDefault(); cancelMessage(projectId); }}
                 className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
               >
                 <Square size={18} />

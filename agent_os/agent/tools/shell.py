@@ -41,13 +41,11 @@ class ShellTool(Tool):
     _ENV_VAR_RE = re.compile(r'(?:\$HOME|\$USERPROFILE|%USERPROFILE%|%APPDATA%|%LOCALAPPDATA%)')
 
     def __init__(self, workspace: str, os_type: str,
-                 platform_provider=None, project_id: str | None = None,
-                 project_dir_name: str = ""):
+                 platform_provider=None, project_id: str | None = None):
         self._workspace = workspace
         self._os_type = os_type
         self._platform_provider = platform_provider
         self._project_id = project_id
-        self._project_dir_name = project_dir_name
         self.name = "shell"
         self.description = "Execute a shell command in the workspace."
         self.parameters = {
@@ -116,10 +114,8 @@ class ShellTool(Tool):
         total = len(lines)
 
         # Save full output to tempfile
-        if self._project_dir_name:
-            output_dir = os.path.join(workspace, "orbital-output", self._project_dir_name, "shell-output")
-        else:
-            output_dir = os.path.join(workspace, "orbital-output", "shell-output")
+        from agent_os.agent.project_paths import ProjectPaths
+        output_dir = ProjectPaths(workspace).shell_output_dir
         os.makedirs(output_dir, exist_ok=True)
         filename = f"{uuid4().hex[:12]}.txt"
         filepath = os.path.join(output_dir, filename)

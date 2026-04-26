@@ -10,25 +10,21 @@ import re
 from uuid import uuid4
 
 
-def project_dir_name(project_name: str, project_id: str) -> str:
-    """Build a slugified directory name: ``my-web-scraper-a3f2``.
-
-    *project_name* is the human-readable project name (e.g. "My Web Scraper").
-    *project_id* is the store-level id (e.g. "proj_a3f2b1c2d4e5").
-
-    The result is ``<slugified-name>-<short-id>`` where *short-id* is the
-    first 4 hex characters after the ``proj_`` prefix.
-    """
-    slug = re.sub(r'[^a-z0-9]+', '-', project_name.lower()).strip('-')
-    slug = slug[:40] or 'project'
-    short_id = project_id.replace('proj_', '')[:4]
-    return f"{slug}-{short_id}"
 
 DEFAULT_NOTIFICATION_PREFS = {
     "task_completed": True,
     "errors": True,
     "agent_messages": True,
     "trigger_started": False,
+}
+
+# Default value for fields that are merged into every ``get_project`` response
+# so legacy records missing the key behave as if it were explicitly ``False``.
+# Keep this flat (top-level) — it is not a runtime-managed field; it persists
+# across daemon restarts and records an architectural decision about whether
+# the project has ever been reconciled with the bundled default skills.
+DEFAULT_PROJECT_FIELDS: dict = {
+    "default_skills_reconciled": False,
 }
 
 
@@ -70,6 +66,11 @@ class ProjectStore:
         if project is not None:
             prefs = project.get("notification_prefs", {})
             project["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
+            # Merge defaults for top-level project fields so legacy records
+            # surface the expected False/zero/empty default without requiring
+            # an explicit migration step.
+            for key, default_value in DEFAULT_PROJECT_FIELDS.items():
+                project.setdefault(key, default_value)
         return project
 
     @staticmethod

@@ -24,7 +24,10 @@ from pydantic import BaseModel, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+from agent_os.daemon_v2.default_skills_installer import install_default_skills
+from agent_os.agent.project_paths import ProjectPaths
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2")
 
@@ -156,7 +159,7 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
 _sub_agent_sessions: dict = {}  # project_id -> Session
 
 
-def _get_or_create_session(project_id: str, workspace: str, project_name: str = ""):
+def _get_or_create_session(project_id: str, workspace: str):
     """Get or create a session for sub-agent-only projects.
 
     Management-agent projects use _agent_manager.get_session().
@@ -175,9 +178,8 @@ def _get_or_create_session(project_id: str, workspace: str, project_name: str = 
     from uuid import uuid4
     from agent_os.agent.session import Session
 
-    dir_name = _project_dir_name(project_name, project_id)
     session_id = f"subagent_{uuid4().hex[:8]}"
-    session = Session.new(session_id, workspace, project_dir_name=dir_name)
+    session = Session.new(session_id, workspace)
     _sub_agent_sessions[project_id] = session
     return session
 
@@ -207,20 +209,27 @@ def _read_file_or_empty(path: str) -> str:
         return ""
 
 
-def _enrich_with_disk_content(result: dict, workspace: str, dir_name: str) -> dict:
+def _enrich_with_disk_content(result: dict, workspace: str) -> dict:
     """Attach project_goals_content and user_directives_content from disk files."""
-    goals_path = os.path.join(workspace, "orbital", dir_name, "instructions", "project_goals.md")
-    rules_path = os.path.join(workspace, "orbital", dir_name, "instructions", "user_directives.md")
-    result["project_goals_content"] = _read_file_or_empty(goals_path)
-    result["user_directives_content"] = _read_file_or_empty(rules_path)
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(workspace)
+    result["project_goals_content"] = _read_file_or_empty(pp.project_goals)
+    result["user_directives_content"] = _read_file_or_empty(pp.user_directives)
     return result
 
 
-def _write_workspace_file(workspace: str, filename: str, content: str, dir_name: str) -> None:
-    """Write content to {workspace}/orbital/{dir_name}/instructions/{filename}."""
-    instructions_dir = os.path.join(workspace, "orbital", dir_name, "instructions")
-    os.makedirs(instructions_dir, exist_ok=True)
-    with open(os.path.join(instructions_dir, filename), "w", encoding="utf-8") as f:
+def _write_workspace_file(workspace: str, filename: str, content: str) -> None:
+    """Write content to {workspace}/orbital/instructions/{filename}."""
+    from agent_os.agent.project_paths import ProjectPaths
+    pp = ProjectPaths(workspace)
+    os.makedirs(pp.instructions_dir, exist_ok=True)
+    if filename == "project_goals.md":
+        filepath = pp.project_goals
+    elif filename == "user_directives.md":
+        filepath = pp.user_directives
+    else:
+        filepath = os.path.join(pp.instructions_dir, filename)
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -273,14 +282,16 @@ async def create_project(req: CreateProjectRequest):
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
-    # Copy default skills into workspace
-    if not req.is_scratch:
-        default_skills_src = os.path.join(os.path.dirname(__file__), "..", "..", "default_skills")
-        default_skills_src = os.path.normpath(default_skills_src)
-        if os.path.isdir(default_skills_src):
-            dest_skills = os.path.join(req.workspace, "skills")
-            if not os.path.exists(dest_skills):
-                shutil.copytree(default_skills_src, dest_skills)
+    # Seed default skills via the shared installer. Any failure here must not
+    # fail project creation — missing skills will reconcile on first agent
+    # start because `default_skills_reconciled` stays False.
+    try:
+        install_default_skills(_project_store, pid)
+    except Exception:
+        logger.error(
+            "default skills install failed during create_project for %s",
+            pid, exc_info=True,
+        )
 
     project = _project_store.get_project(pid)
     return _redact_project(project)
@@ -302,9 +313,8 @@ async def get_project(project_id: str):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     workspace = project.get("workspace", "")
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
     result = _redact_project(project)
-    _enrich_with_disk_content(result, workspace, dir_name)
+    _enrich_with_disk_content(result, workspace)
     result.setdefault("agent_name", result.get("name", ""))
     result.setdefault("is_scratch", False)
     # Flatten runtime budget spend for frontend consumption
@@ -328,7 +338,6 @@ async def update_project(project_id: str, body: ProjectUpdate):
         _project_store.update_runtime(project_id, {"budget_spent_usd": runtime_budget_reset})
     # Handle workspace file content fields separately
     workspace = project.get("workspace", "")
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
     goals_content = updates.pop("project_goals_content", None)
     rules_content = updates.pop("user_directives_content", None)
     # The Settings UI writes to the `instructions` field. Sync it to
@@ -339,9 +348,9 @@ async def update_project(project_id: str, body: ProjectUpdate):
     if goals_content is None and updates.get("instructions") is not None:
         goals_content = updates["instructions"]
     if goals_content is not None:
-        _write_workspace_file(workspace, "project_goals.md", goals_content, dir_name)
+        _write_workspace_file(workspace, "project_goals.md", goals_content)
     if rules_content is not None:
-        _write_workspace_file(workspace, "user_directives.md", rules_content, dir_name)
+        _write_workspace_file(workspace, "user_directives.md", rules_content)
     # If api_key matches the current global key, store empty string so the
     # project inherits at runtime rather than snapshotting a stale copy.
     if "api_key" in updates and _credential_store is not None:
@@ -362,44 +371,23 @@ async def update_project(project_id: str, body: ProjectUpdate):
             pass  # invalid value already persisted — interceptor keeps old preset
     updated = _project_store.get_project(project_id)
     result = _redact_project(updated)
-    _enrich_with_disk_content(result, workspace, dir_name)
+    _enrich_with_disk_content(result, workspace)
     result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
     return result
 
 
 _cleanup_logger = logging.getLogger(__name__)
 
-def _cleanup_project_files(workspace: str, project_id: str, clear_output: bool,
-                           project_name: str = "") -> None:
-    """Remove project data files from the workspace orbital directory.
 
-    All project-specific data lives under orbital/{dir_name}/.  Deleting that
-    single directory is sufficient.  Legacy flat directories from pre-namespaced
-    workspaces are also cleaned up (safe: they only exist in old workspaces).
+def _cleanup_project_files(workspace: str) -> None:
+    """Remove all Orbital data for the project at this workspace.
+
+    Deletes {workspace}/orbital/ and nothing else. User files in the
+    workspace directory (including agent-authored deliverables placed
+    contextually outside orbital/) are preserved.
     """
-    agent_os_dir = os.path.join(workspace, "orbital")
-    if not os.path.isdir(agent_os_dir):
-        return
-
-    # Delete the project's namespace directory (all project data)
-    dir_name = _project_dir_name(project_name, project_id)
-    project_dir = os.path.join(agent_os_dir, dir_name)
-    _rmtree_safe(project_dir)
-
-    # Also try the raw project_id directory (backward compat)
-    old_project_dir = os.path.join(agent_os_dir, project_id)
-    _rmtree_safe(old_project_dir)
-
-    # Legacy flat cleanup (pre-migration workspaces).
-    # TODO: Remove after one release cycle.
-    for legacy_subdir in (
-        "browser-screenshots", "browser-pdfs", "shell_output",
-        "instructions", ".tmp",
-    ):
-        legacy_path = os.path.join(agent_os_dir, legacy_subdir)
-        if os.path.isdir(legacy_path):
-            _rmtree_safe(legacy_path)
-    _remove_safe(os.path.join(agent_os_dir, "approval_history.jsonl"))
+    paths = ProjectPaths(workspace)
+    _rmtree_safe(paths.orbital_dir)
 
 
 def _rmtree_safe(path: str) -> None:
@@ -422,10 +410,7 @@ def _remove_safe(path: str) -> None:
 
 
 @router.delete("/projects/bulk")
-async def bulk_delete_projects(
-    body: BulkDeleteRequest,
-    delete_workspace: bool = Query(default=False),
-):
+async def bulk_delete_projects(body: BulkDeleteRequest):
     """Delete multiple projects by filter criteria."""
     if not body.prefix and not body.project_ids and not body.before:
         raise HTTPException(
@@ -462,8 +447,7 @@ async def bulk_delete_projects(
                 await _agent_manager.stop_agent(pid)
             workspace = p.get("workspace", "")
             if workspace:
-                _cleanup_project_files(workspace, pid, delete_workspace,
-                                       project_name=p.get("name", ""))
+                _cleanup_project_files(workspace)
             _sub_agent_sessions.pop(pid, None)
             _project_store.delete_project(pid)
             deleted += 1
@@ -474,7 +458,7 @@ async def bulk_delete_projects(
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str, clear_output: bool = False):
+async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -485,8 +469,7 @@ async def delete_project(project_id: str, clear_output: bool = False):
     # Clean up project files on disk
     workspace = project.get("workspace", "")
     if workspace:
-        _cleanup_project_files(workspace, project_id, clear_output,
-                               project_name=project.get("name", ""))
+        _cleanup_project_files(workspace)
 
     # Clear in-memory caches
     _sub_agent_sessions.pop(project_id, None)
@@ -580,7 +563,7 @@ async def inject_message(project_id: str, req: InjectRequest):
     if req.target and _sub_agent_manager is not None:
         # Route to sub-agent (Path B: direct @mention)
         workspace = project.get("workspace", "")
-        session = _get_or_create_session(project_id, workspace, project.get("name", ""))
+        session = _get_or_create_session(project_id, workspace)
 
         # Persist user message BEFORE sending to sub-agent
         user_ts = datetime.now(timezone.utc).isoformat()
@@ -662,8 +645,17 @@ async def get_pending_approval(project_id: str):
     return {"pending": True, **approval}
 
 
+@router.post("/agents/{project_id}/cancel")
+async def cancel_message(project_id: str) -> dict:
+    """Cancel the current turn. Agent stays alive."""
+    return await _agent_manager.cancel_message(project_id)
+
+
 @router.post("/agents/{project_id}/stop")
 async def stop_agent(project_id: str):
+    """Internal/admin: full teardown of agent, session, and sub-agents.
+    NOT WIRED TO UI as of T05 — the Stop button now calls /cancel.
+    """
     try:
         await _agent_manager.stop_agent(project_id)
     except KeyError:
@@ -816,8 +808,8 @@ async def chat_history(
         raise HTTPException(status_code=404, detail="Project not found")
 
     workspace = project["workspace"]
-    dir_name = _project_dir_name(project.get("name", ""), project_id)
-    sessions_dir = os.path.join(workspace, "orbital", dir_name, "sessions")
+    from agent_os.agent.project_paths import ProjectPaths
+    sessions_dir = ProjectPaths(workspace).sessions_dir
 
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []
@@ -1105,7 +1097,8 @@ async def delete_skill(project_id: str, skill_name: str):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     workspace = project.get("workspace", "")
-    skills_base = os.path.realpath(os.path.join(workspace, "skills"))
+    from agent_os.agent.project_paths import ProjectPaths
+    skills_base = os.path.realpath(ProjectPaths(workspace).skills_dir)
     skill_path = os.path.realpath(os.path.join(skills_base, skill_name))
     if not skill_path.startswith(skills_base + os.sep):
         raise HTTPException(status_code=400, detail="Invalid skill name")
@@ -1169,11 +1162,12 @@ def _sanitize_skill_dir_name(name: str) -> str:
 
 def _handle_md_upload(workspace: str, content_bytes: bytes) -> dict:
     """Handle uploading a single .md file as a skill."""
+    from agent_os.agent.project_paths import ProjectPaths
     text = content_bytes.decode("utf-8", errors="replace")
     name, description = _validate_skill_content(text)
 
     dir_name = _sanitize_skill_dir_name(name)
-    skill_dir = os.path.join(workspace, "skills", dir_name)
+    skill_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
 
     if os.path.exists(skill_dir):
         raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
@@ -1229,7 +1223,8 @@ def _handle_zip_upload(workspace: str, content_bytes: bytes) -> dict:
         else:
             dir_name = os.path.basename(skill_src_dir)
 
-        dest_dir = os.path.join(workspace, "skills", dir_name)
+        from agent_os.agent.project_paths import ProjectPaths
+        dest_dir = os.path.join(ProjectPaths(workspace).skills_dir, dir_name)
         if os.path.exists(dest_dir):
             raise HTTPException(status_code=409, detail=f"Skill already exists: {dir_name}")
 

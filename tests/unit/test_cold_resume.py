@@ -115,10 +115,10 @@ class TestColdResumeInjection:
 
     def test_cold_resume_injected_on_first_prepare(self, tmp_path):
         """When workspace files exist, first prepare() includes resume context as system message."""
-        # Set up workspace files
+        # Set up workspace files — new layout uses the 5 standard keys via WorkspaceFileManager.
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent Directive\n\nRefactor the auth module.")
+        wfm.write("lessons", "# Lessons\n\nRefactor the auth module.")
         wfm.write("state", "# Project State\n\nWorking on token refresh.")
 
         session = Session.new("cold1", str(tmp_path))
@@ -134,7 +134,6 @@ class TestColdResumeInjection:
                        and "WORKSPACE MEMORY" in m.get("content", "")]
         assert len(resume_msgs) == 1
         content = resume_msgs[0]["content"]
-        assert "Agent Directive" in content
         assert "Refactor the auth module" in content
         assert "Project State" in content
         assert "token refresh" in content
@@ -143,7 +142,7 @@ class TestColdResumeInjection:
         """Second prepare() call should NOT include resume context again."""
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent Directive\n\nDo stuff.")
+        wfm.write("state", "# Project State\n\nDo stuff.")
 
         session = Session.new("cold2", str(tmp_path))
         builder = MockPromptBuilder()
@@ -180,10 +179,9 @@ class TestColdResumeInjection:
         assert len(resume_msgs) == 0
 
     def test_cold_resume_partial_files(self, tmp_path):
-        """Only AGENT.md + PROJECT_STATE exist. Only those two sections included."""
+        """Only PROJECT_STATE exists. Only that section is included in resume context."""
         wfm = WorkspaceFileManager(str(tmp_path))
         wfm.ensure_dir()
-        wfm.write("agent", "# Agent\n\nBuild the widget.")
         wfm.write("state", "# State\n\nWidget is 50% done.")
         # decisions, lessons, context, session_log are NOT written
 
@@ -198,7 +196,6 @@ class TestColdResumeInjection:
                        if "WORKSPACE MEMORY" in m.get("content", "")]
         assert len(resume_msgs) == 1
         content = resume_msgs[0]["content"]
-        assert "Build the widget" in content
         assert "Widget is 50% done" in content
         # Should NOT contain sections for missing files
         assert "Decisions" not in content
@@ -208,30 +205,40 @@ class TestColdResumeInjection:
 
     def test_context_budget_with_resume(self, tmp_path):
         """Large workspace files should reduce sliding window proportionally."""
-        wfm = WorkspaceFileManager(str(tmp_path))
-        wfm.ensure_dir()
-        # Write a very large agent directive to consume budget
+        # Two separate workspaces: one populated, one empty. Comparing usage
+        # across these isolates the effect of workspace file content on budget.
+        ws_with = tmp_path / "with_files"
+        ws_with.mkdir()
+        ws_without = tmp_path / "without_files"
+        ws_without.mkdir()
+
+        wfm_with = WorkspaceFileManager(str(ws_with))
+        wfm_with.ensure_dir()
+        # Write a very large project state to consume budget
         large_content = "X" * 100_000
-        wfm.write("agent", large_content)
+        wfm_with.write("state", large_content)
 
-        session = Session.new("cold5", str(tmp_path))
         builder = MockPromptBuilder()
-        ctx = _make_base_prompt_context(str(tmp_path))
 
-        # Small context limit to make the effect visible
+        # cm_with: workspace has a large state file
+        session_with = Session.new("cold5_with", str(ws_with))
+        ctx_with = _make_base_prompt_context(str(ws_with))
         cm_with = ContextManager(
-            session, builder, ctx,
+            session_with, builder, ctx_with,
             model_context_limit=50_000, response_reserve=5_000,
-            workspace_files=wfm,
-        )
-        cm_without = ContextManager(
-            session, builder, ctx,
-            model_context_limit=50_000, response_reserve=5_000,
-            workspace_files=None,
+            workspace_files=wfm_with,
         )
 
-        msgs_with = cm_with.prepare()
-        msgs_without = cm_without.prepare()
+        # cm_without: separate empty workspace, no state file
+        session_without = Session.new("cold5_without", str(ws_without))
+        ctx_without = _make_base_prompt_context(str(ws_without))
+        cm_without = ContextManager(
+            session_without, builder, ctx_without,
+            model_context_limit=50_000, response_reserve=5_000,
+        )
+
+        cm_with.prepare()
+        cm_without.prepare()
 
         # The version with large workspace files should have higher usage percentage
         assert cm_with.usage_percentage > cm_without.usage_percentage
@@ -259,27 +266,12 @@ class TestColdResumeInjection:
 
 class TestSessionEndCallback:
 
-    @pytest.mark.asyncio
-    async def test_session_end_triggered_on_graceful_stop(self, tmp_path):
-        """Loop exits normally (text response) -> on_session_end fired as background task."""
-        session = Session.new("end1", str(tmp_path))
-        provider = MockProvider(responses=[_make_text_response("Done.")])
-        registry = MockToolRegistry()
-        builder = MockPromptBuilder()
-        ctx = _make_base_prompt_context(str(tmp_path))
-        context_mgr = ContextManager(session, builder, ctx)
-
-        callback = AsyncMock()
-        loop = AgentLoop(
-            session, provider, registry, context_mgr,
-            on_session_end=callback,
-        )
-        await loop.run(initial_message="hello")
-
-        # on_session_end is now fire-and-forget (asyncio.create_task),
-        # so yield control to let the background task execute.
-        await asyncio.sleep(0)
-        callback.assert_awaited_once()
+    # NOTE: test_session_end_triggered_on_graceful_stop was DELETED in
+    # TASK-cancel-arch-04. The fire-and-forget asyncio.create_task(
+    # self._on_session_end()) call site at the end of AgentLoop.run() was
+    # removed; the synchronous session-end inside agent_manager.new_session()
+    # is now the sole authoritative summarization path. The deleted test's
+    # premise no longer holds.
 
     @pytest.mark.asyncio
     async def test_session_end_skipped_on_llm_failure(self, tmp_path):

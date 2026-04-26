@@ -200,7 +200,7 @@ class TestSkillCreationTrigger:
     def test_skill_creation_in_normal_project(self):
         """Non-scratch prompt contains skill creation instructions."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "Skill creation:" in semi_stable
 
@@ -221,7 +221,8 @@ class TestSkillConsultationStrength:
 
     def test_must_read_when_skills_exist(self, tmp_path):
         """When skills exist, prompt uses mandatory 'MUST read' language."""
-        skills_dir = tmp_path / "skills" / "deploy"
+        # Skills live at {workspace}/orbital/skills/ in the new layout (TASK-02).
+        skills_dir = tmp_path / "orbital" / "skills" / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the app.")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -238,7 +239,8 @@ class TestSkillConsultationStrength:
 
     def test_skill_names_still_listed(self, tmp_path):
         """Skill index still lists skill names after preamble change."""
-        skills_dir = tmp_path / "skills" / "my-deploy"
+        # Skills live at {workspace}/orbital/skills/ in the new layout (TASK-02).
+        skills_dir = tmp_path / "orbital" / "skills" / "my-deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Deploy\nDeploys things.")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -288,13 +290,13 @@ class TestLessonsInstructionUpdate:
     def test_append_mid_session_instruction(self):
         """Normal project prompt says agent may append to LESSONS.md mid-session."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "You may append mid-session" in semi_stable
 
     def test_old_do_not_write_removed(self):
         """Old contradictory 'do NOT need to read or write' instruction is gone."""
         builder = PromptBuilder()
-        ctx = make_context(is_scratch=False, project_dir_name="test-proj")
+        ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
         assert "do NOT need to read or write" not in semi_stable

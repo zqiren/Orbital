@@ -202,13 +202,20 @@ class TestStopAgentCallsStopProcess:
         mock_task = asyncio.ensure_future(asyncio.sleep(0))
         await asyncio.sleep(0)  # let it complete
 
-        handle = MagicMock(session=mock_session, task=mock_task)
+        # T04: stop_agent now does `await handle.loop.terminate()` on the
+        # alive-task path; the awaitable must come back from an AsyncMock.
+        mock_loop = MagicMock(terminate=AsyncMock())
+        handle = MagicMock(session=mock_session, task=mock_task,
+                           loop=mock_loop)
         mgr._handles["proj_1"] = handle
 
         await mgr.stop_agent("proj_1")
 
         provider.stop_process.assert_awaited_once_with("proj_1")
-        mock_session.stop.assert_called_once()
+        # Task is still pending (one `await asyncio.sleep(0)` is not enough
+        # to mark a sleep(0) future done) ⇒ stop_agent takes the alive
+        # path and awaits handle.loop.terminate().
+        mock_loop.terminate.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stop_agent_ignores_stop_process_false(self):
@@ -222,7 +229,10 @@ class TestStopAgentCallsStopProcess:
         mock_task = asyncio.ensure_future(asyncio.sleep(0))
         await asyncio.sleep(0)
 
-        handle = MagicMock(session=mock_session, task=mock_task)
+        # T04: see test_stop_agent_calls_stop_process above.
+        mock_loop = MagicMock(terminate=AsyncMock())
+        handle = MagicMock(session=mock_session, task=mock_task,
+                           loop=mock_loop)
         mgr._handles["proj_1"] = handle
 
         await mgr.stop_agent("proj_1")
@@ -435,6 +445,9 @@ class TestStartStopCycleNullProvider:
             MockReg.return_value = mock_reg
             mock_loop = MagicMock()
             mock_loop.run = AsyncMock()
+            # T04: stop_agent now does `await handle.loop.terminate()` on the
+            # alive-task path. Make terminate awaitable.
+            mock_loop.terminate = AsyncMock()
             MockLoop.return_value = mock_loop
 
             # Start

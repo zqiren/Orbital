@@ -21,8 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 import pytest
 import pytest_asyncio
 
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
-
 # ---------------------------------------------------------------------------
 # models.py tests
 # ---------------------------------------------------------------------------
@@ -790,11 +788,19 @@ class TestAgentManager:
         mock_task = asyncio.ensure_future(asyncio.sleep(0))
         await asyncio.sleep(0)  # let it complete
 
-        handle = MagicMock(session=mock_session, task=mock_task)
+        # T04: stop_agent now does `await handle.loop.terminate()` on the
+        # alive-task path; the awaitable must come back from an AsyncMock.
+        mock_loop = MagicMock(terminate=AsyncMock())
+        handle = MagicMock(session=mock_session, task=mock_task,
+                           loop=mock_loop)
         mgr._handles["proj_1"] = handle
 
         await mgr.stop_agent("proj_1")
-        mock_session.stop.assert_called_once()
+        # Task is still pending (one `await asyncio.sleep(0)` is not enough
+        # to mark a sleep(0) future done) ⇒ stop_agent takes the alive
+        # path and awaits handle.loop.terminate(). The terminate() call is
+        # what propagates the stop intent to the session in T04.
+        mock_loop.terminate.assert_awaited_once()
         ws.broadcast.assert_called()
 
     @pytest.mark.asyncio
@@ -1040,9 +1046,8 @@ class TestRESTEndpoints:
         })
         pid = resp.json()["project_id"]
 
-        # Create session files on disk (namespaced by slug-based dir name)
-        dir_name = _project_dir_name("MultiSession", pid)
-        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
+        # Create session files on disk (flat new layout)
+        sessions_dir = tmp_path / "orbital" / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
         # Session 1 (older)
@@ -1084,9 +1089,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        dir_name = _project_dir_name("PagTail", pid)
-        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
-        sessions_dir.mkdir(parents=True)
+        sessions_dir = tmp_path / "orbital" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
         lines = []
         for i in range(10):
             lines.append(json.dumps({"role": "user", "content": f"msg_{i}",
@@ -1110,9 +1114,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        dir_name = _project_dir_name("PagOffset", pid)
-        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
-        sessions_dir.mkdir(parents=True)
+        sessions_dir = tmp_path / "orbital" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
         lines = []
         for i in range(10):
             lines.append(json.dumps({"role": "user", "content": f"msg_{i}",
@@ -1136,9 +1139,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        dir_name = _project_dir_name("PagEmpty", pid)
-        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
-        sessions_dir.mkdir(parents=True)
+        sessions_dir = tmp_path / "orbital" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})
                  for i in range(5)]
@@ -1158,9 +1160,8 @@ class TestRESTEndpoints:
             "api_key": "sk-test",
         })
         pid = resp.json()["project_id"]
-        dir_name = _project_dir_name("PagAll", pid)
-        sessions_dir = tmp_path / "orbital" / dir_name / "sessions"
-        sessions_dir.mkdir(parents=True)
+        sessions_dir = tmp_path / "orbital" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps({"role": "user", "content": f"msg_{i}",
                               "session_id": "s1", "timestamp": f"2026-01-01T00:{i:02d}:00"})
                  for i in range(8)]
@@ -1381,6 +1382,7 @@ class TestSkillsCopyOnProjectCreation:
             "api_key": "sk-test",
         })
         assert resp.status_code == 201
+        pid = resp.json()["project_id"]
         skills_dir = workspace / "skills"
         assert skills_dir.is_dir()
         # Should have the 4 seed skills
@@ -1389,6 +1391,11 @@ class TestSkillsCopyOnProjectCreation:
         assert "efficient-execution" in subdirs
         assert "process-capture" in subdirs
         assert "task-planning" in subdirs
+        # Persistent flag marks the project as reconciled so the installer
+        # short-circuits on the next agent start.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.status_code == 200
+        assert get_resp.json().get("default_skills_reconciled") is True
 
     def test_create_project_does_not_overwrite_existing_skills(self, app_client, tmp_path):
         workspace = tmp_path / "workspace2"
@@ -1407,10 +1414,16 @@ class TestSkillsCopyOnProjectCreation:
             "api_key": "sk-test",
         })
         assert resp.status_code == 201
-        # skills/ should still only have the custom skill
-        subdirs = [d.name for d in skills_dir.iterdir() if d.is_dir()]
+        pid = resp.json()["project_id"]
+        # The custom skill is preserved; the 4 bundled defaults are added
+        # alongside it because they did not previously exist.
+        subdirs = {d.name for d in skills_dir.iterdir() if d.is_dir()}
         assert "my-custom" in subdirs
-        assert "learning-capture" not in subdirs
+        assert {"efficient-execution", "learning-capture",
+                "process-capture", "task-planning"}.issubset(subdirs)
+        # Reconciled flag is set on success.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.json().get("default_skills_reconciled") is True
 
     def test_scratch_project_does_not_get_skills(self, app_client, tmp_path):
         workspace = tmp_path / "workspace3"
@@ -1423,8 +1436,12 @@ class TestSkillsCopyOnProjectCreation:
             "is_scratch": True,
         })
         assert resp.status_code == 201
+        pid = resp.json()["project_id"]
         skills_dir = workspace / "skills"
         assert not skills_dir.exists()
+        # Scratch projects stay unreconciled — nothing to reconcile.
+        get_resp = app_client.get(f"/api/v2/projects/{pid}")
+        assert get_resp.json().get("default_skills_reconciled") is False
 
 
 class TestSkillsAPIEndpoints:

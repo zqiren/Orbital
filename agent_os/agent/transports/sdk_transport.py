@@ -61,6 +61,10 @@ class SDKTransport(AgentTransport):
         # Autonomy preset for filtering permission requests.
         # When set, low-risk tools are auto-approved without surfacing to the user.
         self._autonomy: Autonomy | None = autonomy
+        # Strongly-referenced handle to the background response-consumption
+        # task so the event loop cannot GC it mid-stream. Also used by
+        # stop() to cancel in-flight iteration before disconnect().
+        self._bg_task: asyncio.Task | None = None
 
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
@@ -136,8 +140,46 @@ class SDKTransport(AgentTransport):
         if self._needs_flush:
             await self._flush_stale_messages()
 
+        # Without this guard, the bare _bg_task assignment below drops the
+        # strong reference to the prior task, causing "Task destroyed but it
+        # is pending" at GC time. Before query() also prevents the prior
+        # consumer from reading events from the new query before being reaped.
+        if self._bg_task is not None and not self._bg_task.done():
+            logger.warning("dispatch overwriting pending _bg_task; cancelling prior")
+            self._bg_task.cancel()
+            await asyncio.gather(self._bg_task, return_exceptions=True)
+
         await self._client.query(message)
-        asyncio.create_task(self._consume_response_background())
+
+        # Strongly reference the background task on self so it cannot be
+        # garbage-collected mid-stream (which produced "Task was destroyed
+        # but it is pending" warnings). The done-callback routes any
+        # non-cancellation exception to the logger instead of being lost.
+        self._bg_task = asyncio.create_task(
+            self._consume_response_background(),
+            name=f"sdk-consume-{id(self)}",
+        )
+        self._bg_task.add_done_callback(self._on_bg_task_done)
+
+    def _on_bg_task_done(self, task: "asyncio.Task") -> None:
+        """Completion hook for the background consumer task.
+
+        Responsibilities:
+        - swallow CancelledError (expected on stop())
+        - log any other exception at ERROR with traceback so it does not
+          vanish into the void the way an orphan task's exception would.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        if isinstance(exc, asyncio.CancelledError):
+            return
+        logger.error(
+            "SDKTransport: background response task raised",
+            exc_info=exc,
+        )
 
     async def _consume_response_background(self) -> None:
         """Background task: iterate receive_response(), feed events to queue."""
@@ -207,6 +249,25 @@ class SDKTransport(AgentTransport):
                 future.set_result(False)
         self._pending_approvals.clear()
         self._pending_approval_data.clear()
+
+        # Cancel the background response-consumption task BEFORE
+        # disconnecting the client. If the order were reversed, the task
+        # would observe a None/closed client mid-iteration and surface a
+        # spurious error.
+        bg_task = self._bg_task
+        if bg_task is not None and not bg_task.done():
+            bg_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(bg_task, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "SDKTransport: background task did not cancel within 5s; "
+                    "proceeding with disconnect"
+                )
+        self._bg_task = None
 
         if self._client is not None:
             try:

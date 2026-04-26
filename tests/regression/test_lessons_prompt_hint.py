@@ -23,7 +23,6 @@ def _make_context(*, is_scratch: bool) -> PromptContext:
         datetime_now="2026-04-09T00:00:00",
         context_usage_pct=0.0,
         project_name="test-proj",
-        project_dir_name="test-proj",
         is_scratch=is_scratch,
     )
 

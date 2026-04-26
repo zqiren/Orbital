@@ -209,72 +209,6 @@ class TestOSInstructions:
         assert "\\\\" in semi_stable or "\\" in semi_stable
 
 
-# ===========================================================================
-# AC-9: Workspace bootstrap: AGENT.md content appears in dynamic_suffix
-# ===========================================================================
-
-class TestWorkspaceBootstrap:
-
-    def test_agent_md_appears_in_semi_stable(self, tmp_path):
-        agent_os_dir = tmp_path / "orbital"
-        agent_os_dir.mkdir()
-        agent_md = agent_os_dir / "AGENT.md"
-        agent_md.write_text("Custom agent instructions for this project.")
-
-        builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = make_context(workspace=str(tmp_path))
-        _, semi_stable, _ = builder.build(ctx)
-        assert "Custom agent instructions for this project." in semi_stable
-
-
-# ===========================================================================
-# AC-10: Workspace bootstrap: file > 20K chars → truncated
-# ===========================================================================
-
-class TestWorkspaceBootstrapTruncation:
-
-    def test_large_agent_md_truncated(self, tmp_path):
-        agent_os_dir = tmp_path / "orbital"
-        agent_os_dir.mkdir()
-        agent_md = agent_os_dir / "AGENT.md"
-        # Write 25K chars
-        content = "A" * 25_000
-        agent_md.write_text(content)
-
-        builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = make_context(workspace=str(tmp_path))
-        _, semi_stable, _ = builder.build(ctx)
-        # The full 25K content should NOT appear; it should be truncated to ~20K
-        # Check that we don't have the full 25K in the output
-        assert content not in semi_stable
-        # But some content should still be present (truncated portion)
-        assert "AAAA" in semi_stable
-
-
-# ===========================================================================
-# AC-11: Workspace bootstrap: file doesn't exist → section omitted, no error
-# ===========================================================================
-
-class TestWorkspaceBootstrapMissing:
-
-    def test_missing_agent_md_no_error(self, tmp_path):
-        # No orbital/AGENT.md file
-        builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = make_context(workspace=str(tmp_path))
-        # Should not raise
-        cached, semi_stable, dynamic = builder.build(ctx)
-        assert isinstance(cached, str)
-        assert isinstance(semi_stable, str)
-        assert isinstance(dynamic, str)
-
-    def test_no_workspace_no_error(self):
-        builder = PromptBuilder(workspace=None)
-        ctx = make_context()
-        cached, semi_stable, dynamic = builder.build(ctx)
-        assert isinstance(cached, str)
-        assert isinstance(semi_stable, str)
-        assert isinstance(dynamic, str)
-
 
 # ===========================================================================
 # AC-12: SkillLoader with skills/my-skill/SKILL.md → returns metadata
@@ -283,7 +217,9 @@ class TestWorkspaceBootstrapMissing:
 class TestSkillLoaderScan:
 
     def test_scan_finds_skill_md(self, tmp_path):
-        skills_dir = tmp_path / "skills" / "my-skill"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "my-skill"
         skills_dir.mkdir(parents=True)
         skill_md = skills_dir / "SKILL.md"
         skill_md.write_text("# My Skill\nA skill that does things.")
@@ -300,8 +236,11 @@ class TestSkillLoaderScan:
         assert str(skill_md) == skill["path"] or skill["path"].endswith("SKILL.md")
 
     def test_scan_multiple_skills(self, tmp_path):
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_root = Path(ProjectPaths(str(tmp_path)).skills_dir)
         for name in ["skill-a", "skill-b"]:
-            skill_dir = tmp_path / "skills" / name
+            skill_dir = skills_root / name
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(f"# {name.title()}\nDescription of {name}.")
 
@@ -438,22 +377,18 @@ class TestPromptContext:
 class TestPromptBuilderWithWorkspace:
 
     def test_builder_with_workspace_and_skills(self, tmp_path):
-        # Set up skill
-        skills_dir = tmp_path / "skills" / "deploy"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        # Set up skill under orbital/skills/
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the application.")
-
-        # Set up agent bootstrap
-        agent_os_dir = tmp_path / "orbital"
-        agent_os_dir.mkdir()
-        (agent_os_dir / "AGENT.md").write_text("You are a deployment helper.")
 
         builder = PromptBuilder(workspace=str(tmp_path))
         ctx = make_context(workspace=str(tmp_path))
         cached, semi_stable, _ = builder.build(ctx)
 
         assert "Deploy" in semi_stable
-        assert "You are a deployment helper." in semi_stable
 
     def test_builder_identity_section_in_cached(self):
         builder = PromptBuilder()
@@ -486,7 +421,9 @@ class TestSkillsDisciplineInjection:
 
     def test_skills_present_includes_must_read_instruction(self, tmp_path):
         """When skills exist, output contains mandatory read instruction."""
-        skills_dir = tmp_path / "skills" / "my-skill"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "my-skill"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Skill\nA test skill.")
         builder = PromptBuilder(workspace=str(tmp_path))
@@ -503,7 +440,9 @@ class TestSkillsDisciplineInjection:
 
     def test_skills_section_has_header(self, tmp_path):
         """When skills exist, output contains '## Skills' header."""
-        skills_dir = tmp_path / "skills" / "deploy"
+        from agent_os.agent.project_paths import ProjectPaths
+        from pathlib import Path
+        skills_dir = Path(ProjectPaths(str(tmp_path)).skills_dir) / "deploy"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# Deploy\nDeploy the application.")
         builder = PromptBuilder(workspace=str(tmp_path))

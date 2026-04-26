@@ -26,7 +26,7 @@ from agent_os.agent.session import Session
 from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.config.provider_registry import ProviderRegistry
-from agent_os.daemon_v2.project_store import project_dir_name as _project_dir_name
+from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import AgentConfig, detect_os, resolve_api_key
 
@@ -52,7 +52,6 @@ class ProjectHandle:
     trigger_source: str | None = None
     config_snapshot: dict = field(default_factory=dict)
     started_at: str = ""
-    project_dir_name: str = ""
 
 
 class AgentManager:
@@ -354,6 +353,7 @@ class AgentManager:
                                    tool_args: dict, decision: str,
                                    deny_reason: str | None = None) -> None:
         """Append approval/denial record to {workspace}/orbital/approval_history.jsonl."""
+        from agent_os.agent.project_paths import ProjectPaths
         handle = self._handles.get(project_id)
         if handle is None:
             return
@@ -361,12 +361,9 @@ class AgentManager:
         workspace = handle.config_snapshot.get('workspace')
         if not workspace:
             return
-        dir_name = handle.project_dir_name
-        if not dir_name:
-            return
-        history_dir = os.path.join(workspace, "orbital", dir_name)
-        os.makedirs(history_dir, exist_ok=True)
-        history_file = os.path.join(history_dir, "approval_history.jsonl")
+        pp = ProjectPaths(workspace)
+        os.makedirs(pp.orbital_dir, exist_ok=True)
+        history_file = pp.approval_history
         args_hash = hashlib.sha256(json.dumps(tool_args, sort_keys=True).encode()).hexdigest()[:12]
         record = {
             "tool": tool_name,
@@ -433,11 +430,9 @@ class AgentManager:
             utility_provider = provider
 
         # 2. Tool registry
-        dir_name = _project_dir_name(config.project_name, project_id)
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
-                             vision_enabled=model_info.capabilities.vision,
-                             project_dir_name=dir_name)
+                             vision_enabled=model_info.capabilities.vision)
 
         # 3. Prompt builder
         prompt_builder = PromptBuilder(workspace=config.workspace)
@@ -487,20 +482,33 @@ class AgentManager:
             trigger_name=trigger_name,
             vision_enabled=model_info.capabilities.vision,
             project_id=project_id,
-            project_dir_name=dir_name,
         )
+
+        # 4b. Reconcile default skills for legacy projects that never had them
+        # installed (or the first-install failed). The installer short-circuits
+        # on the persistent ``default_skills_reconciled`` flag, so the common
+        # path is a dict lookup and no disk I/O. Failures must not block agent
+        # start — the flag stays False and we will retry on the next start.
+        if self._project_store.get_project(project_id) is not None:
+            try:
+                install_default_skills(self._project_store, project_id)
+            except Exception:
+                logger.error(
+                    "default skills reconcile failed for project %s; continuing agent start",
+                    project_id, exc_info=True,
+                )
 
         # 5. Session
         sanitized = _sanitize_project_name(config.project_name)
         session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        session = Session.new(session_id, config.workspace, project_dir_name=dir_name)
+        session = Session.new(session_id, config.workspace)
 
         # 6-7. Observers
         session.on_append = self._on_message(project_id)
         session.on_stream = self._on_stream(project_id)
 
         # 8. Workspace files
-        workspace_files = WorkspaceFileManager(config.workspace, project_dir_name=dir_name)
+        workspace_files = WorkspaceFileManager(config.workspace)
         workspace_files.ensure_dir()
 
         # 9. Context manager
@@ -524,6 +532,7 @@ class AgentManager:
                 provider=provider,
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
+                session_id=session.session_id,
             )
 
         # 11b. Budget persistence callback
@@ -577,7 +586,6 @@ class AgentManager:
                 "autonomy": config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
             },
             started_at=datetime.now(timezone.utc).isoformat(),
-            project_dir_name=dir_name,
         )
         self._handles[project_id] = project_handle
 
@@ -603,8 +611,7 @@ class AgentManager:
         self._write_state()
 
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
-                        project_id: str = "", vision_enabled: bool = False,
-                        project_dir_name: str = "") -> None:
+                        project_id: str = "", vision_enabled: bool = False) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
         try:
             from agent_os.agent.tools.read import ReadTool
@@ -638,7 +645,6 @@ class AgentManager:
                 os_type=detect_os(),
                 platform_provider=self._platform_provider,
                 project_id=project_id,
-                project_dir_name=project_dir_name,
             ))
         except ImportError:
             pass
@@ -662,7 +668,6 @@ class AgentManager:
                     autonomy_preset=config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
                     user_credential_store=self._user_credential_store,
                     vision_enabled=vision_enabled,
-                    project_dir_name=project_dir_name,
                 ))
         except ImportError:
             logger.warning("BrowserTool not available (playwright not installed)")
@@ -1183,38 +1188,61 @@ class AgentManager:
         if handle is None:
             return {"status": "no_active_session"}
 
-        # 1. Stop loop if running
+        # 1. Stop loop if running. terminate() interrupts any in-flight LLM
+        # stream, sets the stop flag, and cancels the loop task. The shield
+        # wait below is the final reaper for the loop's finally block.
         if handle.task is not None and not handle.task.done():
-            handle.session.stop()
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
                 logger.warning("new_session(%s): loop did not stop gracefully", project_id)
 
-        # 2. Cancel idle poll / sub-agents
+        # 2. Cancel idle poll. Sub-agent stop_all is deferred to step 3b
+        # (after session-end) so summarization can read sub-agent transcripts.
         poll_task = self._idle_poll_tasks.pop(project_id, None)
         if poll_task and not poll_task.done():
             poll_task.cancel()
-        await self._sub_agent_manager.stop_all(project_id)
 
         # 3. Pre-flush: run session-end routine so workspace files are updated
         workspace = handle.config_snapshot.get("workspace", "")
         try:
-            workspace_files = WorkspaceFileManager(
-                workspace, project_dir_name=handle.project_dir_name,
-            )
+            workspace_files = WorkspaceFileManager(workspace)
             await asyncio.wait_for(
                 run_session_end_routine(
                     session=handle.session,
                     provider=handle.provider,
                     workspace_files=workspace_files,
+                    session_id=handle.session.session_id,
                 ),
-                timeout=30.0,
+                timeout=200.0,
             )
         except asyncio.TimeoutError:
-            logger.warning("new_session(%s): pre-flush LLM call timed out, proceeding", project_id)
+            logger.warning(
+                "new_session(%s): pre-flush LLM call timed out after retries, proceeding without summary",
+                project_id,
+            )
         except Exception:
             logger.warning("new_session(%s): pre-flush failed, proceeding", project_id, exc_info=True)
+
+        # 3b. Stop sub-agents AFTER session-end so transcripts are readable
+        # during summarization. Wrapped in a 10s budget to avoid blocking
+        # rotation indefinitely on a wedged adapter. (T06)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "new_session(%s): stop_all timed out; sub-agents may leak",
+                project_id,
+            )
+        except Exception:
+            logger.exception(
+                "new_session(%s): stop_all raised; continuing with rotation",
+                project_id,
+            )
 
         # 4. Save old session info
         old_session_id = handle.session.session_id
@@ -1224,10 +1252,7 @@ class AgentManager:
         project_name = (project or {}).get("name", "")
         sanitized = _sanitize_project_name(project_name)
         new_session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        new_session = Session.new(
-            new_session_id, workspace,
-            project_dir_name=handle.project_dir_name,
-        )
+        new_session = Session.new(new_session_id, workspace)
 
         # 6. Wire observers
         new_session.on_append = self._on_message(project_id)
@@ -1275,6 +1300,31 @@ class AgentManager:
             "new_session_id": new_session_id,
         }
 
+    async def cancel_message(self, project_id: str) -> dict:
+        """Interrupt current turn for project. Agent stays alive; session preserved."""
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return {"status": "no_agent"}
+        if handle.task is None or handle.task.done():
+            return {"status": "idle"}
+
+        # cancel_turn exceptions intentionally bubble: cancel_turn has its own
+        # internal exception handling (see loop.py:782-787) for the cross-task
+        # wait_for, so any exception escaping here indicates a real bug worth
+        # surfacing as an HTTP 500.
+        await handle.loop.cancel_turn()
+        # Broadcast after cancel_turn returns: the cancellation marker is
+        # written synchronously inside cancel_turn before any await
+        # (loop.py:779), so the JSONL is durable by the time we reach this
+        # line. If cancel_turn is later refactored to defer the marker write,
+        # this ordering assumption needs to be revisited.
+        self._ws.broadcast(project_id, {
+            "type": "agent.status",
+            "project_id": project_id,
+            "status": "idle",
+        })
+        return {"status": "cancelled"}
+
     async def stop_agent(self, project_id: str) -> None:
         """Stop agent and clean up."""
         handle = self._handles.get(project_id)
@@ -1300,14 +1350,19 @@ class AgentManager:
         if self._platform_provider is not None:
             await self._platform_provider.stop_process(project_id)
 
-        handle.session.stop()
-
-        # Wait for loop task
+        # terminate() interrupts any in-flight LLM stream and sets the stop
+        # flag; the shield-wait below is the final reaper for the loop's
+        # finally block.
         if handle.task is not None and not handle.task.done():
+            await handle.loop.terminate()
             try:
                 await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+        else:
+            # Loop already done — preserve the legacy stop flag for any
+            # downstream code that observes it.
+            handle.session.stop()
 
         self._ws.broadcast(project_id, {
             "type": "agent.status",
@@ -1505,8 +1560,19 @@ class AgentManager:
                 })
                 return
 
-        # Max polls exceeded — force idle, something is stuck
-        logger.warning("Sub-agent poll timeout for project %s, forcing idle", project_id)
+        # Max polls exceeded — stop sub-agents, then force idle
+        logger.warning("Sub-agent poll timeout for project %s, forcing stop", project_id)
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Watchdog stop_all timed out for project %s; sub-agents may leak", project_id
+            )
+        except Exception:
+            logger.exception("Watchdog stop_all raised for project %s", project_id)
         self._ws.broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,

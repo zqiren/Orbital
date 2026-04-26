@@ -25,7 +25,7 @@ interface SkillMeta {
 interface SettingsViewProps {
   project: Project;
   onSave: (data: ProjectUpdateRequest) => void;
-  onDelete: (clearOutput: boolean) => void;
+  onDelete: () => void;
 }
 
 const AUTONOMY_OPTIONS: {
@@ -61,7 +61,6 @@ export default function SettingsView({
   const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [clearOutput, setClearOutput] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(
     project.notification_prefs || {},
@@ -231,7 +230,7 @@ export default function SettingsView({
   }
 
   function handleDelete() {
-    onDelete(clearOutput);
+    onDelete();
   }
 
   return (
@@ -520,7 +519,9 @@ export default function SettingsView({
         <div className="mt-12 border border-error/30 rounded-lg p-6">
           <h3 className="text-sm font-semibold text-error mb-2">Danger Zone</h3>
           <p className="text-sm text-secondary mb-4">
-            Permanently delete this project. Sessions and internal data will be removed.
+            Delete this project? Orbital data (sessions, screenshots, logs)
+            will be removed. Files you saved in your workspace folder will be
+            kept.
           </p>
           {!confirmingDelete ? (
             <button
@@ -530,32 +531,19 @@ export default function SettingsView({
               Delete Project
             </button>
           ) : (
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={clearOutput}
-                  onChange={(e) => setClearOutput(e.target.checked)}
-                  className="rounded border-border accent-error"
-                />
-                <span className="text-sm text-primary">
-                  Also clear all agent output files
-                </span>
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleDelete}
-                  className="text-sm font-medium text-white bg-error rounded-lg px-4 py-2 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
-                >
-                  Confirm Delete
-                </button>
-                <button
-                  onClick={() => { setConfirmingDelete(false); setClearOutput(false); }}
-                  className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150 max-md:min-h-[44px]"
-                >
-                  Cancel
-                </button>
-              </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDelete}
+                className="text-sm font-medium text-white bg-error rounded-lg px-4 py-2 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
+              >
+                Confirm Delete
+              </button>
+              <button
+                onClick={() => setConfirmingDelete(false)}
+                className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150 max-md:min-h-[44px]"
+              >
+                Cancel
+              </button>
             </div>
           )}
         </div>

@@ -44,7 +44,6 @@ class PromptContext:
     trigger_name: str | None = None     # human-readable trigger name
     vision_enabled: bool = False        # model supports vision (image input)
     project_id: str = ""                # store-level project id
-    project_dir_name: str = ""          # slugified dir name under orbital/
     active_sub_agents: list = None      # [{"handle": str, "status": str, ...}]
 
     def __post_init__(self):
@@ -228,7 +227,6 @@ class PromptBuilder:
             self._sub_agent_awareness(context),
             self._browser_section(context),
             self._skills(context),
-            self._workspace_bootstrap(context),
             self._os_instructions(context),
         ]))
         truly_dynamic = _SEP.join(filter(None, [
@@ -358,10 +356,8 @@ class PromptBuilder:
 
     def _onboarding_or_directive(self, context: PromptContext) -> str:
         """Return onboarding prompt if project_goals.md missing, else directive."""
-        goals_path = os.path.join(
-            context.workspace, "orbital", context.project_dir_name,
-            "instructions", "project_goals.md"
-        )
+        from agent_os.agent.project_paths import ProjectPaths
+        goals_path = ProjectPaths(context.workspace).project_goals
         content = self._read_truncated(goals_path)
         if content is None:
             return (
@@ -382,7 +378,7 @@ class PromptBuilder:
                 "4. Keep it to at most 5 exchanges. Do not over-ask. If the user gives short answers,\n"
                 "   work with what you have.\n"
                 "5. Once confirmed (user says ok/yes/looks good/any affirmative, OR you've hit 5 exchanges),\n"
-                f"   write project_goals.md to orbital/{context.project_dir_name}/instructions/project_goals.md using the structure:\n"
+                f"   write project_goals.md to {context.workspace}/orbital/instructions/project_goals.md using the structure:\n"
                 "   Mission, Triggers, Scope, Rules, Preferences.\n"
                 "6. Keep project_goals.md under 1500 words. Distill, don't dump.\n\n"
                 "DO NOT use any tools (read, shell, write, edit, browser, etc.) until onboarding is complete.\n"
@@ -424,10 +420,8 @@ class PromptBuilder:
         return f"## Global User Preferences\n\n{content}"
 
     def _standing_rules(self, context: PromptContext) -> str | None:
-        path = os.path.join(
-            context.workspace, "orbital", context.project_dir_name,
-            "instructions", "user_directives.md"
-        )
+        from agent_os.agent.project_paths import ProjectPaths
+        path = ProjectPaths(context.workspace).user_directives
         content = self._read_truncated(path)
         if content is None:
             return None
@@ -445,9 +439,9 @@ class PromptBuilder:
                 "When the user's intent is clear, use your tools immediately rather than "
                 "describing what you could do."
             )
-        ns = context.project_dir_name
+        orbital = f"{context.workspace}/orbital"
         return (
-            f"You maintain your own long-term memory as files in {context.workspace}/orbital/{ns}/:\n"
+            f"You maintain your own long-term memory as files in {orbital}/:\n"
             "- PROJECT_STATE.md: Living summary of project status, pending work, key files.\n"
             "  Update after completing significant work. Keep under 1K tokens.\n"
             "- DECISIONS.md: Key decisions with brief reasoning. Append when you make non-obvious choices.\n"
@@ -456,12 +450,15 @@ class PromptBuilder:
             "  workarounds. Keep entries under 100 words. Session-end routine handles dedup.\n"
             "These files are your memory across sessions. If you don't maintain them, you'll lose context\n"
             "when the session restarts. Update them proactively.\n\n"
-            f"When you produce deliverables the user will want to access (reports, generated code,\n"
-            f"exports, summaries, etc.), place them in {context.workspace}/orbital-output/{ns}/agent_output/.\n"
-            "Create the folder if it doesn't exist. Working files and intermediate artifacts\n"
-            "can live anywhere in the workspace. Only final, user-facing output goes in agent_output/.\n\n"
+            "When you produce deliverables the user will want to keep (reports, generated code,\n"
+            "exports, summaries, documentation), place them in the workspace at a path that\n"
+            "fits the project — e.g., docs/, src/, output/, or wherever the user already\n"
+            "organizes files. DO NOT place user-facing deliverables under orbital/ — that\n"
+            "directory is system state and is wiped on project reset. Your tools write tool\n"
+            "outputs (screenshots, PDFs, shell-command captures) automatically under\n"
+            f"{orbital}/output/; you don't write deliverables there manually.\n\n"
             'When the user says "remember X", "always do X", or "don\'t do X":\n'
-            f"- If it's a rule for this project → append to orbital/{ns}/instructions/user_directives.md\n"
+            f"- If it's a rule for this project → append to {orbital}/instructions/user_directives.md\n"
             f"- If it's a personal/global preference → append to {context.global_preferences_path or '~/orbital/user_preferences.md'}\n"
             '- If unclear → ask: "Should this apply to just this project or all your projects?"\n\n'
             'When the user says "forget X" or "stop doing X":\n'
@@ -590,26 +587,6 @@ class PromptBuilder:
         for skill in skills:
             lines.append(f"- {skill['name']}: {skill['description']} (at {skill['path']})")
         return "\n".join(lines)
-
-    def _workspace_bootstrap(self, context: PromptContext) -> str | None:
-        workspace = self._workspace or context.workspace
-        if not workspace:
-            return None
-        agent_os_dir = os.path.join(workspace, "orbital")
-        bootstrap_files = {
-            "AGENT.md": "Agent Instructions",
-            "USER.md": "User Preferences",
-            "TOOLS.md": "Tool Configuration",
-        }
-        sections = []
-        for filename, label in bootstrap_files.items():
-            filepath = os.path.join(agent_os_dir, filename)
-            content = self._read_truncated(filepath)
-            if content:
-                sections.append(f"[{label} — {filename}]\n{content}")
-        if not sections:
-            return None
-        return "\n\n".join(sections)
 
     def _runtime(self, context: PromptContext) -> str:
         return (

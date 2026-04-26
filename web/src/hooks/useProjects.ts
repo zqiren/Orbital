@@ -52,9 +52,8 @@ export function useProjects() {
     return updated;
   }, []);
 
-  const deleteProject = useCallback(async (id: string, clearOutput: boolean = false) => {
-    const qs = clearOutput ? '?clear_output=true' : '';
-    await api(`/api/v2/projects/${encodeURIComponent(id)}${qs}`, {
+  const deleteProject = useCallback(async (id: string) => {
+    await api(`/api/v2/projects/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
     setProjects((prev) => prev.filter((p) => p.project_id !== id));

@@ -279,9 +279,10 @@ class TestBrowserManager:
     @pytest.mark.asyncio
     async def test_screenshot_retention(self, tmp_path):
         """51 captures -> oldest deleted, max 50 remain."""
+        from agent_os.agent.project_paths import ProjectPaths
         workspace = str(tmp_path / "workspace")
         session_id = "sess_001"
-        screenshot_dir = Path(workspace) / "orbital-output" / "screenshots" / session_id
+        screenshot_dir = Path(ProjectPaths(workspace).screenshots_dir) / session_id
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Pre-create 49 screenshot files (step_0001 through step_0049)

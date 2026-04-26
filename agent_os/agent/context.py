@@ -17,8 +17,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.prompt_builder import PromptContext
 from agent_os.agent.token_utils import estimate_message_tokens
+from agent_os.agent.workspace_files import WorkspaceFileManager
 
 
 # Layer 1 workspace file keys (matching WorkspaceFileManager.FILE_NAMES)
@@ -49,6 +51,12 @@ class ContextManager:
         self._base_ctx = base_prompt_context
         self._model_context_limit = model_context_limit
         self._response_reserve = response_reserve
+        # Always have a WorkspaceFileManager: if the caller didn't supply one,
+        # build one from the prompt context's workspace. Both paths resolve the
+        # same flat orbital/ layout via ProjectPaths post-TASK-02, so there is
+        # no longer a meaningful "fallback" branch.
+        if workspace_files is None and base_prompt_context.workspace:
+            workspace_files = WorkspaceFileManager(base_prompt_context.workspace)
         self._workspace_files = workspace_files
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
@@ -79,16 +87,16 @@ class ContextManager:
             return
 
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, "orbital")
-        goals_path = os.path.join(agent_os_dir, "instructions", "project_goals.md")
-        state_path = os.path.join(agent_os_dir, "PROJECT_STATE.md")
+        pp = ProjectPaths(workspace)
+        goals_path = pp.project_goals
+        state_path = pp.project_state
 
         # If both exist, normal cold resume - no injection needed
         if os.path.isfile(goals_path) and os.path.isfile(state_path):
             return
 
         # Find archived session files
-        sessions_dir = os.path.join(agent_os_dir, "sessions")
+        sessions_dir = pp.sessions_dir
         if not os.path.isdir(sessions_dir):
             return
 
@@ -187,27 +195,25 @@ class ContextManager:
 
         # Read Layer 1 files from disk
         workspace = self._base_ctx.workspace
-        agent_os_dir = os.path.join(workspace, "orbital")
+        pp = ProjectPaths(workspace)
 
         layer_messages: list[dict] = []
 
         # Layer 1: PROJECT_STATE.md, DECISIONS.md, LESSONS.md
-        # Prefer WorkspaceFileManager (knows the project-namespaced path).
-        # Fall back to the flat path only in scratch mode (no workspace_files).
-        for key, filename in _LAYER1_FILES:
-            if self._workspace_files is not None:
+        # WorkspaceFileManager itself routes through ProjectPaths post-TASK-02,
+        # so a single read path covers all callers and any new layer-1 keys
+        # added to _LAYER1_FILES are picked up automatically.
+        if self._workspace_files is not None:
+            for key, filename in _LAYER1_FILES:
                 content = self._workspace_files.read(key)
-            else:
-                filepath = os.path.join(agent_os_dir, filename)
-                content = self._read_file(filepath)
-            if content:
-                layer_messages.append({
-                    "role": "system",
-                    "content": f"[{filename}]\n{content}",
-                })
+                if content:
+                    layer_messages.append({
+                        "role": "system",
+                        "content": f"[{filename}]\n{content}",
+                    })
 
         # Layer 3: instructions/*.md
-        instructions_dir = os.path.join(agent_os_dir, "instructions")
+        instructions_dir = pp.instructions_dir
         instructions_content = self._read_instructions(instructions_dir)
         if instructions_content:
             layer_messages.append({
@@ -493,15 +499,6 @@ class ContextManager:
     def _estimate_tokens(text: str) -> float:
         """Approximate token count: len(text) / 4."""
         return len(text) / 4
-
-    @staticmethod
-    def _read_file(filepath: str) -> str | None:
-        """Read a file, return None if missing."""
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                return f.read()
-        except OSError:
-            return None
 
     @staticmethod
     def _read_instructions(instructions_dir: str) -> str | None:

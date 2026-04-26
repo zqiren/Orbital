@@ -604,17 +604,14 @@ class BrowserManager:
     async def capture_screenshot(
         self, page, workspace: str, session_id: str,
         max_width: int = 1400, max_height: int = 900,
-        project_dir_name: str = "",
     ) -> str:
         """Capture screenshot, save to workspace, return file path."""
+        from agent_os.agent.project_paths import ProjectPaths
         counter_key = session_id
         step = self._screenshot_counters.get(counter_key, 0) + 1
         self._screenshot_counters[counter_key] = step
 
-        if project_dir_name:
-            screenshot_dir = Path(workspace) / "orbital-output" / project_dir_name / "screenshots" / session_id
-        else:
-            screenshot_dir = Path(workspace) / "orbital-output" / "screenshots" / session_id
+        screenshot_dir = Path(ProjectPaths(workspace).screenshots_dir) / session_id
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Enforce retention (max 50)
@@ -631,8 +628,9 @@ class BrowserManager:
     def cleanup_screenshots(self, workspace: str, session_id: str = None):
         """Remove screenshot files. Called on project deletion / daemon shutdown."""
         import shutil
+        from agent_os.agent.project_paths import ProjectPaths
 
-        base = Path(workspace) / "orbital-output" / "screenshots"
+        base = Path(ProjectPaths(workspace).screenshots_dir)
         if session_id:
             target = base / session_id
             if target.exists():
