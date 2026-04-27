@@ -25,6 +25,7 @@ import type {
   SubAgentMessageEvent,
   UserMessageEvent,
   AgentNotifyEvent,
+  StateRefreshLifecycleEvent,
   WebSocketEvent,
   Project,
 } from '../types';
@@ -33,6 +34,7 @@ import StreamingMessage from './StreamingMessage';
 import ActivityBlockComponent from './ActivityBlock';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
+import RefreshTurnStatus from './RefreshTurnStatus';
 
 interface ChatViewProps {
   projectId: string;
@@ -606,6 +608,55 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       scrollToBottom();
     }
 
+    function handleStateRefresh(event: WebSocketEvent) {
+      const e = event as StateRefreshLifecycleEvent;
+      if (e.project_id !== projectId) return;
+
+      setItems((prev) => {
+        // Find the last refresh_status item to update in-place (in_progress → done/failed)
+        const lastRefreshIdx = [...prev].reverse().findIndex((item) => item.type === 'refresh_status');
+        const absIdx = lastRefreshIdx >= 0 ? prev.length - 1 - lastRefreshIdx : -1;
+
+        if (e.status === 'in_progress') {
+          // Always append a new in_progress card
+          return [
+            ...prev,
+            {
+              type: 'refresh_status' as const,
+              status: e.status,
+              trigger: e.trigger,
+              timestamp: e.timestamp,
+            },
+          ];
+        }
+
+        if (absIdx >= 0) {
+          // Update existing card to terminal state
+          const updated = [...prev];
+          updated[absIdx] = {
+            type: 'refresh_status' as const,
+            status: e.status,
+            trigger: e.trigger,
+            timestamp: e.timestamp,
+          };
+          return updated;
+        }
+
+        // No prior in_progress card — still surface terminal state
+        return [
+          ...prev,
+          {
+            type: 'refresh_status' as const,
+            status: e.status,
+            trigger: e.trigger,
+            timestamp: e.timestamp,
+          },
+        ];
+      });
+
+      scrollToBottom();
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -613,6 +664,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     on('chat.sub_agent_message', handleSubAgentMessage);
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
+    on('state_refresh.lifecycle', handleStateRefresh);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -622,6 +674,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       off('chat.sub_agent_message', handleSubAgentMessage);
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
+      off('state_refresh.lifecycle', handleStateRefresh);
     };
   }, [projectId, project.name, on, off, scrollToBottom]);
 
@@ -987,6 +1040,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                   <p className="text-sm font-medium text-primary">{item.title}</p>
                   <p className="text-sm text-secondary mt-1">{item.body}</p>
                 </div>
+              );
+            } else if (item.type === 'refresh_status') {
+              rendered = (
+                <RefreshTurnStatus
+                  key={`refresh-${index}-${item.timestamp}`}
+                  status={item.status}
+                  trigger={item.trigger}
+                  timestamp={item.timestamp}
+                />
               );
             } else if (item.type === 'approval_card') {
               const resolved = approvals.get(item.tool_call_id)?.resolved ?? item.resolved;

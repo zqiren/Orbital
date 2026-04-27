@@ -34,6 +34,12 @@ export type DisplayItem =
       body: string;
       urgency: 'high' | 'normal' | 'low';
       timestamp: string;
+    }
+  | {
+      type: 'refresh_status';
+      status: 'in_progress' | 'done' | 'failed' | 'skipped';
+      trigger: 'turn_count' | 'agent_decided' | 'token_pressure';
+      timestamp: string;
     };
 
 const WINDOWS_PATH_RE = /[A-Za-z]:\\(?:Users|Windows|Program)[^\s"';&|>]*/gi;

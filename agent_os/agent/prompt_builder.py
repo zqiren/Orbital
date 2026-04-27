@@ -45,6 +45,9 @@ class PromptContext:
     vision_enabled: bool = False        # model supports vision (image input)
     project_id: str = ""                # store-level project id
     active_sub_agents: list = None      # [{"handle": str, "status": str, ...}]
+    last_state_update_turn: int | None = None    # turn# of last state checkpoint
+    last_state_update_ts: str | None = None      # ISO timestamp of last checkpoint
+    turns_since_last_update: int | None = None   # turns elapsed since last checkpoint
 
     def __post_init__(self):
         if self.active_sub_agents is None:
@@ -74,6 +77,10 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "list_triggers": "List all triggers for this project",
     "update_trigger": "Update an existing trigger's settings",
     "delete_trigger": "Delete a trigger from this project",
+    "checkpoint_state": (
+        "Trigger an immediate checkpoint of project state files. Call when "
+        "meaningful work has accumulated and you want to persist it."
+    ),
 }
 
 _BROWSER_USAGE_PROMPT = """\
@@ -232,6 +239,7 @@ class PromptBuilder:
         truly_dynamic = _SEP.join(filter(None, [
             self._runtime(context),
             self._context_budget(context),
+            self._state_checkpoint_status(context),
         ]))
         return (cached, semi_stable, truly_dynamic)
 
@@ -608,6 +616,24 @@ class PromptBuilder:
                 "URGENT: Save all important state to PROJECT_STATE.md immediately. "
                 "Context will be compacted soon."
             )
+        return "\n".join(lines)
+
+    def _state_checkpoint_status(self, context: PromptContext) -> str:
+        """Inject last-update metadata so the agent can reason about checkpoint timing.
+
+        Re-built every turn (lives in truly_dynamic) → survives compaction
+        automatically via prompt re-injection.
+        """
+        if context.last_state_update_turn is None:
+            return (
+                "State checkpoint: no checkpoint yet this session. "
+                "Use checkpoint_state tool when meaningful work accumulates."
+            )
+        lines = [
+            f"State checkpoint: last at turn {context.last_state_update_turn} "
+            f"({context.last_state_update_ts}), "
+            f"{context.turns_since_last_update} turns ago."
+        ]
         return "\n".join(lines)
 
     def _os_instructions(self, context: PromptContext) -> str:

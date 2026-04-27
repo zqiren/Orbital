@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from collections import deque
 from uuid import uuid4
 
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 # Default cost rates ($/1K tokens) used when no per-model pricing is available.
 _DEFAULT_COST_PER_1K_INPUT = 0.003
 _DEFAULT_COST_PER_1K_OUTPUT = 0.015
+
+# Number of turns between automatic state checkpoints (turn-count trigger).
+# Also used as the global cooldown between ANY two refreshes (except token-pressure).
+COOLDOWN_TURNS = 15
 
 
 def _estimate_cost_usd(usage: TokenUsage,
@@ -87,6 +92,7 @@ class AgentLoop:
         cost_per_1k_input: float = _DEFAULT_COST_PER_1K_INPUT,
         cost_per_1k_output: float = _DEFAULT_COST_PER_1K_OUTPUT,
         on_session_end=None,
+        on_session_end_refresh=None,
     ):
         self._session = session
         self._provider = provider
@@ -107,12 +113,24 @@ class AgentLoop:
         self._llm_failed = False
         self._on_session_end = on_session_end
 
+        # Periodic state refresh callback (async callable(trigger_name: str))
+        # Injected by agent_manager so loop.py stays decoupled from workspace_files.
+        self._on_session_end_refresh = on_session_end_refresh
+
         # Cancellation state (cancel_turn / terminate)
         self._task: asyncio.Task | None = None
         self._inflight_stream: asyncio.Task | None = None
         self._stream_accumulator: StreamAccumulator | None = None
         self._turn_cancelled: bool = False
         self._cancellation_marker_appended_this_turn: bool = False
+
+        # In-flight refresh task (registered with cancel pathway)
+        self._refresh_task: asyncio.Task | None = None
+
+        # State refresh tracking
+        self._turns_since_last_update: int = 0  # resets after each refresh
+        self._last_refresh_iteration: int = 0   # loop iteration# of last refresh
+        self._current_iteration: int = 0        # current loop iteration (updated at top of loop)
 
     @property
     def is_running(self) -> bool:
@@ -270,6 +288,39 @@ class AgentLoop:
                     break
 
                 iteration += 1
+
+                # --- State refresh: turn-count trigger ---
+                # Track current iteration for agent-decided trigger callback.
+                self._current_iteration = iteration
+                # Increment the per-refresh turn counter and expose it to the
+                # context_manager so the agent sees accurate metadata.
+                self._turns_since_last_update += 1
+                if hasattr(self._context_manager, "_turns_since_last_update"):
+                    self._context_manager._turns_since_last_update = self._turns_since_last_update
+
+                # Fire turn-count trigger when cooldown has elapsed.
+                # Token-pressure trigger is handled separately (before compaction).
+                if (
+                    self._turns_since_last_update >= COOLDOWN_TURNS
+                    and self._on_session_end_refresh is not None
+                ):
+                    logger.info(
+                        "State refresh: turn-count trigger at iteration %d "
+                        "(%d turns since last update)",
+                        iteration, self._turns_since_last_update,
+                    )
+                    self._refresh_task = asyncio.create_task(
+                        self._run_refresh("turn_count", iteration),
+                        name=f"refresh-{self._session.session_id}-{iteration}",
+                    )
+                    try:
+                        await self._refresh_task
+                    except asyncio.CancelledError:
+                        logger.info("State refresh cancelled at iteration %d", iteration)
+                        if self._session.is_stopped():
+                            raise
+                    finally:
+                        self._refresh_task = None
 
                 # Reset per-iteration cancellation flags. The
                 # cancellation-marker flag is sticky across cancelled
@@ -645,6 +696,31 @@ class AgentLoop:
                 if self._context_manager.should_compact():
                     from agent_os.agent import compaction as compaction_mod
 
+                    # Token-pressure trigger: fire refresh BEFORE compaction.
+                    # Exempt from cooldown — data preservation trumps redundancy.
+                    if self._on_session_end_refresh is not None:
+                        logger.info(
+                            "State refresh: token-pressure trigger at iteration %d "
+                            "(context at %.0f%%)",
+                            iteration,
+                            self._context_manager.usage_percentage * 100,
+                        )
+                        self._refresh_task = asyncio.create_task(
+                            self._run_refresh("token_pressure", iteration),
+                            name=f"refresh-tp-{self._session.session_id}-{iteration}",
+                        )
+                        try:
+                            await self._refresh_task
+                        except asyncio.CancelledError:
+                            logger.info(
+                                "Token-pressure refresh cancelled at iteration %d",
+                                iteration,
+                            )
+                            if self._session.is_stopped():
+                                raise
+                        finally:
+                            self._refresh_task = None
+
                     # Pre-compaction memory flush: give agent one turn to save state
                     try:
                         self._session.append_system(compaction_mod.MEMORY_FLUSH_PROMPT)
@@ -726,6 +802,53 @@ class AgentLoop:
             self._running = False
 
     # ------------------------------------------------------------------
+    # State refresh helpers
+    # ------------------------------------------------------------------
+
+    async def _run_refresh(self, trigger_name: str, iteration: int) -> None:
+        """Execute a state refresh and update checkpoint metadata.
+
+        Runs the session-end routine with bypass_idempotency=True so it can
+        fire mid-session. Updates context_manager checkpoint fields after a
+        successful run so the agent sees accurate last-update metadata on
+        the next turn.
+
+        Broadcasts state_refresh.lifecycle WS events (in_progress / done /
+        failed) via the on_session_end_refresh callback, which is wired by
+        agent_manager to include ws.broadcast calls.
+
+        Always resets _turns_since_last_update and _last_refresh_iteration
+        regardless of success/failure so cooldown still engages (prevents
+        rapid retry storms on persistent LLM failures).
+        """
+        if self._on_session_end_refresh is None:
+            return
+
+        try:
+            await self._on_session_end_refresh(trigger_name)
+        except Exception:
+            logger.exception("State refresh failed (trigger=%s)", trigger_name)
+        finally:
+            # Always record the refresh so cooldown engages
+            self._turns_since_last_update = 0
+            self._last_refresh_iteration = iteration
+            # Push metadata into context_manager so the agent sees it
+            ts = datetime.now(timezone.utc).isoformat()
+            if hasattr(self._context_manager, "_last_checkpoint_turn"):
+                self._context_manager._last_checkpoint_turn = iteration
+                self._context_manager._last_checkpoint_ts = ts
+                self._context_manager._turns_since_last_update = 0
+
+    async def trigger_checkpoint(self) -> None:
+        """Public entry point for the agent-decided refresh trigger.
+
+        Used by the checkpoint_state tool registered in agent_manager.
+        Encapsulates the iteration capture so callers do not need to
+        touch loop internals.
+        """
+        await self._run_refresh("agent_decided", self._current_iteration)
+
+    # ------------------------------------------------------------------
     # Cancellation API (cancel_turn / terminate)
     # ------------------------------------------------------------------
 
@@ -798,6 +921,9 @@ class AgentLoop:
         Do NOT await self._task here — this would deadlock if terminate
         was invoked from within the loop's own task.
         """
+        # Cancel any in-flight refresh task before cancelling the turn.
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_task.cancel()
         await self.cancel_turn()
         # Cooperative flag: loop's between-iterations check picks this up.
         self._session.stop()

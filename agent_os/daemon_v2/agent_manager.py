@@ -535,6 +535,66 @@ class AgentManager:
                 session_id=session.session_id,
             )
 
+        # 11a. Periodic state-refresh callback (turn-count / agent-decided /
+        # token-pressure triggers). Broadcasts state_refresh.lifecycle events
+        # so the frontend can show an inline status indicator.
+        async def session_end_refresh_callback(trigger_name: str) -> None:
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).isoformat()
+            self._ws.broadcast(project_id, {
+                "type": "state_refresh.lifecycle",
+                "project_id": project_id,
+                "status": "in_progress",
+                "trigger": trigger_name,
+                "timestamp": ts,
+            })
+            try:
+                await run_session_end_routine(
+                    session=session,
+                    provider=provider,
+                    workspace_files=workspace_files,
+                    utility_provider=utility_provider,
+                    session_id=session.session_id,
+                    bypass_idempotency=True,
+                )
+                self._ws.broadcast(project_id, {
+                    "type": "state_refresh.lifecycle",
+                    "project_id": project_id,
+                    "status": "done",
+                    "trigger": trigger_name,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.info(
+                    "State refresh complete (project=%s trigger=%s)",
+                    project_id, trigger_name,
+                )
+            except asyncio.TimeoutError:
+                self._ws.broadcast(project_id, {
+                    "type": "state_refresh.lifecycle",
+                    "project_id": project_id,
+                    "status": "skipped",
+                    "trigger": trigger_name,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.warning(
+                    "State refresh timed out (skipped) (project=%s trigger=%s)",
+                    project_id, trigger_name,
+                )
+                raise
+            except Exception:
+                self._ws.broadcast(project_id, {
+                    "type": "state_refresh.lifecycle",
+                    "project_id": project_id,
+                    "status": "failed",
+                    "trigger": trigger_name,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.exception(
+                    "State refresh failed (project=%s trigger=%s)",
+                    project_id, trigger_name,
+                )
+                raise
+
         # 11b. Budget persistence callback
         from agent_os.agent.pricing import get_cost_rates, budget_usd_to_token_budget
         cost_per_1k_input, cost_per_1k_output = get_cost_rates(
@@ -568,9 +628,27 @@ class AgentManager:
             cost_per_1k_input=cost_per_1k_input,
             cost_per_1k_output=cost_per_1k_output,
             on_session_end=session_end_callback,
+            on_session_end_refresh=session_end_refresh_callback,
         )
 
-        # 12. Store handle
+        # 12a. Register checkpoint_state tool now that the loop exists.
+        # The tool calls loop.trigger_checkpoint() (agent-decided trigger).
+        try:
+            from agent_os.agent.tools.checkpoint_state import CheckpointStateTool
+
+            async def on_agent_checkpoint():
+                await loop.trigger_checkpoint()
+
+            registry.register(CheckpointStateTool(on_checkpoint=on_agent_checkpoint))
+            # Keep tool_names in PromptContext in sync
+            base_prompt_context.tool_names.append("checkpoint_state")
+        except Exception:
+            logger.warning(
+                "checkpoint_state tool registration failed; agent-decided trigger disabled",
+                exc_info=True,
+            )
+
+        # 13. Store handle
         project_handle = ProjectHandle(
             session=session,
             loop=loop,

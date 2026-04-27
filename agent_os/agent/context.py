@@ -58,6 +58,10 @@ class ContextManager:
         if workspace_files is None and base_prompt_context.workspace:
             workspace_files = WorkspaceFileManager(base_prompt_context.workspace)
         self._workspace_files = workspace_files
+        # State checkpoint metadata — updated by AgentLoop after each refresh
+        self._last_checkpoint_turn: int | None = None
+        self._last_checkpoint_ts: str | None = None
+        self._turns_since_last_update: int | None = None
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
@@ -179,11 +183,21 @@ class ContextManager:
 
         # Update transient fields in PromptContext
         active_subs = self._sub_agent_provider() if self._sub_agent_provider else []
+        # Compute turns_since_last_update for the checkpoint metadata block.
+        # We don't have a turn counter here; the loop passes iteration via
+        # _last_checkpoint_turn. The delta is stored separately on the loop
+        # and threaded in as a plain integer each turn.
         ctx = replace(
             self._base_ctx,
             datetime_now=datetime.now().isoformat(),
             context_usage_pct=self._last_usage_pct,
             active_sub_agents=active_subs,
+            last_state_update_turn=self._last_checkpoint_turn,
+            last_state_update_ts=self._last_checkpoint_ts,
+            turns_since_last_update=(
+                None if self._last_checkpoint_turn is None
+                else getattr(self, "_turns_since_last_update", None)
+            ),
         )
 
         # Build system prompt

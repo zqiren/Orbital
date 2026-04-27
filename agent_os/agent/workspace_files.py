@@ -513,6 +513,7 @@ async def run_session_end_routine(
     utility_provider=None,
     *,
     session_id: str,
+    bypass_idempotency: bool = False,
 ) -> None:
     """Generate and write workspace files at session end.
 
@@ -525,9 +526,16 @@ async def run_session_end_routine(
     the same boundary, and we must not double-write SESSION_LOG / DECISIONS
     / CONTEXT. The completion set is only updated AFTER all writes succeed,
     so a failed run allows a second caller to retry.
+
+    bypass_idempotency: when True, skip the idempotency guard so periodic
+    refresh triggers (turn-count, agent-decided, token-pressure) can call
+    this routine mid-session without being blocked by an earlier /new call.
+    The completion set is also skipped on the write side when bypass=True,
+    so the guard remains intact for future non-bypass calls.
     """
     # Idempotency guard: short-circuit if this session already completed.
-    if session_id in _completed_session_ends:
+    # Bypassed for periodic mid-session refresh triggers.
+    if not bypass_idempotency and session_id in _completed_session_ends:
         logger.info("session_end skipped: already completed for %s", session_id)
         return
 
@@ -644,7 +652,10 @@ async def run_session_end_routine(
 
     # Mark complete only AFTER all writes succeeded. If any write raised,
     # this line is skipped and a retry from the second caller will run.
-    _completed_session_ends.add(session_id)
+    # When bypass_idempotency=True (periodic refresh), skip recording so the
+    # guard remains valid for future /new calls.
+    if not bypass_idempotency:
+        _completed_session_ends.add(session_id)
 
 
 def _build_session_summary(session) -> dict:

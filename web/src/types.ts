@@ -237,6 +237,14 @@ export interface TriggerSkippedEvent {
   timestamp: string;
 }
 
+export interface StateRefreshLifecycleEvent {
+  type: 'state_refresh.lifecycle';
+  project_id: string;
+  status: 'in_progress' | 'done' | 'failed' | 'skipped';
+  trigger: 'turn_count' | 'agent_decided' | 'token_pressure';
+  timestamp: string;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
   | StreamDeltaEvent
@@ -251,7 +259,8 @@ export type WebSocketEvent =
   | TriggerCreatedEvent
   | TriggerDeletedEvent
   | TriggerFiredEvent
-  | TriggerSkippedEvent;
+  | TriggerSkippedEvent
+  | StateRefreshLifecycleEvent;
 
 export interface FileEntry {
   name: string;
