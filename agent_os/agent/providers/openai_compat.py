@@ -134,17 +134,53 @@ def _strip_to_spec(message: dict) -> dict:
     return {k: v for k, v in message.items() if k not in ORBITAL_INTERNAL_FIELDS}
 
 
+def _apply_reasoning_policy(message: dict, reasoning) -> dict:
+    """Enforce per-model echo_back contract on outbound assistant messages.
+
+    Targets `role: assistant` only — user/tool/system rows are passthrough.
+
+      required  – ensure `field` is present (default to "") so providers like
+                  deepseek-v4-pro that 400 on missing thinking-history don't
+                  reject multi-turn requests after a text-only final.
+      forbidden – strip `field` so legacy deepseek-reasoner doesn't 400 on
+                  reasoning_content being sent back as input.
+      none      – defensive strip (model produces no reasoning to echo).
+      optional  – passthrough (current denylist behavior).
+
+    `reasoning` is a ReasoningInfo (frozen dataclass). When None or when
+    `field` is unset, this is a no-op for backward compat.
+    """
+    if reasoning is None or message.get("role") != "assistant":
+        return message
+    field = reasoning.field
+    if not field:
+        return message
+    echo = reasoning.echo_back
+    if echo == "required":
+        if field not in message:
+            new_msg = dict(message)
+            new_msg[field] = ""
+            return new_msg
+    elif echo in ("forbidden", "none"):
+        if field in message:
+            new_msg = dict(message)
+            new_msg.pop(field)
+            return new_msg
+    return message
+
+
 class LLMProvider:
     """Dual-SDK LLM client: OpenAI or Anthropic."""
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None, sdk: str = "openai",
-                 max_output: int = 16384, capabilities=None):
+                 max_output: int = 16384, capabilities=None, reasoning=None):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.sdk = sdk  # "openai" or "anthropic"
         self.max_output = max_output
         self.capabilities = capabilities
+        self.reasoning = reasoning  # ReasoningInfo | None — echo-back contract per model
 
         if sdk == "anthropic":
             import anthropic
@@ -166,7 +202,8 @@ class LLMProvider:
             self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key)
 
     def _prepare_messages_openai(self, messages: list) -> list:
-        """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal content."""
+        """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal
+        content, then enforce the model's reasoning echo-back contract."""
         result = []
         has_vision = self.capabilities and self.capabilities.vision
         for msg in messages:
@@ -174,7 +211,8 @@ class LLMProvider:
             if isinstance(content, list) and not has_vision:
                 msg = dict(msg)
                 msg["content"] = _flatten_multimodal_content(content)
-            result.append(_strip_to_spec(msg))
+            stripped = _strip_to_spec(msg)
+            result.append(_apply_reasoning_policy(stripped, getattr(self, "reasoning", None)))
         return result
 
     async def stream(self, messages, tools=None) -> AsyncIterator[StreamChunk]:

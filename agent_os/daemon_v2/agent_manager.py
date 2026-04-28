@@ -408,6 +408,7 @@ class AgentManager:
             config.model, api_key, config.base_url, sdk=config.sdk,
             max_output=model_info.max_output,
             capabilities=model_info.capabilities,
+            reasoning=model_info.reasoning,
         )
 
         # 1a. Fallback providers
@@ -420,12 +421,17 @@ class AgentManager:
             fallback_providers.append(
                 LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
                             max_output=fb_info.max_output,
-                            capabilities=fb_info.capabilities)
+                            capabilities=fb_info.capabilities,
+                            reasoning=fb_info.reasoning)
             )
 
         # 1b. Utility provider
         if config.utility_model:
-            utility_provider = LLMProvider(config.utility_model, config.api_key, config.base_url, sdk=config.sdk)
+            utility_info = self._provider_registry.get_model_info(config.provider, config.utility_model)
+            utility_provider = LLMProvider(
+                config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
+                reasoning=utility_info.reasoning,
+            )
         else:
             utility_provider = provider
 
