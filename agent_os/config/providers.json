@@ -11,7 +11,7 @@
         "gpt-5.4-mini",
         "gpt-5.4-nano"
       ],
-      "notes": "Flagship: gpt-5.5 (1.05M ctx, $5/$30). Balanced/value flagship: gpt-5.4 ($2.50/$15). Fast/cheap: gpt-5.4-mini, gpt-5.4-nano, gpt-5-nano. Reasoning: o3, o4-mini. No separate China endpoint.",
+      "notes": "Flagship: gpt-5.5 (1.05M ctx). Balanced: gpt-5.4. Fast/cheap: gpt-5.4-mini, gpt-5.4-nano, gpt-5-nano. Reasoning-tier: o1, o3, o3-mini, o4-mini. NOTE: on /chat/completions the reasoning trace is hidden server-side for both o-series and gpt-5.x; reasoning_effort is accepted as a request param. To observe or round-trip the trace you must use the Responses API (reasoning.encrypted_content). No separate China endpoint.",
       "pricing": {
         "gpt-5.2": {
           "input_per_1m": 1.75,
@@ -104,6 +104,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.1": {
@@ -115,6 +122,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5": {
@@ -126,6 +140,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5-mini": {
@@ -137,6 +158,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5-nano": {
@@ -148,6 +176,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-4.1": {
@@ -159,6 +194,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "gpt-4o": {
@@ -170,6 +212,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "gpt-4o-mini": {
@@ -181,6 +230,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "o3": {
@@ -192,6 +248,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "o3 reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "o3-mini": {
@@ -203,6 +266,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "o3-mini reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "o4-mini": {
@@ -214,6 +284,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "o4-mini reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "o1": {
@@ -225,6 +302,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "o1 reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "_default": {
@@ -245,6 +329,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.5-pro": {
@@ -256,6 +347,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": false
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.4": {
@@ -267,6 +365,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.4-pro": {
@@ -278,6 +383,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.4-mini": {
@@ -289,6 +401,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.4-nano": {
@@ -300,6 +419,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         },
         "gpt-5.3-codex": {
@@ -311,6 +437,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Codex variant; reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         }
       }
@@ -326,7 +459,7 @@
         "claude-sonnet-4-6",
         "claude-haiku-4-5"
       ],
-      "notes": "Flagship: claude-opus-4-7 (1M context, new tokenizer ~35% more tokens/text, no extended thinking). Balanced: claude-sonnet-4-6 (1M context). Fast/cheap: claude-haiku-4-5 (200k context). No separate China endpoint. Opus 4.7 + Sonnet 4.6 support 1M context natively at standard pricing; opus-4-5/sonnet-4-5/opus-4-1 remain callable as legacy. Opus 4 / Sonnet 4 (2025-05-14 snapshots) retire 2026-06-15.",
+      "notes": "Flagship: claude-opus-4-7 (1M ctx, adaptive thinking only). Balanced: claude-sonnet-4-6 (1M ctx, adaptive or legacy budget_tokens). Fast/cheap: claude-haiku-4-5 (200k ctx, manual budget_tokens). All three Claude 4.x models support extended thinking and EMIT `thinking` content blocks with opaque signatures. Echo-back of thinking blocks (signatures unmodified) is REQUIRED across tool-use turns; pure text continuations are lenient. Anthropic uses its own SDK, not /chat/completions. No separate China endpoint.",
       "pricing": {
         "claude-opus-4-6": {
           "input_per_1m": 5.0,
@@ -387,6 +520,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Legacy 4.6 opus with extended thinking."
           }
         },
         "claude-sonnet-4-6": {
@@ -398,6 +538,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Adaptive (recommended) or manual budget_tokens (deprecated). Echo-back of thinking blocks required during tool use. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
           }
         },
         "claude-opus-4-5": {
@@ -409,6 +556,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Legacy 4.5 opus extended thinking with budget_tokens."
           }
         },
         "claude-sonnet-4-5": {
@@ -420,6 +574,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Legacy 4.5 sonnet with extended thinking; same echo-back rule."
           }
         },
         "claude-haiku-4-5": {
@@ -431,6 +592,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Manual extended thinking with budget_tokens. Echo-back required during tool use. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
           }
         },
         "claude-sonnet-4": {
@@ -442,6 +610,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Legacy claude-sonnet-4 (May 2025); extended thinking with budget_tokens."
           }
         },
         "claude-opus-4": {
@@ -453,6 +628,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Legacy claude-opus-4 (May 2025); extended thinking with budget_tokens."
           }
         },
         "_default": {
@@ -473,6 +655,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
           }
         },
         "claude-haiku-4-5-20251001": {
@@ -484,6 +673,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Pinned snapshot; same semantics as claude-haiku-4-5."
           }
         },
         "claude-sonnet-4-5-20250929": {
@@ -495,6 +691,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Pinned snapshot of claude-sonnet-4-5."
           }
         },
         "claude-opus-4-5-20251101": {
@@ -506,6 +709,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Pinned snapshot of claude-opus-4-5."
           }
         },
         "claude-opus-4-1-20250805": {
@@ -517,6 +727,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Legacy 4.1 opus snapshot; extended thinking via budget_tokens."
           }
         },
         "claude-sonnet-4-20250514": {
@@ -528,6 +745,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Pinned snapshot. Retires 2026-06-15."
           }
         },
         "claude-opus-4-20250514": {
@@ -539,6 +763,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Pinned snapshot. Retires 2026-06-15."
           }
         }
       }
@@ -552,7 +783,7 @@
         "deepseek-v4-flash",
         "deepseek-v4-pro"
       ],
-      "notes": "deepseek-v4-flash and deepseek-v4-pro are unified hybrid models — set thinking.type='enabled' for reasoning, omit/disable for general chat. Legacy deepseek-chat (non-thinking) and deepseek-reasoner (thinking) are aliases of v4-flash, deprecating 2026-07-24. OpenAI-compatible. Text-only, no vision.",
+      "notes": "deepseek-v4-flash and deepseek-v4-pro are unified hybrid models — set thinking.type='enabled' for reasoning, omit/disable for general chat. CRITICAL: v4 models REQUIRE reasoning_content to be echoed back on subsequent turns (especially after tool calls) — missing field returns HTTP 400. Legacy deepseek-chat (non-thinking) and deepseek-reasoner (thinking) are aliases, deprecating 2026-07-24. deepseek-reasoner has the OPPOSITE rule: reasoning_content must NOT be sent back (also 400s). OpenAI-compatible. Text-only, no vision.",
       "pricing": {
         "deepseek-chat": {
           "input_per_1m": 0.28,
@@ -585,6 +816,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Legacy alias for v4-flash non-thinking mode; no reasoning emitted. Deprecating 2026-07-24. https://api-docs.deepseek.com/quick_start/pricing"
           }
         },
         "deepseek-reasoner": {
@@ -596,6 +834,13 @@
             "vision": false,
             "tool_use": false,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "forbidden",
+            "enable": "model_only",
+            "notes": "LEGACY R1 — docs explicitly say 'if reasoning_content is included in input messages, the API will return a 400 error.' Strip before resend. Deprecating 2026-07-24. https://api-docs.deepseek.com/guides/reasoning_model"
           }
         },
         "_default": {
@@ -617,6 +862,13 @@
             "tool_use": true,
             "streaming": true,
             "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Echo-back required for tool-call turns; safest to always include reasoning_content (empty string when absent). https://api-docs.deepseek.com/guides/thinking_mode"
           }
         },
         "deepseek-v4-pro": {
@@ -629,6 +881,13 @@
             "tool_use": true,
             "streaming": true,
             "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Docs: 'If your code does not correctly pass back reasoning_content, the API will return a 400 error.' Use thinking.type=disabled to opt out. https://api-docs.deepseek.com/guides/thinking_mode"
           }
         }
       }
@@ -644,7 +903,7 @@
         "kimi-k2.5",
         "moonshot-v1-128k"
       ],
-      "notes": "Kimi K2.6 is current flagship (vision, 256K, agentic coding). K2.5 is balanced. K2 preview series sunsets 2026-05-25. OpenAI-compatible API; project requires temperature=1 with .cn base.",
+      "notes": "Hybrid k2.5/k2.6 models accept thinking={type:enabled|disabled}; thinking defaults enabled on k2.6. K2.6 also exposes a 'keep' param: keep='all' REQUIRES historical reasoning_content preserved verbatim (echo-back becomes mandatory). Dedicated kimi-k2-thinking / -turbo are always-on and require echo-back unconditionally. api.moonshot.cn (China) and api.moonshot.ai / platform.kimi.ai (global) are functionally identical.",
       "pricing": {
         "kimi-k2.5": {
           "input_per_1m": 0.6,
@@ -681,6 +940,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid via thinking={type:enabled|disabled}; no 'keep' param so historical reasoning is not retained — echo-back not enforced. https://platform.kimi.ai/docs/api/chat"
           }
         },
         "kimi-k2-instruct": {
@@ -692,6 +958,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Instruct (non-thinking) variant."
           }
         },
         "moonshot-v1-128k": {
@@ -703,6 +976,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "v1 family has no thinking parameter; emits no reasoning_content. https://platform.kimi.ai/docs/api/chat"
           }
         },
         "moonshot-v1-32k": {
@@ -714,6 +994,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "v1 family has no thinking parameter."
           }
         },
         "_default": {
@@ -734,6 +1021,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Defaults to enabled. Adds 'keep' param: keep='all' upgrades echo_back to required (preserve historical reasoning_content verbatim). https://platform.kimi.ai/docs/api/chat"
           }
         },
         "kimi-k2-turbo-preview": {
@@ -745,6 +1039,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Turbo preview of K2; same hybrid semantics as kimi-k2.6.",
+            "needs_verification": true
           }
         }
       }
@@ -762,7 +1064,7 @@
         "glm-4.6",
         "glm-4.5-air"
       ],
-      "notes": "GLM-5.1 is latest flagship (200K ctx, aligned with Claude Opus 4.6, 8-hour autonomous tasks). GLM-5 / GLM-5-Turbo flagship tier. GLM-4.7 is the thinking/reasoning model. Vision is served by separate models (glm-5v-turbo, glm-4.6v) not listed here.",
+      "notes": "GLM-5.1 is latest flagship (200K ctx). GLM-5/Turbo flagship tier. GLM-4.7 is the dedicated thinking model. All GLM 4.x/5.x are hybrid (thinking.type=enabled to turn on); echo-back is OPTIONAL — server respects thinking.clear_thinking flag (default true = strip history). Endpoint is OpenAI-compat at https://api.z.ai/api/paas/v4 (note: /paas/v4, NOT /v1). Vision served by separate models (glm-5v-turbo, glm-4.6v) not listed.",
       "pricing": {
         "glm-5": {
           "input_per_1m": 1.0,
@@ -815,6 +1117,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Same hybrid model as 4.x line; thinking defaults enabled. https://docs.z.ai/api-reference/llm/chat-completion"
           }
         },
         "glm-4.7": {
@@ -826,6 +1135,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid (not always-on). Docs: missing/truncated/rewritten/reordered blocks degrade performance but do not 400. https://docs.z.ai/guides/llm/glm-4.7"
           }
         },
         "glm-4.6": {
@@ -837,6 +1153,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid. clear_thinking=false to retain history. https://docs.z.ai/guides/llm/glm-4.6"
           }
         },
         "glm-4.5-air": {
@@ -848,6 +1171,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid. Echo-back governed by thinking.clear_thinking flag (default true = strip). https://docs.z.ai/guides/llm/glm-4.5"
           }
         },
         "_default": {
@@ -868,6 +1198,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
           }
         },
         "glm-5-turbo": {
@@ -879,6 +1216,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Turbo variant of glm-5; same hybrid semantics.",
+            "needs_verification": true
           }
         },
         "glm-4.7-flashx": {
@@ -890,6 +1235,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "FlashX variant of glm-4.7; same hybrid semantics.",
+            "needs_verification": true
           }
         },
         "glm-4.7-flash": {
@@ -901,6 +1254,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Fast variant of glm-4.7; same hybrid semantics.",
+            "needs_verification": true
           }
         },
         "glm-4.5-flash": {
@@ -912,6 +1273,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Flash variant; same hybrid semantics.",
+            "needs_verification": true
           }
         }
       }
@@ -930,7 +1299,7 @@
         "qwen-flash",
         "qwen3-coder-plus"
       ],
-      "notes": "Qwen3-Max is the current flagship (262K ctx, thinking-mode). Multimodal lives in qwen3.5-plus / qwen3.5-flash. qwen-turbo is deprecated; use qwen-flash. OpenAI-compatible endpoint.",
+      "notes": "Qwen3-Max is the current flagship (262K ctx, hybrid thinking). All Qwen3 hybrid models default thinking OFF; enable via extra_body.enable_thinking=true. Echo-back is OPTIONAL but governed by preserve_thinking flag. Multimodal lives in qwen3.5-plus / qwen3.5-flash. qwen-turbo deprecated; use qwen-flash. Qwen3-coder is non-thinking. OpenAI-compatible endpoint (dashscope-intl for international, dashscope for CN — same semantics).",
       "pricing": {
         "qwen3.5-max": {
           "input_per_1m": 2.0,
@@ -971,6 +1340,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Latest Qwen3.5 flagship; hybrid thinking-mode (default off). Same enable_thinking + preserve_thinking pattern.",
+            "needs_verification": true
           }
         },
         "qwen3-max": {
@@ -982,6 +1359,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking DEFAULT OFF. Enable via extra_body.enable_thinking=true. preserve_thinking=true to retain history. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
           }
         },
         "qwen3.5-plus": {
@@ -993,6 +1377,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
           }
         },
         "qwen-plus": {
@@ -1004,6 +1395,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
           }
         },
         "qwen-turbo": {
@@ -1015,6 +1413,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Deprecated. Use qwen-flash."
           }
         },
         "qwen3-coder-plus": {
@@ -1026,6 +1431,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Coder model; not listed among thinking-supported. https://help.aliyun.com/zh/model-studio/qwen-coder"
           }
         },
         "_default": {
@@ -1046,6 +1458,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off.",
+            "needs_verification": true
           }
         },
         "qwen-flash": {
@@ -1057,6 +1477,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. Replaces deprecated qwen-turbo. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
           }
         },
         "qwen3.5-flash": {
@@ -1068,6 +1495,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
           }
         },
         "qwen3-coder-flash": {
@@ -1079,6 +1513,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Coder model variant; not thinking-supported.",
+            "needs_verification": true
           }
         }
       }
@@ -1094,7 +1536,7 @@
         "grok-4-1-fast-non-reasoning",
         "grok-code-fast-1"
       ],
-      "notes": "OpenAI-compatible. Grok 4.20 (2M ctx) is the new flagship and xAI's recommended default; Grok 4.1 Fast has 2M ctx; grok-code-fast-1 is text-only (no vision). Single global endpoint (no China endpoint).",
+      "notes": "Grok 4.20 and grok-4-1-fast-reasoning are auto-reasoning (reasoning_effort returns 400). On /chat/completions xAI's SDK exposes reasoning_content in stream deltas, but the official contract for echo-back is on the Responses API (reasoning.encrypted_content). Echo-back is OPTIONAL on xAI — no upstream 400 enforcement.",
       "pricing": {
         "grok-4": {
           "input_per_1m": 3.0,
@@ -1135,6 +1577,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "auto",
+            "notes": "Auto-reasoning. Same xAI semantics as grok-4.20.",
+            "needs_verification": true
           }
         },
         "grok-4-1-fast-reasoning": {
@@ -1146,6 +1596,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "grok-4-1-fast variant with reasoning enabled. reasoning_effort not accepted (auto). Echo-back optional. https://docs.x.ai/developers/models/grok-4-1-fast-reasoning"
           }
         },
         "grok-4-1-fast-non-reasoning": {
@@ -1157,6 +1614,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning variant of grok-4-1-fast. https://docs.x.ai/developers/models/grok-4-1-fast-reasoning"
           }
         },
         "grok-code-fast-1": {
@@ -1168,6 +1632,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "auto",
+            "notes": "Marketed as a reasoning model for agentic coding; xAI reasoning guide does not detail it explicitly. Probe before relying on. https://x.ai/news/grok-code-fast-1",
+            "needs_verification": true
           }
         },
         "grok-3": {
@@ -1179,6 +1651,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model.",
+            "needs_verification": true
           }
         },
         "_default": {
@@ -1199,6 +1679,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "auto",
+            "notes": "Reasons automatically; reasoning_effort returns 400. reasoning_content visible on stream deltas via xAI SDK. Encrypted reasoning round-trip is optional. https://docs.x.ai/docs/guides/reasoning"
           }
         }
       }
@@ -1213,7 +1700,7 @@
         "gemini-3-flash-preview",
         "gemini-2.5-flash"
       ],
-      "notes": "Gemini 3.1 Pro Preview is current flagship (gemini-3-pro-preview was shut down 2026-03-09). 1M context across the family. OpenAI-compatible endpoint via /v1beta/openai. Flagship pricing is tiered at >200K tokens.",
+      "notes": "Gemini 3 family (3.1-pro-preview, 3-flash-preview) STRICTLY enforces thought_signature echo-back on function-call/tool turns — missing signature returns 400. On the OpenAI-compat endpoint, signatures live in tool_calls[*].extra_content.google.thought_signature; thought summaries appear as reasoning_content when extra_body.google.thinking_config.include_thoughts=true. Gemini 2.5 is lenient (no enforcement, quality degrades). Endpoint: https://generativelanguage.googleapis.com/v1beta/openai (OpenAI-compat shim).",
       "pricing": {
         "gemini-3-pro-preview": {
           "input_per_1m": 2.0,
@@ -1258,6 +1745,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Same Gemini 3 strict signature validation.",
+            "needs_verification": true
           }
         },
         "gemini-3-flash-preview": {
@@ -1269,6 +1764,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Same Gemini 3 strict signature validation on tool-use turns. https://ai.google.dev/gemini-api/docs/thinking"
           }
         },
         "gemini-2.5-flash": {
@@ -1280,6 +1782,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Uses thinking_budget (-1 for dynamic). Lenient. https://ai.google.dev/gemini-api/docs/thinking"
           }
         },
         "gemini-2.5-pro": {
@@ -1291,6 +1800,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "2.5-series does not strictly enforce signature echo-back; quality degrades if omitted. https://ai.google.dev/gemini-api/docs/thinking"
           }
         },
         "gemini-2.0-flash": {
@@ -1302,6 +1818,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Pre-thinking-mode generation."
           }
         },
         "_default": {
@@ -1322,6 +1845,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Gemini 3 STRICTLY enforces thought_signature echo-back on tool/function-call turns (extra_content.google.thought_signature). Pure text turns lenient. Thought summaries surface as reasoning_content when extra_body.google.thinking_config.include_thoughts=true. https://ai.google.dev/gemini-api/docs/thought-signatures"
           }
         },
         "gemini-2.5-flash-lite": {
@@ -1333,6 +1863,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Lite variant; same lenient 2.5 semantics.",
+            "needs_verification": true
           }
         }
       }
@@ -1350,7 +1888,7 @@
         "codestral-latest",
         "devstral-2-25-12"
       ],
-      "notes": "Mistral Large 3 = flagship multimodal. Mistral Medium 3.1 = balanced multimodal. Mistral Small 4 = fast (text+reasoning+coding). Magistral Medium/Small 1.2 = reasoning (native CoT). Codestral = code+FIM. Devstral 2 = agentic SWE. OpenAI-compatible endpoint at /v1/chat/completions; Codestral also offers /v1/fim/completions.",
+      "notes": "Mistral Large 3 / Medium 3.1 / Small 4 are non-reasoning (multimodal/text). Magistral Medium/Small 1.2 are reasoning models with NATIVE chain-of-thought. Magistral-2507/2509 emit structured `type=thinking` chunks; Magistral-2506 used inline <think>...</think> tags in content. Echo-back is not enforced (optional). Codestral = code+FIM. Devstral = agentic SWE. OpenAI-compatible at /v1/chat/completions.",
       "pricing": {
         "mistral-large-latest": {
           "input_per_1m": 0.5,
@@ -1399,6 +1937,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model. https://docs.mistral.ai/capabilities/reasoning"
           }
         },
         "mistral-medium-latest": {
@@ -1410,6 +1955,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "magistral-medium-latest": {
@@ -1421,6 +1973,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=high",
+            "notes": "Magistral 2507/2509 emits structured chunks with type=thinking. 2506 used inline <think>...</think> tags in content. Echo-back not enforced upstream. https://docs.mistral.ai/capabilities/reasoning"
           }
         },
         "magistral-small-latest": {
@@ -1432,6 +1991,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=high",
+            "notes": "Same shape as magistral-medium. Newer 2509/2507 structured chunks; 2506 inline tags. https://docs.mistral.ai/capabilities/reasoning"
           }
         },
         "mistral-small-latest": {
@@ -1443,6 +2009,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "codestral-latest": {
@@ -1454,6 +2027,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Code+FIM model; non-reasoning."
           }
         },
         "devstral-small-latest": {
@@ -1465,6 +2045,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Devstral agentic SWE; non-reasoning.",
+            "needs_verification": true
           }
         },
         "_default": {
@@ -1485,6 +2073,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Devstral 2.x agentic SWE; non-reasoning.",
+            "needs_verification": true
           }
         }
       }
@@ -1500,7 +2096,7 @@
         "moonshotai/kimi-k2-instruct-0905",
         "llama-3.1-8b-instant"
       ],
-      "notes": "Ultra-fast inference for open-source models (Llama, GPT-OSS, Qwen, Kimi K2). OpenAI-compatible at /openai/v1. deepseek-r1-distill-llama-70b was deprecated 2025-10-02; use gpt-oss-120b or llama-3.3-70b-versatile for reasoning.",
+      "notes": "Ultra-fast inference for open-source models. OpenAI-compatible at /openai/v1. Reasoning models (gpt-oss-120b/20b, qwen3-32b, deepseek-r1-distill) emit reasoning in a `reasoning` field (not reasoning_content). TWO mutually-exclusive params: reasoning_format (parsed/raw/hidden — for qwen/deepseek-r1-distill) and include_reasoning + reasoning_effort (for gpt-oss). Echo-back is OPTIONAL (not enforced upstream). Deprecations: deepseek-r1-distill-llama-70b (2025-10-02), kimi-k2-instruct-0905 (2026-03-23). Use gpt-oss-120b instead.",
       "pricing": {
         "llama-4-scout-17b-16e-instruct": {
           "input_per_1m": 0.11,
@@ -1553,6 +2149,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model.",
+            "needs_verification": true
           }
         },
         "deepseek-r1-distill-llama-70b": {
@@ -1564,6 +2168,13 @@
             "vision": false,
             "tool_use": false,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning_format=parsed",
+            "notes": "DEPRECATED 2025-10-02. Same reasoning_format semantics as qwen3-32b on Groq; Groq does NOT enforce DeepSeek-style echo-back. https://console.groq.com/docs/reasoning"
           }
         },
         "_default": {
@@ -1583,6 +2194,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "llama-3.3-70b-versatile": {
@@ -1593,6 +2211,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "openai/gpt-oss-20b": {
@@ -1603,6 +2228,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Same as gpt-oss-120b. https://console.groq.com/docs/reasoning"
           }
         },
         "openai/gpt-oss-120b": {
@@ -1613,6 +2245,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Reasoning in `reasoning` field on assistant message. reasoning_format param NOT supported for gpt-oss; use include_reasoning. Default returns reasoning. https://console.groq.com/docs/reasoning"
           }
         },
         "qwen/qwen3-32b": {
@@ -1623,6 +2262,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning_format=parsed",
+            "notes": "Use reasoning_format=parsed for `reasoning` field, raw to keep <think> inline in content, hidden to suppress. include_reasoning is mutually exclusive with reasoning_format. https://console.groq.com/docs/reasoning"
           }
         },
         "moonshotai/kimi-k2-instruct-0905": {
@@ -1633,6 +2279,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Kimi K2 instruct (non-reasoning) on Groq. DEPRECATED 2026-03-23 in favor of gpt-oss-120b."
           }
         },
         "meta-llama/llama-4-scout-17b-16e-instruct": {
@@ -1643,6 +2296,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model.",
+            "needs_verification": true
           }
         }
       }
@@ -1660,7 +2321,7 @@
         "meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "openai/gpt-oss-120b"
       ],
-      "notes": "Hosts many open-source models (Llama, Qwen, DeepSeek, Kimi, GLM, MiniMax, gpt-oss). OpenAI-compatible API. Llama 4 family is fine-tuning only as of 2026-04-27.",
+      "notes": "Together does NOT unify reasoning shapes across models: DeepSeek-R1 emits inline <think>...</think> tags inside content; gpt-oss-120b emits a separate `reasoning` field on the assistant message. Per-model contract varies — check the model page on together.ai. Echo-back is generally optional on Together (no documented gateway-level enforcement).",
       "pricing": {
         "_default": {
           "input_per_1m": 0.5,
@@ -1710,6 +2371,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Mirrors upstream Moonshot K2.6 semantics. Together-specific behavior unverified.",
+            "needs_verification": true
           }
         },
         "deepseek-ai/DeepSeek-V4-Pro": {
@@ -1720,6 +2389,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Upstream DeepSeek v4-pro requires reasoning_content echo-back. Together's gateway behavior (whether it surfaces the field or inlines) needs verification on the model page. Treat as required to be safe. https://www.together.ai/models/deepseek-v4-pro",
+            "needs_verification": true
           }
         },
         "deepseek-ai/DeepSeek-R1": {
@@ -1730,6 +2407,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Together returns reasoning INLINE via <think>...</think> tags in `content` (no separate reasoning_content field). Old R1 contract did not require echo-back. https://docs.together.ai/docs/deepseek-r1"
           }
         },
         "Qwen/Qwen3.5-397B-A17B": {
@@ -1740,6 +2424,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Mirrors upstream Qwen3 hybrid semantics. Verify on Together's model card.",
+            "needs_verification": true
           }
         },
         "meta-llama/Llama-3.3-70B-Instruct-Turbo": {
@@ -1750,6 +2442,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "field": null,
+            "echo_back": "none",
+            "enable": "model_only",
+            "notes": "Non-reasoning model."
           }
         },
         "openai/gpt-oss-120b": {
@@ -1760,6 +2459,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning_effort=medium",
+            "notes": "Together exposes a SEPARATE `reasoning` field on the assistant message. Example: { message: { role, content, reasoning } }. https://docs.together.ai/docs/gpt-oss"
           }
         }
       }
@@ -1779,7 +2485,7 @@
         "minimax/minimax-m2.7",
         "stepfun/step-3.5-flash"
       ],
-      "notes": "Aggregator routing 200+ models from all major providers. OpenAI-compatible. Suggested list reflects current OpenRouter weekly leaderboard; pricing varies per upstream and falls through to _default.",
+      "notes": "OpenRouter normalizes upstream reasoning into three aliases: `reasoning` (string), `reasoning_content` (input alias), and `reasoning_details` (structured array, required for Anthropic tool-use continuity). Anthropic models on OR REQUIRE reasoning_details echo-back across tool-use turns; DeepSeek models pass through upstream's strict echo-back contract. Use reasoning.max_tokens, reasoning.effort, or reasoning.enabled to enable. reasoning.exclude=true suppresses output.",
       "pricing": {
         "_default": {
           "input_per_1m": 2.0,
@@ -1805,6 +2511,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "required",
+            "enable": "param:reasoning.max_tokens=N",
+            "notes": "OR normalizes Anthropic thinking into `reasoning` + `reasoning_details`. reasoning_details MUST be passed back unmodified across tool-use turns. https://openrouter.ai/docs/guides/best-practices/reasoning-tokens"
           }
         },
         "anthropic/claude-sonnet-4.6": {
@@ -1816,6 +2529,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "required",
+            "enable": "param:reasoning.max_tokens=N",
+            "notes": "Same Anthropic semantics; reasoning_details preserved verbatim across tool-use turns."
           }
         },
         "google/gemini-3-flash-preview": {
@@ -1827,6 +2547,13 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning.max_tokens=N",
+            "notes": "Gemini thinking via OR's unified reasoning param. Upstream Gemini does not require echo-back for pure text."
           }
         },
         "moonshotai/kimi-k2.6": {
@@ -1838,6 +2565,14 @@
             "vision": true,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning.enabled=true",
+            "notes": "OR unifies Moonshot reasoning_content into `reasoning`. Echo-back follows upstream Moonshot (optional unless keep='all').",
+            "needs_verification": true
           }
         },
         "deepseek/deepseek-v3.2": {
@@ -1849,6 +2584,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "required",
+            "enable": "param:reasoning.enabled=true",
+            "notes": "OR normalizes DeepSeek reasoning_content into `reasoning` (also accepts reasoning_content alias). DeepSeek upstream enforces echo-back; OR passes 400 through. Pass back `message.reasoning` (string) OR `reasoning_details` (array) unmodified. https://openrouter.ai/docs/guides/best-practices/reasoning-tokens"
           }
         },
         "x-ai/grok-4.1-fast": {
@@ -1860,6 +2602,13 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning.effort=high",
+            "notes": "Grok via OR. reasoning.effort accepts low/medium/high/xhigh/minimal. No upstream echo-back enforcement."
           }
         },
         "minimax/minimax-m2.7": {
@@ -1871,6 +2620,14 @@
             "vision": false,
             "tool_use": true,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "param:reasoning.enabled=true",
+            "notes": "MiniMax M-series; OR central reasoning page lacks specifics. Confirm via model page on openrouter.ai.",
+            "needs_verification": true
           }
         },
         "stepfun/step-3.5-flash": {
@@ -1882,6 +2639,14 @@
             "vision": false,
             "tool_use": false,
             "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning",
+            "echo_back": "optional",
+            "enable": "auto",
+            "notes": "StepFun reasoning support on OR not authoritatively documented.",
+            "needs_verification": true
           }
         }
       }

@@ -30,6 +30,28 @@ class ModelCapabilities:
 
 
 @dataclass(frozen=True)
+class ReasoningInfo:
+    """Per-model reasoning/thinking-mode contract.
+
+    `field`: stream-delta key carrying reasoning text. None + supported=True
+    means reasoning is inline as <think>...</think> within `content`.
+    `echo_back`: must past assistant turns include the field?
+        required  – API 400s if missing  (DeepSeek v4 family, Anthropic during tool use, Gemini 3 during tool use)
+        optional  – tolerated either way
+        forbidden – API 400s if INCLUDED (legacy DeepSeek R1)
+        none      – nothing to echo (hidden server-side or unsupported)
+    `enable`: how to turn on reasoning at request time
+        auto / model_only / param:<key>=<value>
+    """
+    supported: bool = False
+    field: str | None = None
+    echo_back: str = "none"
+    enable: str = "model_only"
+    needs_verification: bool = False
+    notes: str = ""
+
+
+@dataclass(frozen=True)
 class ModelInfo:
     """Metadata for a specific model."""
     context_window: int = _FALLBACK_CONTEXT_WINDOW
@@ -37,6 +59,20 @@ class ModelInfo:
     capabilities: ModelCapabilities = ModelCapabilities()
     tier: str = ""
     display_name: str = ""
+    reasoning: ReasoningInfo = ReasoningInfo()
+
+
+def _parse_reasoning_entry(entry: dict | None) -> ReasoningInfo:
+    if not entry:
+        return ReasoningInfo()
+    return ReasoningInfo(
+        supported=bool(entry.get("supported", False)),
+        field=entry.get("field"),
+        echo_back=entry.get("echo_back", "none"),
+        enable=entry.get("enable", "model_only"),
+        needs_verification=bool(entry.get("needs_verification", False)),
+        notes=entry.get("notes", ""),
+    )
 
 
 def _parse_model_entry(entry: dict) -> ModelInfo:
@@ -53,6 +89,7 @@ def _parse_model_entry(entry: dict) -> ModelInfo:
         capabilities=caps,
         tier=entry.get("tier", ""),
         display_name=entry.get("display_name", ""),
+        reasoning=_parse_reasoning_entry(entry.get("reasoning")),
     )
 
 
