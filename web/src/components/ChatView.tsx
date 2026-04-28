@@ -692,6 +692,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     if (item.type === 'activity_block') {
       return `activity_block:${item.startTime}:${item.endTime}:${item.activities.length}`;
     }
+    if (item.type === 'refresh_status') {
+      return `refresh_status:${item.timestamp}:${item.status}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
     const contentPrefix = item.content?.slice(0, 32) ?? '';
