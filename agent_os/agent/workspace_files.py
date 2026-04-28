@@ -556,7 +556,9 @@ async def run_session_end_routine(
     _per_attempt_timeouts = [30.0, 60.0, 90.0]
     for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
         try:
-            response = await asyncio.wait_for(llm.complete(messages), timeout=_timeout)
+            response = await asyncio.wait_for(
+                llm.complete(messages, disable_reasoning=True), timeout=_timeout
+            )
             break
         except asyncio.TimeoutError:
             if _attempt < len(_per_attempt_timeouts):

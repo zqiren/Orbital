@@ -16,6 +16,7 @@ infrastructure; this tool is only a signal. The tool stores a callback
 
 import asyncio
 
+from agent_os.agent.loop import COOLDOWN_TURNS
 from .base import Tool, ToolResult
 
 
@@ -37,9 +38,9 @@ class CheckpointStateTool(Tool):
             "Trigger an immediate checkpoint of project state files "
             "(PROJECT_STATE, DECISIONS, LESSONS, CONTEXT, SESSION_LOG). "
             "Call this when you have completed a significant piece of work "
-            "and want to ensure it is persisted before continuing. "
-            "Do NOT call this more than once every 15 turns — a cooldown "
-            "is enforced automatically."
+            f"and want to ensure it is persisted before continuing. "
+            f"Do NOT call this more than once every {COOLDOWN_TURNS} turns — "
+            "a cooldown is enforced automatically."
         )
         self.parameters = {
             "type": "object",

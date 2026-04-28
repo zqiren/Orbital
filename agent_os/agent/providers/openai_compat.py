@@ -134,6 +134,62 @@ def _strip_to_spec(message: dict) -> dict:
     return {k: v for k, v in message.items() if k not in ORBITAL_INTERNAL_FIELDS}
 
 
+def _build_reasoning_off_switch(model: str, reasoning) -> dict | None:
+    """Compute the ``extra_body`` payload that disables reasoning for the model.
+
+    Returns:
+        - dict to pass via ``extra_body=`` when reasoning can be disabled
+        - None when:
+            - ``reasoning`` is None
+            - ``reasoning.enable`` does NOT start with ``param:`` (locked-on
+              model — auto / model_only). A WARNING is logged for these cases
+              so callers know the request will go out with reasoning still on.
+            - the ``param:...`` value is unrecognized (also logs a WARNING)
+
+    Mapping (prefix match on the ``enable`` string):
+        param:thinking.type=enabled        -> {"thinking": {"type": "disabled"}}
+        param:enable_thinking=true         -> {"enable_thinking": False}
+        param:reasoning_effort=...         -> {"reasoning_effort": "minimal"}
+        param:reasoning.max_tokens=...     -> {"reasoning": {"enabled": False}}
+        param:reasoning.enabled=true       -> {"reasoning": {"enabled": False}}
+        param:reasoning.effort=...         -> {"reasoning": {"enabled": False}}
+    """
+    logger = logging.getLogger(__name__)
+    if reasoning is None:
+        return None
+
+    enable = getattr(reasoning, "enable", "") or ""
+    if not enable.startswith("param:"):
+        logger.warning(
+            "disable_reasoning requested but model %s is locked-on "
+            "(enable=%r); request will be sent with reasoning still active",
+            model, enable,
+        )
+        return None
+
+    spec = enable[len("param:"):]
+
+    if spec.startswith("thinking.type=enabled"):
+        return {"thinking": {"type": "disabled"}}
+    if spec.startswith("enable_thinking=true"):
+        return {"enable_thinking": False}
+    if spec.startswith("reasoning_effort="):
+        return {"reasoning_effort": "minimal"}
+    if spec.startswith("reasoning.max_tokens="):
+        return {"reasoning": {"enabled": False}}
+    if spec.startswith("reasoning.enabled=true"):
+        return {"reasoning": {"enabled": False}}
+    if spec.startswith("reasoning.effort="):
+        return {"reasoning": {"enabled": False}}
+
+    logger.warning(
+        "disable_reasoning requested but model %s has unrecognized "
+        "enable=%r; request will be sent with reasoning still active",
+        model, enable,
+    )
+    return None
+
+
 def _apply_reasoning_policy(message: dict, reasoning) -> dict:
     """Enforce per-model echo_back contract on outbound assistant messages.
 
@@ -351,21 +407,32 @@ class LLMProvider:
         except Exception as exc:
             self._classify_anthropic_error(exc)
 
-    async def complete(self, messages, tools=None) -> LLMResponse:
-        """Non-streaming completion. Returns LLMResponse directly."""
+    async def complete(self, messages, tools=None, *, disable_reasoning: bool = False) -> LLMResponse:
+        """Non-streaming completion. Returns LLMResponse directly.
+
+        ``disable_reasoning``: when True AND ``self.reasoning.enable`` starts
+        with ``"param:"``, send the matching off-switch via ``extra_body=``
+        on the OpenAI SDK call. No-op for the Anthropic SDK path.
+        """
         if self.sdk == "anthropic":
             return await self._complete_anthropic(messages, tools)
-        return await self._complete_openai(messages, tools)
+        return await self._complete_openai(messages, tools, disable_reasoning=disable_reasoning)
 
-    async def _complete_openai(self, messages, tools=None) -> LLMResponse:
+    async def _complete_openai(self, messages, tools=None, *, disable_reasoning: bool = False) -> LLMResponse:
         """OpenAI SDK non-streaming path."""
         messages = self._prepare_messages_openai(messages)
+        extra_kwargs: dict = {}
+        if disable_reasoning:
+            off_switch = _build_reasoning_off_switch(self.model, self.reasoning)
+            if off_switch is not None:
+                extra_kwargs["extra_body"] = off_switch
         try:
             response = await self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=tools or None,
                 stream=False,
+                **extra_kwargs,
             )
         except (ContextOverflowError, LLMError):
             raise

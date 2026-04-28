@@ -40,7 +40,7 @@ _DEFAULT_COST_PER_1K_OUTPUT = 0.015
 
 # Number of turns between automatic state checkpoints (turn-count trigger).
 # Also used as the global cooldown between ANY two refreshes (except token-pressure).
-COOLDOWN_TURNS = 15
+COOLDOWN_TURNS = 50
 
 
 def _estimate_cost_usd(usage: TokenUsage,

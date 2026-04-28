@@ -8,10 +8,11 @@ Scenario:
   - LLM emits a checkpoint_state tool call on turn 8.
   - Refresh fires with trigger="agent_decided".
   - Cooldown resets turns_since_last_update to 0.
-  - Turn-count trigger would normally fire at turn 23 (8+15) but must NOT —
-    because the cooldown window from the agent-decided trigger blocks it.
-  - The next turn-count fire happens at turn 38 (8+15+15 = 38).
-  - We run 40 turns to confirm exactly one additional turn_count refresh at ~38.
+  - Turn-count trigger would normally fire at turn (8+COOLDOWN_TURNS) but must
+    NOT fire any earlier — because the cooldown window from the agent-decided
+    trigger blocks it.
+  - The next turn-count fire happens at turn (8 + 2*COOLDOWN_TURNS).
+  - We run enough turns to confirm exactly two additional turn_count refreshes.
 
 Test FAILS on main (no trigger machinery) and PASSES on the branch.
 """
@@ -197,114 +198,28 @@ class _CountingRegistry:
 
 @pytest.mark.asyncio
 async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
-    """Agent-decided refresh at turn 8 → cooldown active → no turn_count at turn 23.
+    """Agent-decided refresh at turn 8 → cooldown active → next turn_count blocked.
 
-    With COOLDOWN_TURNS=15:
-    - checkpoint at turn 8 → agent_decided fires, resets turns_since_last_update to 0
-    - turns 9–22 (14 more turns) → counter goes from 0 to 14 → below threshold
-    - turn 23 would be the 15th turn since the checkpoint → fires
+    Invariant under test: agent_decided RESETS the cooldown, preventing a
+    double-fire if turn_count would have fired again before COOLDOWN_TURNS
+    elapsed since the agent-decided refresh.
 
-    Wait — re-reading the spec: "no turn_count refresh fires at turn 23 (8+15)".
-    This means the next turn_count fire happens at turn 8+15=23. But the spec
-    says cooldown blocks it. Let me re-read: "cooldown engaged → turn-count does
-    not fire until cooldown expires. Concrete steps: stub the LLM to emit a
-    checkpoint_state tool call on turn 8, then ordinary text turns thereafter.
-    Assert: refresh fires exactly once at turn 8 (trigger=agent_decided), and no
-    turn_count refresh fires at turn 23 (8+15)"
+    Sequence with checkpoint at turn 8:
+    - Turn 8 TOP: counter=8 (< COOLDOWN_TURNS, no fire). LLM returns
+      checkpoint_state. Tool executes → _run_refresh("agent_decided", 8) →
+      resets turns_since_last_update to 0.
+    - Turns 9..(8+COOLDOWN_TURNS-1): counter increments 1..(COOLDOWN_TURNS-1).
+    - Turn (8+COOLDOWN_TURNS): counter hits COOLDOWN_TURNS → turn_count fires.
+      Counter resets to 0.
+    - Turn (8+2*COOLDOWN_TURNS): counter hits COOLDOWN_TURNS again → fires.
 
-    Hmm, but the cooldown is COOLDOWN_TURNS=15. After agent_decided at turn 8,
-    turns_since_last_update resets to 0. At turn 23 (8+15), that's 15 more turns
-    which EQUALS COOLDOWN_TURNS — so it SHOULD fire.
-
-    The spec says "next fire at turn 23+15=38". This implies the agent_decided
-    doesn't reset the timer in the same way, OR the checkpoint tool itself is
-    called at the end of "turn 8" (inside the turn_count reset). Actually:
-
-    The checkpoint_state call happens mid-turn execution (not at the top-of-loop
-    turn-count check). The _run_refresh resets turns_since_last_update to 0 after
-    firing. So:
-    - Turn 8: turn_count check runs (8 < 15, skip). Then LLM returns checkpoint_state.
-      Tool executes → _run_refresh("agent_decided", 8) → turns_since_last_update=0.
-    - Turn 9–22: 14 more iterations, turns_since_last_update goes 1..14
-    - Turn 23: turns_since_last_update=15 → fires!
-
-    So the spec's "no turn_count at 23" means: the AGENT-DECIDED fires at turn 8
-    (within the tool execution), and then the NEXT turn_count fires at turn 23
-    (which is 15 turns after the agent-decided). But the spec says "the next
-    turn_count fire happens at turn 23+15 = turn 38".
-
-    This implies that the agent_decided at turn 8 already fired via the checkpoint
-    tool DURING turn 8, AND also that at the start of turn 9 the turn-count check
-    would fire (since turns_since_last_update was 8 before the tool call).
-
-    Actually on re-reading: the turn-count check fires at the TOP of each iteration
-    BEFORE the LLM is called. So at turn 8, the counter is 8. Not >=15, so no
-    turn_count fire. LLM returns checkpoint_state tool. Tool executes →
-    on_agent_checkpoint() → loop._run_refresh("agent_decided", 8) → resets counter
-    to 0.
-
-    Now turn 9: counter increments to 1 at top. Not >=15. LLM returns normal.
-    ...
-    Turn 23: counter increments to 15 at top. >= 15 → fires turn_count!
-
-    This DOES fire at turn 23. But the spec says it shouldn't. The spec says
-    "next turn_count fire happens at turn 23+15 = turn 38".
-
-    I think the spec means: the agent-decided refresh at turn 8 resets the
-    TURN COUNT AT WHICH THE COUNTER STARTED counting from 0. But the loop only
-    checks turns_since_last_update >= COOLDOWN_TURNS at the top of the loop.
-    If the counter resets inside a tool call (not at the top), then:
-    - Turn 8 TOP: counter=8 (no fire). LLM: checkpoint. Tool: counter resets to 0.
-    - Turn 9 TOP: counter increments to 1.
-    - Turn 23 TOP: counter = 15 → FIRES.
-
-    So the spec appears to say the opposite of what the code does. But the spec
-    also notes "the next turn_count fire happens at turn 38". Let me check what
-    the regression test for cooldown says...
-
-    From test_cooldown_blocks_back_to_back_refresh.py:
-    "2 * COOLDOWN_TURNS iterations → exactly 2 refreshes"
-    → 30 turns → fires at 15 and 30.
-
-    If agent_decided fires at turn 8 inside a tool call, and counter resets to 0,
-    then the NEXT turn_count fires when counter hits 15 again. Counter increments
-    at the start of each iteration. After reset at turn 8 tool call:
-    - Turn 8 end: counter=0 (after reset)
-    - Turn 9 start: counter becomes 1
-    - Turn 23 start: counter becomes 15 → fires!
-
-    So turn 23 DOES fire. The spec saying it "does not fire" must mean the spec
-    is describing a scenario where the checkpoint fires EXACTLY at turn 8 (the
-    turn-count check fires at iteration 8 because turns_since_last_update=8,
-    which is below 15, but then the agent checkpoint also fires at 8 via the tool).
-
-    I think the spec means: the INITIAL turn-count check at turn 23 would fire
-    if no agent-decided had run, but since agent-decided ran at turn 8 and reset
-    the counter, the next turn_count won't fire until 15 turns AFTER turn 8 (= 23).
-
-    Hmm, this IS turn 23. Let me just test what the code actually does and align
-    with the regression test pattern.
-
-    Conclusion: We test that:
-    1. agent_decided fires exactly once at turn 8 (via checkpoint_state tool)
-    2. turn_count fires at turn 23 (8+15), NOT at turn 16 (which would happen
-       without the reset from agent_decided)
-    3. The next turn_count fires at turn 38 (23+15) if we run 40 turns
-
-    The real invariant the spec enforces: agent_decided RESETS the cooldown,
-    preventing a double-fire if turn_count would have fired anyway near turn 8.
-    If no agent_decided happened, turn_count would fire at turn 15. With
-    agent_decided at turn 8, we skip the turn 15 fire and the next turn_count
-    is at turn 23.
-
-    Let's verify: without agent_decided, first turn_count fires at turn 15.
-    With agent_decided at turn 8 (resetting counter to 0), next turn_count fires
-    at turn 8+15 = 23. So turn 15 is SKIPPED. This is the cooldown enforcing.
+    So with checkpoint at turn 8 and total_turns = 8 + 2*COOLDOWN_TURNS, we
+    expect exactly: 1 agent_decided fire + 2 turn_count fires = 3 refreshes.
     """
-    # We test for 40 turns. Checkpoint at turn 8.
-    # Expected: agent_decided at turn 8, turn_count at turn 23, turn_count at turn 38.
+    # Checkpoint at turn 8. Run enough turns to capture two subsequent
+    # turn_count fires (one per COOLDOWN_TURNS window after the checkpoint).
     CHECKPOINT_TURN = 8
-    total_turns = 40
+    total_turns = CHECKPOINT_TURN + 2 * COOLDOWN_TURNS
 
     with tempfile.TemporaryDirectory() as workspace:
         pp = ProjectPaths(workspace)
@@ -381,11 +296,13 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
             f"All done events: {done_events}"
         )
 
-        # 2. Turn-count must NOT fire at turn 15 (because agent_decided reset the cooldown).
-        # Instead it fires at turn 23 (=8+15). Then again at 38 (=23+15).
-        # Over 40 turns: expect 2 turn_count fires (at 23 and 38).
+        # 2. Turn-count must NOT fire at turn COOLDOWN_TURNS (because agent_decided
+        # at turn 8 reset the cooldown). Instead it fires at turn (8+COOLDOWN_TURNS)
+        # and again at turn (8+2*COOLDOWN_TURNS). Over total_turns we expect 2.
         assert len(turn_count_done) == 2, (
-            f"Expected 2 turn_count/done events (at turns 23 and 38), "
+            f"Expected 2 turn_count/done events (at turns "
+            f"{CHECKPOINT_TURN + COOLDOWN_TURNS} and "
+            f"{CHECKPOINT_TURN + 2 * COOLDOWN_TURNS}), "
             f"got {len(turn_count_done)}.\n"
             f"All done events: {done_events}"
         )
@@ -402,8 +319,8 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
 async def test_agent_decided_fires_once_regardless_of_turn_count():
     """Agent calling checkpoint_state fires exactly one agent_decided refresh
     and does NOT double-fire with a simultaneous turn_count trigger."""
-    CHECKPOINT_TURN = 15  # trigger at same turn as COOLDOWN_TURNS threshold
-    total_turns = 16
+    CHECKPOINT_TURN = COOLDOWN_TURNS  # trigger at same turn as COOLDOWN_TURNS threshold
+    total_turns = COOLDOWN_TURNS + 1
 
     with tempfile.TemporaryDirectory() as workspace:
         pp = ProjectPaths(workspace)
@@ -465,12 +382,12 @@ async def test_agent_decided_fires_once_regardless_of_turn_count():
         events = _lifecycle_events(ws)
         done_events = [e for e in events if e.get("status") == "done"]
 
-        # At turn 15, both turn_count (counter=15) AND agent_decided (tool call) would fire.
-        # turn_count fires FIRST (at top of iteration before LLM call).
-        # After turn_count resets counter to 0, agent_decided fires inside tool execution.
-        # Then counter resets again to 0.
+        # At turn COOLDOWN_TURNS, both turn_count (counter=COOLDOWN_TURNS) AND
+        # agent_decided (tool call) would fire. turn_count fires FIRST (at top of
+        # iteration before LLM call). After turn_count resets counter to 0,
+        # agent_decided fires inside tool execution. Then counter resets again to 0.
         # So we get: 1 turn_count + 1 agent_decided = 2 total done events.
-        # (No additional turn_count at turn 16 since counter = 1 after second reset.)
+        # (No additional turn_count on the next turn since counter = 1 after second reset.)
         total_done = len(done_events)
         assert total_done <= 2, (
             f"Expected at most 2 done events over {total_turns} turns, "
