@@ -446,6 +446,21 @@
             "notes": "Codex variant; reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
         }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": 10,
+        "extended_ttl_min": 1440,
+        "extended_ttl_param": "model_only:gpt-5.5+",
+        "isolation": "per_org",
+        "isolation_confidence": "explicit",
+        "min_tokens": 1024,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.prompt_tokens_details.cached_tokens",
+        "pollution_risk": "likely_safe",
+        "notes": "Auto-cache >=1024 tokens. Use prompt_cache_key for routing stickiness; ~15 RPM/engine ceiling. Responses API caches reasoning persists, Chat Completions does not — meaningful caching with o-series effectively requires Responses API. https://developers.openai.com/api/docs/guides/prompt-caching"
       }
     },
     "anthropic": {
@@ -772,6 +787,21 @@
             "notes": "Pinned snapshot. Retires 2026-06-15."
           }
         }
+      },
+      "cache": {
+        "supported": "explicit",
+        "control": "breakpoints",
+        "default_ttl_min": 5,
+        "extended_ttl_min": 60,
+        "extended_ttl_param": "cache_control.ttl=1h",
+        "isolation": "per_workspace",
+        "isolation_confidence": "explicit",
+        "min_tokens": 1024,
+        "max_breakpoints": 4,
+        "observable": true,
+        "observability_field": "usage.cache_read_input_tokens + usage.cache_creation_input_tokens",
+        "pollution_risk": "safe",
+        "notes": "Requires explicit cache_control breakpoints — Orbital's Anthropic adapter does NOT currently set them, so caching is effectively off. 1h TTL: 2.0x write cost, 0.1x read; amortizes after ~3 hits. Min tokens vary by model: opus-4-x/haiku-4-5=4096, sonnet-4-6=2048, sonnet-4-5/4=1024. Per-workspace isolation since 2026-02-05. https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
       }
     },
     "deepseek": {
@@ -890,6 +920,21 @@
             "notes": "Hybrid; thinking defaults enabled. Docs: 'If your code does not correctly pass back reasoning_content, the API will return a 400 error.' Use thinking.type=disabled to opt out. https://api-docs.deepseek.com/guides/thinking_mode"
           }
         }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "per_account",
+        "isolation_confidence": "explicit",
+        "min_tokens": 64,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens",
+        "pollution_risk": "likely_safe",
+        "notes": "Disk-based cache, multi-day inactivity TTL. 64-token prefix units. Best-effort, no 100% hit guarantee. Most refresh-friendly cache in the registry. https://api-docs.deepseek.com/guides/kv_cache"
       }
     },
     "moonshot": {
@@ -1049,6 +1094,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "both",
+        "control": "resource",
+        "default_ttl_min": 60,
+        "extended_ttl_min": null,
+        "extended_ttl_param": "ttl_caller_set + reset_ttl",
+        "isolation": "per_account",
+        "isolation_confidence": "implied",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.cached_tokens",
+        "pollution_risk": "safe",
+        "notes": "moonshot-v1 = explicit POST /v1/caching resource. kimi-k2.x = automatic prefix. Per-minute storage fee on explicit (~Y10/M tokens/min). Break-even cited at ~11 calls/hour. https://platform.moonshot.cn/blog/posts/context-caching"
       }
     },
     "zhipu": {
@@ -1283,6 +1343,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "unclear",
+        "isolation_confidence": "unclear",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.prompt_tokens_details.cached_tokens",
+        "pollution_risk": "at_risk",
+        "notes": "Least-documented cache in the registry. TTL, eviction policy, isolation, hash granularity all undocumented. Format-sensitive (whitespace/ordering). Recommend empirical measurement before relying on cache cost models. https://docs.z.ai/guides/capabilities/cache"
       }
     },
     "qwen": {
@@ -1523,6 +1598,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "both",
+        "control": "breakpoints",
+        "default_ttl_min": 5,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "per_account_per_model",
+        "isolation_confidence": "explicit",
+        "min_tokens": 1024,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.cached_tokens + usage.cache_creation_input_tokens",
+        "pollution_risk": "likely_safe",
+        "notes": "Anthropic-compatible cache_control:ephemeral. 5min TTL is FIXED and SHORT — main risk for long-running sessions. Implicit min: 256 tokens, 0.2x read. Explicit min: 1024 tokens, 0.1x read, 1.25x write. Per-model isolation means swapping qwen3-max <-> qwen-plus busts cache. https://www.alibabacloud.com/help/en/model-studio/context-cache"
       }
     },
     "xai": {
@@ -1688,6 +1778,21 @@
             "notes": "Reasons automatically; reasoning_effort returns 400. reasoning_content visible on stream deltas via xAI SDK. Encrypted reasoning round-trip is optional. https://docs.x.ai/docs/guides/reasoning"
           }
         }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "unclear",
+        "isolation_confidence": "unclear",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.cached_prompt_text_tokens (native) / usage.prompt_tokens_details.cached_tokens (compat)",
+        "pollution_risk": "at_risk",
+        "notes": "Docs explicitly state 'evicted at any time due to server load' and 'not 100% guaranteed'. Set x-grok-conv-id header for per-session routing stickiness (hint, not isolation guarantee). TTL, min tokens, exact pricing multiplier all undocumented. https://docs.x.ai/developers/advanced-api-usage/prompt-caching"
       }
     },
     "google": {
@@ -1873,6 +1978,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "both",
+        "control": "resource",
+        "default_ttl_min": 60,
+        "extended_ttl_min": null,
+        "extended_ttl_param": "ttl_caller_set",
+        "isolation": "unclear",
+        "isolation_confidence": "unclear",
+        "min_tokens": 1024,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage_metadata.cached_content_token_count",
+        "pollution_risk": "likely_safe",
+        "notes": "Implicit auto-cache on Gemini 2.5+. Explicit cachedContents resource with caller-set TTL (default 1h). Storage fee proportional to (tokens x TTL) — keeping a 30k cache alive for hours can outweigh savings if hit volume is low. Min: Gemini 3 Flash=1024, Pro=4096. OpenAI-compat shim accepts extra_body.cached_content. https://ai.google.dev/gemini-api/docs/caching"
       }
     },
     "mistral": {
@@ -2083,6 +2203,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "none",
+        "control": "none",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "none",
+        "isolation_confidence": "n_a",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": false,
+        "observability_field": null,
+        "pollution_risk": "n_a",
+        "notes": "No prompt caching documented as of 2026-04-29. No cache_control field, no cached-token pricing tier, no cached_tokens in usage. Independent audit (arXiv 2502.07776v1) confirmed no detectable caching. https://docs.mistral.ai/api"
       }
     },
     "groq": {
@@ -2306,6 +2441,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": 120,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "per_org",
+        "isolation_confidence": "explicit",
+        "min_tokens": 1024,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "usage.cached_tokens",
+        "pollution_risk": "likely_safe",
+        "notes": "Volatile-memory only (never persisted). ~2hr idle TTL. Min varies 128-1024 by model. Cached tokens DO NOT count toward rate limits. 1.0x write, 0.5x read. Prefix matches stop at first divergence — middle edits invalidate. https://console.groq.com/docs/prompt-caching"
       }
     },
     "together": {
@@ -2468,6 +2618,21 @@
             "notes": "Together exposes a SEPARATE `reasoning` field on the assistant message. Example: { message: { role, content, reasoning } }. https://docs.together.ai/docs/gpt-oss"
           }
         }
+      },
+      "cache": {
+        "supported": "dedicated_only",
+        "control": "automatic",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "per_endpoint",
+        "isolation_confidence": "implied",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": false,
+        "observability_field": null,
+        "pollution_risk": "safe",
+        "notes": "Caching ONLY on Dedicated Endpoints (single-tenant); serverless has no cache (audit-confirmed). Non-disableable on Dedicated post-Feb-2026. No observability fields. https://docs.together.ai/docs/dedicated-inference"
       }
     },
     "openrouter": {
@@ -2649,6 +2814,21 @@
             "needs_verification": true
           }
         }
+      },
+      "cache": {
+        "supported": "passthrough",
+        "control": "passthrough",
+        "default_ttl_min": null,
+        "extended_ttl_min": 60,
+        "extended_ttl_param": "passthrough:anthropic.cache_control.ttl=1h",
+        "isolation": "passthrough",
+        "isolation_confidence": "implied",
+        "min_tokens": null,
+        "max_breakpoints": 4,
+        "observable": true,
+        "observability_field": "usage.prompt_tokens_details.cached_tokens + cache_write_tokens + cache_discount",
+        "pollution_risk": "at_risk",
+        "notes": "Pass-through to upstream provider; OR does not maintain its own cache. Provider sticky routing activates only when cache-read pricing beats normal input — bypassed by provider.order. Pin provider.order per session to prevent silent re-routing breaking cache continuity. https://openrouter.ai/docs/guides/best-practices/prompt-caching"
       }
     },
     "custom": {
@@ -2674,6 +2854,21 @@
             "streaming": true
           }
         }
+      },
+      "cache": {
+        "supported": "unknown",
+        "control": "unknown",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "unknown",
+        "isolation_confidence": "unknown",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": null,
+        "observability_field": null,
+        "pollution_risk": "unknown",
+        "notes": "Behavior depends on the user-configured endpoint. No general statement possible."
       }
     }
   },
