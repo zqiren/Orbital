@@ -42,7 +42,7 @@ class ReadTool(Tool):
         self.parameters = {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path relative to workspace"},
+                "path": {"type": "string", "description": "Path within your workspace. Use a relative path like 'src/main.py' or 'docs/notes.md'. Do NOT start with '/' and do NOT pass an absolute path."},
             },
             "required": ["path"],
         }

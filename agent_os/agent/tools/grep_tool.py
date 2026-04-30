@@ -114,7 +114,7 @@ class GrepTool(Tool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file to search in, relative to workspace. Defaults to workspace root.",
+                    "description": "Directory or file within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes.md'). Defaults to workspace root. Do NOT start with '/'.",
                 },
                 "glob_filter": {
                     "type": "string",

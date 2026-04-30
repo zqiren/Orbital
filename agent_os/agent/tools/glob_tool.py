@@ -37,7 +37,7 @@ class GlobTool(Tool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory to search from, relative to workspace. Defaults to workspace root.",
+                    "description": "Directory within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes'). Defaults to workspace root. Do NOT start with '/'.",
                 },
             },
             "required": ["pattern"],

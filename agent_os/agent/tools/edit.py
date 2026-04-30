@@ -21,7 +21,7 @@ class EditTool(Tool):
         self.parameters = {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path relative to workspace"},
+                "path": {"type": "string", "description": "Path within your workspace. Use a relative path like 'src/main.py' or 'docs/notes.md'. Do NOT start with '/' and do NOT pass an absolute path."},
                 "old_text": {"type": "string", "description": "Exact text to find"},
                 "new_text": {"type": "string", "description": "Replacement text"},
             },
