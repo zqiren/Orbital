@@ -390,8 +390,16 @@ class AgentLoop:
                         if rotated is not None:
                             _current_idx = rotated
                             _retries_on_current = 0
-                            model_name = _all_providers[rotated].model
+                            new_provider = _all_providers[rotated]
+                            model_name = new_provider.model
                             logger.info("Rotating to fallback model: %s", model_name)
+                            self._session.append_meta(
+                                "model_swap",
+                                provider=getattr(new_provider, "provider", "unknown"),
+                                model=model_name,
+                                sdk=getattr(new_provider, "sdk", "unknown"),
+                                reason=f"transient: {e.message}",
+                            )
                             self._session.append_system(
                                 f"Primary model unavailable ({e.message}). "
                                 f"Switching to {model_name}."
@@ -409,6 +417,14 @@ class AgentLoop:
                         if rotated is not None:
                             _current_idx = rotated
                             _retries_on_current = 0
+                            new_provider = _all_providers[rotated]
+                            self._session.append_meta(
+                                "model_swap",
+                                provider=getattr(new_provider, "provider", "unknown"),
+                                model=new_provider.model,
+                                sdk=getattr(new_provider, "sdk", "unknown"),
+                                reason=f"retries_exhausted: {e.message}",
+                            )
                             continue
                         # All providers exhausted
                         self._llm_failed = True

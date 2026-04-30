@@ -409,6 +409,7 @@ class AgentManager:
             max_output=model_info.max_output,
             capabilities=model_info.capabilities,
             reasoning=model_info.reasoning,
+            provider=config.provider,
         )
 
         # 1a. Fallback providers
@@ -422,7 +423,8 @@ class AgentManager:
                 LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
                             max_output=fb_info.max_output,
                             capabilities=fb_info.capabilities,
-                            reasoning=fb_info.reasoning)
+                            reasoning=fb_info.reasoning,
+                            provider=getattr(fb, 'provider', 'custom'))
             )
 
         # 1b. Utility provider
@@ -431,6 +433,7 @@ class AgentManager:
             utility_provider = LLMProvider(
                 config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
                 reasoning=utility_info.reasoning,
+                provider=config.provider,
             )
         else:
             utility_provider = provider
@@ -507,7 +510,13 @@ class AgentManager:
         # 5. Session
         sanitized = _sanitize_project_name(config.project_name)
         session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        session = Session.new(session_id, config.workspace)
+        session = Session.new(
+            session_id, config.workspace,
+            provider=config.provider,
+            model=config.model,
+            sdk=config.sdk,
+            fallback_models=[fb.model for fb in config.llm_fallback_models],
+        )
 
         # 6-7. Observers
         session.on_append = self._on_message(project_id)
@@ -668,6 +677,9 @@ class AgentManager:
                 "workspace": config.workspace,
                 "model": config.model,
                 "autonomy": config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
+                "provider": config.provider,
+                "sdk": config.sdk,
+                "fallback_models": [fb.model for fb in config.llm_fallback_models],
             },
             started_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1336,7 +1348,14 @@ class AgentManager:
         project_name = (project or {}).get("name", "")
         sanitized = _sanitize_project_name(project_name)
         new_session_id = f"{sanitized}_{uuid4().hex[:8]}"
-        new_session = Session.new(new_session_id, workspace)
+        snap = handle.config_snapshot
+        new_session = Session.new(
+            new_session_id, workspace,
+            provider=snap.get("provider", "unknown"),
+            model=snap.get("model", "unknown"),
+            sdk=snap.get("sdk", "unknown"),
+            fallback_models=snap.get("fallback_models", []),
+        )
 
         # 6. Wire observers
         new_session.on_append = self._on_message(project_id)

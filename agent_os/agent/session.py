@@ -62,10 +62,25 @@ class Session:
     # ------------------------------------------------------------------
 
     @classmethod
-    def new(cls, session_id: str, workspace: str, project_id: str = "") -> Session:
+    def new(
+        cls,
+        session_id: str,
+        workspace: str,
+        project_id: str = "",
+        *,
+        provider: str = "unknown",
+        model: str = "unknown",
+        sdk: str = "unknown",
+        fallback_models: list[str] | None = None,
+    ) -> Session:
         """Create a fresh session.
 
         File at {workspace}/orbital/sessions/{session_id}.jsonl.
+
+        Records identity (provider/model/sdk/fallback_models) as a
+        ``role: meta`` line written as the very first line of the JSONL so
+        post-mortem investigations can fingerprint which adapter served the
+        session without inferring from error strings.
         """
         from agent_os.agent.project_paths import ProjectPaths
         sessions_dir = ProjectPaths(workspace).sessions_dir
@@ -73,10 +88,22 @@ class Session:
         filepath = os.path.join(sessions_dir, f"{session_id}.jsonl")
         session = cls(filepath)
         session.session_id = session_id
-        # Create empty file under file lock
+        meta_record = {
+            "role": "meta",
+            "event": "session_start",
+            "provider": provider,
+            "model": model,
+            "sdk": sdk,
+            "fallback_models": list(fallback_models) if fallback_models else [],
+            "timestamp": _now(),
+        }
+        # Create file and write the session_start meta record under file lock.
+        # The meta record is intentionally NOT appended to self._messages —
+        # it is identity metadata, not conversation, and must never reach
+        # the LLM via get_messages()/get_recent().
         with session._file_lock:
             with open(filepath, "w", encoding="utf-8") as f:
-                pass
+                f.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
         return session
 
     @classmethod
@@ -92,10 +119,17 @@ class Session:
                         continue
                     try:
                         msg = json.loads(line)
-                        session._messages.append(msg)
                     except json.JSONDecodeError:
                         skipped += 1
                         logger.warning("Skipped corrupted JSONL line: %s", line[:100])
+                        continue
+                    # Meta records (session_start, model_swap, …) are identity
+                    # metadata, not conversation — keep them out of in-memory
+                    # message state so the sliding window never surfaces them
+                    # to the LLM.
+                    if msg.get("role") == "meta":
+                        continue
+                    session._messages.append(msg)
 
             if skipped > 0:
                 logger.warning("Skipped %d corrupted lines during session load", skipped)
@@ -219,6 +253,33 @@ class Session:
             "timestamp": _now(),
         }
         self.append(msg)
+
+    def append_meta(self, event: str, **fields) -> None:
+        """Append a ``role: meta`` lifecycle record to the JSONL.
+
+        Used for events that describe the session's identity rather than its
+        conversation — currently ``session_start`` (written by ``new()``) and
+        ``model_swap`` (written by the agent loop on fallback rotation).
+
+        Meta records are intentionally NOT added to ``self._messages`` so they
+        never appear in ``get_messages()``/``get_recent()`` and therefore never
+        reach the LLM. They are forensic-only: ``jq '.role == "meta"'`` over
+        the JSONL is the canonical reader.
+        """
+        record = {
+            "role": "meta",
+            "event": event,
+            "timestamp": _now(),
+            **fields,
+        }
+        line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        with self._lock:
+            with self._file_lock:
+                fd = os.open(self._filepath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+                try:
+                    os.write(fd, line_bytes)
+                finally:
+                    os.close(fd)
 
     def get_messages(self) -> list[dict]:
         """Return full in-memory message list."""

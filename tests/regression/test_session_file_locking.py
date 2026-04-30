@@ -73,7 +73,12 @@ def test_concurrent_append_blocked(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_append_atomic_writes(tmp_path):
-    """Every line in the JSONL file is valid JSON after many appends."""
+    """Every line in the JSONL file is valid JSON after many appends.
+
+    Note: ``Session.new`` writes a ``role: meta`` ``session_start`` record
+    as the first line; this test skips it and verifies the 100 user lines
+    that follow.
+    """
     session = Session.new("test-atomic", str(tmp_path))
 
     # Append messages of varying sizes
@@ -85,8 +90,15 @@ def test_append_atomic_writes(tmp_path):
     with open(session._filepath, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    assert len(lines) == 100
-    for idx, line in enumerate(lines):
+    # 1 meta header + 100 user messages
+    assert len(lines) == 101
+    meta = json.loads(lines[0])
+    assert meta["role"] == "meta"
+    assert meta["event"] == "session_start"
+
+    user_lines = lines[1:]
+    assert len(user_lines) == 100
+    for idx, line in enumerate(user_lines):
         line = line.strip()
         assert line, f"Empty line at index {idx}"
         msg = json.loads(line)  # Raises if invalid JSON

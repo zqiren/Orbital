@@ -229,11 +229,13 @@ class LLMProvider:
     """Dual-SDK LLM client: OpenAI or Anthropic."""
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None, sdk: str = "openai",
-                 max_output: int = 16384, capabilities=None, reasoning=None):
+                 max_output: int = 16384, capabilities=None, reasoning=None,
+                 provider: str = "unknown"):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.sdk = sdk  # "openai" or "anthropic"
+        self.provider = provider  # vendor key (e.g. "moonshot", "anthropic", "openai") for forensic logging
         self.max_output = max_output
         self.capabilities = capabilities
         self.reasoning = reasoning  # ReasoningInfo | None — echo-back contract per model
