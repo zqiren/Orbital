@@ -7,6 +7,7 @@
 import json
 import os
 
+from ._path_utils import resolve_safe
 from .base import Tool, ToolResult
 
 
@@ -27,21 +28,13 @@ class EditTool(Tool):
             "required": ["path", "old_text", "new_text"],
         }
 
-    def _resolve_safe(self, path: str) -> str | None:
-        """Resolve path relative to workspace. Returns None if outside workspace."""
-        path = path.lstrip("/")
-        resolved = os.path.realpath(os.path.join(self._workspace, path))
-        if not resolved.startswith(self._workspace):
-            return None
-        return resolved
-
     def execute(self, **arguments) -> ToolResult:
         try:
             path = arguments.get("path", "")
             old_text = arguments.get("old_text", "")
             new_text = arguments.get("new_text", "")
 
-            resolved = self._resolve_safe(path)
+            resolved = resolve_safe(self._workspace, path)
             if resolved is None:
                 return ToolResult(content=f"Error: path outside workspace: {path}")
 

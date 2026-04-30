@@ -7,6 +7,7 @@
 import json
 import os
 
+from ._path_utils import resolve_safe
 from .base import Tool, ToolResult
 
 
@@ -26,20 +27,12 @@ class WriteTool(Tool):
             "required": ["path", "content"],
         }
 
-    def _resolve_safe(self, path: str) -> str | None:
-        """Resolve path relative to workspace. Returns None if outside workspace."""
-        path = path.lstrip("/")
-        resolved = os.path.realpath(os.path.join(self._workspace, path))
-        if not resolved.startswith(self._workspace):
-            return None
-        return resolved
-
     def execute(self, **arguments) -> ToolResult:
         try:
             path = arguments.get("path", "")
             content = arguments.get("content", "")
 
-            resolved = self._resolve_safe(path)
+            resolved = resolve_safe(self._workspace, path)
             if resolved is None:
                 return ToolResult(content=f"Error: could not write to {path}: path outside workspace")
 

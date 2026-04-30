@@ -11,6 +11,7 @@ the workspace root before expansion; absolute or escape-attempt paths are reject
 import os
 from pathlib import Path
 
+from ._path_utils import resolve_safe
 from .base import Tool, ToolResult
 
 _MAX_RESULTS = 1000
@@ -42,17 +43,6 @@ class GlobTool(Tool):
             "required": ["pattern"],
         }
 
-    # NOTE: duplicated from ReadTool._resolve_safe for consistency with the
-    # existing pattern (read.py / write.py / edit.py all repeat the same 4-line
-    # helper). Kept in-sync rather than extracted so a refactor remains opt-in.
-    def _resolve_safe(self, path: str) -> str | None:
-        """Resolve path relative to workspace. Returns None if outside workspace."""
-        path = path.lstrip("/")
-        resolved = os.path.realpath(os.path.join(self._workspace, path))
-        if not resolved.startswith(self._workspace):
-            return None
-        return resolved
-
     def execute(self, **arguments) -> ToolResult:
         try:
             pattern = arguments.get("pattern")
@@ -60,7 +50,7 @@ class GlobTool(Tool):
                 return ToolResult(content="Error: 'pattern' argument is required")
 
             path_arg = arguments.get("path", ".")
-            resolved = self._resolve_safe(path_arg)
+            resolved = resolve_safe(self._workspace, path_arg)
             if resolved is None:
                 return ToolResult(content=f"Error: path outside workspace: {path_arg}")
 
