@@ -1,4 +1,8 @@
 <p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <img src="docs/subagent-dispatch.gif" alt="Delegating work to Claude Code from inside an Orbital project" width="800">
 </p>
 <p align="center"><em>You assign work to the project. The agent plans, delegates to Claude Code, and reports back.</em></p>
