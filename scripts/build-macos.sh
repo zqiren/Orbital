@@ -66,7 +66,7 @@ codesign --verify --deep --strict dist/Orbital.app
 
 # 5. Create DMG
 echo "[5/5] Creating DMG..."
-DMG_NAME="Orbital-1.0.0-macOS.dmg"
+DMG_NAME="Orbital-0.5.2-macOS.dmg"
 
 # Strip user-writable extended attributes (quarantine etc.).
 # com.apple.provenance is restricted and can't be stripped — harmless.

@@ -25,7 +25,7 @@ cp assets/icon.ico dist/Orbital/assets/
 if command -v iscc &>/dev/null; then
     echo "[4/4] Building installer with Inno Setup..."
     iscc installer/agentos-setup.iss
-    echo "Installer: installer/Output/Orbital-Setup-1.0.0.exe"
+    echo "Installer: installer/Output/Orbital-Setup-0.5.2.exe"
 else
     echo "[4/4] Skipping installer (iscc not found on PATH)"
 fi
