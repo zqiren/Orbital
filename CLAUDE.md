@@ -139,6 +139,173 @@ After making code changes to the daemon or backend services, ALWAYS restart the 
 
 - **Never rely on closure variables mutated inside `setState` updaters.** React 19 batching makes the read timing unpredictable — the updater may be deferred to the render phase, so a local variable set inside the updater can still be `false` when read outside it. Use `flushSync` if you need synchronous state computation, or restructure to avoid cross-boundary communication entirely. See the `toggleDirectory` fix in `FileExplorer.tsx` for a concrete example.
 
+## Release Process
+
+Cutting an Orbital release means producing platform-specific installers (`.exe` for Windows, `.dmg` for macOS), tagging the SHA, and publishing to GitHub Releases. PyInstaller cannot cross-compile, so each platform is built on its native machine.
+
+### Pre-flight (run once, on either platform)
+
+1. **Confirm clean working tree:**
+   ```bash
+   git status      # must be clean
+   git rev-parse HEAD
+   ```
+
+2. **Bump version strings.** Seven locations carry a version, and they are currently out of sync (`0.0.0` / `0.1.0` / `1.0.0`) — they have never been kept aligned. Update every one to the new `{X.Y.Z}`:
+   - `pyproject.toml` — `version` field (line 7, currently `0.1.0`)
+   - `web/package.json` — `version` field (line 4, currently `0.0.0`)
+   - `agent_os/desktop/agentos-macos.spec` — `CFBundleShortVersionString` and `CFBundleVersion` (lines 95–96, currently `1.0.0`)
+   - `installer/agentos-setup.iss` — `AppVersion` (line 6) AND `OutputBaseFilename` (line 11), both currently `1.0.0`
+   - `scripts/build-desktop.sh` — the version inside the echoed installer-path string (line 28)
+   - `scripts/build-macos.sh` — `DMG_NAME` (line 69, currently `Orbital-1.0.0-macOS.dmg`)
+   - `agent_os/desktop/agentos.spec` — no version to bump (Windows spec carries none)
+
+   Commit with message `chore: bump version to v{X.Y.Z}`.
+
+3. **Verify clean build from cold state** (catches `.tsbuildinfo`-cached failures like the v0.5.1 regression):
+   ```bash
+   rm -rf web/node_modules web/dist web/.tsbuildinfo
+   cd web && npm ci && npx tsc --noEmit && npm run build && cd ..
+   python -m pytest tests/unit/ -q
+   ```
+   All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
+
+---
+
+### Windows build
+
+**Machine requirement:** Windows 10/11 with Python 3.x, Node.js, Git Bash (or WSL), and Inno Setup installed (with `iscc` on PATH).
+
+**Steps:**
+
+1. From the repo root in Git Bash:
+   ```bash
+   bash scripts/build-desktop.sh
+   ```
+   This is the Windows build path — runs PyInstaller against `agent_os/desktop/agentos.spec`, copies the React SPA into `dist/Orbital/web/`, and invokes Inno Setup automatically if `iscc` is on PATH.
+
+2. Verify outputs exist:
+   - PyInstaller bundle at `dist/Orbital/`, entrypoint `dist/Orbital/Orbital.exe`
+   - Bundle includes `agent_os/vendor/rg/rg.exe` (Windows ripgrep — required for the `grep` tool to work on user machines)
+   - Installer at `installer/Output/Orbital-Setup-{X.Y.Z}.exe`
+
+3. If `iscc` was not on PATH during step 1, run Inno Setup manually now:
+   ```bash
+   iscc installer/agentos-setup.iss
+   ```
+
+4. Smoke test on a clean Windows VM (or fresh user account):
+   - Install via the `.exe`
+   - Launch Orbital
+   - Create a test project
+   - Verify the SmartScreen warning is the only "scary" dialog (expected — installer is unsigned)
+   - Run an agent with a prompt that exercises `grep` to confirm ripgrep is bundled correctly
+
+**Output filename convention:** `Orbital-Setup-{X.Y.Z}.exe` (controlled by `OutputBaseFilename` in the .iss — bump as part of pre-flight step 2).
+
+---
+
+### macOS build
+
+**Machine requirement:** Apple Silicon Mac (M1 or later), macOS 13+ (Ventura), Python 3.x, Node.js, `create-dmg` (or `hdiutil` fallback).
+
+**Note on architecture:** `agentos-macos.spec` does not set `target_arch`, so PyInstaller produces a binary matching the host machine — **arm64 only when built on Apple Silicon, x86_64 only when built on Intel.** It is *not* universal. Confirm after build with:
+```bash
+file dist/Orbital.app/Contents/MacOS/Orbital
+```
+If a universal binary is needed later, that is a spec change (`target_arch='universal2'`) plus a Python install with universal wheels — defer until there is real demand.
+
+**Steps:**
+
+1. From the repo root:
+   ```bash
+   bash scripts/build-macos.sh
+   ```
+   The script handles ad-hoc signing, xattr stripping, and DMG packaging — see `## macOS Build Notes` below for the gotchas it works around.
+
+2. Verify outputs exist:
+   ```bash
+   ls -lh dist/Orbital-{version}-macOS.dmg
+   ls -lh dist/Orbital.app/Contents/MacOS/Orbital
+   ```
+
+3. **Sanity-check that platform-specific assets are bundled** (these have caused regressions before):
+   ```bash
+   # ripgrep for grep tool — both archs are vendored at agent_os/vendor/rg/macos-{arm64,x86_64}/
+   # and copied into the .app by the spec's datas list. Runtime selects via platform.machine().
+   ls dist/Orbital.app/Contents/Resources/agent_os/vendor/rg/macos-arm64/
+   ls dist/Orbital.app/Contents/Resources/agent_os/vendor/rg/macos-x86_64/
+
+   # Patchright driver for browser automation
+   ls dist/Orbital.app/Contents/Resources/patchright/driver/ | head -3
+
+   # App Nap suppression code
+   grep -l "beginActivity\|app_nap" agent_os/platform/macos/provider.py
+
+   # Window close intercept
+   grep -l "miniaturize\|windowShouldClose" agent_os/desktop/main.py
+   ```
+
+4. Smoke test on a clean Mac (or new user account):
+   - Mount the `.dmg`, drag to Applications
+   - First launch: expect Gatekeeper warning ("cannot be opened because Apple cannot check it for malicious software"). User must Right-click → Open → Open to bypass. Document this in release notes.
+   - Verify agent runs, grep tool works, browser automation launches.
+
+**Output filename convention:** `Orbital-{X.Y.Z}-macOS.dmg`
+
+**Code signing:** Not currently configured. `scripts/build-macos.sh` contains commented-out Developer-ID `codesign` and `notarytool` placeholders for future use. The script *does* already perform ad-hoc signing (mandatory after asset copy — see `## macOS Build Notes` below). Defer Developer-ID signing + notarization until a signed certificate is available.
+
+---
+
+### Tag and publish (run once, after both platform builds succeed)
+
+1. **Tag from the SHA that was built:**
+   ```bash
+   git tag -a v{X.Y.Z} -m "v{X.Y.Z}"
+   git push origin v{X.Y.Z}
+   ```
+
+2. **Create GitHub Release** tied to the tag:
+   - Title: `v{X.Y.Z}`
+   - Upload both `Orbital-Setup-{X.Y.Z}.exe` and `Orbital-{X.Y.Z}-macOS.dmg` as release assets
+   - Write release notes covering: user-visible changes, known issues (including the unsigned-installer warnings on both platforms), and install instructions
+
+3. **Update the README install links** if they reference a specific version rather than `/releases/latest`.
+
+---
+
+### Post-release verification
+
+Within 24 hours of publishing:
+
+- Download both installers from the public Releases page (not local artifacts) on a fresh machine each
+- Run through the smoke test in each platform section
+- If a regression is found: do **not** delete or modify the release; cut a v{X.Y.Z+1} patch instead
+
+---
+
+### Hotfix workflow
+
+If a bug is reported on a tagged version while main has moved ahead:
+
+1. `git checkout -b hotfix/v{X.Y.Z+1} v{X.Y.Z}`
+2. Apply the fix
+3. Tag, build, publish v{X.Y.Z+1} via the steps above
+4. Cherry-pick the fix back to main
+5. Delete the hotfix branch
+
+---
+
+### Things this runbook does NOT cover (intentional)
+
+- CI / GitHub Actions automation — manual builds only for now
+- Code signing (Windows or macOS)
+- Auto-update mechanisms
+- Homebrew cask, winget, or other package-manager distribution
+- Notarization (macOS) — gated on signing first
+
+If any of these become priorities, add them as a separate section rather than inlining into the existing flow.
+
 ## macOS Build Notes (`scripts/build-macos.sh`)
 
 - **Re-sign the bundle AFTER copying SPA/assets in.** PyInstaller ad-hoc signs the `.app` during its BUNDLE step. Steps that copy new files into `Contents/Resources/` (web SPA, icons) happen *after* that signing, so the new files aren't in `_CodeSignature/CodeResources` and the seal is broken (`codesign --verify` reports "a sealed resource is missing or invalid"). On macOS Sequoia+, Finder validates the seal when drag-installing from a DMG into `/Applications` and skips items whose hashes don't match — surfacing as **"The operation can't be completed because some items had to be skipped."** The app still launches fine from elsewhere (e.g. `~/Desktop`) because Gatekeeper doesn't re-validate there. Fix: `codesign --force --deep --sign - dist/Orbital.app` after asset copy, before DMG creation.
