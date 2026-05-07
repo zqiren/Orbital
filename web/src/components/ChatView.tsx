@@ -3,12 +3,113 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Send, Square, Loader2 } from 'lucide-react';
+import { Send, Square, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { transformChatHistory } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+
+type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
+type CapsuleChild = AgentRunItem['items'][number];
+
+function formatToolBreakdown(counts: Record<string, number>): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return '';
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
+}
+
+function formatDuration(startedAt: number, endedAt: number | null): string {
+  if (!endedAt || endedAt <= startedAt) return '<1s';
+  const ms = endedAt - startedAt;
+  if (ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
+
+function capsuleSummaryText(capsule: AgentRunItem): string {
+  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
+  const dur = formatDuration(capsule.started_at, capsule.ended_at);
+  const head = breakdown || (capsule.has_thinking ? 'thinking' : 'agent step');
+  let line = `${head} · ${dur}`;
+  if (capsule.status === 'error' || capsule.status === 'stopped') {
+    line += ' · stopped at error';
+  }
+  return line;
+}
+
+function getLiveRunningCapsule(
+  items: DisplayItem[],
+): { idx: number; capsule: AgentRunItem } | null {
+  if (items.length === 0) return null;
+  const last = items[items.length - 1];
+  if (last.type === 'agent_run' && last.status === 'running') {
+    return { idx: items.length - 1, capsule: last };
+  }
+  return null;
+}
+
+function appendToLiveCapsule(
+  prev: DisplayItem[],
+  child: CapsuleChild,
+  timestamp: string,
+): DisplayItem[] {
+  const ms = Date.parse(timestamp);
+  const live = getLiveRunningCapsule(prev);
+  if (!live) {
+    const id = `cap:live:${ms}:${Math.random().toString(36).slice(2, 8)}`;
+    const counts: Record<string, number> = {};
+    let hasThinking = false;
+    if (child.type === 'tool_call_row') counts[child.tool_name] = 1;
+    if (child.type === 'reasoning_block') hasThinking = true;
+    const fresh: AgentRunItem = {
+      type: 'agent_run',
+      capsule_id: id,
+      status: 'running',
+      items: [child],
+      tool_call_count_by_name: counts,
+      has_thinking: hasThinking,
+      started_at: ms,
+      ended_at: null,
+    };
+    return [...prev, fresh];
+  }
+  const counts = { ...live.capsule.tool_call_count_by_name };
+  let hasThinking = live.capsule.has_thinking;
+  if (child.type === 'tool_call_row') {
+    counts[child.tool_name] = (counts[child.tool_name] ?? 0) + 1;
+  }
+  if (child.type === 'reasoning_block') hasThinking = true;
+  const updated: AgentRunItem = {
+    ...live.capsule,
+    items: [...live.capsule.items, child],
+    tool_call_count_by_name: counts,
+    has_thinking: hasThinking,
+    ended_at: ms,
+  };
+  const next = [...prev];
+  next[live.idx] = updated;
+  return next;
+}
+
+function finalizeLiveCapsule(
+  prev: DisplayItem[],
+  status: 'completed' | 'error' | 'stopped',
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  if (!live) return prev;
+  if (live.capsule.items.length === 0) {
+    return prev.slice(0, live.idx);
+  }
+  const updated: AgentRunItem = { ...live.capsule, status };
+  const next = [...prev];
+  next[live.idx] = updated;
+  return next;
+}
 
 const CHAT_PAGE_SIZE = 50;
 const REST_FALLBACK_DELAY_MS = 500;
@@ -66,6 +167,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
+  const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
   const [inputText, setInputText] = useState('');
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
@@ -281,11 +383,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   }, [loading, items.length, projectId, startAgent]);
 
   // Fix 3C: Show "Thinking..." indicator when agent starts running.
-  // Activity rows are now appended directly to items as they arrive; no
-  // batching state to flush on terminal status.
+  // Live machinery rows accumulate inside an open agent_run capsule; on
+  // terminal status the capsule is finalized so it collapses.
   useEffect(() => {
     if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
       setShowThinking(false);
+      const finalStatus =
+        agentStatus === 'idle' ? 'completed' :
+        agentStatus === 'error' ? 'error' : 'stopped';
+      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)
       if (wasRunningRef.current) {
@@ -402,21 +508,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       if (e.is_final) {
         setStream((prev) => {
           if (!prev) {
-            // Stream state is null — intermediate deltas were missed.
-            // Trigger REST fallback outside the updater (side-effect free).
-            // fetchLatestMessage is called below after setStream.
             return null;
           }
           const finalText = prev.text + e.text;
           if (finalText.trim()) {
             setItems((prevItems) => {
-              // Deduplicate: skip if last item has same content
-              const last = prevItems[prevItems.length - 1];
+              // Visible text closes any open live capsule first, then appends.
+              const afterCapsule = finalizeLiveCapsule(prevItems, 'completed');
+              const last = afterCapsule[afterCapsule.length - 1];
               if (last && last.type === 'agent_message' && 'content' in last && last.content === finalText) {
-                return prevItems;
+                return afterCapsule;
               }
               return [
-                ...prevItems,
+                ...afterCapsule,
                 {
                   type: 'agent_message',
                   content: finalText,
@@ -428,8 +532,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
           }
           return null;
         });
-        // Always trigger REST fallback on is_final — whether prev was null
-        // (missed all deltas) or non-null (verify streamed text is complete).
         fetchLatestMessage();
         scrollToBottom();
         return;
@@ -458,34 +560,40 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       // description. Real content surfaces on history reload via
       // chatTransform's tool_result_inline pairing.
       if (e.category === 'tool_result') {
-        setItems((prev) => [
-          ...prev,
-          {
-            type: 'tool_result_inline',
-            tool_call_id: e.tool_name,
-            content: e.description,
-            timestamp: e.timestamp,
-          },
-        ]);
+        setItems((prev) =>
+          appendToLiveCapsule(
+            prev,
+            {
+              type: 'tool_result_inline',
+              tool_call_id: e.tool_name,
+              content: e.description,
+              timestamp: e.timestamp,
+            },
+            e.timestamp,
+          ),
+        );
         scrollToBottom();
         return;
       }
 
-      // Tool-use family: append a tool_call_row. The live ActivityEvent
-      // doesn't carry tool_call_id for tool_use, so the event id is used
-      // as a synthetic key — pairing with tool_result_inline on the live
-      // path is positional (sequential append), not by id.
-      setItems((prev) => [
-        ...prev,
-        {
-          type: 'tool_call_row',
-          tool_name: e.tool_name,
-          target_description: e.description,
-          tool_call_id: e.id,
-          category: e.category,
-          timestamp: e.timestamp,
-        },
-      ]);
+      // Tool-use family: route into the live capsule. The live
+      // ActivityEvent does not carry tool_call_id for tool_use; the
+      // event id is used as a synthetic key — pairing with tool_result
+      // on the live path is positional, not by id.
+      setItems((prev) =>
+        appendToLiveCapsule(
+          prev,
+          {
+            type: 'tool_call_row',
+            tool_name: e.tool_name,
+            target_description: e.description,
+            tool_call_id: e.id,
+            category: e.category,
+            timestamp: e.timestamp,
+          },
+          e.timestamp,
+        ),
+      );
       scrollToBottom();
     }
 
@@ -573,14 +681,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
         return;
       }
 
-      setItems((prev) => [
-        ...prev,
-        {
-          type: 'user_message',
-          content: e.content,
-          timestamp: e.timestamp,
-        },
-      ]);
+      setItems((prev) => {
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          {
+            type: 'user_message',
+            content: e.content,
+            timestamp: e.timestamp,
+          },
+        ];
+      });
       scrollToBottom();
     }
 
@@ -698,6 +809,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     if (item.type === 'reasoning_block') {
       return `reasoning_block:${item.turn_id}:${item.content.slice(0, 32)}`;
     }
+    if (item.type === 'agent_run') {
+      // status + items.length lets the auto-scroll fire on each child append
+      // and again on status flip from running → completed.
+      return `agent_run:${item.capsule_id}:${item.status}:${item.items.length}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
     const contentPrefix = item.content.slice(0, 32);
@@ -788,11 +904,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   async function executeNewSession() {
     setInputText('');
     // Echo the command so user sees it was received
-    setItems((prev) => [...prev, {
-      type: 'user_message' as const,
-      content: '/new',
-      timestamp: new Date().toISOString(),
-    }]);
+    setItems((prev) => {
+      const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+      return [...afterCapsule, {
+        type: 'user_message' as const,
+        content: '/new',
+        timestamp: new Date().toISOString(),
+      }];
+    });
     setShowCommandDropdown(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
@@ -853,15 +972,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       textareaRef.current.style.height = 'auto';
     }
 
-    setItems((prev) => [
-      ...prev,
-      {
-        type: 'user_message',
-        content: content,
-        timestamp: new Date().toISOString(),
-        ...(target && { target }),
-      },
-    ]);
+    setItems((prev) => {
+      const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+      return [
+        ...afterCapsule,
+        {
+          type: 'user_message',
+          content: content,
+          timestamp: new Date().toISOString(),
+          ...(target && { target }),
+        },
+      ];
+    });
 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
@@ -999,33 +1121,91 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
-            } else if (item.type === 'reasoning_block') {
+            } else if (item.type === 'agent_run') {
+              const isExpanded = item.status === 'running' || expandedCapsules.has(item.capsule_id);
+              const isLocked = item.status === 'running';
+              const summary = capsuleSummaryText(item);
+              const Chevron = isExpanded ? ChevronDown : ChevronRight;
               rendered = (
                 <div
-                  key={`reason-${index}`}
-                  className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-[13px] leading-relaxed whitespace-pre-wrap"
+                  key={`run-${item.capsule_id}`}
+                  data-testid="agent_run"
+                  data-capsule-id={item.capsule_id}
+                  data-capsule-status={item.status}
+                  className="mb-3 rounded-md border border-border bg-sidebar/40 px-3 py-2"
                 >
-                  {item.content}
-                </div>
-              );
-            } else if (item.type === 'tool_call_row') {
-              rendered = (
-                <div
-                  key={`tc-${index}-${item.tool_call_id}`}
-                  className="flex items-center gap-2 mb-1 text-[13px] text-secondary"
-                >
-                  <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
-                  <span className="font-mono text-primary">{item.tool_name}</span>
-                  <span className="truncate">{item.target_description}</span>
-                </div>
-              );
-            } else if (item.type === 'tool_result_inline') {
-              rendered = (
-                <div
-                  key={`tr-${index}-${item.tool_call_id}`}
-                  className="mb-2 pl-5 italic text-secondary/80 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
-                >
-                  {item.content}
+                  <button
+                    type="button"
+                    onClick={
+                      isLocked
+                        ? undefined
+                        : () => {
+                            setExpandedCapsules((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.capsule_id)) next.delete(item.capsule_id);
+                              else next.add(item.capsule_id);
+                              return next;
+                            });
+                          }
+                    }
+                    disabled={isLocked}
+                    className={`flex items-center gap-2 w-full text-left text-[13px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+                  >
+                    <Chevron size={14} className="shrink-0" />
+                    {item.status === 'running' && (
+                      <Loader2 size={12} className="shrink-0 animate-spin" />
+                    )}
+                    <span className="truncate">{summary}</span>
+                  </button>
+                  {isExpanded && item.items.length > 0 && (
+                    <div className="mt-2 pl-2 border-t border-border/30 pt-2">
+                      {item.items.map((child, ci) => {
+                        if (child.type === 'reasoning_block') {
+                          return (
+                            <div
+                              key={`rc-r-${ci}`}
+                              className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-[13px] leading-relaxed whitespace-pre-wrap"
+                            >
+                              {child.content}
+                            </div>
+                          );
+                        }
+                        if (child.type === 'tool_call_row') {
+                          return (
+                            <div
+                              key={`rc-t-${ci}-${child.tool_call_id}`}
+                              className="flex items-center gap-2 mb-1 text-[13px] text-secondary"
+                            >
+                              <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
+                              <span className="font-mono text-primary">{child.tool_name}</span>
+                              <span className="truncate">{child.target_description}</span>
+                            </div>
+                          );
+                        }
+                        if (child.type === 'tool_result_inline') {
+                          return (
+                            <div
+                              key={`rc-i-${ci}-${child.tool_call_id}`}
+                              className="mb-2 pl-5 italic text-secondary/80 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
+                            >
+                              {child.content}
+                            </div>
+                          );
+                        }
+                        if (child.type === 'agent_message') {
+                          // Empty-content marker delimits silent tool batches.
+                          return (
+                            <div
+                              key={`rc-m-${ci}`}
+                              className="my-2 border-t border-border/40"
+                              aria-hidden
+                            />
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             } else if (item.type === 'agent_notify') {

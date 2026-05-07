@@ -19,6 +19,17 @@ export type DisplayItem =
   | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
   | { type: 'tool_call_row'; tool_name: string; target_description: string; tool_call_id: string; category: ActivityCategory; timestamp: string; isHistorical?: boolean }
   | { type: 'tool_result_inline'; tool_call_id: string; content: string; timestamp: string; isHistorical?: boolean }
+  | {
+      type: 'agent_run';
+      capsule_id: string;
+      status: 'running' | 'completed' | 'error' | 'stopped';
+      items: DisplayItem[];
+      tool_call_count_by_name: Record<string, number>;
+      has_thinking: boolean;
+      started_at: number;
+      ended_at: number | null;
+      isHistorical?: boolean;
+    }
   | { type: 'session_separator'; timestamp: string }
   | {
       type: 'approval_card';
@@ -174,18 +185,62 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
   };
 }
 
+// Reasoning, tool_call_row, tool_result_inline, and empty-content
+// agent_message markers may appear inside an agent_run.items array.
+type CapsuleChild =
+  | Extract<DisplayItem, { type: 'reasoning_block' }>
+  | Extract<DisplayItem, { type: 'tool_call_row' }>
+  | Extract<DisplayItem, { type: 'tool_result_inline' }>
+  | Extract<DisplayItem, { type: 'agent_message' }>;
+
+interface OpenCapsule {
+  items: CapsuleChild[];
+  startedAtMs: number;
+  endedAtMs: number;
+}
+
 export function transformChatHistory(messages: ChatMessage[], workspace?: string): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
   let currentSessionId: string | undefined;
+  let capsuleCounter = 0;
+  let currentCapsule: OpenCapsule | null = null;
 
-  // Pre-index tool results by tool_call_id so each tool_call_row can pair
-  // with its result regardless of position in the JSONL.
-  const toolResultByCallId = new Map<string, ChatMessage>();
-  for (const m of messages) {
-    if (m.role === 'tool' && m.tool_call_id) {
-      toolResultByCallId.set(m.tool_call_id, m);
+  function tsToMs(ts: string): number {
+    const n = Date.parse(ts);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function openCapsuleAt(ts: string): OpenCapsule {
+    const ms = tsToMs(ts);
+    return { items: [], startedAtMs: ms, endedAtMs: ms };
+  }
+
+  function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
+    if (!currentCapsule || currentCapsule.items.length === 0) {
+      currentCapsule = null;
+      return;
     }
+    const counts: Record<string, number> = {};
+    let hasThinking = false;
+    for (const it of currentCapsule.items) {
+      if (it.type === 'tool_call_row') {
+        counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
+      } else if (it.type === 'reasoning_block') {
+        hasThinking = true;
+      }
+    }
+    items.push({
+      type: 'agent_run',
+      capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
+      status,
+      items: currentCapsule.items,
+      tool_call_count_by_name: counts,
+      has_thinking: hasThinking,
+      started_at: currentCapsule.startedAtMs,
+      ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+    });
+    currentCapsule = null;
   }
 
   while (i < messages.length) {
@@ -198,6 +253,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
 
     if (msg.role === 'system') {
       if (msg._meta?.approval_request) {
+        finalizeCapsule();
         items.push({
           type: 'approval_card',
           what: msg.content ?? '',
@@ -213,8 +269,9 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
       continue;
     }
 
-    // Detect session boundary changes
+    // Detect session boundary changes — close any open capsule first.
     if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+      finalizeCapsule();
       items.push({ type: 'session_separator', timestamp: msg.timestamp });
     }
     if (msg.session_id) {
@@ -222,6 +279,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'user') {
+      finalizeCapsule();
       items.push({
         type: 'user_message',
         content: msg.content ?? '',
@@ -233,6 +291,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'agent') {
+      finalizeCapsule();
       if (msg.chunk_type === 'approval_request') {
         items.push({
           type: 'approval_card',
@@ -245,7 +304,6 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
         i++;
         continue;
       }
-      // Strip ANSI escape codes and filter empty / "(no response)" content
       const cleaned = (msg.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
       if (cleaned && cleaned !== '(no response)') {
         items.push({
@@ -260,48 +318,62 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'assistant') {
+      const text = msg.content && msg.content.trim() ? msg.content : null;
       const reasoning = (msg.reasoning_content ?? '').trim();
-      if (reasoning) {
-        items.push({
-          type: 'reasoning_block',
-          content: reasoning,
-          timestamp: msg.timestamp,
-          turn_id: msg.timestamp,
-        });
-      }
+      const hasTools = !!(msg.tool_calls && msg.tool_calls.length > 0);
+      const msTime = tsToMs(msg.timestamp);
 
-      if (msg.content) {
+      if (text) {
+        // Visible text closes any open capsule, then emits inline.
+        finalizeCapsule();
         items.push({
           type: 'agent_message',
-          content: msg.content,
+          content: text,
           source: msg.source,
           timestamp: msg.timestamp,
         });
-      }
-
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
-          const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
-          items.push({
-            type: 'tool_call_row',
-            tool_name: activity.toolName,
-            target_description: activity.description,
-            tool_call_id: tc.id,
-            category: activity.category,
+      } else if (reasoning || hasTools) {
+        // Silent assistant turn. If we're already inside a capsule with
+        // prior items, insert an empty agent_message marker so the UI
+        // can delimit between silent tool batches.
+        if (currentCapsule && currentCapsule.items.length > 0) {
+          currentCapsule.items.push({
+            type: 'agent_message',
+            content: '',
+            source: msg.source,
             timestamp: msg.timestamp,
           });
+          currentCapsule.endedAtMs = msTime;
+        }
+      }
 
-          const resultMsg = toolResultByCallId.get(tc.id);
-          if (resultMsg) {
-            const resultContent = typeof resultMsg.content === 'string'
-              ? resultMsg.content
-              : '';
-            items.push({
-              type: 'tool_result_inline',
+      // Machinery (reasoning + tool_calls) flows into the capsule that
+      // follows the just-emitted visible text, or extends the current one.
+      if (reasoning || hasTools) {
+        if (!currentCapsule) {
+          currentCapsule = openCapsuleAt(msg.timestamp);
+        }
+        if (reasoning) {
+          currentCapsule.items.push({
+            type: 'reasoning_block',
+            content: reasoning,
+            timestamp: msg.timestamp,
+            turn_id: msg.timestamp,
+          });
+          currentCapsule.endedAtMs = msTime;
+        }
+        if (hasTools) {
+          for (const tc of msg.tool_calls!) {
+            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
+            currentCapsule.items.push({
+              type: 'tool_call_row',
+              tool_name: activity.toolName,
+              target_description: activity.description,
               tool_call_id: tc.id,
-              content: resultContent,
-              timestamp: resultMsg.timestamp,
+              category: activity.category,
+              timestamp: msg.timestamp,
             });
+            currentCapsule.endedAtMs = msTime;
           }
         }
       }
@@ -311,13 +383,27 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'tool') {
-      // Already paired with its tool_call_row via toolResultByCallId.
+      if (currentCapsule) {
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        currentCapsule.items.push({
+          type: 'tool_result_inline',
+          tool_call_id: msg.tool_call_id ?? '',
+          content,
+          timestamp: msg.timestamp,
+        });
+        currentCapsule.endedAtMs = tsToMs(msg.timestamp);
+      }
+      // Orphan tool results (no preceding open capsule) are dropped —
+      // the LLM never associated them with a visible call.
       i++;
       continue;
     }
 
     i++;
   }
+
+  // End of stream: any still-open capsule is in-flight.
+  finalizeCapsule('running');
 
   // Mark items from historical sessions
   let lastSepIndex = -1;
