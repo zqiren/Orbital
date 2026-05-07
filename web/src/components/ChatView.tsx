@@ -111,6 +111,22 @@ function finalizeLiveCapsule(
   return next;
 }
 
+// chatTransform emits status:'running' for each chunk's tail capsule —
+// fine when the chunk truly is the live tail, but on pagination earlier
+// chunks' tails end up mid-history and stay incorrectly running. Sweep
+// any non-trailing 'running' capsule down to 'completed'. The last item
+// is left alone so a genuinely live capsule keeps its running status.
+function reconcileTrailingRunning(items: DisplayItem[]): DisplayItem[] {
+  let changed = false;
+  const next: DisplayItem[] = items.map((it, idx) => {
+    if (it.type !== 'agent_run' || it.status !== 'running') return it;
+    if (idx === items.length - 1) return it;
+    changed = true;
+    return { ...it, status: 'completed' as const };
+  });
+  return changed ? next : items;
+}
+
 const CHAT_PAGE_SIZE = 50;
 const REST_FALLBACK_DELAY_MS = 500;
 const SLASH_COMMANDS = [
@@ -316,7 +332,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
 
         if (chatResult.status === 'fulfilled') {
           const { data: messages, total } = chatResult.value;
-          const transformed = transformChatHistory(messages, project.workspace);
+          const transformed = reconcileTrailingRunning(
+            transformChatHistory(messages, project.workspace),
+          );
           setItems(transformed);
           setTotalMessages(total);
           setLoadedOffset(CHAT_PAGE_SIZE);
@@ -365,7 +383,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       // Stash prevHeight; the useLayoutEffect on `items` will compensate
       // synchronously after the prepended DOM has committed.
       pendingPrependPrevHeightRef.current = prevHeight;
-      setItems(prev => [...transformed, ...prev]);
+      setItems(prev => reconcileTrailingRunning([...transformed, ...prev]));
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
