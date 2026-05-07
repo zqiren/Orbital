@@ -16,7 +16,9 @@ export type DisplayItem =
   | { type: 'user_message'; content: string; timestamp: string; target?: string; isHistorical?: boolean }
   | { type: 'agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
-  | { type: 'activity_block'; activities: Activity[]; startTime: string; endTime: string; isHistorical?: boolean }
+  | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
+  | { type: 'tool_call_row'; tool_name: string; target_description: string; tool_call_id: string; category: ActivityCategory; timestamp: string; isHistorical?: boolean }
+  | { type: 'tool_result_inline'; tool_call_id: string; content: string; timestamp: string; isHistorical?: boolean }
   | { type: 'session_separator'; timestamp: string }
   | {
       type: 'approval_card';
@@ -177,6 +179,15 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
   let i = 0;
   let currentSessionId: string | undefined;
 
+  // Pre-index tool results by tool_call_id so each tool_call_row can pair
+  // with its result regardless of position in the JSONL.
+  const toolResultByCallId = new Map<string, ChatMessage>();
+  for (const m of messages) {
+    if (m.role === 'tool' && m.tool_call_id) {
+      toolResultByCallId.set(m.tool_call_id, m);
+    }
+  }
+
   while (i < messages.length) {
     const msg = messages[i];
 
@@ -249,59 +260,14 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'assistant') {
-      if (msg.content && (!msg.tool_calls || msg.tool_calls.length === 0)) {
-        if (msg.source !== 'management' && msg.source !== 'user') {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        } else {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        }
-        i++;
-        continue;
-      }
-
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        const activities: Activity[] = [];
-        const startTime = msg.timestamp;
-
-        for (const tc of msg.tool_calls) {
-          activities.push(toolCallToActivity(tc, msg.timestamp, msg, workspace));
-        }
-
-        let endTime = msg.timestamp;
-        let j = i + 1;
-        while (j < messages.length && messages[j].role === 'tool') {
-          endTime = messages[j].timestamp;
-          j++;
-        }
-
-        if (msg.content) {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        }
-
+      const reasoning = (msg.reasoning_content ?? '').trim();
+      if (reasoning) {
         items.push({
-          type: 'activity_block',
-          activities,
-          startTime,
-          endTime,
+          type: 'reasoning_block',
+          content: reasoning,
+          timestamp: msg.timestamp,
+          turn_id: msg.timestamp,
         });
-
-        i = j;
-        continue;
       }
 
       if (msg.content) {
@@ -312,11 +278,40 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
           timestamp: msg.timestamp,
         });
       }
+
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls) {
+          const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
+          items.push({
+            type: 'tool_call_row',
+            tool_name: activity.toolName,
+            target_description: activity.description,
+            tool_call_id: tc.id,
+            category: activity.category,
+            timestamp: msg.timestamp,
+          });
+
+          const resultMsg = toolResultByCallId.get(tc.id);
+          if (resultMsg) {
+            const resultContent = typeof resultMsg.content === 'string'
+              ? resultMsg.content
+              : '';
+            items.push({
+              type: 'tool_result_inline',
+              tool_call_id: tc.id,
+              content: resultContent,
+              timestamp: resultMsg.timestamp,
+            });
+          }
+        }
+      }
+
       i++;
       continue;
     }
 
     if (msg.role === 'tool') {
+      // Already paired with its tool_call_row via toolResultByCallId.
       i++;
       continue;
     }

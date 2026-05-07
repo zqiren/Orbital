@@ -31,7 +31,6 @@ import type {
 } from '../types';
 import ChatMessage from './ChatMessage';
 import StreamingMessage from './StreamingMessage';
-import ActivityBlockComponent from './ActivityBlock';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
@@ -59,18 +58,6 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-interface RealtimeActivityBlock {
-  activities: Array<{
-    id: string;
-    category: string;
-    description: string;
-    toolName: string;
-    timestamp: string;
-  }>;
-  startTime: string;
-  endTime: string;
-}
-
 export default function ChatView({ projectId, project, agentStatus, statusTick }: ChatViewProps) {
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,7 +66,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
-  const [realtimeBlock, setRealtimeBlock] = useState<RealtimeActivityBlock | null>(null);
   const [inputText, setInputText] = useState('');
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
@@ -294,11 +280,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     }
   }, [loading, items.length, projectId, startAgent]);
 
-  // Fix 3A: Flush realtimeBlock on terminal status (idle, error, stopped)
-  // Fix 3C: Show "Thinking..." indicator when agent starts running
+  // Fix 3C: Show "Thinking..." indicator when agent starts running.
+  // Activity rows are now appended directly to items as they arrive; no
+  // batching state to flush on terminal status.
   useEffect(() => {
     if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
-      flushRealtimeBlock();
       setShowThinking(false);
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)
@@ -325,7 +311,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       }]);
       setStream(null);
       setApprovals(new Map());
-      setRealtimeBlock(null);
       setShowThinking(false);
       setTotalMessages(0);
       setLoadedOffset(0);
@@ -446,7 +431,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
         // Always trigger REST fallback on is_final — whether prev was null
         // (missed all deltas) or non-null (verify streamed text is complete).
         fetchLatestMessage();
-        flushRealtimeBlock();
         scrollToBottom();
         return;
       }
@@ -463,30 +447,45 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
-      if (e.category === 'tool_result' || e.category === 'agent_output') return;
 
-      const activity = {
-        id: e.id,
-        category: e.category,
-        description: e.description,
-        toolName: e.tool_name,
-        timestamp: e.timestamp,
-      };
+      // agent_output activities duplicate sub-agent messages already
+      // delivered via chat.sub_agent_message — drop them.
+      if (e.category === 'agent_output') return;
 
-      setRealtimeBlock((prev) => {
-        if (!prev) {
-          return {
-            activities: [activity],
-            startTime: e.timestamp,
-            endTime: e.timestamp,
-          };
-        }
-        return {
+      // tool_result activity: the broadcast carries tool_call_id in the
+      // tool_name field (see activity_translator.py:189) and the actual
+      // result content is NOT included on the wire — only a placeholder
+      // description. Real content surfaces on history reload via
+      // chatTransform's tool_result_inline pairing.
+      if (e.category === 'tool_result') {
+        setItems((prev) => [
           ...prev,
-          activities: [...prev.activities, activity],
-          endTime: e.timestamp,
-        };
-      });
+          {
+            type: 'tool_result_inline',
+            tool_call_id: e.tool_name,
+            content: e.description,
+            timestamp: e.timestamp,
+          },
+        ]);
+        scrollToBottom();
+        return;
+      }
+
+      // Tool-use family: append a tool_call_row. The live ActivityEvent
+      // doesn't carry tool_call_id for tool_use, so the event id is used
+      // as a synthetic key — pairing with tool_result_inline on the live
+      // path is positional (sequential append), not by id.
+      setItems((prev) => [
+        ...prev,
+        {
+          type: 'tool_call_row',
+          tool_name: e.tool_name,
+          target_description: e.description,
+          tool_call_id: e.id,
+          category: e.category,
+          timestamp: e.timestamp,
+        },
+      ]);
       scrollToBottom();
     }
 
@@ -679,9 +678,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   }, [projectId, project.name, on, off, scrollToBottom]);
 
   // Fingerprint for the last item. DisplayItem has no stable id; use a
-  // composite of type + tool_call_id (for approval_card) or timestamp +
-  // a content prefix to disambiguate. session_separator has only
-  // timestamp; agent_notify has type+timestamp+title.
+  // composite of type + a discriminating field per variant.
   function lastItemKey(item: DisplayItem | undefined): string | null {
     if (!item) return null;
     if (item.type === 'approval_card') return `approval_card:${item.tool_call_id}`;
@@ -689,15 +686,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     if (item.type === 'agent_notify') {
       return `agent_notify:${item.timestamp}:${item.title}`;
     }
-    if (item.type === 'activity_block') {
-      return `activity_block:${item.startTime}:${item.endTime}:${item.activities.length}`;
-    }
     if (item.type === 'refresh_status') {
       return `refresh_status:${item.timestamp}:${item.status}`;
     }
+    if (item.type === 'tool_call_row') {
+      return `tool_call_row:${item.tool_call_id}:${item.timestamp}`;
+    }
+    if (item.type === 'tool_result_inline') {
+      return `tool_result_inline:${item.tool_call_id}:${item.timestamp}`;
+    }
+    if (item.type === 'reasoning_block') {
+      return `reasoning_block:${item.turn_id}:${item.content.slice(0, 32)}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
-    const contentPrefix = item.content?.slice(0, 32) ?? '';
+    const contentPrefix = item.content.slice(0, 32);
     return `${item.type}:${item.timestamp}:${contentPrefix}`;
   }
 
@@ -726,37 +729,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       scrollToBottom();
     }
   }, [items, scrollToBottom]);
-
-  function flushRealtimeBlock() {
-    setRealtimeBlock((prev) => {
-      if (prev && prev.activities.length > 0) {
-        const block: DisplayItem = {
-          type: 'activity_block' as const,
-          activities: prev.activities.map((a) => ({
-            ...a,
-            category: a.category as import('../types').ActivityCategory,
-          })),
-          startTime: prev.startTime,
-          endTime: prev.endTime,
-        };
-        setItems((prevItems) => {
-          // Insert before the last agent_message so the activity block
-          // appears between the two text messages, not after both.
-          let insertIdx = prevItems.length;
-          for (let i = prevItems.length - 1; i >= 0; i--) {
-            if (prevItems[i].type === 'agent_message') {
-              insertIdx = i;
-              break;
-            }
-          }
-          const updated = [...prevItems];
-          updated.splice(insertIdx, 0, block);
-          return updated;
-        });
-      }
-      return null;
-    });
-  }
 
   function adjustTextareaHeight() {
     const ta = textareaRef.current;
@@ -1027,14 +999,34 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
-            } else if (item.type === 'activity_block') {
+            } else if (item.type === 'reasoning_block') {
               rendered = (
-                <ActivityBlockComponent
-                  key={`act-${index}`}
-                  activities={item.activities}
-                  startTime={item.startTime}
-                  endTime={item.endTime}
-                />
+                <div
+                  key={`reason-${index}`}
+                  className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-[13px] leading-relaxed whitespace-pre-wrap"
+                >
+                  {item.content}
+                </div>
+              );
+            } else if (item.type === 'tool_call_row') {
+              rendered = (
+                <div
+                  key={`tc-${index}-${item.tool_call_id}`}
+                  className="flex items-center gap-2 mb-1 text-[13px] text-secondary"
+                >
+                  <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
+                  <span className="font-mono text-primary">{item.tool_name}</span>
+                  <span className="truncate">{item.target_description}</span>
+                </div>
+              );
+            } else if (item.type === 'tool_result_inline') {
+              rendered = (
+                <div
+                  key={`tr-${index}-${item.tool_call_id}`}
+                  className="mb-2 pl-5 italic text-secondary/80 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
+                >
+                  {item.content}
+                </div>
               );
             } else if (item.type === 'agent_notify') {
               const urgencyColor = item.urgency === 'high' ? 'border-error/40 bg-error/5' : 'border-accent/30 bg-accent/5';
@@ -1108,17 +1100,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
               rendered
             );
           })}
-
-        {!loading && realtimeBlock && realtimeBlock.activities.length > 0 && (
-          <ActivityBlockComponent
-            activities={realtimeBlock.activities.map((a) => ({
-              ...a,
-              category: a.category as import('../types').ActivityCategory,
-            }))}
-            startTime={realtimeBlock.startTime}
-            endTime={realtimeBlock.endTime}
-          />
-        )}
 
         {!loading &&
           Array.from(approvals.values())

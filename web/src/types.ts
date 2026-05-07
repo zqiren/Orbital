@@ -96,6 +96,7 @@ export interface ChatMessage {
   target?: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  reasoning_content?: string;
   _status?: string;
   _compaction?: boolean;
   _meta?: Record<string, unknown>;
