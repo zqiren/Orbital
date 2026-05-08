@@ -68,6 +68,10 @@ export default function App() {
   const [statusSummaries, setStatusSummaries] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, number>>({});
   const [daemonOnline, setDaemonOnline] = useState(true);
+  // Project-level agent availability. Lifted out of ChatView so a Files->Chat
+  // tab switch doesn't block on the daemon's /agents/available cache miss
+  // (cold call can take up to 8s). null = not yet loaded.
+  const [agentsAvailable, setAgentsAvailable] = useState<Array<{ slug: string; name: string }> | null>(null);
 
   const { triggers, fetchTriggers, toggleTrigger, deleteTrigger } = useTriggers(selectedProjectId ?? '');
 
@@ -83,6 +87,32 @@ export default function App() {
       fetchTriggers();
     }
   }, [selectedProjectId, selectedStatus, fetchTriggers]);
+
+  // Fetch agent availability when a project is selected. Pre-filtered to the
+  // shape the @-mention dropdown actually consumes: installed sub-agents, no
+  // 'built-in'. The fetch happens once per project select, off the chat-tab
+  // mount path, so tab switches don't block on this network call.
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    let cancelled = false;
+    setAgentsAvailable(null);
+    api<Array<{ slug: string; name: string; installed: boolean }>>(
+      '/api/v2/agents/available',
+    )
+      .then((agents) => {
+        if (cancelled) return;
+        setAgentsAvailable(
+          agents.filter((a) => a.slug !== 'built-in' && a.installed)
+            .map((a) => ({ slug: a.slug, name: a.name })),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Leave list empty on failure; @-dropdown simply shows no matches.
+        setAgentsAvailable([]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedProjectId]);
 
   // Mobile panel swap navigation
   const [isMobile, setIsMobile] = useState(false);
@@ -477,6 +507,7 @@ export default function App() {
                 project={selectedProject}
                 agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
                 statusTick={statusTicks[selectedProject.project_id] ?? 0}
+                mentionAgents={agentsAvailable ?? []}
               />
             )}
             {tab === 'files' && (

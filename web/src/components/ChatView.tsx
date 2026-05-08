@@ -238,6 +238,14 @@ interface ChatViewProps {
   project: Project;
   agentStatus: AgentRunStatus;
   statusTick?: number;
+  /**
+   * Installed sub-agents available for @-mention. Lifted to App-level state
+   * so tab switches don't refetch /agents/available. Empty array while
+   * App is still resolving the initial fetch — the dropdown then shows no
+   * matches, which is fine: `@` was typed before sub-agents loaded, the
+   * keystrokes that follow re-evaluate against the populated list.
+   */
+  mentionAgents: Array<{ slug: string; name: string }>;
 }
 
 interface StreamState {
@@ -256,7 +264,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents }: ChatViewProps) {
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -268,7 +276,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [inputText, setInputText] = useState('');
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
-  const [mentionAgents, setMentionAgents] = useState<Array<{slug: string; name: string}>>([]);
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
   const [showThinking, setShowThinking] = useState(false);
@@ -403,16 +410,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     async function loadData() {
       setLoading(true);
       try {
-        const [chatResult, agentsResult] = await Promise.allSettled([
-          apiWithTotal<ChatMessageType[]>(
-            `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
-          ),
-          api<Array<{slug: string; name: string; installed: boolean}>>('/api/v2/agents/available'),
-        ]);
+        const chatResult = await apiWithTotal<ChatMessageType[]>(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
+        ).catch((err) => {
+          console.error('[ChatView] Failed to load chat history:', err);
+          return null;
+        });
         if (cancelled) return;
 
-        if (chatResult.status === 'fulfilled') {
-          const { data: messages, total } = chatResult.value;
+        if (chatResult) {
+          const { data: messages, total } = chatResult;
           const transformed = reconcileTrailingRunning(
             transformChatHistory(messages, project.workspace),
           );
@@ -420,14 +427,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
           setTotalMessages(total);
           setLoadedOffset(CHAT_PAGE_SIZE);
         } else {
-          console.error('[ChatView] Failed to load chat history:', chatResult.reason);
           setItems([]);
-        }
-
-        if (agentsResult.status === 'fulfilled') {
-          setMentionAgents(agentsResult.value.filter(a => a.slug !== 'built-in' && a.installed));
-        } else {
-          console.error('[ChatView] Failed to load agents:', agentsResult.reason);
         }
       } finally {
         if (!cancelled) setLoading(false);
