@@ -7,7 +7,7 @@ import { Send, Square, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
-import { transformChatHistory } from '../utils/chatTransform';
+import { transformChatHistory, truncateResult } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
@@ -109,6 +109,87 @@ function finalizeLiveCapsule(
   const next = [...prev];
   next[live.idx] = updated;
   return next;
+}
+
+// Live tool_result events carry only the placeholder description
+// "Tool result received" and the originating tool_call_id (in the
+// tool_name field per activity_translator.py:189) — no real content is
+// on the wire. Mark the most recent pending tool_call_row inside the
+// live capsule as received with empty content; the JSONL reload will
+// surface the actual content on next mount via chatTransform pairing.
+type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
+
+function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const expandable = row.result_status !== 'pending';
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
+  return (
+    <div className="mb-1 text-[13px] text-secondary">
+      <button
+        type="button"
+        onClick={expandable ? () => setExpanded(e => !e) : undefined}
+        disabled={!expandable}
+        className={`flex items-center gap-2 w-full text-left ${expandable ? 'cursor-pointer hover:text-primary' : 'cursor-default'}`}
+      >
+        {expandable ? (
+          <Chevron size={12} className="shrink-0 opacity-70" />
+        ) : (
+          <span className="shrink-0 w-3" aria-hidden />
+        )}
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
+        <span className="font-mono text-primary">{row.tool_name}</span>
+        <span className="truncate">{row.target_description}</span>
+      </button>
+      {expanded && expandable && (() => {
+        const raw = row.result_content;
+        if (raw === null || raw === '') {
+          return (
+            <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-[12px] italic text-secondary/70">
+              no result content
+            </div>
+          );
+        }
+        const { text, footer } = truncateResult(raw);
+        return (
+          <div className="mt-1 ml-5">
+            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-[12px] text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+              {text}
+            </pre>
+            {footer && (
+              <div className="mt-1 px-3 text-[11px] text-secondary/60 italic">{footer}</div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function markLatestLiveCallResultReceived(
+  prev: DisplayItem[],
+  timestamp: string,
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  if (!live) return prev;
+  const items = live.capsule.items;
+  for (let k = items.length - 1; k >= 0; k--) {
+    const item = items[k];
+    if (item.type === 'tool_call_row' && item.result_status === 'pending') {
+      const updatedRow = { ...item, result_content: '', result_status: 'received' as const };
+      const newItems = [...items];
+      newItems[k] = updatedRow;
+      const updatedCapsule: AgentRunItem = {
+        ...live.capsule,
+        items: newItems,
+        ended_at: Date.parse(timestamp),
+      };
+      const next = [...prev];
+      next[live.idx] = updatedCapsule;
+      return next;
+    }
+  }
+  return prev;
 }
 
 // chatTransform emits status:'running' for each chunk's tail capsule —
@@ -573,23 +654,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       if (e.category === 'agent_output') return;
 
       // tool_result activity: the broadcast carries tool_call_id in the
-      // tool_name field (see activity_translator.py:189) and the actual
-      // result content is NOT included on the wire — only a placeholder
-      // description. Real content surfaces on history reload via
-      // chatTransform's tool_result_inline pairing.
+      // tool_name field (per activity_translator.py:189) but no result
+      // content — only a "Tool result received" placeholder we never
+      // surface. Mark the most recent pending row in the capsule as
+      // received with empty content; the actual content arrives via
+      // JSONL on next mount through chatTransform pairing.
       if (e.category === 'tool_result') {
-        setItems((prev) =>
-          appendToLiveCapsule(
-            prev,
-            {
-              type: 'tool_result_inline',
-              tool_call_id: e.tool_name,
-              content: e.description,
-              timestamp: e.timestamp,
-            },
-            e.timestamp,
-          ),
-        );
+        setItems((prev) => markLatestLiveCallResultReceived(prev, e.timestamp));
         scrollToBottom();
         return;
       }
@@ -608,6 +679,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
             tool_call_id: e.id,
             category: e.category,
             timestamp: e.timestamp,
+            result_content: null,
+            result_status: 'pending',
           },
           e.timestamp,
         ),
@@ -819,10 +892,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       return `refresh_status:${item.timestamp}:${item.status}`;
     }
     if (item.type === 'tool_call_row') {
-      return `tool_call_row:${item.tool_call_id}:${item.timestamp}`;
-    }
-    if (item.type === 'tool_result_inline') {
-      return `tool_result_inline:${item.tool_call_id}:${item.timestamp}`;
+      // Include result_status so transitions pending → received re-fingerprint.
+      return `tool_call_row:${item.tool_call_id}:${item.timestamp}:${item.result_status}`;
     }
     if (item.type === 'reasoning_block') {
       return `reasoning_block:${item.turn_id}:${item.content.slice(0, 32)}`;
@@ -1190,24 +1261,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                         }
                         if (child.type === 'tool_call_row') {
                           return (
-                            <div
+                            <ToolCallRow
                               key={`rc-t-${ci}-${child.tool_call_id}`}
-                              className="flex items-center gap-2 mb-1 text-[13px] text-secondary"
-                            >
-                              <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
-                              <span className="font-mono text-primary">{child.tool_name}</span>
-                              <span className="truncate">{child.target_description}</span>
-                            </div>
-                          );
-                        }
-                        if (child.type === 'tool_result_inline') {
-                          return (
-                            <div
-                              key={`rc-i-${ci}-${child.tool_call_id}`}
-                              className="mb-2 pl-5 italic text-secondary/80 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
-                            >
-                              {child.content}
-                            </div>
+                              row={child}
+                            />
                           );
                         }
                         if (child.type === 'agent_message') {

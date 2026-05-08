@@ -17,8 +17,17 @@ export type DisplayItem =
   | { type: 'agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
-  | { type: 'tool_call_row'; tool_name: string; target_description: string; tool_call_id: string; category: ActivityCategory; timestamp: string; isHistorical?: boolean }
-  | { type: 'tool_result_inline'; tool_call_id: string; content: string; timestamp: string; isHistorical?: boolean }
+  | {
+      type: 'tool_call_row';
+      tool_name: string;
+      target_description: string;
+      tool_call_id: string;
+      category: ActivityCategory;
+      timestamp: string;
+      result_content: string | null;
+      result_status: 'pending' | 'received' | 'error';
+      isHistorical?: boolean;
+    }
   | {
       type: 'agent_run';
       capsule_id: string;
@@ -185,12 +194,12 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
   };
 }
 
-// Reasoning, tool_call_row, tool_result_inline, and empty-content
-// agent_message markers may appear inside an agent_run.items array.
+// Reasoning, tool_call_row, and empty-content agent_message markers
+// may appear inside an agent_run.items array. Tool result content is
+// carried on tool_call_row.result_content, paired by tool_call_id.
 type CapsuleChild =
   | Extract<DisplayItem, { type: 'reasoning_block' }>
   | Extract<DisplayItem, { type: 'tool_call_row' }>
-  | Extract<DisplayItem, { type: 'tool_result_inline' }>
   | Extract<DisplayItem, { type: 'agent_message' }>;
 
 interface OpenCapsule {
@@ -372,6 +381,8 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
               tool_call_id: tc.id,
               category: activity.category,
               timestamp: msg.timestamp,
+              result_content: null,
+              result_status: 'pending',
             });
             currentCapsule.endedAtMs = msTime;
           }
@@ -384,17 +395,26 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
 
     if (msg.role === 'tool') {
       if (currentCapsule) {
+        const tcId = msg.tool_call_id ?? '';
         const content = typeof msg.content === 'string' ? msg.content : '';
-        currentCapsule.items.push({
-          type: 'tool_result_inline',
-          tool_call_id: msg.tool_call_id ?? '',
-          content,
-          timestamp: msg.timestamp,
-        });
+        // Pair by tool_call_id with the matching tool_call_row inside the
+        // currently open capsule. Search from the back since out-of-order
+        // arrival pairs more recent calls more cheaply.
+        for (let k = currentCapsule.items.length - 1; k >= 0; k--) {
+          const item = currentCapsule.items[k];
+          if (item.type === 'tool_call_row' && item.tool_call_id === tcId) {
+            currentCapsule.items[k] = {
+              ...item,
+              result_content: content,
+              result_status: 'received',
+            };
+            break;
+          }
+        }
         currentCapsule.endedAtMs = tsToMs(msg.timestamp);
       }
-      // Orphan tool results (no preceding open capsule) are dropped —
-      // the LLM never associated them with a visible call.
+      // Orphan tool results (no open capsule, or no matching call) are
+      // dropped — the LLM never associated them with a visible call.
       i++;
       continue;
     }
@@ -423,4 +443,45 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
   }
 
   return items;
+}
+
+const RESULT_CHAR_BOUND = 500;
+const RESULT_LINE_BOUND = 12;
+
+/**
+ * Mechanical truncation for tool result content displayed in the UI.
+ * Returns the content unchanged when it fits both bounds; otherwise cuts
+ * at whichever bound triggers first and adds a footer noting the totals.
+ */
+export function truncateResult(
+  content: string,
+): { text: string; footer: string | null } {
+  const totalChars = content.length;
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+
+  if (totalChars <= RESULT_CHAR_BOUND && totalLines <= RESULT_LINE_BOUND) {
+    return { text: content, footer: null };
+  }
+
+  // Char count of the first N lines (joined with their newlines). If this
+  // is < RESULT_CHAR_BOUND, the line bound triggers earlier in the stream.
+  const firstNLinesText = lines.slice(0, RESULT_LINE_BOUND).join('\n');
+  const firstNLinesLen = firstNLinesText.length;
+
+  const charBoundFires = totalChars > RESULT_CHAR_BOUND;
+  const lineBoundFires = totalLines > RESULT_LINE_BOUND;
+
+  // When both fire, pick whichever produces the shorter (earlier) cut.
+  // When only one fires, that one wins outright.
+  if (charBoundFires && (!lineBoundFires || RESULT_CHAR_BOUND <= firstNLinesLen)) {
+    return {
+      text: content.slice(0, RESULT_CHAR_BOUND) + '…',
+      footer: `first ${RESULT_CHAR_BOUND} chars · result is ${totalChars} chars total`,
+    };
+  }
+  return {
+    text: firstNLinesText + '…',
+    footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
+  };
 }

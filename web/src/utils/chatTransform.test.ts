@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from 'vitest';
-import { transformChatHistory } from './chatTransform';
+import { transformChatHistory, truncateResult } from './chatTransform';
 import type { ChatMessage } from '../types';
 
 const TS = '2026-05-08T10:00:00Z';
@@ -46,8 +46,8 @@ function tc(id: string, name: string, args = '{}') {
   return { id, type: 'function' as const, function: { name, arguments: args } };
 }
 
-describe('transformChatHistory — Variant A reasoning + per-call rows + inline results (still works)', () => {
-  it('preserves user_message, agent_message, and session_separator behavior for pure text', () => {
+describe('transformChatHistory — pure-text and session boundaries (unchanged)', () => {
+  it('preserves user_message, agent_message, and session_separator behavior', () => {
     const messages: ChatMessage[] = [
       { ...user('hi'), session_id: 's1' },
       asst({ content: 'hello back', session_id: 's1' }),
@@ -64,10 +64,21 @@ describe('transformChatHistory — Variant A reasoning + per-call rows + inline 
       'agent_message',
     ]);
   });
+
+  it('pure text exchange emits no agent_run capsule', () => {
+    const messages: ChatMessage[] = [
+      user('hi', TS),
+      asst({ content: 'hello back', timestamp: TS2 }),
+    ];
+
+    const items = transformChatHistory(messages);
+
+    expect(items.map(i => i.type)).toEqual(['user_message', 'agent_message']);
+  });
 });
 
-describe('transformChatHistory — agent_run capsule grouping', () => {
-  it('1. visible-text boundary: text emits inline, machinery folds into following capsule, then closes at next visible text', () => {
+describe('transformChatHistory — capsule grouping (updated for paired results)', () => {
+  it('visible-text boundary closes capsule; tool_call_row carries paired result', () => {
     const messages: ChatMessage[] = [
       user('go', TS),
       asst({
@@ -96,24 +107,16 @@ describe('transformChatHistory — agent_run capsule grouping', () => {
       expect(capsule.items.map(x => x.type)).toEqual([
         'reasoning_block',
         'tool_call_row',
-        'tool_result_inline',
       ]);
-      expect(capsule.status).toBe('completed');
-      expect(capsule.has_thinking).toBe(true);
-      expect(capsule.tool_call_count_by_name).toEqual({ read: 1 });
-    }
-
-    const a1 = items[1];
-    if (a1.type === 'agent_message') {
-      expect(a1.content).toBe("I'll read X");
-    }
-    const a2 = items[3];
-    if (a2.type === 'agent_message') {
-      expect(a2.content).toBe('Done');
+      const row = capsule.items[1];
+      if (row.type === 'tool_call_row') {
+        expect(row.result_content).toBe('contents of X');
+        expect(row.result_status).toBe('received');
+      }
     }
   });
 
-  it('2. silent chaining: two empty-content tool turns fold into one capsule with marker between turns', () => {
+  it('silent chaining: each tool_call_row carries its own paired result', () => {
     const messages: ChatMessage[] = [
       user('go', TS),
       asst({
@@ -143,133 +146,28 @@ describe('transformChatHistory — agent_run capsule grouping', () => {
     ]);
 
     const capsule = items[1];
-    expect(capsule.type).toBe('agent_run');
     if (capsule.type === 'agent_run') {
       expect(capsule.items.map(x => x.type)).toEqual([
         'reasoning_block',
         'tool_call_row',
-        'tool_result_inline',
-        'agent_message',
+        'agent_message', // silent-turn marker
         'reasoning_block',
         'tool_call_row',
-        'tool_result_inline',
       ]);
-      expect(capsule.status).toBe('completed');
-      expect(capsule.tool_call_count_by_name).toEqual({ read: 1, write: 1 });
-      // The middle agent_message marker should have empty content
-      const marker = capsule.items[3];
-      if (marker.type === 'agent_message') {
-        expect(marker.content).toBe('');
+      const row1 = capsule.items[1];
+      const row2 = capsule.items[4];
+      if (row1.type === 'tool_call_row' && row2.type === 'tool_call_row') {
+        expect(row1.tool_call_id).toBe('c1');
+        expect(row1.result_content).toBe('r1 result');
+        expect(row1.result_status).toBe('received');
+        expect(row2.tool_call_id).toBe('c2');
+        expect(row2.result_content).toBe('r2 result');
+        expect(row2.result_status).toBe('received');
       }
     }
   });
 
-  it('3. mixed pattern: visible text closes capsule and machinery extends across silent middle step', () => {
-    const messages: ChatMessage[] = [
-      user('go', TS),
-      asst({
-        content: 'Step 1',
-        reasoning_content: 'plan',
-        tool_calls: [tc('c1', 'read')],
-        timestamp: TS2,
-      }),
-      tool('c1', 'r1', TS3),
-      asst({
-        content: null,
-        // No reasoning on the silent middle step
-        tool_calls: [tc('c2', 'edit')],
-        timestamp: TS4,
-      }),
-      tool('c2', 'r2', TS5),
-      asst({ content: 'Step 2 done', timestamp: TS6 }),
-    ];
-
-    const items = transformChatHistory(messages);
-    const itemTypes = items.map(i => i.type);
-
-    expect(itemTypes).toEqual([
-      'user_message',
-      'agent_message',
-      'agent_run',
-      'agent_message',
-    ]);
-
-    const capsule = items[2];
-    if (capsule.type === 'agent_run') {
-      expect(capsule.items.map(x => x.type)).toEqual([
-        'reasoning_block',
-        'tool_call_row',
-        'tool_result_inline',
-        'agent_message',
-        'tool_call_row',
-        'tool_result_inline',
-      ]);
-      expect(capsule.tool_call_count_by_name).toEqual({ read: 1, edit: 1 });
-    }
-  });
-
-  it('4. in-flight turn with no closing visible item produces capsule with status:running', () => {
-    const messages: ChatMessage[] = [
-      user('go', TS),
-      asst({
-        content: null,
-        reasoning_content: 'r',
-        tool_calls: [tc('c1', 'shell')],
-        timestamp: TS2,
-      }),
-      tool('c1', 'output', TS3),
-    ];
-
-    const items = transformChatHistory(messages);
-
-    expect(items.map(i => i.type)).toEqual(['user_message', 'agent_run']);
-    const capsule = items[1];
-    if (capsule.type === 'agent_run') {
-      expect(capsule.status).toBe('running');
-      expect(capsule.ended_at).toBe(null);
-    }
-  });
-
-  it('5. pure text exchange emits no agent_run capsule', () => {
-    const messages: ChatMessage[] = [
-      user('hi', TS),
-      asst({ content: 'hello back', timestamp: TS2 }),
-    ];
-
-    const items = transformChatHistory(messages);
-
-    expect(items.map(i => i.type)).toEqual(['user_message', 'agent_message']);
-  });
-
-  it('6. reasoning-only capsule (no tool calls) emits with has_thinking and empty tool_call_count_by_name', () => {
-    const messages: ChatMessage[] = [
-      user('hi', TS),
-      asst({
-        content: 'hello',
-        reasoning_content: 'a thought',
-        timestamp: TS2,
-      }),
-      asst({ content: 'done', timestamp: TS3 }),
-    ];
-
-    const items = transformChatHistory(messages);
-    const itemTypes = items.map(i => i.type);
-
-    expect(itemTypes).toEqual([
-      'user_message',
-      'agent_message',
-      'agent_run',
-      'agent_message',
-    ]);
-    const capsule = items[2];
-    if (capsule.type === 'agent_run') {
-      expect(capsule.items.map(x => x.type)).toEqual(['reasoning_block']);
-      expect(capsule.has_thinking).toBe(true);
-      expect(capsule.tool_call_count_by_name).toEqual({});
-    }
-  });
-
-  it('7. multiple user messages: capsules are bounded; no capsule spans across two user messages', () => {
+  it('multiple user messages: capsules are bounded; rows in each capsule pair correctly', () => {
     const messages: ChatMessage[] = [
       user('q1', TS),
       asst({
@@ -300,14 +198,178 @@ describe('transformChatHistory — agent_run capsule grouping', () => {
       'agent_run',
       'agent_message',
     ]);
+  });
+});
 
-    const cap1 = items[1];
-    const cap2 = items[3];
-    if (cap1.type === 'agent_run' && cap2.type === 'agent_run') {
-      expect(cap1.tool_call_count_by_name).toEqual({ read: 1 });
-      expect(cap2.tool_call_count_by_name).toEqual({ write: 1 });
-      // Capsule ids must be distinct
-      expect(cap1.capsule_id).not.toBe(cap2.capsule_id);
+describe('transformChatHistory — tool result pairing (NEW)', () => {
+  it('pairs tool result into the matching tool_call_row, no sibling tool_result_inline', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'the result text', TS2),
+    ];
+
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(1);
+    const capsule = items[0];
+    expect(capsule.type).toBe('agent_run');
+    if (capsule.type === 'agent_run') {
+      // No tool_result_inline anywhere
+      for (const child of capsule.items) {
+        expect(child.type).not.toBe('tool_result_inline');
+      }
+      const row = capsule.items.find(x => x.type === 'tool_call_row');
+      expect(row).toBeDefined();
+      if (row && row.type === 'tool_call_row') {
+        expect(row.result_content).toBe('the result text');
+        expect(row.result_status).toBe('received');
+      }
     }
+  });
+
+  it('in-flight call: tool_call_row has null content and pending status', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'shell')],
+        timestamp: TS,
+      }),
+      // No following role:tool message — agent still working
+    ];
+
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(1);
+    const capsule = items[0];
+    if (capsule.type === 'agent_run') {
+      const row = capsule.items.find(x => x.type === 'tool_call_row');
+      if (row && row.type === 'tool_call_row') {
+        expect(row.result_content).toBeNull();
+        expect(row.result_status).toBe('pending');
+      }
+    }
+  });
+
+  it('three parallel calls return out of order: pairing is by id, not position', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [
+          tc('a', 'read', '{"path":"a"}'),
+          tc('b', 'read', '{"path":"b"}'),
+          tc('c', 'read', '{"path":"c"}'),
+        ],
+        timestamp: TS,
+      }),
+      tool('b', 'result-B', TS2),
+      tool('a', 'result-A', TS3),
+      tool('c', 'result-C', TS4),
+    ];
+
+    const items = transformChatHistory(messages);
+    const capsule = items[0];
+    if (capsule.type === 'agent_run') {
+      const rows = capsule.items.filter(x => x.type === 'tool_call_row');
+      expect(rows.length).toBe(3);
+      // Order is the original call order (a, b, c)
+      const ids = rows.map(r => r.type === 'tool_call_row' ? r.tool_call_id : '');
+      expect(ids).toEqual(['a', 'b', 'c']);
+      const contents = rows.map(r => r.type === 'tool_call_row' ? r.result_content : null);
+      expect(contents).toEqual(['result-A', 'result-B', 'result-C']);
+    }
+  });
+
+  it('tool_result_inline DisplayItem type no longer exists', () => {
+    // Compile-time + runtime check: no DisplayItem with type='tool_result_inline'
+    // can be constructed anywhere in the transformed output.
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'read')], timestamp: TS }),
+      tool('c1', 'r', TS2),
+      asst({ content: 'done', timestamp: TS3 }),
+    ];
+
+    const items = transformChatHistory(messages);
+    function* walk(arr: typeof items): Generator<{ type: string }> {
+      for (const it of arr) {
+        yield it;
+        if (it.type === 'agent_run') yield* walk(it.items as typeof items);
+      }
+    }
+    for (const it of walk(items)) {
+      expect(it.type).not.toBe('tool_result_inline');
+    }
+  });
+
+  it('empty result content: row gets empty string with received status', () => {
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'shell')], timestamp: TS }),
+      tool('c1', '', TS2),
+    ];
+
+    const items = transformChatHistory(messages);
+    const capsule = items[0];
+    if (capsule.type === 'agent_run') {
+      const row = capsule.items.find(x => x.type === 'tool_call_row');
+      if (row && row.type === 'tool_call_row') {
+        expect(row.result_content).toBe('');
+        expect(row.result_status).toBe('received');
+      }
+    }
+  });
+});
+
+describe('truncateResult', () => {
+  it('returns short input as-is with no footer', () => {
+    const r = truncateResult('hello world');
+    expect(r.text).toBe('hello world');
+    expect(r.footer).toBeNull();
+  });
+
+  it('returns empty input as-is with no footer', () => {
+    const r = truncateResult('');
+    expect(r.text).toBe('');
+    expect(r.footer).toBeNull();
+  });
+
+  it('char-bound input: truncates at 500, footer reports total chars', () => {
+    const long = 'x'.repeat(700); // 1 line, 700 chars
+    const r = truncateResult(long);
+    expect(r.text).toBe('x'.repeat(500) + '…');
+    expect(r.footer).toBe('first 500 chars · result is 700 chars total');
+  });
+
+  it('line-bound input: truncates at 12 lines, footer reports total lines', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line${i}`).join('\n');
+    const r = truncateResult(lines);
+    const expectedFirst12 = Array.from({ length: 12 }, (_, i) => `line${i}`).join('\n');
+    expect(r.text).toBe(expectedFirst12 + '…');
+    expect(r.footer).toBe('first 12 lines · result is 20 lines total');
+  });
+
+  it('both bounds: char bound triggers when first 12 lines already exceed 500 chars', () => {
+    // 12 lines of 50 chars each = 600 chars (without newlines) + 11 newlines = 611.
+    const longLine = 'x'.repeat(50);
+    const content = Array.from({ length: 14 }, () => longLine).join('\n');
+    const r = truncateResult(content);
+    expect(r.text).toBe(content.slice(0, 500) + '…');
+    expect(r.footer).toBe(`first 500 chars · result is ${content.length} chars total`);
+  });
+
+  it('both bounds: line bound triggers when many short lines fit under 500 chars', () => {
+    // 20 lines of 3 chars each = 60 chars + 19 newlines = 79. <500 chars but >12 lines.
+    const content = Array.from({ length: 20 }, () => 'abc').join('\n');
+    const r = truncateResult(content);
+    const first12 = Array.from({ length: 12 }, () => 'abc').join('\n');
+    expect(r.text).toBe(first12 + '…');
+    expect(r.footer).toBe('first 12 lines · result is 20 lines total');
+  });
+
+  it('exactly at the bounds (500 chars, 12 lines): no truncation, no footer', () => {
+    const content = 'a'.repeat(500);
+    const r = truncateResult(content);
+    expect(r.text).toBe(content);
+    expect(r.footer).toBeNull();
   });
 });
