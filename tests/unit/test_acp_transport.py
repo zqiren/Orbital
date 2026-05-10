@@ -2,7 +2,15 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Unit tests for ACP transport (JSON-RPC over stdio)."""
+"""Unit tests for ACP transport (JSON-RPC over stdio).
+
+These tests exercise ACPTransport against a ``MockACPProcess`` that
+represents a **generic** ACP-compliant agent - NOT claude-code. claude-code
+has no ACP server mode (the binary rejects ``claude acp`` with ``unknown
+command``); ACP is for gemini-cli and other ACP-compliant agents. See
+``agent_os/agent/transports/acp_transport.py`` for scope notes and
+``tests/fixtures/dummy_acp_agent.py`` for the e2e-equivalent fixture.
+"""
 import asyncio
 import json
 import pytest
