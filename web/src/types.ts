@@ -245,6 +245,14 @@ export interface StateRefreshLifecycleEvent {
   timestamp: string;
 }
 
+export interface WorkspaceClaudemdWarningEvent {
+  type: 'workspace_claudemd_warning';
+  project_id: string;
+  claudemd_path: string;
+  content_hash: string;
+  matched_token: string;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
   | StreamDeltaEvent
@@ -260,7 +268,8 @@ export type WebSocketEvent =
   | TriggerDeletedEvent
   | TriggerFiredEvent
   | TriggerSkippedEvent
-  | StateRefreshLifecycleEvent;
+  | StateRefreshLifecycleEvent
+  | WorkspaceClaudemdWarningEvent;
 
 export interface FileEntry {
   name: string;

@@ -718,6 +718,23 @@ async def deny(project_id: str, req: DenyRequest):
     return {"status": "denied"}
 
 
+@router.post("/agents/{project_id}/claudemd-warning/dismiss")
+async def dismiss_claudemd_warning(project_id: str, body: dict):
+    """Dismiss a workspace_claudemd_warning banner for the current session.
+
+    Body: {"content_hash": "<hash from the WS event>"}.
+    Suppression is keyed by (project_id, content_hash) and lives in
+    daemon memory; restart or content change re-emits.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    content_hash = (body or {}).get("content_hash")
+    if not content_hash or not isinstance(content_hash, str):
+        raise HTTPException(status_code=400, detail="content_hash required")
+    _sub_agent_manager.dismiss_claudemd_warning(project_id, content_hash)
+    return {"status": "dismissed"}
+
+
 def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[list[dict], int]:
     """Read chat messages from session JSONL files. Runs in a thread.
 

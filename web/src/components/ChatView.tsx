@@ -26,6 +26,7 @@ import type {
   UserMessageEvent,
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
+  WorkspaceClaudemdWarningEvent,
   WebSocketEvent,
   Project,
 } from '../types';
@@ -35,6 +36,7 @@ import ActivityBlockComponent from './ActivityBlock';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
+import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 
 interface ChatViewProps {
   projectId: string;
@@ -91,6 +93,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [commandFilter, setCommandFilter] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [injectError, setInjectError] = useState<string | null>(null);
+  // Workspace CLAUDE.md interference banner: latest unhandled warning
+  // for this project (cleared on dismiss).
+  const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -657,6 +662,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       scrollToBottom();
     }
 
+    function handleClaudemdWarning(event: WebSocketEvent) {
+      const e = event as WorkspaceClaudemdWarningEvent;
+      if (e.project_id !== projectId) return;
+      setClaudemdWarning({
+        project_id: e.project_id,
+        claudemd_path: e.claudemd_path,
+        content_hash: e.content_hash,
+        matched_token: e.matched_token,
+      });
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -665,6 +681,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
+    on('workspace_claudemd_warning', handleClaudemdWarning);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -675,6 +692,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
+      off('workspace_claudemd_warning', handleClaudemdWarning);
     };
   }, [projectId, project.name, on, off, scrollToBottom]);
 
@@ -981,6 +999,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
 
   return (
     <div className="flex flex-col h-full">
+      {claudemdWarning && (
+        <ClaudemdWarningBanner
+          projectId={projectId}
+          warning={claudemdWarning}
+          onDismiss={() => setClaudemdWarning(null)}
+        />
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 max-md:pb-20">
         {loading && (
           <div className="space-y-3">
