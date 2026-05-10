@@ -2,7 +2,17 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""E2E ACP transport validation through real daemon wiring."""
+"""E2E ACP transport validation against a generic ACP-server fixture.
+
+These tests validate the ACPTransport layer end-to-end (subprocess spawn,
+JSON-RPC 2.0 over stdio, session lifecycle, permission round-trip) against
+``tests/fixtures/dummy_acp_agent.py`` - a generic ACP-compliant agent stub.
+
+This is **not** a claude-code integration test. claude-code has no ACP
+server mode and is explicitly rejected by ``SubAgentManager._resolve_transport``
+when a manifest pairs ``command: claude`` with ``transport: acp``. The fixture
+stands in for future ACP-compliant agents (gemini-cli etc.).
+"""
 import os
 import pytest
 from agent_os.agent.adapters.base import AdapterConfig

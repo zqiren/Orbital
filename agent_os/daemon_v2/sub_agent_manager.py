@@ -122,9 +122,34 @@ class SubAgentManager:
         return f"Started {handle}"
 
     def _resolve_transport(self, manifest, config_dict, autonomy=None):
-        """Resolve the appropriate transport for a manifest."""
+        """Resolve the appropriate transport for a manifest.
+
+        Raises:
+            ValueError: if a claude-code manifest requests ``transport: acp``.
+                claude-code has no ACP server mode (the binary rejects
+                ``claude acp`` with "unknown command"); ACP is for gemini-cli
+                and other ACP-compliant agents. See
+                ``docs/investigations/FINDINGS-sub-agent-context-and-persistence.md``
+                Q4. We refuse silently redirecting to SDK because the user
+                wrote ``acp`` deliberately and a silent swap masks the
+                misconfiguration.
+        """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
+        command = getattr(manifest.runtime, 'command', None) or ""
+
+        # Guard: ACP transport is not supported by claude-code.
+        # Treat as a user manifest error, not a silent redirect.
+        if transport_hint == "acp" and command.startswith("claude"):
+            manifest_path = f"agent_os/agents/manifests/{manifest.slug.replace('-', '_')}.yaml"
+            msg = (
+                "ACP transport is not supported by claude-code. "
+                "Use 'auto' or 'sdk' transport for claude. "
+                "ACP is for gemini-cli and other ACP-compliant agents. "
+                f"Edit manifest: {manifest_path}"
+            )
+            logger.warning(msg)
+            raise ValueError(msg)
 
         # Determine effective transport type
         if transport_hint == "auto":
@@ -237,8 +262,12 @@ class SubAgentManager:
             except ValueError:
                 autonomy = Autonomy.CHECK_IN
 
-        # Resolve transport from manifest
-        transport = self._resolve_transport(manifest, config_dict, autonomy=autonomy)
+        # Resolve transport from manifest. May raise ValueError for invalid
+        # manifest combinations (e.g. claude-code with transport: acp).
+        try:
+            transport = self._resolve_transport(manifest, config_dict, autonomy=autonomy)
+        except ValueError as e:
+            return f"Error: unsupported transport in manifest: {e}"
 
         adapter = CLIAdapter(
             handle=handle,

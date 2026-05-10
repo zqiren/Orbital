@@ -2,7 +2,21 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""ACP transport -- JSON-RPC 2.0 over stdio for Agent Client Protocol."""
+"""ACP transport -- JSON-RPC 2.0 over stdio for Agent Client Protocol.
+
+Scope: this transport is for **gemini-cli and other ACP-compliant agents**.
+It is **NOT** for claude-code. The current production claude binary
+(claude-code 2.1.x) has no ACP server mode and rejects ``claude acp`` with
+``unknown command "acp"``. Routing claude through this transport would fail
+at process start. See
+``docs/investigations/FINDINGS-sub-agent-context-and-persistence.md`` Q4.
+
+Routing for claude-code is enforced by ``SubAgentManager._resolve_transport``,
+which raises a clear ValueError if a manifest sets ``command: claude`` with
+``transport: acp``. The unit-test fixture ``tests/fixtures/dummy_acp_agent.py``
+is a generic ACP-server stub that exercises this transport's protocol logic;
+it is **not** a stand-in for claude-code.
+"""
 import asyncio
 import json
 import logging

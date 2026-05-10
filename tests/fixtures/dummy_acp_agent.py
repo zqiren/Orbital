@@ -2,7 +2,16 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Minimal ACP agent for transport testing. Implements JSON-RPC 2.0 over stdio."""
+"""Generic ACP-server fixture for testing the ACP transport layer.
+
+This is a **generic** ACP-compliant agent stub - NOT a claude-code stand-in.
+claude-code has no ACP server mode (rejects ``claude acp`` with ``unknown
+command``); ACP transport is intended for gemini-cli and other ACP-compliant
+agents. This fixture exercises the orbital ACPTransport's JSON-RPC 2.0
+protocol implementation independently of any specific upstream agent.
+
+Implements JSON-RPC 2.0 over stdio.
+"""
 import json
 import sys
 
