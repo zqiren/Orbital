@@ -75,6 +75,10 @@ class AgentConfig:
     enabled_agents: list[str] = field(default_factory=list)
     agent_slug: str = "built-in"
     enabled_sub_agents: list[str] = field(default_factory=list)
+    # Denylist of sub-agent slugs to exclude from this project. New canonical
+    # source of truth as of the sub-agent settings rework. ``enabled_sub_agents``
+    # remains for backward compatibility but is treated as informational only.
+    disabled_sub_agents: list[str] = field(default_factory=list)
     agent_credentials: dict = field(default_factory=dict)
     network_extra_domains: list[str] = field(default_factory=list)
     project_name: str = ""

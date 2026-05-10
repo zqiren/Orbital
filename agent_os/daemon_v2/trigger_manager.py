@@ -427,6 +427,24 @@ class TriggerManager:
                 or ""
             )
 
+            # Compute available sub-agents from setup_engine, minus the
+            # project's disabled_sub_agents denylist. Legacy ``enabled_sub_agents``
+            # is informational-only in v1.
+            disabled = set(project.get("disabled_sub_agents", []) or [])
+            setup_engine = getattr(self._agent_manager, '_setup_engine', None)
+            if setup_engine is not None:
+                available = setup_engine.check_all()
+                trigger_enabled_sub_agents = [
+                    a.slug for a in available
+                    if a.installed and a.slug != "built-in"
+                    and a.slug not in disabled
+                ]
+            else:
+                trigger_enabled_sub_agents = [
+                    s for s in (project.get("enabled_sub_agents") or [])
+                    if s not in disabled
+                ]
+
             config = AgentConfig(
                 workspace=project["workspace"],
                 model=model,
@@ -439,7 +457,8 @@ class TriggerManager:
                 project_instructions=project.get("instructions", ""),
                 is_scratch=project.get("is_scratch", False),
                 agent_name=project.get("agent_name", project.get("name", "")),
-                enabled_sub_agents=project.get("enabled_sub_agents", []),
+                enabled_sub_agents=trigger_enabled_sub_agents,
+                disabled_sub_agents=list(disabled),
                 budget_limit_usd=project.get("budget_limit_usd"),
                 budget_action=project.get("budget_action", "ask"),
             )
