@@ -233,6 +233,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         setup_engine=setup_engine,
         platform_provider=platform_provider,
         project_store=project_store,
+        ws_manager=ws_manager,
     )
 
     # 6. Agent manager
