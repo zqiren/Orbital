@@ -204,7 +204,20 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     else:
         manifests_dir = os.path.join(os.path.dirname(__file__), "..", "agents", "manifests")
     registry.load_directory(manifests_dir)
-    setup_engine = SetupEngine(registry)
+
+    # 5b. Daemon-level sub-agent config (model/effort/permission-mode overrides).
+    # Stored at ``~/.orbital/sub_agent_config.json`` so it follows the user
+    # account, not any individual project. Read at sub-agent dispatch time
+    # via SetupEngine.get_adapter_config and merged into the CLI invocation.
+    from agent_os.daemon_v2.sub_agent_config_store import SubAgentConfigStore
+    sub_agent_config_path = os.path.join(
+        os.path.expanduser("~"), ".orbital", "sub_agent_config.json"
+    )
+    sub_agent_config_store = SubAgentConfigStore(sub_agent_config_path)
+
+    setup_engine = SetupEngine(
+        registry, sub_agent_config_store=sub_agent_config_store,
+    )
 
     # 5c. Provider registry (model capabilities, context windows, max output)
     from agent_os.config.provider_registry import ProviderRegistry
@@ -275,7 +288,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(credential_routes.router)
 
     # 7a. Settings routes
-    settings_routes.configure(settings_store, credential_store=credential_store)
+    settings_routes.configure(
+        settings_store,
+        credential_store=credential_store,
+        setup_engine=setup_engine,
+        sub_agent_config_store=sub_agent_config_store,
+        ws_manager=ws_manager,
+    )
     app.include_router(settings_routes.router)
 
     # 7b. File browsing routes
