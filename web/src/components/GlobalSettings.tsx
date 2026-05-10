@@ -8,6 +8,7 @@ import LLMProviderSettings from './LLMProviderSettings';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import CredentialStore from './CredentialStore';
 import PairPhone from './PairPhone';
+import SubAgentSettings from './SubAgentSettings';
 
 interface GlobalSettingsProps {
   onBack: () => void;
@@ -148,6 +149,12 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
             </p>
           </div>
           <CredentialStore />
+        </div>
+
+        {/* Sub-agents */}
+        <div className="mt-10 pt-8 border-t border-border">
+          <h2 className="text-base font-semibold text-primary mb-3">Sub-agents</h2>
+          <SubAgentSettings />
         </div>
 
         {/* Phone Pairing section */}
