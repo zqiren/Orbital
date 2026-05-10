@@ -46,6 +46,7 @@ class CreateProjectRequest(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -67,6 +68,7 @@ class ProjectUpdate(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -265,6 +267,8 @@ async def create_project(req: CreateProjectRequest):
         project_data["agent_slug"] = req.agent_slug
     if req.enabled_sub_agents is not None:
         project_data["enabled_sub_agents"] = req.enabled_sub_agents
+    if req.disabled_sub_agents is not None:
+        project_data["disabled_sub_agents"] = req.disabled_sub_agents
     if req.agent_credentials is not None:
         project_data["agent_credentials"] = req.agent_credentials
     if req.network_extra_domains is not None:
@@ -535,6 +539,7 @@ async def start_agent(req: StartAgentRequest):
         project_instructions=project.get("instructions", ""),
         agent_slug=project.get("agent_slug", "built-in"),
         enabled_sub_agents=project.get("enabled_sub_agents", []),
+        disabled_sub_agents=project.get("disabled_sub_agents", []),
         agent_credentials=project.get("agent_credentials", {}),
         network_extra_domains=project.get("network_extra_domains", []),
         is_scratch=project.get("is_scratch", False),
@@ -716,6 +721,23 @@ async def deny(project_id: str, req: DenyRequest):
         "resolution": "denied",
     })
     return {"status": "denied"}
+
+
+@router.post("/agents/{project_id}/claudemd-warning/dismiss")
+async def dismiss_claudemd_warning(project_id: str, body: dict):
+    """Dismiss a workspace_claudemd_warning banner for the current session.
+
+    Body: {"content_hash": "<hash from the WS event>"}.
+    Suppression is keyed by (project_id, content_hash) and lives in
+    daemon memory; restart or content change re-emits.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    content_hash = (body or {}).get("content_hash")
+    if not content_hash or not isinstance(content_hash, str):
+        raise HTTPException(status_code=400, detail="content_hash required")
+    _sub_agent_manager.dismiss_claudemd_warning(project_id, content_hash)
+    return {"status": "dismissed"}
 
 
 def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[list[dict], int]:
