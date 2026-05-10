@@ -46,6 +46,7 @@ class CreateProjectRequest(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -67,6 +68,7 @@ class ProjectUpdate(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -265,6 +267,8 @@ async def create_project(req: CreateProjectRequest):
         project_data["agent_slug"] = req.agent_slug
     if req.enabled_sub_agents is not None:
         project_data["enabled_sub_agents"] = req.enabled_sub_agents
+    if req.disabled_sub_agents is not None:
+        project_data["disabled_sub_agents"] = req.disabled_sub_agents
     if req.agent_credentials is not None:
         project_data["agent_credentials"] = req.agent_credentials
     if req.network_extra_domains is not None:
@@ -535,6 +539,7 @@ async def start_agent(req: StartAgentRequest):
         project_instructions=project.get("instructions", ""),
         agent_slug=project.get("agent_slug", "built-in"),
         enabled_sub_agents=project.get("enabled_sub_agents", []),
+        disabled_sub_agents=project.get("disabled_sub_agents", []),
         agent_credentials=project.get("agent_credentials", {}),
         network_extra_domains=project.get("network_extra_domains", []),
         is_scratch=project.get("is_scratch", False),
