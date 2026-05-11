@@ -2,7 +2,10 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""ACP agent that emits a permission request before responding."""
+"""Generic ACP-server fixture that emits a permission request before responding.
+
+NOT a claude-code stand-in - see ``dummy_acp_agent.py`` for scope notes.
+"""
 import json
 import sys
 

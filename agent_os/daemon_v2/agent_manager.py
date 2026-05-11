@@ -269,13 +269,23 @@ class AgentManager:
                 except ValueError:
                     autonomy = Autonomy.HANDS_OFF
 
-                # Auto-detect sub-agents if not explicitly configured
-                enabled_sub_agents = project.get("enabled_sub_agents", None)
-                if enabled_sub_agents is None and self._setup_engine is not None:
+                # Compute available sub-agents from setup_engine, minus any
+                # entries on the project's disabled_sub_agents denylist.
+                # Note: legacy ``enabled_sub_agents`` is intentionally ignored
+                # here for v1 — ``disabled_sub_agents`` is the new canonical
+                # source of truth (informational-only legacy field).
+                disabled = set(project.get("disabled_sub_agents", []) or [])
+                if self._setup_engine is not None:
                     available = self._setup_engine.check_all()
                     enabled_sub_agents = [
                         a.slug for a in available
                         if a.installed and a.slug != "built-in"
+                        and a.slug not in disabled
+                    ]
+                else:
+                    enabled_sub_agents = [
+                        s for s in (project.get("enabled_sub_agents") or [])
+                        if s not in disabled
                     ]
 
                 # Use global settings as fallback for missing project-level LLM config
@@ -308,6 +318,7 @@ class AgentManager:
                     project_instructions=project.get("instructions", ""),
                     agent_slug=project.get("agent_slug", "built-in"),
                     enabled_sub_agents=enabled_sub_agents or [],
+                    disabled_sub_agents=list(disabled),
                     agent_credentials=project.get("agent_credentials", {}),
                     network_extra_domains=project.get("network_extra_domains", []),
                     is_scratch=project.get("is_scratch", False),
@@ -864,13 +875,21 @@ class AgentManager:
             except ValueError:
                 autonomy = Autonomy.HANDS_OFF
 
-            # Auto-detect sub-agents if not explicitly configured
-            enabled_sub_agents = project.get("enabled_sub_agents", None)
-            if enabled_sub_agents is None and self._setup_engine is not None:
+            # Compute available sub-agents from setup_engine, minus the
+            # project's disabled_sub_agents denylist. Legacy ``enabled_sub_agents``
+            # is informational-only in v1.
+            disabled = set(project.get("disabled_sub_agents", []) or [])
+            if self._setup_engine is not None:
                 available = self._setup_engine.check_all()
                 enabled_sub_agents = [
                     a.slug for a in available
                     if a.installed and a.slug != "built-in"
+                    and a.slug not in disabled
+                ]
+            else:
+                enabled_sub_agents = [
+                    s for s in (project.get("enabled_sub_agents") or [])
+                    if s not in disabled
                 ]
 
             # Use global settings as fallback for missing project-level LLM config
@@ -894,6 +913,7 @@ class AgentManager:
                 project_name=project.get("name", ""),
                 project_instructions=project.get("instructions", ""),
                 enabled_sub_agents=enabled_sub_agents or [],
+                disabled_sub_agents=list(disabled),
                 budget_limit_usd=project.get("budget_limit_usd"),
                 budget_action=project.get("budget_action", "ask"),
             )
@@ -1029,12 +1049,20 @@ class AgentManager:
             except ValueError:
                 _autonomy = _Autonomy.HANDS_OFF
 
-            _enabled_sub = proj.get("enabled_sub_agents", None)
-            if _enabled_sub is None and self._setup_engine is not None:
+            # Available sub-agents = installed - disabled_sub_agents.
+            # Legacy ``enabled_sub_agents`` is ignored in v1.
+            _disabled = set(proj.get("disabled_sub_agents", []) or [])
+            if self._setup_engine is not None:
                 available = self._setup_engine.check_all()
                 _enabled_sub = [
                     a.slug for a in available
                     if a.installed and a.slug != "built-in"
+                    and a.slug not in _disabled
+                ]
+            else:
+                _enabled_sub = [
+                    s for s in (proj.get("enabled_sub_agents") or [])
+                    if s not in _disabled
                 ]
 
             global_settings = self._settings_store.get() if self._settings_store else None
@@ -1057,6 +1085,7 @@ class AgentManager:
                 project_name=proj.get("name", ""),
                 project_instructions=proj.get("instructions", ""),
                 enabled_sub_agents=_enabled_sub or [],
+                disabled_sub_agents=list(_disabled),
                 budget_limit_usd=proj.get("budget_limit_usd"),
                 budget_action=proj.get("budget_action", "ask"),
             )

@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 
 from agent_os.agents.manifest import AgentManifest
 from agent_os.agents.registry import AgentRegistry
@@ -21,13 +22,34 @@ from agent_os.daemon_v2.models import detect_os
 logger = logging.getLogger(__name__)
 
 
+# Cache TTL for SetupEngine.check_all() results in seconds. The check_all path
+# spawns one subprocess per agent (auth-status check, install probes, etc.),
+# which can take several seconds on a cold call. The cache keeps the response
+# snappy for back-to-back requests; explicit invalidation clears it after any
+# action that could change the result (install, login, refresh).
+CHECK_ALL_CACHE_TTL_SECONDS = 60
+
+
 class SetupEngine:
     """Probes the system for agent readiness based on manifest metadata."""
 
-    def __init__(self, registry: AgentRegistry, credential_store=None) -> None:
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        credential_store=None,
+        sub_agent_config_store=None,
+    ) -> None:
         self._registry = registry
         self._credential_store = credential_store
+        self._sub_agent_config_store = sub_agent_config_store
         self._resolved_paths: dict[str, str] = {}  # slug -> resolved binary path
+        # In-memory cache of the last check_all() result. Tuple of
+        # (results, expires_at_monotonic). None when empty or invalidated.
+        self._check_all_cache: tuple[list[AgentSetupStatus], float] | None = None
+
+    def set_sub_agent_config_store(self, store) -> None:
+        """Late-bind the sub-agent config store (called by app factory)."""
+        self._sub_agent_config_store = store
 
     # ------------------------------------------------------------------
     # Public API
@@ -87,11 +109,34 @@ class SetupEngine:
         )
 
     def check_all(self) -> list[AgentSetupStatus]:
-        """Status check for all registered agents."""
+        """Status check for all registered agents.
+
+        Cached for ``CHECK_ALL_CACHE_TTL_SECONDS``. Use ``invalidate_cache()``
+        to force a re-check (e.g. after an install or login action).
+        """
+        if self._check_all_cache is not None:
+            results, expires_at = self._check_all_cache
+            if time.monotonic() < expires_at:
+                return results
+
         results = []
         for manifest in self._registry.list_all():
             results.append(self.check_agent(manifest.slug))
+
+        self._check_all_cache = (
+            results,
+            time.monotonic() + CHECK_ALL_CACHE_TTL_SECONDS,
+        )
         return results
+
+    def invalidate_cache(self) -> None:
+        """Drop the cached ``check_all()`` result.
+
+        Call this after any orbital-driven action that could change
+        agent install/auth status (install, login, logout, etc.) so that
+        the next ``check_all()`` re-probes the system.
+        """
+        self._check_all_cache = None
 
     def resolve_binary(self, manifest: AgentManifest) -> str | None:
         """Find the agent binary.
@@ -252,9 +297,24 @@ class SetupEngine:
             if value and cred.env_var:
                 env[cred.env_var] = value
 
+        # Merge daemon-level sub-agent config (model/effort/etc.) into argv.
+        # Persisted overrides win when no manifest arg conflicts; we simply
+        # append, leaving the CLI to take the last-wins value if duplicated.
+        extra_args: list[str] = []
+        if self._sub_agent_config_store is not None:
+            try:
+                extra_args = list(
+                    self._sub_agent_config_store.build_extra_args(slug)
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to build sub-agent extra args for %s",
+                    slug, exc_info=True,
+                )
+
         return {
             "command": binary,
-            "args": list(manifest.runtime.args),
+            "args": list(manifest.runtime.args) + extra_args,
             "workspace": project_workspace,
             "approval_patterns": [
                 p.get("regex", "") for p in manifest.runtime.approval_patterns

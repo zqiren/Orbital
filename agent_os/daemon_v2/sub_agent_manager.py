@@ -27,7 +27,8 @@ class SubAgentManager:
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
-                 project_store=None, lifecycle_observer=None):
+                 project_store=None, lifecycle_observer=None,
+                 ws_manager=None):
         self._process_manager = process_manager
         self._adapter_configs = adapter_configs or {}  # handle -> AdapterConfig (legacy)
         self._platform_provider = platform_provider
@@ -35,10 +36,17 @@ class SubAgentManager:
         self._setup_engine = setup_engine
         self._project_store = project_store
         self._lifecycle_observer = lifecycle_observer
+        # WebSocketManager used to surface CLAUDE.md interference banners.
+        # Optional: when None we fall back to process_manager._ws if set.
+        self._ws_manager = ws_manager
         self._adapters: dict[str, dict[str, object]] = {}  # project_id -> {handle -> adapter}
         self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}  # project_id -> lock
         self._stopping: set[str] = set()  # project_ids currently in stop_all
+        # CLAUDE.md interference state for this orbital session.
+        # Maps (project_id, content_hash) -> "warned" | "dismissed".
+        # Cleared on daemon restart (in-memory only).
+        self._claudemd_warning_state: dict[tuple[str, str], str] = {}
 
     def _get_lock(self, project_id: str) -> asyncio.Lock:
         """Get or create the per-project lifecycle lock."""
@@ -121,10 +129,40 @@ class SubAgentManager:
 
         return f"Started {handle}"
 
-    def _resolve_transport(self, manifest, config_dict, autonomy=None):
-        """Resolve the appropriate transport for a manifest."""
+    def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None):
+        """Resolve the appropriate transport for a manifest.
+
+        system_prompt, when provided, is forwarded to transports that
+        support it (SDK, Pipe). PTYTransport does not currently support
+        --append-system-prompt-file injection; the caller is responsible
+        for the degraded first-turn injection path.
+
+        Raises:
+            ValueError: if a claude-code manifest requests ``transport: acp``.
+                claude-code has no ACP server mode (the binary rejects
+                ``claude acp`` with "unknown command"); ACP is for gemini-cli
+                and other ACP-compliant agents. See
+                ``docs/investigations/FINDINGS-sub-agent-context-and-persistence.md``
+                Q4. We refuse silently redirecting to SDK because the user
+                wrote ``acp`` deliberately and a silent swap masks the
+                misconfiguration.
+        """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
+        command = getattr(manifest.runtime, 'command', None) or ""
+
+        # Guard: ACP transport is not supported by claude-code.
+        # Treat as a user manifest error, not a silent redirect.
+        if transport_hint == "acp" and command.startswith("claude"):
+            manifest_path = f"agent_os/agents/manifests/{manifest.slug.replace('-', '_')}.yaml"
+            msg = (
+                "ACP transport is not supported by claude-code. "
+                "Use 'auto' or 'sdk' transport for claude. "
+                "ACP is for gemini-cli and other ACP-compliant agents. "
+                f"Edit manifest: {manifest_path}"
+            )
+            logger.warning(msg)
+            raise ValueError(msg)
 
         # Determine effective transport type
         if transport_hint == "auto":
@@ -147,15 +185,23 @@ class SubAgentManager:
             try:
                 from agent_os.agent.transports.sdk_transport import SDKTransport, HAS_SDK
                 if HAS_SDK:
-                    return SDKTransport(autonomy=autonomy)
+                    return SDKTransport(autonomy=autonomy, system_prompt=system_prompt)
             except ImportError:
                 pass
             # Fallback to pipe if SDK not available
             from agent_os.agent.transports.pipe_transport import PipeTransport
-            return PipeTransport(config=self._get_pipe_config(manifest.slug))
+            return PipeTransport(
+                config=self._get_pipe_config(manifest.slug),
+                system_prompt=system_prompt,
+                agent_slug=manifest.slug,
+            )
         elif transport_type == "pipe":
             from agent_os.agent.transports.pipe_transport import PipeTransport
-            return PipeTransport(config=self._get_pipe_config(manifest.slug))
+            return PipeTransport(
+                config=self._get_pipe_config(manifest.slug),
+                system_prompt=system_prompt,
+                agent_slug=manifest.slug,
+            )
         elif transport_type == "pty":
             from agent_os.agent.transports.pty_transport import PTYTransport
             approval_patterns = config_dict.get("approval_patterns", [])
@@ -173,6 +219,87 @@ class SubAgentManager:
         if slug == "claude-code":
             return CLAUDE_CODE_PIPE_CONFIG
         return PipeTransportConfig()
+
+    # ------------------------------------------------------------------
+    # Workspace CLAUDE.md interference: passive detection + WS banner.
+    # See spec §4 / DECISIONS-from-followup.md D4: detect+warn only,
+    # no prompt-side defense, no --bare opt-in for v1.
+    # ------------------------------------------------------------------
+
+    def _ws(self):
+        """Return the WebSocketManager instance, falling back to the one
+        owned by the process_manager when none was injected directly.
+        """
+        if self._ws_manager is not None:
+            return self._ws_manager
+        return getattr(self._process_manager, "_ws", None)
+
+    def _maybe_emit_claudemd_warning(self, project_id: str, workspace: str) -> None:
+        """Inspect workspace CLAUDE.md and emit a one-time WS banner.
+
+        - Logs INFO when CLAUDE.md is present (with content hash).
+        - Emits ``workspace_claudemd_warning`` when conflicting tokens
+          match. Re-emits if file content changes (different hash) or
+          if the daemon was restarted (state map empty).
+        - Suppressed for the (project_id, content_hash) pair when the
+          banner has already been emitted or dismissed in this session.
+        """
+        from agent_os.agent.sub_agent_prompt import (
+            detect_claudemd_conflict,
+            hash_claudemd,
+        )
+
+        # Log INFO event whenever CLAUDE.md is present, regardless of conflict.
+        present_hash = hash_claudemd(workspace)
+        if present_hash is not None:
+            logger.info(
+                "workspace CLAUDE.md present for project=%s hash=%s",
+                project_id, present_hash[:12],
+            )
+
+        info = detect_claudemd_conflict(workspace)
+        if info is None:
+            return
+
+        key = (project_id, info["content_hash"])
+        state = self._claudemd_warning_state.get(key)
+        if state in ("warned", "dismissed"):
+            return
+
+        logger.warning(
+            "workspace CLAUDE.md may conflict with Orbital inheritance "
+            "(project=%s, matched_token=%r, hash=%s)",
+            project_id, info["matched_token"], info["content_hash"][:12],
+        )
+
+        # Mark warned BEFORE broadcasting so a misfired re-call cannot
+        # double-emit even if broadcast happens to dispatch reentrantly.
+        self._claudemd_warning_state[key] = "warned"
+
+        ws = self._ws()
+        if ws is not None:
+            try:
+                ws.broadcast(project_id, {
+                    "type": "workspace_claudemd_warning",
+                    "project_id": project_id,
+                    "claudemd_path": info["claudemd_path"],
+                    "content_hash": info["content_hash"],
+                    "matched_token": info["matched_token"],
+                })
+            except Exception:
+                logger.exception(
+                    "failed to broadcast workspace_claudemd_warning "
+                    "for project=%s",
+                    project_id,
+                )
+
+    def dismiss_claudemd_warning(self, project_id: str, content_hash: str) -> None:
+        """Mark a CLAUDE.md banner as dismissed for the current session.
+
+        Suppresses re-emission for the same (project_id, content_hash)
+        until the daemon restarts or the file content changes.
+        """
+        self._claudemd_warning_state[(project_id, content_hash)] = "dismissed"
 
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0) -> str:
         """Start a sub-agent using the manifest registry and setup engine."""
@@ -237,8 +364,68 @@ class SubAgentManager:
             except ValueError:
                 autonomy = Autonomy.CHECK_IN
 
-        # Resolve transport from manifest
-        transport = self._resolve_transport(manifest, config_dict, autonomy=autonomy)
+        # --- Sub-agent inheritance: render prompt + lazily create MEMORY.md ---
+        # Re-render fresh per dispatch (per spec: "Do NOT cache the rendered string").
+        # MEMORY.md is created LAZILY just before injection, never at project init.
+        system_prompt: str | None = None
+        if workspace:
+            try:
+                from agent_os.agent.sub_agent_prompt import (
+                    ensure_memory_md,
+                    render_sub_agent_prompt,
+                )
+
+                # Determine peer slugs (other enabled sub-agents in the project)
+                enabled_sub_agents = project.get("enabled_sub_agents", None) if project else None
+                if not enabled_sub_agents and self._setup_engine is not None:
+                    try:
+                        available = self._setup_engine.check_all()
+                        enabled_sub_agents = [
+                            a.slug for a in available
+                            if getattr(a, "installed", False) and a.slug != "built-in"
+                        ]
+                    except Exception:
+                        enabled_sub_agents = [handle]
+                if not enabled_sub_agents:
+                    enabled_sub_agents = [handle]
+
+                # Lazily create THIS sub-agent's MEMORY.md (not peers — see
+                # regression test 5: peer memory files are not created at
+                # dispatch of another sub-agent).
+                ensure_memory_md(workspace, handle)
+
+                system_prompt = render_sub_agent_prompt(
+                    workspace=workspace,
+                    namespace=None,
+                    agent_slug=handle,
+                    enabled_sub_agents=enabled_sub_agents,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to render sub-agent inheritance prompt for "
+                    "project=%s handle=%s",
+                    project_id, handle,
+                )
+                system_prompt = None
+
+            # Detect workspace CLAUDE.md interference (passive surface only).
+            # This is a separate side-channel concern from prompt rendering.
+            try:
+                self._maybe_emit_claudemd_warning(project_id, workspace)
+            except Exception:
+                logger.exception(
+                    "claudemd detection failed for project=%s handle=%s",
+                    project_id, handle,
+                )
+
+        # Resolve transport from manifest. May raise ValueError for invalid
+        # manifest combinations (e.g. claude-code with transport: acp).
+        try:
+            transport = self._resolve_transport(
+                manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
+            )
+        except ValueError as e:
+            return f"Error: unsupported transport in manifest: {e}"
 
         adapter = CLIAdapter(
             handle=handle,

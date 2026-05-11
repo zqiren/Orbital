@@ -46,6 +46,7 @@ class CreateProjectRequest(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -67,6 +68,7 @@ class ProjectUpdate(BaseModel):
     sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
+    disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
     network_extra_domains: list[str] | None = None
     agent_name: str | None = None
@@ -265,6 +267,8 @@ async def create_project(req: CreateProjectRequest):
         project_data["agent_slug"] = req.agent_slug
     if req.enabled_sub_agents is not None:
         project_data["enabled_sub_agents"] = req.enabled_sub_agents
+    if req.disabled_sub_agents is not None:
+        project_data["disabled_sub_agents"] = req.disabled_sub_agents
     if req.agent_credentials is not None:
         project_data["agent_credentials"] = req.agent_credentials
     if req.network_extra_domains is not None:
@@ -535,6 +539,7 @@ async def start_agent(req: StartAgentRequest):
         project_instructions=project.get("instructions", ""),
         agent_slug=project.get("agent_slug", "built-in"),
         enabled_sub_agents=project.get("enabled_sub_agents", []),
+        disabled_sub_agents=project.get("disabled_sub_agents", []),
         agent_credentials=project.get("agent_credentials", {}),
         network_extra_domains=project.get("network_extra_domains", []),
         is_scratch=project.get("is_scratch", False),
@@ -716,6 +721,23 @@ async def deny(project_id: str, req: DenyRequest):
         "resolution": "denied",
     })
     return {"status": "denied"}
+
+
+@router.post("/agents/{project_id}/claudemd-warning/dismiss")
+async def dismiss_claudemd_warning(project_id: str, body: dict):
+    """Dismiss a workspace_claudemd_warning banner for the current session.
+
+    Body: {"content_hash": "<hash from the WS event>"}.
+    Suppression is keyed by (project_id, content_hash) and lives in
+    daemon memory; restart or content change re-emits.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    content_hash = (body or {}).get("content_hash")
+    if not content_hash or not isinstance(content_hash, str):
+        raise HTTPException(status_code=400, detail="content_hash required")
+    _sub_agent_manager.dismiss_claudemd_warning(project_id, content_hash)
+    return {"status": "dismissed"}
 
 
 def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[list[dict], int]:
@@ -1241,6 +1263,175 @@ def _handle_zip_upload(workspace: str, content_bytes: bytes) -> dict:
             "path": os.path.join(dest_dir, "SKILL.md"),
             "dir_name": dir_name,
         }
+
+
+# ---- Sub-Agent MEMORY.md Endpoints ----
+
+# Hard cap on MEMORY.md size when the user edits via the UI. This prevents
+# accidental UI-driven runaway growth. Soft warning at 2KB target.
+_MEMORY_MAX_BYTES = 10 * 1024
+_MEMORY_TARGET_BYTES = 2 * 1024
+
+
+class SubAgentMemoryUpdate(BaseModel):
+    content: str
+
+
+def _resolve_available_sub_agents(project: dict) -> list[dict]:
+    """Compute the available sub-agent list for a project.
+
+    Returns a list of {slug, name} dicts for sub-agents that are
+    installed AND not in disabled_sub_agents. Skips 'built-in' (the
+    management agent itself, never a peer dispatch target).
+    """
+    disabled = set(project.get("disabled_sub_agents", []) or [])
+    if _setup_engine is None:
+        return []
+    statuses = _setup_engine.check_all()
+    out: list[dict] = []
+    for s in statuses:
+        if s.slug == "built-in":
+            continue
+        if not s.installed:
+            continue
+        if s.slug in disabled:
+            continue
+        out.append({"slug": s.slug, "name": s.name})
+    return out
+
+
+def _memory_md_path_for(workspace: str, agent_slug: str) -> str:
+    """Compute the on-disk path to a sub-agent's MEMORY.md."""
+    return os.path.join(
+        ProjectPaths(workspace).sub_agent_dir(agent_slug),
+        "MEMORY.md",
+    )
+
+
+@router.get("/projects/{project_id}/sub-agent-memory")
+async def list_sub_agent_memory(project_id: str):
+    """Return MEMORY.md status for each enabled sub-agent in this project.
+
+    Each entry: {agent_slug, agent_name, exists, content, last_modified, size_bytes}.
+    `exists: false` for sub-agents enabled but never dispatched (MEMORY.md
+    not yet lazily created on disk).
+    """
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    workspace = project.get("workspace", "")
+    if not workspace:
+        return []
+    available = _resolve_available_sub_agents(project)
+    out: list[dict] = []
+    for entry in available:
+        slug = entry["slug"]
+        name = entry["name"]
+        path = _memory_md_path_for(workspace, slug)
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                stat = os.stat(path)
+                out.append({
+                    "agent_slug": slug,
+                    "agent_name": name,
+                    "exists": True,
+                    "content": content,
+                    "last_modified": stat.st_mtime,
+                    "size_bytes": stat.st_size,
+                })
+            except OSError:
+                out.append({
+                    "agent_slug": slug,
+                    "agent_name": name,
+                    "exists": False,
+                    "content": "",
+                    "last_modified": None,
+                    "size_bytes": 0,
+                })
+        else:
+            out.append({
+                "agent_slug": slug,
+                "agent_name": name,
+                "exists": False,
+                "content": "",
+                "last_modified": None,
+                "size_bytes": 0,
+            })
+    return out
+
+
+_AGENT_SLUG_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+@router.put("/projects/{project_id}/sub-agent-memory/{agent_slug}")
+async def update_sub_agent_memory(
+    project_id: str, agent_slug: str, body: SubAgentMemoryUpdate,
+):
+    """Write content to the sub-agent's MEMORY.md file.
+
+    Creates the file (and the parent directory) if it doesn't exist.
+    Validates content size: hard cap at 10KB, warning at 2KB.
+    """
+    if not _AGENT_SLUG_RE.match(agent_slug):
+        raise HTTPException(status_code=400, detail="Invalid agent slug")
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    workspace = project.get("workspace", "")
+    if not workspace:
+        raise HTTPException(status_code=400, detail="Project has no workspace")
+
+    # Validate that this slug is among the available sub-agents for this
+    # project. Disabled / unknown / not-installed sub-agents are rejected.
+    available_slugs = {e["slug"] for e in _resolve_available_sub_agents(project)}
+    if agent_slug not in available_slugs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sub-agent {agent_slug!r} is not available for this project",
+        )
+
+    content_bytes = body.content.encode("utf-8")
+    if len(content_bytes) > _MEMORY_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Content exceeds {_MEMORY_MAX_BYTES} byte limit "
+                f"({len(content_bytes)} bytes)."
+            ),
+        )
+
+    path = _memory_md_path_for(workspace, agent_slug)
+    parent = os.path.dirname(path)
+    try:
+        os.makedirs(parent, exist_ok=True)
+        # Per spec: PUT-creates-file path writes user content directly,
+        # without the daemon's canonical header. The UI is overwriting
+        # MEMORY.md from scratch.
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body.content)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to write MEMORY.md: {e}",
+        )
+
+    stat = os.stat(path)
+    response: dict = {
+        "agent_slug": agent_slug,
+        "exists": True,
+        "size_bytes": stat.st_size,
+        "last_modified": stat.st_mtime,
+    }
+    if len(content_bytes) > _MEMORY_TARGET_BYTES:
+        response["warning"] = (
+            f"Content size {len(content_bytes)} bytes exceeds the "
+            f"{_MEMORY_TARGET_BYTES} byte target. Sub-agents read MEMORY.md "
+            "every dispatch — keep it concise."
+        )
+    return response
 
 
 # ---- Network utilities ----

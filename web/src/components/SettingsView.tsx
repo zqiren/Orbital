@@ -14,6 +14,9 @@ import type {
 import { api, BASE_URL, isRelayMode, ApiError } from '../config';
 import LLMProviderSettings, { type LLMValues } from './LLMProviderSettings';
 import FallbackModelsEditor from './FallbackModelsEditor';
+import SubAgentMemoryCard, {
+  type SubAgentMemoryEntry,
+} from './SubAgentMemoryCard';
 
 interface SkillMeta {
   name: string;
@@ -72,6 +75,10 @@ export default function SettingsView({
   const [skillSuccess, setSkillSuccess] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sub-agent MEMORY.md state
+  const [memoryEntries, setMemoryEntries] = useState<SubAgentMemoryEntry[]>([]);
+  const [memoryError, setMemoryError] = useState('');
 
   // Budget state
   const [budgetLimit, setBudgetLimit] = useState<string>(
@@ -132,6 +139,26 @@ export default function SettingsView({
   useEffect(() => {
     fetchSkills();
   }, [fetchSkills]);
+
+  // Load sub-agent MEMORY.md list. Re-runs whenever the project changes
+  // (which includes when disabled_sub_agents has been edited and saved
+  // via the parent — the parent re-fetches and passes a fresh project).
+  const fetchMemories = useCallback(async () => {
+    if (project.is_scratch) return;
+    setMemoryError('');
+    try {
+      const data = await api<SubAgentMemoryEntry[]>(
+        `/api/v2/projects/${encodeURIComponent(pid)}/sub-agent-memory`,
+      );
+      setMemoryEntries(data);
+    } catch (e) {
+      setMemoryError(e instanceof ApiError ? e.detail : 'Failed to load sub-agent memories');
+    }
+  }, [pid, project.is_scratch]);
+
+  useEffect(() => {
+    fetchMemories();
+  }, [fetchMemories]);
 
   async function handleDeleteSkill(dirName: string) {
     setSkillError('');
@@ -285,6 +312,40 @@ export default function SettingsView({
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
           />
         </div>
+
+        {/* Sub-Agent Memories */}
+        {!project.is_scratch && (
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1.5">
+              Sub-Agent Memories
+              <span className="text-secondary font-normal"> — long-term memory per sub-agent for this project</span>
+            </label>
+            <p className="text-xs text-secondary mb-2">
+              Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.
+            </p>
+
+            {memoryError && (
+              <p className="text-xs text-error mb-2">{memoryError}</p>
+            )}
+
+            {memoryEntries.length === 0 ? (
+              <p className="text-xs text-secondary/60 italic">
+                No sub-agents enabled for this project.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {memoryEntries.map((entry) => (
+                  <SubAgentMemoryCard
+                    key={entry.agent_slug}
+                    projectId={pid}
+                    entry={entry}
+                    onSaved={fetchMemories}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Skills */}
         {!project.is_scratch && (

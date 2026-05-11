@@ -156,6 +156,25 @@ git branch -D test/full-integration
 
 `D:\repro-smoke\` and the seeded settings can stay around for re-testing.
 
+## Post-fix verification: Option 1 dispatch round-trip
+
+After this fix is applied, the manual smoke test should succeed end-to-end.
+
+Expected result:
+- Dispatch returns in ~5-10 seconds (not 60-72 seconds)
+- Response is a real claude response that references seeded PROJECT_STATE.md content
+- tasklist shows a new claude.exe pid that PERSISTS (no longer exits silently after 60s)
+
+If Tier 3 instrumentation is still loaded:
+- Expected trace pattern shows QUERY.ctrl_req POST (not EXC) followed by a successful initialize response
+- TRANSPORT.write should show multiple writes (initial control_request, then user prompt)
+- No 60s silence; sub-second between SDK calls
+
+If the smoke test still fails after this fix:
+- Capture the new Tier 3 trace
+- The classification has changed (W1 doesn't apply if the same trace pattern appears with --append-system-prompt active)
+- Halt and review; do NOT proceed with additional speculative fixes
+
 ## Known orphans
 
 - One claude.exe (PID varies, ~500 MB resident) may linger from earlier failed-dispatch attempts. Safe to `Stop-Process -Name claude -Force` if memory pressure matters.
