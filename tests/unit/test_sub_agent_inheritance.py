@@ -170,6 +170,37 @@ class TestRenderSubAgentPromptPaths:
         )
         assert "Available skills: (none)" in prompt
 
+    def test_render_sub_agent_prompt_contains_no_newlines(self, workspace):
+        """Regression guard against the Windows claude.exe argv-newline hang.
+
+        Any `\\n` in the string passed via ClaudeAgentOptions.system_prompt
+        (preset/append dict) is forwarded to claude.exe's
+        ``--append-system-prompt`` argv value, which on Windows v2.1.138 under
+        streaming SDK mode causes a 60s+ silent stdout hang. The renderer must
+        emit a single-line prompt so no newline ever reaches argv.
+        See docs/investigations/TRIGGER-orbital-prompt-content.md.
+        """
+        # Realistic inputs: peer with existing MEMORY.md (so the
+        # "Other sub-agents" block renders), skills present.
+        paths = ProjectPaths(workspace)
+        os.makedirs(paths.skills_dir, exist_ok=True)
+        with open(os.path.join(paths.skills_dir, "alpha.md"), "w") as f:
+            f.write("# alpha")
+        ensure_memory_md(workspace, "codex")  # peer w/ MEMORY.md
+
+        prompt = render_sub_agent_prompt(
+            workspace=workspace,
+            namespace=None,
+            agent_slug="claude-code",
+            enabled_sub_agents=["claude-code", "codex"],
+        )
+        assert "\n" not in prompt, (
+            f"render_sub_agent_prompt produced a newline-containing string "
+            f"(len={len(prompt)}, first newline at "
+            f"{prompt.find(chr(10))}); see "
+            f"docs/investigations/TRIGGER-orbital-prompt-content.md"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 4-5. MEMORY.md lifecycle
