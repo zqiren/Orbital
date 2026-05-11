@@ -214,7 +214,17 @@ class TestMemoryMdLifecycle:
 
 class TestSDKTransportSystemPrompt:
     @pytest.mark.asyncio
-    async def test_sdk_transport_passes_system_prompt(self):
+    async def test_sdk_transport_passes_system_prompt_as_preset_append_dict(self):
+        """system_prompt is forwarded as a preset/append dict, NOT a plain string.
+
+        Plain-string `system_prompt` maps to claude-agent-sdk's
+        ``--system-prompt <text>`` (REPLACE) which stalls claude.exe's
+        ``Query.initialize`` for the full 60s timeout on Windows
+        (Tier 3 trace W1 classification, ``TRACE-windows-dispatch-bug.md``).
+        The dict shape ``{type:preset, preset:claude_code, append:<text>}``
+        maps to ``--append-system-prompt <text>``, which preserves
+        claude-code's default system prompt and avoids the stall.
+        """
         from agent_os.agent.transports.sdk_transport import SDKTransport
 
         transport = SDKTransport(system_prompt="YOU ARE A SUB-AGENT")
@@ -227,10 +237,14 @@ class TestSDKTransportSystemPrompt:
             await transport.start("claude", [], "/workspace")
 
             opts_kwargs = MockOptions.call_args[1]
-            assert opts_kwargs.get("system_prompt") == "YOU ARE A SUB-AGENT"
+            sp = opts_kwargs.get("system_prompt")
+            assert isinstance(sp, dict), f"expected dict, got {type(sp).__name__}: {sp!r}"
+            assert sp.get("type") == "preset"
+            assert sp.get("preset") == "claude_code"
+            assert sp.get("append") == "YOU ARE A SUB-AGENT"
 
     @pytest.mark.asyncio
-    async def test_sdk_transport_omits_system_prompt_when_unset(self):
+    async def test_sdk_transport_omits_system_prompt_when_none(self):
         from agent_os.agent.transports.sdk_transport import SDKTransport
 
         transport = SDKTransport()  # no system_prompt
