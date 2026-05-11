@@ -98,7 +98,7 @@ class InjectAttachment(BaseModel):
     The path is workspace-relative (the upload endpoint stores files under
     ``uploads/`` by default). The route validates the path resolves inside
     the workspace and that the declared size matches the file on disk
-    before building the "[Attached file: ...]" prefix.
+    before building the ``<attached_files>...</attached_files>`` prefix.
     """
 
     path: str
@@ -620,7 +620,7 @@ async def inject_message(project_id: str, req: InjectRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Build the "[Attached file: ...]" prefix BEFORE the branch split so
+    # Build the ``<attached_files>...</attached_files>`` prefix BEFORE the branch split so
     # both the management-agent branch and the sub-agent branch see the
     # prefixed content. Validation runs against the project workspace; a
     # failure here must not write anything to the session JSONL.

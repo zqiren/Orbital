@@ -68,12 +68,10 @@ def validate_attachments(
 
 
 def format_prefix(attachments: "Sequence[InjectAttachment]") -> str:
-    """Build the "[Attached file: ...]" / "[Attached files: ...]" block.
+    """Build the ``<attached_files>...</attached_files>`` block.
 
     - Empty list → ``""``
-    - Single attachment → one-line bracketed entry
-    - Multiple attachments → bulleted block with the closing ``]`` on the
-      last line of the list
+    - Non-empty list → XML-tagged block with one bullet line per attachment
 
     Output for a non-empty list always ends with exactly ``\\n\\n`` so the
     user's content lands on its own paragraph below the prefix.
@@ -81,14 +79,8 @@ def format_prefix(attachments: "Sequence[InjectAttachment]") -> str:
     if not attachments:
         return ""
 
-    if len(attachments) == 1:
-        a = attachments[0]
-        return f"[Attached file: {a.path} ({a.mime}, {_human_size(a.size)})]\n\n"
-
-    lines = ["[Attached files:"]
-    for i, a in enumerate(attachments):
-        suffix = "]" if i == len(attachments) - 1 else ""
-        lines.append(
-            f"- {a.path} ({a.mime}, {_human_size(a.size)}){suffix}"
-        )
+    lines = ["<attached_files>"]
+    for a in attachments:
+        lines.append(f"- {a.path} ({a.mime}, {_human_size(a.size)})")
+    lines.append("</attached_files>")
     return "\n".join(lines) + "\n\n"

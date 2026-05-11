@@ -9,7 +9,7 @@ by the inject route to:
 
 1. validate_attachments(): confirm each declared path resolves inside the
    project workspace, exists, and matches the declared size.
-2. format_prefix(): build the "[Attached file: ...]" / "[Attached files: ..."
+2. format_prefix(): build the ``<attached_files>...</attached_files>``
    block prepended to the user's chat content.
 3. _human_size(): render a byte count using binary units (1024-based) since
    the upload cap is 10 * 1024 * 1024.
@@ -141,24 +141,27 @@ class TestValidateAttachments:
 
 
 class TestFormatPrefix:
-    def test_single_attachment_one_line(self):
+    def test_single_attachment_uses_wrapped_block(self):
         out = format_prefix([
-            InjectAttachment(path="uploads/foo.png", mime="image/png", size=2048),
+            InjectAttachment(path="uploads/foo.png", mime="image/png", size=1024),
         ])
-        assert out == "[Attached file: uploads/foo.png (image/png, 2.0 KB)]\n\n"
+        # Single and multi render identically — always wrapped block.
+        assert out.startswith("<attached_files>\n")
+        assert "\n- uploads/foo.png (image/png, 1.0 KB)\n" in out
+        assert out.endswith("</attached_files>\n\n")
 
     def test_two_attachments_bulleted(self):
         out = format_prefix([
             InjectAttachment(path="uploads/a.png", mime="image/png", size=1024),
             InjectAttachment(path="uploads/b.txt", mime="text/plain", size=512),
         ])
-        # Bulleted block: opens with "[Attached files:", each entry on its own
-        # line, closing "]" on the last entry's line, followed by exactly one
-        # blank line.
-        assert out.startswith("[Attached files:\n")
-        assert "- uploads/a.png (image/png, 1.0 KB)" in out
-        assert "- uploads/b.txt (text/plain, 512 B)]" in out
-        assert out.endswith("\n\n")
+        # Wrapped block: opens with "<attached_files>", each entry on its own
+        # line, closing "</attached_files>" on its own line, followed by
+        # exactly one blank line.
+        assert out.startswith("<attached_files>\n")
+        assert "\n- uploads/a.png (image/png, 1.0 KB)\n" in out
+        assert "\n- uploads/b.txt (text/plain, 512 B)\n" in out
+        assert out.endswith("</attached_files>\n\n")
 
     def test_three_attachments_bulleted(self):
         out = format_prefix([
@@ -166,12 +169,11 @@ class TestFormatPrefix:
             InjectAttachment(path="b.txt", mime="text/plain", size=200),
             InjectAttachment(path="c.txt", mime="text/plain", size=300),
         ])
-        assert out.startswith("[Attached files:\n")
-        assert "- a.txt (text/plain, 100 B)" in out
-        assert "- b.txt (text/plain, 200 B)" in out
-        # Last entry carries the closing "]"
-        assert "- c.txt (text/plain, 300 B)]" in out
-        assert out.endswith("\n\n")
+        assert out.startswith("<attached_files>\n")
+        assert "\n- a.txt (text/plain, 100 B)\n" in out
+        assert "\n- b.txt (text/plain, 200 B)\n" in out
+        assert "\n- c.txt (text/plain, 300 B)\n" in out
+        assert out.endswith("</attached_files>\n\n")
 
     def test_empty_list_returns_empty_string(self):
         assert format_prefix([]) == ""

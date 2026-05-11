@@ -7,8 +7,8 @@
 Behavior under test (Approach 1 — path-references only, no native multimodal):
 
 1. When `attachments` is present and validates, the route prepends a
-   "[Attached file: ...]" / "[Attached files: ...]" block to `content`
-   before either branch (management agent, sub-agent) sees it.
+   ``<attached_files>...</attached_files>`` block to `content` before either
+   branch (management agent, sub-agent) sees it.
 
 2. On the sub-agent branch, the user message persisted to session JSONL
    carries the prefixed `content` AND a top-level `attachments` field with
@@ -147,10 +147,9 @@ class TestManagementAgentBranch:
         call_args = mocks["agent_manager"].inject_message.await_args
         assert call_args.args[0] == "proj_test"
         forwarded_content = call_args.args[1]
-        assert forwarded_content.startswith(
-            "[Attached file: uploads/hello.txt (text/plain, "
-        ), forwarded_content
-        assert forwarded_content.endswith("]\n\nwhat is this?")
+        assert forwarded_content.startswith("<attached_files>\n"), forwarded_content
+        assert "- uploads/hello.txt (text/plain, " in forwarded_content
+        assert forwarded_content.endswith("</attached_files>\n\nwhat is this?")
 
     def test_three_attachments_use_bulleted_format(self, workspace):
         s1 = _write_upload(workspace, "uploads/a.txt", b"aaa")
@@ -173,11 +172,11 @@ class TestManagementAgentBranch:
         assert resp.status_code == 200, resp.text
 
         forwarded = mocks["agent_manager"].inject_message.await_args.args[1]
-        assert forwarded.startswith("[Attached files:\n")
+        assert forwarded.startswith("<attached_files>\n")
         assert "- uploads/a.txt" in forwarded
         assert "- uploads/b.txt" in forwarded
         assert "- uploads/c.txt" in forwarded
-        assert forwarded.endswith("]\n\nsummarise")
+        assert forwarded.endswith("</attached_files>\n\nsummarise")
 
     def test_empty_content_with_attachment_passes_just_prefix(self, workspace):
         size = _write_upload(workspace, "uploads/x.txt", b"x")
@@ -197,8 +196,9 @@ class TestManagementAgentBranch:
 
         forwarded = mocks["agent_manager"].inject_message.await_args.args[1]
         # Prefix only, no synthesized user text appended.
-        assert forwarded.startswith("[Attached file: uploads/x.txt")
-        assert forwarded.endswith("]\n\n")
+        assert forwarded.startswith("<attached_files>\n")
+        assert "- uploads/x.txt" in forwarded
+        assert forwarded.endswith("</attached_files>\n\n")
 
     def test_attachments_none_behaves_identical_to_today(self, workspace):
         app, mocks = _make_app(workspace, with_sub_agent=False)
@@ -256,10 +256,9 @@ class TestSubAgentBranch:
         user_msgs = [m for m in messages if m.get("role") == "user"]
         assert len(user_msgs) == 1
         msg = user_msgs[0]
-        assert msg["content"].startswith(
-            "[Attached file: uploads/hello.txt (text/plain, "
-        )
-        assert msg["content"].endswith("]\n\ncheck this")
+        assert msg["content"].startswith("<attached_files>\n")
+        assert "- uploads/hello.txt (text/plain, " in msg["content"]
+        assert msg["content"].endswith("</attached_files>\n\ncheck this")
         assert msg["target"] == "@worker"
         assert "attachments" in msg
         assert msg["attachments"] == [
@@ -271,7 +270,7 @@ class TestSubAgentBranch:
         send_call = mocks["sub_agent_manager"].send.await_args
         assert send_call.args[0] == "proj_test"
         assert send_call.args[1] == "@worker"
-        assert send_call.args[2].endswith("]\n\ncheck this")
+        assert send_call.args[2].endswith("</attached_files>\n\ncheck this")
         assert "uploads/hello.txt" in send_call.args[2]
 
     def test_no_attachments_omits_attachments_field(self, workspace):
