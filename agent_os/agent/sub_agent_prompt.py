@@ -179,7 +179,15 @@ def render_sub_agent_prompt(
     _ = namespace
     _ = orbital
 
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+
+    # Windows workaround: claude.exe v2.1.138 hangs when --append-system-prompt
+    # (or --system-prompt) receives an argv value containing \n. Flatten to a
+    # single-line string before passing to the SDK. See:
+    #   docs/investigations/TRIGGER-orbital-prompt-content.md
+    #   docs/investigations/BOUNDARY-claude-exe-hang.md
+    # Remove when claude-code addresses the Windows newline-in-argv bug.
+    return rendered.replace("\n", "; ")
 
 
 def ensure_memory_md(workspace: str, agent_slug: str) -> str:

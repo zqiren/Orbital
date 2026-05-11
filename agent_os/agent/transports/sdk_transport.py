@@ -84,7 +84,11 @@ class SDKTransport(AgentTransport):
             env=sdk_env,
         )
         if self._system_prompt is not None:
-            options_kwargs["system_prompt"] = self._system_prompt
+            options_kwargs["system_prompt"] = {
+                "type": "preset",
+                "preset": "claude_code",
+                "append": self._system_prompt,
+            }
         options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
