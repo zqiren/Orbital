@@ -26,6 +26,10 @@ from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.agent.project_paths import ProjectPaths
+from agent_os.api.routes._attachment_formatter import (
+    validate_attachments,
+    format_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +91,59 @@ class StartAgentRequest(BaseModel):
     initial_message: str | None = None
 
 
+_MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
+
+class InjectAttachment(BaseModel):
+    """A single attachment reference passed to /inject.
+
+    The path is workspace-relative (the upload endpoint stores files under
+    ``uploads/`` by default). The route validates the path resolves inside
+    the workspace and that the declared size matches the file on disk
+    before building the ``<attached_files>...</attached_files>`` prefix.
+    """
+
+    path: str
+    mime: str
+    size: int
+
+    @field_validator("path")
+    @classmethod
+    def reject_absolute_or_traversal(cls, v: str) -> str:
+        if not v or len(v) > 1024:
+            raise ValueError("path empty or too long")
+        if v.startswith("/") or v.startswith("\\"):
+            raise ValueError("path must be relative")
+        if "\x00" in v:
+            raise ValueError("path contains NUL")
+        # Normalise backslash separators before splitting so a Windows-style
+        # relative path like ``uploads\\foo.png`` is treated the same as
+        # ``uploads/foo.png`` for the purpose of '..' detection.
+        parts = v.replace("\\", "/").split("/")
+        if any(p == ".." for p in parts):
+            raise ValueError("path may not contain '..' segments")
+        return v
+
+    @field_validator("mime")
+    @classmethod
+    def validate_mime(cls, v: str) -> str:
+        if not _MIME_PATTERN.match(v):
+            raise ValueError("invalid mime type")
+        return v
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, v: int) -> int:
+        if v < 0 or v > 10 * 1024 * 1024:
+            raise ValueError("size out of range (0..10MB)")
+        return v
+
+
 class InjectRequest(BaseModel):
     content: str
     target: str | None = None
     nonce: str | None = None
+    attachments: list[InjectAttachment] | None = None
 
     @field_validator("content")
     @classmethod
@@ -101,6 +154,13 @@ class InjectRequest(BaseModel):
                 " encoding issue). Use Python with explicit UTF-8 encoding for"
                 " non-ASCII text, or send from the desktop app."
             )
+        return v
+
+    @field_validator("attachments")
+    @classmethod
+    def cap_attachment_count(cls, v):
+        if v is not None and len(v) > 10:
+            raise ValueError("too many attachments (max 10)")
         return v
 
 
@@ -565,6 +625,24 @@ async def inject_message(project_id: str, req: InjectRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Build the ``<attached_files>...</attached_files>`` prefix BEFORE the branch split so
+    # both the management-agent branch and the sub-agent branch see the
+    # prefixed content. Validation runs against the project workspace; a
+    # failure here must not write anything to the session JSONL.
+    if req.attachments:
+        workspace = project.get("workspace", "")
+        try:
+            validate_attachments(workspace, req.attachments)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid attachment: {e}")
+        effective_content = format_prefix(req.attachments) + req.content
+        attachment_dicts: list[dict] | None = [
+            a.model_dump() for a in req.attachments
+        ]
+    else:
+        effective_content = req.content
+        attachment_dicts = None
+
     if req.target and _sub_agent_manager is not None:
         # Route to sub-agent (Path B: direct @mention)
         workspace = project.get("workspace", "")
@@ -574,23 +652,25 @@ async def inject_message(project_id: str, req: InjectRequest):
         user_ts = datetime.now(timezone.utc).isoformat()
         user_msg: dict = {
             "role": "user",
-            "content": req.content,
+            "content": effective_content,
             "target": req.target,
             "timestamp": user_ts,
         }
         if req.nonce:
             user_msg["nonce"] = req.nonce
+        if attachment_dicts is not None:
+            user_msg["attachments"] = attachment_dicts
         session.append(user_msg)
 
         # Auto-start sub-agent if not running
         try:
-            result = await _sub_agent_manager.send(project_id, req.target, req.content)
+            result = await _sub_agent_manager.send(project_id, req.target, effective_content)
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
         if result.startswith("Error: agent") and "not running" in result:
             try:
                 await _sub_agent_manager.start(project_id, req.target)
-                result = await _sub_agent_manager.send(project_id, req.target, req.content)
+                result = await _sub_agent_manager.send(project_id, req.target, effective_content)
             except Exception:
                 raise HTTPException(status_code=404, detail=f"Failed to auto-start {req.target}")
 
@@ -611,15 +691,18 @@ async def inject_message(project_id: str, req: InjectRequest):
             await _lifecycle_observer.on_message_routed(
                 project_id, req.target,
                 initiator="user_mention",
-                message_preview=req.content[:100],
+                message_preview=effective_content[:100],
                 transcript_path=transcript_path,
             )
 
         return {"status": result}
     else:
-        # Route to management agent (auto-starts if no session)
+        # Route to management agent (auto-starts if no session).
+        # The prefix is part of effective_content; agent_manager.inject_message
+        # itself does not learn about attachments — see PR description for the
+        # deliberate v1 audit-field asymmetry.
         result = await _agent_manager.inject_message(
-            project_id, req.content, nonce=req.nonce,
+            project_id, effective_content, nonce=req.nonce,
         )
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,
