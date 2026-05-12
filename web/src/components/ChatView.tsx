@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Send, Square, Loader2, Plus } from 'lucide-react';
+import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
-import { transformChatHistory } from '../utils/chatTransform';
+import { transformChatHistory, truncateResult } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
@@ -35,6 +35,204 @@ function genId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
+type CapsuleChild = AgentRunItem['items'][number];
+
+function formatToolBreakdown(counts: Record<string, number>): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return '';
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
+}
+
+function formatDuration(startedAt: number, endedAt: number | null): string {
+  if (!endedAt || endedAt <= startedAt) return '<1s';
+  const ms = endedAt - startedAt;
+  if (ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
+
+function capsuleSummaryText(capsule: AgentRunItem): string {
+  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
+  const dur = formatDuration(capsule.started_at, capsule.ended_at);
+  const head = breakdown || (capsule.has_thinking ? 'thinking' : 'agent step');
+  let line = `${head} · ${dur}`;
+  if (capsule.status === 'error' || capsule.status === 'stopped') {
+    line += ' · stopped at error';
+  }
+  return line;
+}
+
+function getLiveRunningCapsule(
+  items: DisplayItem[],
+): { idx: number; capsule: AgentRunItem } | null {
+  if (items.length === 0) return null;
+  const last = items[items.length - 1];
+  if (last.type === 'agent_run' && last.status === 'running') {
+    return { idx: items.length - 1, capsule: last };
+  }
+  return null;
+}
+
+function appendToLiveCapsule(
+  prev: DisplayItem[],
+  child: CapsuleChild,
+  timestamp: string,
+): DisplayItem[] {
+  const ms = Date.parse(timestamp);
+  const live = getLiveRunningCapsule(prev);
+  if (!live) {
+    const id = `cap:live:${ms}:${Math.random().toString(36).slice(2, 8)}`;
+    const counts: Record<string, number> = {};
+    let hasThinking = false;
+    if (child.type === 'tool_call_row') counts[child.tool_name] = 1;
+    if (child.type === 'reasoning_block') hasThinking = true;
+    const fresh: AgentRunItem = {
+      type: 'agent_run',
+      capsule_id: id,
+      status: 'running',
+      items: [child],
+      tool_call_count_by_name: counts,
+      has_thinking: hasThinking,
+      started_at: ms,
+      ended_at: null,
+    };
+    return [...prev, fresh];
+  }
+  const counts = { ...live.capsule.tool_call_count_by_name };
+  let hasThinking = live.capsule.has_thinking;
+  if (child.type === 'tool_call_row') {
+    counts[child.tool_name] = (counts[child.tool_name] ?? 0) + 1;
+  }
+  if (child.type === 'reasoning_block') hasThinking = true;
+  const updated: AgentRunItem = {
+    ...live.capsule,
+    items: [...live.capsule.items, child],
+    tool_call_count_by_name: counts,
+    has_thinking: hasThinking,
+    ended_at: ms,
+  };
+  const next = [...prev];
+  next[live.idx] = updated;
+  return next;
+}
+
+function finalizeLiveCapsule(
+  prev: DisplayItem[],
+  status: 'completed' | 'error' | 'stopped',
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  if (!live) return prev;
+  if (live.capsule.items.length === 0) {
+    return prev.slice(0, live.idx);
+  }
+  const updated: AgentRunItem = { ...live.capsule, status };
+  const next = [...prev];
+  next[live.idx] = updated;
+  return next;
+}
+
+// Live tool_result events carry only the placeholder description
+// "Tool result received" and the originating tool_call_id (in the
+// tool_name field per activity_translator.py:189) — no real content is
+// on the wire. Mark the most recent pending tool_call_row inside the
+// live capsule as received with empty content; the JSONL reload will
+// surface the actual content on next mount via chatTransform pairing.
+type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
+
+function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const expandable = row.result_status !== 'pending';
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
+  return (
+    <div className="mb-1 text-[13px] text-secondary">
+      <button
+        type="button"
+        onClick={expandable ? () => setExpanded(e => !e) : undefined}
+        disabled={!expandable}
+        className={`flex items-center gap-2 w-full text-left ${expandable ? 'cursor-pointer hover:text-primary' : 'cursor-default'}`}
+      >
+        {expandable ? (
+          <Chevron size={12} className="shrink-0 opacity-70" />
+        ) : (
+          <span className="shrink-0 w-3" aria-hidden />
+        )}
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
+        <span className="font-mono text-primary">{row.tool_name}</span>
+        <span className="truncate">{row.target_description}</span>
+      </button>
+      {expanded && expandable && (() => {
+        const raw = row.result_content;
+        if (raw === null || raw === '') {
+          return (
+            <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-[12px] italic text-secondary/70">
+              no result content
+            </div>
+          );
+        }
+        const { text, footer } = truncateResult(raw);
+        return (
+          <div className="mt-1 ml-5">
+            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-[12px] text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+              {text}
+            </pre>
+            {footer && (
+              <div className="mt-1 px-3 text-[11px] text-secondary/60 italic">{footer}</div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function markLatestLiveCallResultReceived(
+  prev: DisplayItem[],
+  timestamp: string,
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  if (!live) return prev;
+  const items = live.capsule.items;
+  for (let k = items.length - 1; k >= 0; k--) {
+    const item = items[k];
+    if (item.type === 'tool_call_row' && item.result_status === 'pending') {
+      const updatedRow = { ...item, result_content: '', result_status: 'received' as const };
+      const newItems = [...items];
+      newItems[k] = updatedRow;
+      const updatedCapsule: AgentRunItem = {
+        ...live.capsule,
+        items: newItems,
+        ended_at: Date.parse(timestamp),
+      };
+      const next = [...prev];
+      next[live.idx] = updatedCapsule;
+      return next;
+    }
+  }
+  return prev;
+}
+
+// chatTransform emits status:'running' for each chunk's tail capsule —
+// fine when the chunk truly is the live tail, but on pagination earlier
+// chunks' tails end up mid-history and stay incorrectly running. Sweep
+// any non-trailing 'running' capsule down to 'completed'. The last item
+// is left alone so a genuinely live capsule keeps its running status.
+function reconcileTrailingRunning(items: DisplayItem[]): DisplayItem[] {
+  let changed = false;
+  const next: DisplayItem[] = items.map((it, idx) => {
+    if (it.type !== 'agent_run' || it.status !== 'running') return it;
+    if (idx === items.length - 1) return it;
+    changed = true;
+    return { ...it, status: 'completed' as const };
+  });
+  return changed ? next : items;
+}
+
 const CHAT_PAGE_SIZE = 50;
 const REST_FALLBACK_DELAY_MS = 500;
 const SLASH_COMMANDS = [
@@ -51,21 +249,30 @@ import type {
   UserMessageEvent,
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
+  WorkspaceClaudemdWarningEvent,
   WebSocketEvent,
   Project,
 } from '../types';
 import ChatMessage from './ChatMessage';
 import StreamingMessage from './StreamingMessage';
-import ActivityBlockComponent from './ActivityBlock';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
+import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 
 interface ChatViewProps {
   projectId: string;
   project: Project;
   agentStatus: AgentRunStatus;
   statusTick?: number;
+  /**
+   * Installed sub-agents available for @-mention. Lifted to App-level state
+   * so tab switches don't refetch /agents/available. Empty array while
+   * App is still resolving the initial fetch — the dropdown then shows no
+   * matches, which is fine: `@` was typed before sub-agents loaded, the
+   * keystrokes that follow re-evaluate against the populated list.
+   */
+  mentionAgents: Array<{ slug: string; name: string }>;
 }
 
 interface StreamState {
@@ -84,19 +291,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-interface RealtimeActivityBlock {
-  activities: Array<{
-    id: string;
-    category: string;
-    description: string;
-    toolName: string;
-    timestamp: string;
-  }>;
-  startTime: string;
-  endTime: string;
-}
-
-export default function ChatView({ projectId, project, agentStatus, statusTick }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents }: ChatViewProps) {
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -104,11 +299,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
-  const [realtimeBlock, setRealtimeBlock] = useState<RealtimeActivityBlock | null>(null);
+  const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
   const [inputText, setInputText] = useState('');
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
-  const [mentionAgents, setMentionAgents] = useState<Array<{slug: string; name: string}>>([]);
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
   const [showThinking, setShowThinking] = useState(false);
@@ -116,6 +310,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   const [commandFilter, setCommandFilter] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [injectError, setInjectError] = useState<string | null>(null);
+  // Workspace CLAUDE.md interference banner: latest unhandled warning
+  // for this project (cleared on dismiss).
+  const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [dragCounter, setDragCounter] = useState(0);
 
@@ -246,29 +443,24 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     async function loadData() {
       setLoading(true);
       try {
-        const [chatResult, agentsResult] = await Promise.allSettled([
-          apiWithTotal<ChatMessageType[]>(
-            `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
-          ),
-          api<Array<{slug: string; name: string; installed: boolean}>>('/api/v2/agents/available'),
-        ]);
+        const chatResult = await apiWithTotal<ChatMessageType[]>(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
+        ).catch((err) => {
+          console.error('[ChatView] Failed to load chat history:', err);
+          return null;
+        });
         if (cancelled) return;
 
-        if (chatResult.status === 'fulfilled') {
-          const { data: messages, total } = chatResult.value;
-          const transformed = transformChatHistory(messages, project.workspace);
+        if (chatResult) {
+          const { data: messages, total } = chatResult;
+          const transformed = reconcileTrailingRunning(
+            transformChatHistory(messages, project.workspace),
+          );
           setItems(transformed);
           setTotalMessages(total);
           setLoadedOffset(CHAT_PAGE_SIZE);
         } else {
-          console.error('[ChatView] Failed to load chat history:', chatResult.reason);
           setItems([]);
-        }
-
-        if (agentsResult.status === 'fulfilled') {
-          setMentionAgents(agentsResult.value.filter(a => a.slug !== 'built-in' && a.installed));
-        } else {
-          console.error('[ChatView] Failed to load agents:', agentsResult.reason);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -305,7 +497,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       // Stash prevHeight; the useLayoutEffect on `items` will compensate
       // synchronously after the prepended DOM has committed.
       pendingPrependPrevHeightRef.current = prevHeight;
-      setItems(prev => [...transformed, ...prev]);
+      setItems(prev => reconcileTrailingRunning([...transformed, ...prev]));
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
@@ -322,12 +514,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     }
   }, [loading, items.length, projectId, startAgent]);
 
-  // Fix 3A: Flush realtimeBlock on terminal status (idle, error, stopped)
-  // Fix 3C: Show "Thinking..." indicator when agent starts running
+  // Fix 3C: Show "Thinking..." indicator when agent starts running.
+  // Live machinery rows accumulate inside an open agent_run capsule; on
+  // terminal status the capsule is finalized so it collapses.
   useEffect(() => {
     if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
-      flushRealtimeBlock();
       setShowThinking(false);
+      const finalStatus =
+        agentStatus === 'idle' ? 'completed' :
+        agentStatus === 'error' ? 'error' : 'stopped';
+      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)
       if (wasRunningRef.current) {
@@ -353,7 +549,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       }]);
       setStream(null);
       setApprovals(new Map());
-      setRealtimeBlock(null);
       setShowThinking(false);
       setTotalMessages(0);
       setLoadedOffset(0);
@@ -445,21 +640,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       if (e.is_final) {
         setStream((prev) => {
           if (!prev) {
-            // Stream state is null — intermediate deltas were missed.
-            // Trigger REST fallback outside the updater (side-effect free).
-            // fetchLatestMessage is called below after setStream.
             return null;
           }
           const finalText = prev.text + e.text;
           if (finalText.trim()) {
             setItems((prevItems) => {
-              // Deduplicate: skip if last item has same content
-              const last = prevItems[prevItems.length - 1];
+              // Visible text closes any open live capsule first, then appends.
+              const afterCapsule = finalizeLiveCapsule(prevItems, 'completed');
+              const last = afterCapsule[afterCapsule.length - 1];
               if (last && last.type === 'agent_message' && 'content' in last && last.content === finalText) {
-                return prevItems;
+                return afterCapsule;
               }
               return [
-                ...prevItems,
+                ...afterCapsule,
                 {
                   type: 'agent_message',
                   content: finalText,
@@ -471,10 +664,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
           }
           return null;
         });
-        // Always trigger REST fallback on is_final — whether prev was null
-        // (missed all deltas) or non-null (verify streamed text is complete).
         fetchLatestMessage();
-        flushRealtimeBlock();
         scrollToBottom();
         return;
       }
@@ -491,30 +681,43 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
-      if (e.category === 'tool_result' || e.category === 'agent_output') return;
 
-      const activity = {
-        id: e.id,
-        category: e.category,
-        description: e.description,
-        toolName: e.tool_name,
-        timestamp: e.timestamp,
-      };
+      // agent_output activities duplicate sub-agent messages already
+      // delivered via chat.sub_agent_message — drop them.
+      if (e.category === 'agent_output') return;
 
-      setRealtimeBlock((prev) => {
-        if (!prev) {
-          return {
-            activities: [activity],
-            startTime: e.timestamp,
-            endTime: e.timestamp,
-          };
-        }
-        return {
-          ...prev,
-          activities: [...prev.activities, activity],
-          endTime: e.timestamp,
-        };
-      });
+      // tool_result activity: the broadcast carries tool_call_id in the
+      // tool_name field (per activity_translator.py:189) but no result
+      // content — only a "Tool result received" placeholder we never
+      // surface. Mark the most recent pending row in the capsule as
+      // received with empty content; the actual content arrives via
+      // JSONL on next mount through chatTransform pairing.
+      if (e.category === 'tool_result') {
+        setItems((prev) => markLatestLiveCallResultReceived(prev, e.timestamp));
+        scrollToBottom();
+        return;
+      }
+
+      // Tool-use family: route into the live capsule. The live
+      // ActivityEvent does not carry tool_call_id for tool_use; the
+      // event id is used as a synthetic key — pairing with tool_result
+      // on the live path is positional, not by id.
+      setItems((prev) =>
+        appendToLiveCapsule(
+          prev,
+          {
+            type: 'tool_call_row',
+            tool_name: e.tool_name,
+            target_description: e.description,
+            tool_call_id: e.id,
+            category: e.category,
+            timestamp: e.timestamp,
+            result_content: null,
+            result_status: 'pending',
+          },
+          e.timestamp,
+        ),
+      );
       scrollToBottom();
     }
 
@@ -602,14 +805,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
         return;
       }
 
-      setItems((prev) => [
-        ...prev,
-        {
-          type: 'user_message',
-          content: e.content,
-          timestamp: e.timestamp,
-        },
-      ]);
+      setItems((prev) => {
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          {
+            type: 'user_message',
+            content: e.content,
+            timestamp: e.timestamp,
+          },
+        ];
+      });
       scrollToBottom();
     }
 
@@ -685,6 +891,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       scrollToBottom();
     }
 
+    function handleClaudemdWarning(event: WebSocketEvent) {
+      const e = event as WorkspaceClaudemdWarningEvent;
+      if (e.project_id !== projectId) return;
+      setClaudemdWarning({
+        project_id: e.project_id,
+        claudemd_path: e.claudemd_path,
+        content_hash: e.content_hash,
+        matched_token: e.matched_token,
+      });
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -693,6 +910,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
+    on('workspace_claudemd_warning', handleClaudemdWarning);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -703,13 +921,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
+      off('workspace_claudemd_warning', handleClaudemdWarning);
     };
   }, [projectId, project.name, on, off, scrollToBottom]);
 
   // Fingerprint for the last item. DisplayItem has no stable id; use a
-  // composite of type + tool_call_id (for approval_card) or timestamp +
-  // a content prefix to disambiguate. session_separator has only
-  // timestamp; agent_notify has type+timestamp+title.
+  // composite of type + a discriminating field per variant.
   function lastItemKey(item: DisplayItem | undefined): string | null {
     if (!item) return null;
     if (item.type === 'approval_card') return `approval_card:${item.tool_call_id}`;
@@ -717,15 +934,24 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     if (item.type === 'agent_notify') {
       return `agent_notify:${item.timestamp}:${item.title}`;
     }
-    if (item.type === 'activity_block') {
-      return `activity_block:${item.startTime}:${item.endTime}:${item.activities.length}`;
-    }
     if (item.type === 'refresh_status') {
       return `refresh_status:${item.timestamp}:${item.status}`;
     }
+    if (item.type === 'tool_call_row') {
+      // Include result_status so transitions pending → received re-fingerprint.
+      return `tool_call_row:${item.tool_call_id}:${item.timestamp}:${item.result_status}`;
+    }
+    if (item.type === 'reasoning_block') {
+      return `reasoning_block:${item.turn_id}:${item.content.slice(0, 32)}`;
+    }
+    if (item.type === 'agent_run') {
+      // status + items.length lets the auto-scroll fire on each child append
+      // and again on status flip from running → completed.
+      return `agent_run:${item.capsule_id}:${item.status}:${item.items.length}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
-    const contentPrefix = item.content?.slice(0, 32) ?? '';
+    const contentPrefix = item.content.slice(0, 32);
     return `${item.type}:${item.timestamp}:${contentPrefix}`;
   }
 
@@ -754,37 +980,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
       scrollToBottom();
     }
   }, [items, scrollToBottom]);
-
-  function flushRealtimeBlock() {
-    setRealtimeBlock((prev) => {
-      if (prev && prev.activities.length > 0) {
-        const block: DisplayItem = {
-          type: 'activity_block' as const,
-          activities: prev.activities.map((a) => ({
-            ...a,
-            category: a.category as import('../types').ActivityCategory,
-          })),
-          startTime: prev.startTime,
-          endTime: prev.endTime,
-        };
-        setItems((prevItems) => {
-          // Insert before the last agent_message so the activity block
-          // appears between the two text messages, not after both.
-          let insertIdx = prevItems.length;
-          for (let i = prevItems.length - 1; i >= 0; i--) {
-            if (prevItems[i].type === 'agent_message') {
-              insertIdx = i;
-              break;
-            }
-          }
-          const updated = [...prevItems];
-          updated.splice(insertIdx, 0, block);
-          return updated;
-        });
-      }
-      return null;
-    });
-  }
 
   function adjustTextareaHeight() {
     const ta = textareaRef.current;
@@ -844,11 +1039,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
   async function executeNewSession() {
     setInputText('');
     // Echo the command so user sees it was received
-    setItems((prev) => [...prev, {
-      type: 'user_message' as const,
-      content: '/new',
-      timestamp: new Date().toISOString(),
-    }]);
+    setItems((prev) => {
+      const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+      return [...afterCapsule, {
+        type: 'user_message' as const,
+        content: '/new',
+        timestamp: new Date().toISOString(),
+      }];
+    });
     setShowCommandDropdown(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
@@ -1113,15 +1311,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
     }
     clearAttachments();
 
-    setItems((prev) => [
-      ...prev,
-      {
-        type: 'user_message',
-        content: wireContent,
-        timestamp: new Date().toISOString(),
-        ...(target && { target }),
-      },
-    ]);
+    setItems((prev) => {
+      const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+      return [
+        ...afterCapsule,
+        {
+          type: 'user_message',
+          content: wireContent,
+          timestamp: new Date().toISOString(),
+          ...(target && { target }),
+        },
+      ];
+    });
 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
@@ -1235,6 +1436,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
           <span className="text-lg font-medium">Drop files to attach</span>
         </div>
       )}
+      {claudemdWarning && (
+        <ClaudemdWarningBanner
+          projectId={projectId}
+          warning={claudemdWarning}
+          onDismiss={() => setClaudemdWarning(null)}
+        />
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 max-md:pb-20">
         {loading && (
           <div className="space-y-3">
@@ -1281,14 +1489,78 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
-            } else if (item.type === 'activity_block') {
+            } else if (item.type === 'agent_run') {
+              const isExpanded = item.status === 'running' || expandedCapsules.has(item.capsule_id);
+              const isLocked = item.status === 'running';
+              const summary = capsuleSummaryText(item);
+              const Chevron = isExpanded ? ChevronDown : ChevronRight;
               rendered = (
-                <ActivityBlockComponent
-                  key={`act-${index}`}
-                  activities={item.activities}
-                  startTime={item.startTime}
-                  endTime={item.endTime}
-                />
+                <div
+                  key={`run-${item.capsule_id}`}
+                  data-testid="agent_run"
+                  data-capsule-id={item.capsule_id}
+                  data-capsule-status={item.status}
+                  className="mb-3 rounded-md border border-border bg-sidebar/40 px-3 py-2"
+                >
+                  <button
+                    type="button"
+                    onClick={
+                      isLocked
+                        ? undefined
+                        : () => {
+                            setExpandedCapsules((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.capsule_id)) next.delete(item.capsule_id);
+                              else next.add(item.capsule_id);
+                              return next;
+                            });
+                          }
+                    }
+                    disabled={isLocked}
+                    className={`flex items-center gap-2 w-full text-left text-[13px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+                  >
+                    <Chevron size={14} className="shrink-0" />
+                    {item.status === 'running' && (
+                      <Loader2 size={12} className="shrink-0 animate-spin" />
+                    )}
+                    <span className="truncate">{summary}</span>
+                  </button>
+                  {isExpanded && item.items.length > 0 && (
+                    <div className="mt-2 pl-2 border-t border-border/30 pt-2">
+                      {item.items.map((child, ci) => {
+                        if (child.type === 'reasoning_block') {
+                          return (
+                            <div
+                              key={`rc-r-${ci}`}
+                              className="mb-2 pl-3 border-l-2 border-accent/40 italic text-secondary text-[13px] leading-relaxed whitespace-pre-wrap"
+                            >
+                              {child.content}
+                            </div>
+                          );
+                        }
+                        if (child.type === 'tool_call_row') {
+                          return (
+                            <ToolCallRow
+                              key={`rc-t-${ci}-${child.tool_call_id}`}
+                              row={child}
+                            />
+                          );
+                        }
+                        if (child.type === 'agent_message') {
+                          // Empty-content marker delimits silent tool batches.
+                          return (
+                            <div
+                              key={`rc-m-${ci}`}
+                              className="my-2 border-t border-border/40"
+                              aria-hidden
+                            />
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
+                  )}
+                </div>
               );
             } else if (item.type === 'agent_notify') {
               const urgencyColor = item.urgency === 'high' ? 'border-error/40 bg-error/5' : 'border-accent/30 bg-accent/5';
@@ -1362,17 +1634,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick }
               rendered
             );
           })}
-
-        {!loading && realtimeBlock && realtimeBlock.activities.length > 0 && (
-          <ActivityBlockComponent
-            activities={realtimeBlock.activities.map((a) => ({
-              ...a,
-              category: a.category as import('../types').ActivityCategory,
-            }))}
-            startTime={realtimeBlock.startTime}
-            endTime={realtimeBlock.endTime}
-          />
-        )}
 
         {!loading &&
           Array.from(approvals.values())

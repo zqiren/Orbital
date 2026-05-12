@@ -40,7 +40,7 @@ class SDKTransport(AgentTransport):
     AgentOS's approval system.
     """
 
-    def __init__(self, autonomy: "Autonomy | None" = None):
+    def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
@@ -65,6 +65,9 @@ class SDKTransport(AgentTransport):
         # task so the event loop cannot GC it mid-stream. Also used by
         # stop() to cancel in-flight iteration before disconnect().
         self._bg_task: asyncio.Task | None = None
+        # Optional system prompt. Forwarded to ClaudeAgentOptions(system_prompt=...)
+        # at start() time. Used by sub-agent inheritance flow.
+        self._system_prompt: str | None = system_prompt
 
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
@@ -73,13 +76,20 @@ class SDKTransport(AgentTransport):
         sdk_env = dict(env) if env else {}
         sdk_env.pop("CLAUDECODE", None)
         sdk_env["CLAUDECODE"] = ""  # Override os.environ value in subprocess
-        options = ClaudeAgentOptions(
+        options_kwargs: dict = dict(
             cwd=workspace,
             permission_mode="default",
             can_use_tool=self._handle_permission,
             cli_path=command or None,
             env=sdk_env,
         )
+        if self._system_prompt is not None:
+            options_kwargs["system_prompt"] = {
+                "type": "preset",
+                "preset": "claude_code",
+                "append": self._system_prompt,
+            }
+        options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
         self._alive = True

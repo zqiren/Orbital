@@ -16,7 +16,29 @@ export type DisplayItem =
   | { type: 'user_message'; content: string; timestamp: string; target?: string; isHistorical?: boolean }
   | { type: 'agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
-  | { type: 'activity_block'; activities: Activity[]; startTime: string; endTime: string; isHistorical?: boolean }
+  | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
+  | {
+      type: 'tool_call_row';
+      tool_name: string;
+      target_description: string;
+      tool_call_id: string;
+      category: ActivityCategory;
+      timestamp: string;
+      result_content: string | null;
+      result_status: 'pending' | 'received' | 'error';
+      isHistorical?: boolean;
+    }
+  | {
+      type: 'agent_run';
+      capsule_id: string;
+      status: 'running' | 'completed' | 'error' | 'stopped';
+      items: DisplayItem[];
+      tool_call_count_by_name: Record<string, number>;
+      has_thinking: boolean;
+      started_at: number;
+      ended_at: number | null;
+      isHistorical?: boolean;
+    }
   | { type: 'session_separator'; timestamp: string }
   | {
       type: 'approval_card';
@@ -172,10 +194,63 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
   };
 }
 
+// Reasoning, tool_call_row, and empty-content agent_message markers
+// may appear inside an agent_run.items array. Tool result content is
+// carried on tool_call_row.result_content, paired by tool_call_id.
+type CapsuleChild =
+  | Extract<DisplayItem, { type: 'reasoning_block' }>
+  | Extract<DisplayItem, { type: 'tool_call_row' }>
+  | Extract<DisplayItem, { type: 'agent_message' }>;
+
+interface OpenCapsule {
+  items: CapsuleChild[];
+  startedAtMs: number;
+  endedAtMs: number;
+}
+
 export function transformChatHistory(messages: ChatMessage[], workspace?: string): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
   let currentSessionId: string | undefined;
+  let capsuleCounter = 0;
+  let currentCapsule: OpenCapsule | null = null;
+
+  function tsToMs(ts: string): number {
+    const n = Date.parse(ts);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function openCapsuleAt(ts: string): OpenCapsule {
+    const ms = tsToMs(ts);
+    return { items: [], startedAtMs: ms, endedAtMs: ms };
+  }
+
+  function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
+    if (!currentCapsule || currentCapsule.items.length === 0) {
+      currentCapsule = null;
+      return;
+    }
+    const counts: Record<string, number> = {};
+    let hasThinking = false;
+    for (const it of currentCapsule.items) {
+      if (it.type === 'tool_call_row') {
+        counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
+      } else if (it.type === 'reasoning_block') {
+        hasThinking = true;
+      }
+    }
+    items.push({
+      type: 'agent_run',
+      capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
+      status,
+      items: currentCapsule.items,
+      tool_call_count_by_name: counts,
+      has_thinking: hasThinking,
+      started_at: currentCapsule.startedAtMs,
+      ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+    });
+    currentCapsule = null;
+  }
 
   while (i < messages.length) {
     const msg = messages[i];
@@ -187,6 +262,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
 
     if (msg.role === 'system') {
       if (msg._meta?.approval_request) {
+        finalizeCapsule();
         items.push({
           type: 'approval_card',
           what: msg.content ?? '',
@@ -202,8 +278,9 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
       continue;
     }
 
-    // Detect session boundary changes
+    // Detect session boundary changes — close any open capsule first.
     if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+      finalizeCapsule();
       items.push({ type: 'session_separator', timestamp: msg.timestamp });
     }
     if (msg.session_id) {
@@ -211,6 +288,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'user') {
+      finalizeCapsule();
       items.push({
         type: 'user_message',
         content: msg.content ?? '',
@@ -222,6 +300,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'agent') {
+      finalizeCapsule();
       if (msg.chunk_type === 'approval_request') {
         items.push({
           type: 'approval_card',
@@ -234,7 +313,6 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
         i++;
         continue;
       }
-      // Strip ANSI escape codes and filter empty / "(no response)" content
       const cleaned = (msg.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
       if (cleaned && cleaned !== '(no response)') {
         items.push({
@@ -249,80 +327,103 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     }
 
     if (msg.role === 'assistant') {
-      if (msg.content && (!msg.tool_calls || msg.tool_calls.length === 0)) {
-        if (msg.source !== 'management' && msg.source !== 'user') {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        } else {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        }
-        i++;
-        continue;
-      }
+      const text = msg.content && msg.content.trim() ? msg.content : null;
+      const reasoning = (msg.reasoning_content ?? '').trim();
+      const hasTools = !!(msg.tool_calls && msg.tool_calls.length > 0);
+      const msTime = tsToMs(msg.timestamp);
 
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        const activities: Activity[] = [];
-        const startTime = msg.timestamp;
-
-        for (const tc of msg.tool_calls) {
-          activities.push(toolCallToActivity(tc, msg.timestamp, msg, workspace));
-        }
-
-        let endTime = msg.timestamp;
-        let j = i + 1;
-        while (j < messages.length && messages[j].role === 'tool') {
-          endTime = messages[j].timestamp;
-          j++;
-        }
-
-        if (msg.content) {
-          items.push({
-            type: 'agent_message',
-            content: msg.content,
-            source: msg.source,
-            timestamp: msg.timestamp,
-          });
-        }
-
-        items.push({
-          type: 'activity_block',
-          activities,
-          startTime,
-          endTime,
-        });
-
-        i = j;
-        continue;
-      }
-
-      if (msg.content) {
+      if (text) {
+        // Visible text closes any open capsule, then emits inline.
+        finalizeCapsule();
         items.push({
           type: 'agent_message',
-          content: msg.content,
+          content: text,
           source: msg.source,
           timestamp: msg.timestamp,
         });
+      } else if (reasoning || hasTools) {
+        // Silent assistant turn. If we're already inside a capsule with
+        // prior items, insert an empty agent_message marker so the UI
+        // can delimit between silent tool batches.
+        if (currentCapsule && currentCapsule.items.length > 0) {
+          currentCapsule.items.push({
+            type: 'agent_message',
+            content: '',
+            source: msg.source,
+            timestamp: msg.timestamp,
+          });
+          currentCapsule.endedAtMs = msTime;
+        }
       }
+
+      // Machinery (reasoning + tool_calls) flows into the capsule that
+      // follows the just-emitted visible text, or extends the current one.
+      if (reasoning || hasTools) {
+        if (!currentCapsule) {
+          currentCapsule = openCapsuleAt(msg.timestamp);
+        }
+        if (reasoning) {
+          currentCapsule.items.push({
+            type: 'reasoning_block',
+            content: reasoning,
+            timestamp: msg.timestamp,
+            turn_id: msg.timestamp,
+          });
+          currentCapsule.endedAtMs = msTime;
+        }
+        if (hasTools) {
+          for (const tc of msg.tool_calls!) {
+            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
+            currentCapsule.items.push({
+              type: 'tool_call_row',
+              tool_name: activity.toolName,
+              target_description: activity.description,
+              tool_call_id: tc.id,
+              category: activity.category,
+              timestamp: msg.timestamp,
+              result_content: null,
+              result_status: 'pending',
+            });
+            currentCapsule.endedAtMs = msTime;
+          }
+        }
+      }
+
       i++;
       continue;
     }
 
     if (msg.role === 'tool') {
+      if (currentCapsule) {
+        const tcId = msg.tool_call_id ?? '';
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        // Pair by tool_call_id with the matching tool_call_row inside the
+        // currently open capsule. Search from the back since out-of-order
+        // arrival pairs more recent calls more cheaply.
+        for (let k = currentCapsule.items.length - 1; k >= 0; k--) {
+          const item = currentCapsule.items[k];
+          if (item.type === 'tool_call_row' && item.tool_call_id === tcId) {
+            currentCapsule.items[k] = {
+              ...item,
+              result_content: content,
+              result_status: 'received',
+            };
+            break;
+          }
+        }
+        currentCapsule.endedAtMs = tsToMs(msg.timestamp);
+      }
+      // Orphan tool results (no open capsule, or no matching call) are
+      // dropped — the LLM never associated them with a visible call.
       i++;
       continue;
     }
 
     i++;
   }
+
+  // End of stream: any still-open capsule is in-flight.
+  finalizeCapsule('running');
 
   // Mark items from historical sessions
   let lastSepIndex = -1;
@@ -342,4 +443,45 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
   }
 
   return items;
+}
+
+const RESULT_CHAR_BOUND = 500;
+const RESULT_LINE_BOUND = 12;
+
+/**
+ * Mechanical truncation for tool result content displayed in the UI.
+ * Returns the content unchanged when it fits both bounds; otherwise cuts
+ * at whichever bound triggers first and adds a footer noting the totals.
+ */
+export function truncateResult(
+  content: string,
+): { text: string; footer: string | null } {
+  const totalChars = content.length;
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+
+  if (totalChars <= RESULT_CHAR_BOUND && totalLines <= RESULT_LINE_BOUND) {
+    return { text: content, footer: null };
+  }
+
+  // Char count of the first N lines (joined with their newlines). If this
+  // is < RESULT_CHAR_BOUND, the line bound triggers earlier in the stream.
+  const firstNLinesText = lines.slice(0, RESULT_LINE_BOUND).join('\n');
+  const firstNLinesLen = firstNLinesText.length;
+
+  const charBoundFires = totalChars > RESULT_CHAR_BOUND;
+  const lineBoundFires = totalLines > RESULT_LINE_BOUND;
+
+  // When both fire, pick whichever produces the shorter (earlier) cut.
+  // When only one fires, that one wins outright.
+  if (charBoundFires && (!lineBoundFires || RESULT_CHAR_BOUND <= firstNLinesLen)) {
+    return {
+      text: content.slice(0, RESULT_CHAR_BOUND) + '…',
+      footer: `first ${RESULT_CHAR_BOUND} chars · result is ${totalChars} chars total`,
+    };
+  }
+  return {
+    text: firstNLinesText + '…',
+    footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
+  };
 }

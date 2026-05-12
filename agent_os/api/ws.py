@@ -105,3 +105,36 @@ class WebSocketManager:
                     disconnected.append(ws)
         for ws in disconnected:
             self.disconnect(ws)
+
+    def broadcast_global(self, payload: dict) -> None:
+        """Send payload to ALL connected clients regardless of subscription.
+
+        Used for daemon-level events that aren't tied to a single project
+        (e.g. sub-agent login progress). Same sync/async semantics as
+        ``broadcast()``.
+        """
+        # Use a sentinel project_id understood by the drain loop's filter
+        # below: subscription set membership treats this id as if every
+        # client subscribed. Easiest implementation: skip the queue and
+        # send to every client directly.
+        disconnected = []
+        for ws in list(self._clients):
+            try:
+                # Async path will land in the drain queue if we put a
+                # broadcast there with a wildcard, but to keep the
+                # implementation simple we pump directly.
+                send_fn = getattr(ws, "send_json", None)
+                if send_fn is None:
+                    continue
+                result = send_fn(payload)
+                # If the send_json is awaitable (real WebSocket), schedule it.
+                if asyncio.iscoroutine(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(result)
+                    except RuntimeError:
+                        pass
+            except Exception:
+                disconnected.append(ws)
+        for ws in disconnected:
+            self.disconnect(ws)
