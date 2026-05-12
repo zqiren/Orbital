@@ -55,7 +55,13 @@ export function useAgent() {
   }, []);
 
   const injectMessage = useCallback(
-    async (projectId: string, content: string, target?: string, nonce?: string) => {
+    async (
+      projectId: string,
+      content: string,
+      target?: string,
+      nonce?: string,
+      attachments?: Array<{ path: string; mime: string; size: number }>,
+    ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
         {
@@ -64,6 +70,7 @@ export function useAgent() {
             content,
             ...(target !== undefined && { target }),
             ...(nonce !== undefined && { nonce }),
+            ...(attachments && attachments.length > 0 && { attachments }),
           }),
         },
       );
