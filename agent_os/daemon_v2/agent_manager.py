@@ -1425,9 +1425,15 @@ class AgentManager:
         if hasattr(cm, '_last_usage_pct'):
             cm._last_usage_pct = 0.0
 
-        # 8. Swap session in handle
+        # 8. Swap session in handle (and on the loop instance — loop._session
+        # is set in __init__ and never updated; if we leave it stale, the
+        # loop's own session.append calls in subsequent runs go to the OLD
+        # JSONL while cm.prepare reads from the NEW one. Sync to avoid that
+        # divergence.)
         handle.session = new_session
         handle.task = None
+        if hasattr(handle.loop, "_session"):
+            handle.loop._session = new_session
 
         # 10. Broadcast new_session event, then idle so frontend status
         #     doesn't stay stuck (enables repeat /new invocations).
@@ -1485,13 +1491,15 @@ class AgentManager:
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
-        # Stop the queue dispatcher first so it doesn't try to drain mid-stop.
+        # Shut down the queue dispatcher first so it doesn't try to drain
+        # mid-stop. shutdown() is the full-teardown variant — distinct from
+        # the Phase 4 stop() which only pauses draining.
         dispatcher = self._dispatchers.pop(project_id, None)
         if dispatcher is not None:
             try:
-                await dispatcher.stop()
+                await dispatcher.shutdown()
             except Exception:
-                logger.warning("dispatcher stop failed for %s", project_id, exc_info=True)
+                logger.warning("dispatcher shutdown failed for %s", project_id, exc_info=True)
 
         # Cancel idle poll task if running
         poll_task = self._idle_poll_tasks.pop(project_id, None)
@@ -1584,6 +1592,85 @@ class AgentManager:
         """Return the AgentLoop object so the dispatcher can read exit_reason."""
         handle = self._handles.get(project_id)
         return handle.loop if handle else None
+
+    def get_sub_agent_manager(self):
+        return self._sub_agent_manager
+
+    async def switch_session(
+        self,
+        project_id: str,
+        session_id: str,
+        *,
+        start_loop: bool = False,
+    ):
+        """Swap the active session for a project to the given session_id.
+
+        Used by the queue dispatcher for stop (switch to chat) and resume
+        (switch back to a parked attempt). Unlike new_session(), this does
+        NOT run the pre-flush routine, stop sub-agents, or mint a new id —
+        the caller owns those decisions.
+
+        If the JSONL for session_id exists, it is loaded; otherwise a fresh
+        session with that id is created. Loop, ContextManager and handle
+        references are all kept consistent.
+        """
+        handle = self._handles.get(project_id)
+        if handle is None:
+            return None
+
+        # Stop the loop if running, but skip pre-flush. The caller decides
+        # whether to preserve the session (stop) or rotate (new_session).
+        if handle.task is not None and not handle.task.done():
+            await handle.loop.terminate()
+            try:
+                await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning(
+                    "switch_session(%s): loop did not stop gracefully",
+                    project_id,
+                )
+
+        workspace = handle.config_snapshot.get("workspace", "")
+        paths = ProjectPaths(workspace)
+        session_path = paths.session_file(session_id)
+
+        snap = handle.config_snapshot
+        if os.path.exists(session_path):
+            new_session = Session.load(session_path)
+            new_session.session_id = session_id
+        else:
+            new_session = Session.new(
+                session_id, workspace,
+                provider=snap.get("provider", "unknown"),
+                model=snap.get("model", "unknown"),
+                sdk=snap.get("sdk", "unknown"),
+                fallback_models=snap.get("fallback_models", []),
+            )
+
+        new_session.on_append = self._on_message(project_id)
+        new_session.on_stream = self._on_stream(project_id)
+
+        cm = handle.context_manager
+        if hasattr(cm, "_session"):
+            cm._session = new_session
+        if hasattr(cm, "_cold_resume_injected"):
+            cm._cold_resume_injected = False
+        if hasattr(cm, "_recovery_injected"):
+            cm._recovery_injected = False
+        if hasattr(cm, "_window_factor"):
+            cm._window_factor = 1.0
+        if hasattr(cm, "_last_usage_pct"):
+            cm._last_usage_pct = 0.0
+
+        handle.session = new_session
+        handle.task = None
+        if hasattr(handle.loop, "_session"):
+            handle.loop._session = new_session
+
+        if start_loop:
+            await self._start_loop(project_id)
+
+        return new_session
 
     async def _ensure_dispatcher(self, project_id: str, workspace: str) -> None:
         """Create + start the dispatcher for this project if not already running."""

@@ -128,7 +128,7 @@ async def test_three_item_pipeline_complete_blocked_text(tmp_path):
 
     if not ok:
         state = store.load()
-        await dispatcher.stop()
+        await dispatcher.shutdown()
         pytest.fail(
             "Items did not reach expected states. Final: "
             + ", ".join(f"{it.id}={it.state.value}" for it in state.items)
@@ -157,7 +157,7 @@ async def test_three_item_pipeline_complete_blocked_text(tmp_path):
     # Session rotation happened twice (after items 1 and 2; item 3 stalled)
     assert mgr.new_session_calls == 2
 
-    await dispatcher.stop()
+    await dispatcher.shutdown()
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_each_attempt_records_its_own_session_id(tmp_path):
     sid_b = state.items[1].attempts[0].session_id
     assert sid_a != sid_b, "Each attempt should record a distinct session id"
 
-    await dispatcher.stop()
+    await dispatcher.shutdown()
 
 
 @pytest.mark.asyncio
@@ -219,4 +219,4 @@ async def test_text_only_exit_does_not_rotate_session(tmp_path):
     assert mgr.new_session_calls == 0
     assert store.load().items[0].state == ItemState.RUNNING
 
-    await dispatcher.stop()
+    await dispatcher.shutdown()

@@ -795,6 +795,34 @@ async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
     return {"status": "reordered"}
 
 
+@router.post("/projects/{project_id}/queue/stop")
+async def stop_queue(project_id: str) -> dict:
+    """Pause queue draining and switch the active session to chat mode."""
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    return await dispatcher.stop()
+
+
+@router.post("/projects/{project_id}/queue/resume")
+async def resume_queue(project_id: str) -> dict:
+    """Resume queue draining. If an attempt was parked, hot-resume it."""
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    return await dispatcher.resume()
+
+
 @router.post("/agents/{project_id}/approve")
 async def approve(project_id: str, req: ApproveRequest):
     try:

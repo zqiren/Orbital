@@ -67,7 +67,7 @@ async def dispatcher(store):
         agent_manager=mgr,
     )
     yield d, mgr, store
-    await d.stop()
+    await d.shutdown()
 
 
 @pytest.mark.asyncio
@@ -173,4 +173,4 @@ async def test_dispatcher_idles_when_queue_stopped(store):
     state = store.load()
     assert state.items[0].state == ItemState.QUEUED
     mgr.inject_message.assert_not_called()
-    await d.stop()
+    await d.shutdown()
