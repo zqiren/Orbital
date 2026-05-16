@@ -89,6 +89,64 @@ class QueueDispatcher:
         self._task = asyncio.create_task(self._run())
         logger.info("dispatcher(%s): started", self._project_id)
 
+    def reclaim_on_startup(self) -> dict:
+        """Reconcile queue state with on-disk records at daemon startup.
+
+        Contract per D6:
+        - If queue state is STOPPED: leave everything as is. The user
+          previously stopped the queue; the same chat-mode applies after
+          restart. The dispatcher will idle until /queue/resume.
+        - If queue state is DRAINING and items are in RUNNING state: those
+          attempts were interrupted by daemon death. Close each open
+          attempt with outcome=INTERRUPTED, increment interrupted_count.
+          interrupted_count >= 2 → mark BLOCKED (poison pill protection).
+          Otherwise → requeue at head with priority=1.
+
+        Called by AgentManager during agent (re)start, before start().
+        Returns a summary dict for logging.
+        """
+        state = self._store.load()
+        summary: dict = {
+            "queue_state": state.state.value,
+            "reclaimed_items": [],
+            "blocked_items": [],
+        }
+        if state.state == QueueRunState.STOPPED:
+            logger.info(
+                "dispatcher(%s): startup with STOPPED queue; no reclaim",
+                self._project_id,
+            )
+            return summary
+
+        # DRAINING: walk items in RUNNING state.
+        for item in list(state.items):
+            if item.state != ItemState.RUNNING:
+                continue
+            # Close any open attempt
+            if item.attempts and item.attempts[-1].outcome is None:
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.INTERRUPTED,
+                    block_reason="interrupted by daemon restart",
+                )
+            new_count = self._store.increment_interrupted(item.id)
+            if new_count >= 2:
+                self._store.set_item_state(item.id, ItemState.BLOCKED)
+                summary["blocked_items"].append(item.id)
+                logger.warning(
+                    "dispatcher(%s): item %s blocked after %d interruptions",
+                    self._project_id, item.id, new_count,
+                )
+            else:
+                self._store.set_item_state(item.id, ItemState.QUEUED)
+                self._store.move_to_head(item.id)
+                summary["reclaimed_items"].append(item.id)
+                logger.info(
+                    "dispatcher(%s): item %s requeued at head (interruptions=%d)",
+                    self._project_id, item.id, new_count,
+                )
+        return summary
+
     async def shutdown(self) -> None:
         """Full teardown — used by AgentManager.stop_agent. NOT the same as
         Phase 4 stop(): this kills the dispatcher task entirely."""

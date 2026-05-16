@@ -1691,6 +1691,20 @@ class AgentManager:
             ws_manager=self._ws,
             max_runtime_seconds=max_runtime,
         )
+        # D6: reclaim before starting the dispatch task. Doing it pre-start
+        # ensures the first tick of _run sees a coherent queue.
+        try:
+            reclaim_summary = dispatcher.reclaim_on_startup()
+            if reclaim_summary.get("reclaimed_items") or reclaim_summary.get("blocked_items"):
+                logger.info(
+                    "dispatcher(%s): startup reclaim: %s",
+                    project_id, reclaim_summary,
+                )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): reclaim_on_startup raised; continuing",
+                project_id,
+            )
         self._dispatchers[project_id] = dispatcher
         await dispatcher.start()
 
