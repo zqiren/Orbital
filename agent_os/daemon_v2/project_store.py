@@ -27,6 +27,13 @@ DEFAULT_PROJECT_FIELDS: dict = {
     "default_skills_reconciled": False,
 }
 
+# Queue runtime cap defaults. Applied lazily when reading
+# get_max_runtime_seconds so legacy projects use the default without a
+# migration.
+DEFAULT_MAX_RUNTIME_SECONDS = 1800  # 30 min
+MIN_MAX_RUNTIME_SECONDS = 60
+MAX_MAX_RUNTIME_SECONDS = 86400  # 24h
+
 
 class ProjectStore:
     """CRUD for projects using JSON files on disk."""
@@ -138,3 +145,11 @@ class ProjectStore:
             raise ValueError("cannot delete scratch project")
         self._projects.pop(project_id, None)
         self._save()
+
+    def get_max_runtime_seconds(self, project_id: str) -> int:
+        """Return the per-attempt runtime cap. Falls back to default."""
+        project = self._projects.get(project_id) or {}
+        value = project.get("max_runtime_seconds")
+        if not isinstance(value, int):
+            return DEFAULT_MAX_RUNTIME_SECONDS
+        return max(MIN_MAX_RUNTIME_SECONDS, min(MAX_MAX_RUNTIME_SECONDS, value))
