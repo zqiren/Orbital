@@ -835,6 +835,127 @@ async def new_session(project_id: str):
     return result
 
 
+# ---- Queue routes (Phase 1) ----
+
+class QueueAddItemRequest(BaseModel):
+    content: str
+    file_refs: list[str] | None = None
+    priority: int | None = 0
+    review_before_advance: bool | None = False
+    source: str | None = "user"
+    idempotency_key: str | None = None
+
+
+class QueueEditItemRequest(BaseModel):
+    content: str | None = None
+    file_refs: list[str] | None = None
+    priority: int | None = None
+    review_before_advance: bool | None = None
+
+
+class QueueReorderRequest(BaseModel):
+    item_ids: list[str]
+
+
+def _resolve_queue_store(project_id: str):
+    """Return a QueueStore for the project even if no agent is running.
+
+    Falls through to project_store for the workspace lookup so that GET on
+    the queue endpoint works before an agent is ever started.
+    """
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    project = _project_store.get_project(project_id) if _project_store else None
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    workspace = project.get("workspace") or ""
+    if not workspace:
+        raise HTTPException(status_code=400, detail="Project has no workspace")
+    return _agent_manager.get_queue_store(project_id, workspace=workspace)
+
+
+@router.get("/projects/{project_id}/queue")
+async def get_queue(project_id: str) -> dict:
+    store = _resolve_queue_store(project_id)
+    return store.snapshot()
+
+
+@router.post("/projects/{project_id}/queue/items")
+async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
+    if not req.content or not req.content.strip():
+        raise HTTPException(status_code=400, detail="content must be non-empty")
+    store = _resolve_queue_store(project_id)
+    item = store.add_item(
+        content=req.content,
+        file_refs=req.file_refs or [],
+        priority=int(req.priority or 0),
+        review_before_advance=bool(req.review_before_advance),
+        source=(req.source or "user"),
+        idempotency_key=req.idempotency_key,
+    )
+    dispatcher = _agent_manager.get_dispatcher(project_id) if _agent_manager else None
+    if dispatcher is not None:
+        dispatcher.notify_new_item()
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_added",
+            "project_id": project_id,
+            "item_id": item.id,
+        })
+    return {"item": item.model_dump(mode="json")}
+
+
+@router.patch("/projects/{project_id}/queue/items/{item_id}")
+async def edit_queue_item(project_id: str, item_id: str, req: QueueEditItemRequest) -> dict:
+    store = _resolve_queue_store(project_id)
+    item = store.edit_item(
+        item_id,
+        content=req.content,
+        file_refs=req.file_refs,
+        priority=req.priority,
+        review_before_advance=req.review_before_advance,
+    )
+    if item is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Item not found or not in queued state (only queued items can be edited)",
+        )
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_edited",
+            "project_id": project_id,
+            "item_id": item_id,
+        })
+    return {"item": item.model_dump(mode="json")}
+
+
+@router.delete("/projects/{project_id}/queue/items/{item_id}")
+async def delete_queue_item(project_id: str, item_id: str) -> dict:
+    store = _resolve_queue_store(project_id)
+    removed = store.remove_item(item_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_removed",
+            "project_id": project_id,
+            "item_id": item_id,
+        })
+    return {"status": "removed"}
+
+
+@router.post("/projects/{project_id}/queue/reorder")
+async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
+    store = _resolve_queue_store(project_id)
+    store.reorder(req.item_ids)
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.reordered",
+            "project_id": project_id,
+        })
+    return {"status": "reordered"}
+
+
 @router.post("/agents/{project_id}/approve")
 async def approve(project_id: str, req: ApproveRequest):
     try:
