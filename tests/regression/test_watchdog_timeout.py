@@ -114,7 +114,7 @@ async def test_watchdog_fires_when_loop_exceeds_cap(tmp_path):
     # And rotated the session for the next attempt
     assert mgr.new_session_calls == 1
 
-    await dispatcher.stop()
+    await dispatcher.shutdown()
 
 
 @pytest.mark.asyncio
@@ -147,4 +147,4 @@ async def test_fast_attempt_not_killed_by_watchdog(tmp_path):
     assert state.items[0].state == ItemState.DONE
     assert state.items[0].attempts[0].outcome == AttemptOutcome.COMPLETED
 
-    await dispatcher.stop()
+    await dispatcher.shutdown()

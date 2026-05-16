@@ -4,15 +4,19 @@
 
 """QueueDispatcher — per-project queue-draining task.
 
-Phase 1 scope: pull queued items, mark them running, dispatch one attempt
-through the existing agent loop via inject_message, wait for the loop to
-finish. Phase 1 has no signal detection, so after the loop returns the
-dispatcher STALLS (item stays `running`, no rotation, no advance). Phase 2
-wires the loop._exit_reason check that drives advance/block/stall.
+The dispatcher owns one asyncio.Task per project. It pulls queued items,
+runs the agent loop on the project's session, and routes on three exit
+signals: complete → advance, blocked → bypass, text → stall for chat.
 
-The dispatcher does not own the agent loop — AgentManager does. The
-dispatcher is a producer of work items into AgentManager.inject_message
-and a consumer of "loop task done" signals from AgentManager._handles.
+The dispatcher does NOT own the agent loop — AgentManager does. The
+dispatcher reads loop._exit_reason after each run via AgentManager.get_loop.
+
+Stop/resume (Phase 4): stop() terminates the live attempt's loop without
+closing the attempt and swaps the active session to a dedicated per-project
+chat session. resume() swaps back to the parked attempt session and starts
+a fresh loop run on it. The dispatcher task stays alive across stop/resume
+cycles; it just transitions between DRAINING (drain queue) and STOPPED
+(idle while user chats) states.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 from agent_os.queue.models import (
     AttemptOutcome,
@@ -41,10 +46,9 @@ def _now_iso() -> str:
 class QueueDispatcher:
     """Owns the queue-draining asyncio.Task for one project."""
 
-    # Poll interval when no items are ready
     IDLE_WAIT_TIMEOUT_SEC = 5.0
-    # Poll interval while waiting for the inner loop task to finish
     LOOP_WAIT_POLL_SEC = 2.0
+    SUB_AGENT_STOP_TIMEOUT_SEC = 10.0
 
     def __init__(
         self,
@@ -60,28 +64,35 @@ class QueueDispatcher:
         self._ws = ws_manager
         self._max_runtime_seconds = max_runtime_seconds
         self._task: Optional[asyncio.Task] = None
-        self._stopping = False
+        self._shutting_down = False
         self._idle_event = asyncio.Event()
-        # Phase-1 stall flag: once the loop returns text-only, the dispatcher
-        # parks until told otherwise. Phase 2 replaces with exit_reason check.
+        # Per-item stall flag: a text-only exit means "pause for question",
+        # so we sit on the item until the user removes it, resumes via
+        # injection, or the queue is stopped.
         self._stalled_item_id: Optional[str] = None
+        # Increments on every stop(). _await_and_handle snapshots this at
+        # the start of an attempt; if the generation differs at the end, a
+        # stop fired mid-attempt and we MUST NOT close/advance/stall — the
+        # state belongs to the next resume(). A bare boolean flag would
+        # race with resume() resetting it before the handler resumed.
+        self._stop_generation = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the dispatcher loop. Idempotent."""
+        """Start the dispatcher task. Idempotent."""
         if self._task is not None and not self._task.done():
             return
-        self._stopping = False
+        self._shutting_down = False
         self._task = asyncio.create_task(self._run())
         logger.info("dispatcher(%s): started", self._project_id)
 
-    async def stop(self) -> None:
-        """Stop the dispatcher task. Does NOT terminate the inner agent loop
-        (AgentManager owns that). Phase 4 adds richer stop-as-pause."""
-        self._stopping = True
+    async def shutdown(self) -> None:
+        """Full teardown — used by AgentManager.stop_agent. NOT the same as
+        Phase 4 stop(): this kills the dispatcher task entirely."""
+        self._shutting_down = True
         self._idle_event.set()
         if self._task is not None and not self._task.done():
             self._task.cancel()
@@ -90,11 +101,129 @@ class QueueDispatcher:
             except (asyncio.CancelledError, Exception):
                 pass
         self._task = None
-        logger.info("dispatcher(%s): stopped", self._project_id)
+        logger.info("dispatcher(%s): shut down", self._project_id)
 
     def notify_new_item(self) -> None:
-        """Wake the dispatcher if it is sleeping. Safe to call from sync code."""
+        """Wake the dispatcher if it is sleeping. Safe from sync code."""
         self._idle_event.set()
+
+    # ------------------------------------------------------------------
+    # Phase 4: stop / resume
+    # ------------------------------------------------------------------
+
+    async def stop(self) -> dict:
+        """Pause queue draining. Switch the active session to a dedicated
+        per-project chat session, terminate any live attempt loop, but do
+        NOT close the in-flight attempt or rotate. The session JSONL is
+        preserved so resume can pick up exactly where things left off."""
+        self._stop_generation += 1
+        # Set queue state first so the main loop sees STOPPED on its next tick.
+        self._store.set_queue_state(QueueRunState.STOPPED)
+
+        # Terminate the live attempt's loop, if any. AgentManager.switch_session
+        # does the terminate; we additionally clear sub-agents under a budget.
+        sub_mgr = self._agent_manager.get_sub_agent_manager()
+        if sub_mgr is not None:
+            try:
+                await asyncio.wait_for(
+                    sub_mgr.stop_all(self._project_id),
+                    timeout=self.SUB_AGENT_STOP_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "dispatcher(%s): stop_all timed out; sub-agents may leak",
+                    self._project_id,
+                )
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): stop_all raised; continuing",
+                    self._project_id,
+                )
+
+        # Mint or reuse the chat session id, persist it, then swap.
+        qstate = self._store.load()
+        chat_sid = qstate.chat_session_id
+        if not chat_sid:
+            chat_sid = f"chat_{uuid4().hex[:12]}"
+            self._store.set_chat_session_id(chat_sid)
+
+        try:
+            await self._agent_manager.switch_session(
+                self._project_id, chat_sid, start_loop=False,
+            )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): switch to chat session failed",
+                self._project_id,
+            )
+
+        self._broadcast_state_changed(QueueRunState.STOPPED.value)
+        logger.info(
+            "dispatcher(%s): stopped; active session is chat_session=%s",
+            self._project_id, chat_sid,
+        )
+        return {"status": "stopped", "chat_session_id": chat_sid}
+
+    async def resume(self) -> dict:
+        """Re-activate queue draining. If a parked attempt exists, swap the
+        active session back to it and start a new loop run on the same
+        session. Otherwise, just set the queue back to draining and let the
+        main loop pick up the next queued item."""
+        self._stalled_item_id = None
+        self._store.set_queue_state(QueueRunState.DRAINING)
+
+        # Find a parked attempt: head item in RUNNING with an attempts list.
+        head = self._store.head()
+        parked_item = head if (head and head.state == ItemState.RUNNING) else None
+
+        if parked_item is not None and parked_item.attempts:
+            session_id = parked_item.attempts[-1].session_id
+            logger.info(
+                "dispatcher(%s): resuming item %s on parked session %s",
+                self._project_id, parked_item.id, session_id,
+            )
+            try:
+                await self._agent_manager.switch_session(
+                    self._project_id, session_id, start_loop=False,
+                )
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): switch to parked session failed",
+                    self._project_id,
+                )
+            # Set the loop's queue_state before starting it so the approval
+            # branch picks it up.
+            loop_obj = self._agent_manager.get_loop(self._project_id)
+            if loop_obj is not None:
+                try:
+                    loop_obj._queue_state = "draining"
+                except Exception:
+                    pass
+            # Spawn a handler task: it starts the loop and waits for exit.
+            asyncio.create_task(self._resume_attempt(parked_item))
+        else:
+            # No parked attempt — kick the main loop in case items are queued.
+            self._idle_event.set()
+
+        self._broadcast_state_changed(QueueRunState.DRAINING.value)
+        return {
+            "status": "draining",
+            "resumed_item_id": parked_item.id if parked_item else None,
+        }
+
+    async def _resume_attempt(self, item: ItemRecord) -> None:
+        """Re-start the agent loop on an already-parked attempt session,
+        then route the eventual exit through the same handler used by
+        first-time dispatch."""
+        try:
+            await self._agent_manager._start_loop(self._project_id)
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): _start_loop on resume failed for item %s",
+                self._project_id, item.id,
+            )
+            return
+        await self._await_and_handle(item)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -102,17 +231,24 @@ class QueueDispatcher:
 
     async def _run(self) -> None:
         try:
-            while not self._stopping:
+            while not self._shutting_down:
                 try:
                     qstate = self._store.load()
                     if qstate.state == QueueRunState.STOPPED:
                         await self._wait_idle()
                         continue
 
-                    # Phase-1 stall: once an item has been dispatched and the
-                    # loop returned, we don't rotate. Sit on this item until
-                    # the user removes it or restarts.
                     if self._stalled_item_id is not None:
+                        await self._wait_idle()
+                        continue
+
+                    # If an attempt is already in-flight — either via the
+                    # main path's await on _dispatch_one (this branch can't
+                    # be re-entered) OR via a parallel _resume_attempt task —
+                    # head() will be RUNNING. Idle until rotation drops the
+                    # head's state out of RUNNING.
+                    head = self._store.head()
+                    if head is not None and head.state == ItemState.RUNNING:
                         await self._wait_idle()
                         continue
 
@@ -159,7 +295,6 @@ class QueueDispatcher:
             await self._wait_idle()
             return
 
-        # Move item into running and open an attempt
         self._store.set_item_state(item.id, ItemState.RUNNING)
         attempt = AttemptRecord(session_id=session.session_id)
         self._store.append_attempt(item.id, attempt)
@@ -169,8 +304,6 @@ class QueueDispatcher:
             self._project_id, item.id, session.session_id,
         )
 
-        # Tell the loop it's draining a queue so Phase 3 approval-as-block
-        # semantics activate. Default ("chat") is preserved for non-queue work.
         loop_obj = self._agent_manager.get_loop(self._project_id)
         if loop_obj is not None:
             try:
@@ -178,9 +311,6 @@ class QueueDispatcher:
             except Exception:
                 pass
 
-        # Inject the item content as a user message. inject_message handles
-        # all three cases (idle session → hot resume, running → queue,
-        # no handle → auto-start).
         try:
             await self._agent_manager.inject_message(
                 self._project_id, item.content,
@@ -197,7 +327,14 @@ class QueueDispatcher:
             )
             return
 
-        # Wait for the loop to finish this run, bounded by max_runtime_seconds.
+        await self._await_and_handle(item)
+
+    async def _await_and_handle(self, item: ItemRecord) -> None:
+        """Wait for the in-flight loop task to finish then route the outcome
+        based on AgentLoop._exit_reason. Honors the watchdog and stop signals."""
+        loop_obj = self._agent_manager.get_loop(self._project_id)
+        gen_at_start = self._stop_generation
+
         try:
             await asyncio.wait_for(
                 self._wait_for_loop_done(),
@@ -221,12 +358,27 @@ class QueueDispatcher:
                 outcome=AttemptOutcome.INTERRUPTED,
                 block_reason="exceeded runtime cap",
             )
+            # Rotate BEFORE setting state to BLOCKED so a parallel main-loop
+            # tick can't pick up the next queued item while the rotation is
+            # still in flight. Belt-and-suspenders with the head-RUNNING
+            # guard in _run.
+            await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.BLOCKED)
             self._broadcast_advance(item.id, "interrupted")
-            await self._rotate_session_for_advance()
+            self._idle_event.set()
             return
 
-        # Read exit_reason and route the outcome.
+        # If stop() was called mid-attempt, the loop was terminated by
+        # switch_session. We MUST NOT close the attempt — preserve it
+        # exactly as it was so resume can pick up cleanly.
+        if self._stop_generation != gen_at_start:
+            logger.info(
+                "dispatcher(%s): item %s loop terminated by stop; "
+                "attempt preserved (no close, no advance, no rotation)",
+                self._project_id, item.id,
+            )
+            return
+
         loop_obj = self._agent_manager.get_loop(self._project_id)
         exit_reason = getattr(loop_obj, "_exit_reason", "text") if loop_obj else "text"
         exit_summary = getattr(loop_obj, "_exit_summary", None) if loop_obj else None
@@ -240,12 +392,13 @@ class QueueDispatcher:
                 outcome=AttemptOutcome.COMPLETED,
                 summary=exit_summary or "",
             )
+            await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.DONE)
             logger.info(
                 "dispatcher(%s): item %s completed", self._project_id, item.id,
             )
             self._broadcast_advance(item.id, "completed")
-            await self._rotate_session_for_advance()
+            self._idle_event.set()
             return
 
         if exit_reason == "blocked":
@@ -254,18 +407,17 @@ class QueueDispatcher:
                 outcome=AttemptOutcome.BLOCKED,
                 block_reason=exit_block_reason or "",
             )
+            await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.BLOCKED)
             logger.info(
                 "dispatcher(%s): item %s blocked: %s",
                 self._project_id, item.id, exit_block_reason or "(no reason)",
             )
             self._broadcast_advance(item.id, "blocked")
-            await self._rotate_session_for_advance()
+            self._idle_event.set()
             return
 
-        # exit_reason == "text" (or unknown) → pause for question. Item stays
-        # running, dispatcher stalls until the user takes action (resume,
-        # remove, inject chat message, etc.).
+        # text-only → stall
         logger.info(
             "dispatcher(%s): item %s exited text-only; stalling for user input",
             self._project_id, item.id,
@@ -273,12 +425,6 @@ class QueueDispatcher:
         self._stalled_item_id = item.id
 
     async def _rotate_session_for_advance(self) -> None:
-        """Rotate the session so the next attempt starts clean.
-
-        Called after a completed or blocked outcome. Wraps AgentManager.
-        new_session() in a guard so dispatcher failures here log and continue
-        rather than killing the whole drain loop.
-        """
         try:
             await self._agent_manager.new_session(self._project_id)
         except Exception:
@@ -287,25 +433,8 @@ class QueueDispatcher:
                 self._project_id,
             )
 
-    def _broadcast_advance(self, item_id: str, outcome: str) -> None:
-        if self._ws is None:
-            return
-        try:
-            self._ws.broadcast(self._project_id, {
-                "type": "queue.item_advanced",
-                "project_id": self._project_id,
-                "item_id": item_id,
-                "outcome": outcome,
-            })
-        except Exception:
-            pass
-
     async def _wait_for_loop_done(self) -> None:
-        """Poll the AgentManager handle for the current loop task to finish."""
-        # Access handle through a public-ish getter to keep the coupling
-        # visible. AgentManager exposes _handles directly today; we use it
-        # via a small accessor on AgentManager added in Phase 1 patches.
-        while not self._stopping:
+        while not self._shutting_down:
             task = self._agent_manager.get_loop_task(self._project_id)
             if task is None or task.done():
                 return
@@ -321,3 +450,32 @@ class QueueDispatcher:
                 raise
             except Exception:
                 return
+
+    # ------------------------------------------------------------------
+    # WebSocket helpers
+    # ------------------------------------------------------------------
+
+    def _broadcast_advance(self, item_id: str, outcome: str) -> None:
+        if self._ws is None:
+            return
+        try:
+            self._ws.broadcast(self._project_id, {
+                "type": "queue.item_advanced",
+                "project_id": self._project_id,
+                "item_id": item_id,
+                "outcome": outcome,
+            })
+        except Exception:
+            pass
+
+    def _broadcast_state_changed(self, state: str) -> None:
+        if self._ws is None:
+            return
+        try:
+            self._ws.broadcast(self._project_id, {
+                "type": "queue.state_changed",
+                "project_id": self._project_id,
+                "state": state,
+            })
+        except Exception:
+            pass
