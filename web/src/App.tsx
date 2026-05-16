@@ -25,6 +25,7 @@ import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import CreateProject from './components/CreateProject';
 import ProjectDetail, { type DetailTab } from './components/ProjectDetail';
+import QueueTab from './components/QueueTab';
 import SettingsView from './components/SettingsView';
 import ChatView from './components/ChatView';
 import FileExplorer from './components/FileExplorer';
@@ -61,7 +62,7 @@ export default function App() {
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [view, setView] = useState<View>('list');
-  const [tab, setTab] = useState<DetailTab>('chat');
+  const [tab, setTab] = useState<DetailTab>('queue');
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -351,7 +352,7 @@ export default function App() {
   function handleSelectProject(id: string) {
     setSelectedProjectId(id);
     setView('detail');
-    setTab('chat');
+    setTab('queue');
     setMobileView('content');
   }
 
@@ -365,7 +366,7 @@ export default function App() {
     const created = await createProject(data);
     setSelectedProjectId(created.project_id);
     setView('detail');
-    setTab('chat');
+    setTab('queue');
   }
 
   async function handleUpdateProject(data: ProjectUpdateRequest) {
@@ -498,6 +499,12 @@ export default function App() {
                 project={selectedProject}
                 onSave={handleUpdateProject}
                 onDelete={handleDeleteProject}
+              />
+            )}
+            {tab === 'queue' && (
+              <QueueTab
+                key={`queue-${selectedProject.project_id}`}
+                projectId={selectedProject.project_id}
               />
             )}
             {tab === 'chat' && (

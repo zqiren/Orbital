@@ -6,7 +6,7 @@ import type { AgentRunStatus, Project, Trigger } from '../types';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 
-export type DetailTab = 'chat' | 'files' | 'settings';
+export type DetailTab = 'queue' | 'chat' | 'files' | 'settings';
 
 interface ProjectDetailProps {
   project: Project;
@@ -22,6 +22,7 @@ interface ProjectDetailProps {
 }
 
 const TABS: { key: DetailTab; label: string }[] = [
+  { key: 'queue', label: 'Queue' },
   { key: 'chat', label: 'Chat' },
   { key: 'files', label: 'Files' },
   { key: 'settings', label: 'Settings' },
