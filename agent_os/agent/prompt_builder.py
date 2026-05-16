@@ -81,6 +81,17 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
         "Trigger an immediate checkpoint of project state files. Call when "
         "meaningful work has accumulated and you want to persist it."
     ),
+    "mark_task_complete": (
+        "Signal that the current queued task is finished. Exits the loop "
+        "and tells the dispatcher to advance to the next item. Other tools "
+        "in the same response are DISCARDED — do all work first, then call this."
+    ),
+    "mark_task_blocked": (
+        "Signal that the current queued task cannot proceed (missing "
+        "credentials, ambiguous spec, blocked by another task, etc.). Exits "
+        "the loop and bypasses this item. Other tools in the same response "
+        "are DISCARDED — call this on its own with a clear reason."
+    ),
 }
 
 _BROWSER_USAGE_PROMPT = """\
@@ -223,6 +234,7 @@ class PromptBuilder:
             self._safety(context),
             self._status_reporting(),
             self._error_recovery(),
+            self._queue_signals(),
         ]))
         semi_stable = _SEP.join(filter(None, [
             self._trigger_context(context),
@@ -365,6 +377,24 @@ class PromptBuilder:
             "- Read error messages carefully before retrying.\n"
             "- If the same error occurs 2+ times, try a different approach.\n"
             "- Do not loop on the same failing strategy."
+        )
+
+    def _queue_signals(self) -> str:
+        return (
+            "## Queue Signals\n\n"
+            "When you are working on a queued task, signal completion or "
+            "block status via these tools:\n"
+            "- `mark_task_complete(summary)` — the task is done. The "
+            "dispatcher advances to the next queued item.\n"
+            "- `mark_task_blocked(reason)` — the task cannot proceed. The "
+            "dispatcher bypasses this item.\n\n"
+            "IMPORTANT: When you call either signal, ANY other tools you "
+            "call in the same response are DISCARDED. Finish all of your "
+            "work first (read files, write changes, run commands), and "
+            "then on a separate final response call the signal on its own.\n\n"
+            "If the user is chatting with you (no active queued task), do "
+            "NOT call these signals — the dispatcher is idle and they will "
+            "have no effect."
         )
 
     def _onboarding_or_directive(self, context: PromptContext) -> str:

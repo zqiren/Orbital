@@ -132,6 +132,16 @@ class AgentLoop:
         self._last_refresh_iteration: int = 0   # loop iteration# of last refresh
         self._current_iteration: int = 0        # current loop iteration (updated at top of loop)
 
+        # Queue integration (Phase 2 — exit_reason; Phase 3 — queue_state)
+        # Reset to defaults at the start of every run().
+        self._exit_reason: str = "text"
+        self._exit_summary: str | None = None
+        self._exit_block_reason: str | None = None
+        # "chat" (default) preserves legacy approval-pause; "draining" makes
+        # the dispatcher treat approval-required tool calls as blocks. The
+        # dispatcher sets this before each run via agent_manager helpers.
+        self._queue_state: str = "chat"
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -201,6 +211,11 @@ class AgentLoop:
                   initial_nonce: str | None = None) -> None:
         """Main loop entry point."""
         self._running = True
+        # Reset queue exit-reason at the start of every run so the dispatcher
+        # always reads a fresh value scoped to this run.
+        self._exit_reason = "text"
+        self._exit_summary = None
+        self._exit_block_reason = None
         # Capture our own task handle so terminate() can cancel us.
         self._task = asyncio.current_task()
         try:
@@ -497,6 +512,53 @@ class AgentLoop:
                 truncate_consumed_tool_results(
                     self._session, response.text, iteration,
                 )
+
+                # ── Queue signal short-circuit ────────────────────────────
+                # If the response contains mark_task_complete or
+                # mark_task_blocked, exit the loop immediately with the
+                # corresponding _exit_reason. Other tool calls in the same
+                # response are discarded (the finally block's
+                # resolve_pending_tool_calls will write CANCELLED results
+                # for them so the JSONL stays valid).
+                _queue_signal_exit = False
+                for _tc_raw in response.tool_calls:
+                    _tc = normalize_tool_call(_tc_raw)
+                    if _tc["name"] == "mark_task_complete":
+                        summary = (_tc["arguments"] or {}).get("summary", "")
+                        if isinstance(summary, str):
+                            summary = summary.strip()
+                        else:
+                            summary = ""
+                        self._exit_reason = "complete"
+                        self._exit_summary = summary
+                        self._session.append({
+                            "role": "system",
+                            "content": f"Task completed: {summary}" if summary else "Task completed.",
+                            "source": "queue_signal",
+                            "signal": "complete",
+                            "payload": {"summary": summary},
+                        })
+                        _queue_signal_exit = True
+                        break
+                    if _tc["name"] == "mark_task_blocked":
+                        reason = (_tc["arguments"] or {}).get("reason", "")
+                        if isinstance(reason, str):
+                            reason = reason.strip()
+                        else:
+                            reason = ""
+                        self._exit_reason = "blocked"
+                        self._exit_block_reason = reason
+                        self._session.append({
+                            "role": "system",
+                            "content": f"Task blocked: {reason}" if reason else "Task blocked.",
+                            "source": "queue_signal",
+                            "signal": "blocked",
+                            "payload": {"reason": reason},
+                        })
+                        _queue_signal_exit = True
+                        break
+                if _queue_signal_exit:
+                    break
 
                 # Normalize and execute tool calls
                 tool_calls = [normalize_tool_call(tc) for tc in response.tool_calls]

@@ -24,11 +24,14 @@ from agent_os.agent.prompt_builder import PromptBuilder, PromptContext
 from agent_os.agent.providers.openai_compat import LLMProvider
 from agent_os.agent.session import Session
 from agent_os.agent.tools.registry import ToolRegistry
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import AgentConfig, detect_os, resolve_api_key
+from agent_os.queue.dispatcher import QueueDispatcher
+from agent_os.queue.store import QueueStore
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,9 @@ class AgentManager:
         self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
+        # Queue infrastructure (per project)
+        self._queue_stores: dict[str, QueueStore] = {}
+        self._dispatchers: dict[str, QueueDispatcher] = {}
 
     # ── Daemon state file (shutdown hardening) ──────────────────────────
 
@@ -717,9 +723,25 @@ class AgentManager:
         self._prevent_sleep_if_needed()
         self._write_state()
 
+        # 16. Queue dispatcher (Phase 1 — passive; Phase 2+ wires advancement)
+        await self._ensure_dispatcher(project_id, config.workspace)
+
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
                         project_id: str = "", vision_enabled: bool = False) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
+        # Queue signal tools — always registered, used by the queue dispatcher
+        # to detect attempt completion. Detection happens at response-parsing
+        # time in AgentLoop, before tool dispatch, so these classes' execute()
+        # serves only as a defensive fallback path.
+        try:
+            from agent_os.agent.tools.queue_signals import (
+                MarkTaskBlockedTool,
+                MarkTaskCompleteTool,
+            )
+            registry.register(MarkTaskCompleteTool())
+            registry.register(MarkTaskBlockedTool())
+        except ImportError:
+            logger.warning("queue signal tools failed to register", exc_info=True)
         try:
             from agent_os.agent.tools.read import ReadTool
             registry.register(ReadTool(workspace=config.workspace))
@@ -1463,6 +1485,14 @@ class AgentManager:
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
+        # Stop the queue dispatcher first so it doesn't try to drain mid-stop.
+        dispatcher = self._dispatchers.pop(project_id, None)
+        if dispatcher is not None:
+            try:
+                await dispatcher.stop()
+            except Exception:
+                logger.warning("dispatcher stop failed for %s", project_id, exc_info=True)
+
         # Cancel idle poll task if running
         poll_task = self._idle_poll_tasks.pop(project_id, None)
         if poll_task and not poll_task.done():
@@ -1514,6 +1544,61 @@ class AgentManager:
         """Return session for a project, or None."""
         handle = self._handles.get(project_id)
         return handle.session if handle else None
+
+    # ── Queue helpers (Phase 1) ─────────────────────────────────────────
+
+    def get_queue_store(self, project_id: str, workspace: str | None = None) -> QueueStore:
+        """Return the QueueStore for a project, creating it on first access.
+
+        Workspace is looked up from the active handle when omitted; pass it
+        explicitly only from reclaim/startup paths where no handle exists yet.
+        """
+        store = self._queue_stores.get(project_id)
+        if store is not None:
+            return store
+        if workspace is None:
+            handle = self._handles.get(project_id)
+            if handle is None:
+                project = self._project_store.get_project(project_id)
+                if project is None:
+                    raise KeyError(f"No project '{project_id}'")
+                workspace = project.get("workspace") or ""
+            else:
+                workspace = handle.config_snapshot.get("workspace", "")
+        if not workspace:
+            raise ValueError(f"No workspace known for project '{project_id}'")
+        paths = ProjectPaths(workspace)
+        store = QueueStore(paths.queue_file)
+        self._queue_stores[project_id] = store
+        return store
+
+    def get_dispatcher(self, project_id: str) -> "QueueDispatcher | None":
+        return self._dispatchers.get(project_id)
+
+    def get_loop_task(self, project_id: str) -> "asyncio.Task | None":
+        """Used by the QueueDispatcher to await the inner loop task."""
+        handle = self._handles.get(project_id)
+        return handle.task if handle else None
+
+    def get_loop(self, project_id: str):
+        """Return the AgentLoop object so the dispatcher can read exit_reason."""
+        handle = self._handles.get(project_id)
+        return handle.loop if handle else None
+
+    async def _ensure_dispatcher(self, project_id: str, workspace: str) -> None:
+        """Create + start the dispatcher for this project if not already running."""
+        existing = self._dispatchers.get(project_id)
+        if existing is not None:
+            return
+        store = self.get_queue_store(project_id, workspace=workspace)
+        dispatcher = QueueDispatcher(
+            project_id=project_id,
+            store=store,
+            agent_manager=self,
+            ws_manager=self._ws,
+        )
+        self._dispatchers[project_id] = dispatcher
+        await dispatcher.start()
 
     async def _start_loop(self, project_id: str) -> None:
         """Start a new loop.run() on existing session (hot resume)."""

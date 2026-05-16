@@ -1,0 +1,273 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""QueueStore — file-backed CRUD for queue.json.
+
+Atomic writes via tmp + replace, in-process serialization via a threading.Lock.
+Designed to be the single source of truth for queue state. The dispatcher
+reads and mutates through this; HTTP routes mutate through this; both go
+through the same lock.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from agent_os.queue.models import (
+    AttemptOutcome,
+    AttemptRecord,
+    ItemRecord,
+    ItemState,
+    QueueRunState,
+    QueueState,
+    Source,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class QueueStore:
+    """File-backed queue state with atomic writes."""
+
+    def __init__(self, queue_file: str | Path):
+        self._path = Path(queue_file)
+        self._lock = threading.RLock()
+        self._state: Optional[QueueState] = None
+
+    # ------------------------------------------------------------------
+    # Load / save
+    # ------------------------------------------------------------------
+
+    def load(self) -> QueueState:
+        with self._lock:
+            if self._state is not None:
+                return self._state
+            if not self._path.exists():
+                self._state = QueueState()
+                self._save_locked()
+                return self._state
+            try:
+                text = self._path.read_text(encoding="utf-8")
+                self._state = QueueState.model_validate_json(text)
+            except (OSError, ValueError, json.JSONDecodeError):
+                logger.warning(
+                    "queue.json at %s is corrupt; starting from empty",
+                    self._path, exc_info=True,
+                )
+                self._state = QueueState()
+                self._save_locked()
+            return self._state
+
+    def save(self) -> None:
+        with self._lock:
+            self._save_locked()
+
+    def _save_locked(self) -> None:
+        if self._state is None:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        tmp.write_text(
+            self._state.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(self._path)
+
+    # ------------------------------------------------------------------
+    # Item CRUD
+    # ------------------------------------------------------------------
+
+    def add_item(
+        self,
+        content: str,
+        *,
+        file_refs: Optional[list[str]] = None,
+        priority: int = 0,
+        review_before_advance: bool = False,
+        source: str = "user",
+        idempotency_key: Optional[str] = None,
+    ) -> ItemRecord:
+        state = self.load()
+        with self._lock:
+            if idempotency_key:
+                for existing in state.items:
+                    if existing.idempotency_key == idempotency_key:
+                        return existing
+            try:
+                src_enum = Source(source)
+            except ValueError:
+                src_enum = Source.USER
+            item = ItemRecord(
+                content=content,
+                file_refs=file_refs or [],
+                priority=priority,
+                review_before_advance=review_before_advance,
+                source=src_enum,
+                idempotency_key=idempotency_key,
+            )
+            if priority == 1:
+                insert_at = sum(
+                    1 for it in state.items if it.state == ItemState.RUNNING
+                )
+                state.items.insert(insert_at, item)
+            else:
+                state.items.append(item)
+            self._save_locked()
+            return item
+
+    def edit_item(
+        self,
+        item_id: str,
+        *,
+        content: Optional[str] = None,
+        file_refs: Optional[list[str]] = None,
+        priority: Optional[int] = None,
+        review_before_advance: Optional[bool] = None,
+    ) -> Optional[ItemRecord]:
+        state = self.load()
+        with self._lock:
+            for item in state.items:
+                if item.id == item_id:
+                    if item.state != ItemState.QUEUED:
+                        return None
+                    if content is not None:
+                        item.content = content
+                    if file_refs is not None:
+                        item.file_refs = file_refs
+                    if priority is not None:
+                        item.priority = priority
+                    if review_before_advance is not None:
+                        item.review_before_advance = review_before_advance
+                    self._save_locked()
+                    return item
+            return None
+
+    def remove_item(self, item_id: str) -> bool:
+        state = self.load()
+        with self._lock:
+            for idx, item in enumerate(state.items):
+                if item.id == item_id:
+                    if item.state == ItemState.RUNNING and item.attempts:
+                        latest = item.attempts[-1]
+                        if latest.outcome is None:
+                            latest.outcome = AttemptOutcome.CANCELLED
+                            latest.ended_at = _now_iso()
+                    state.items.pop(idx)
+                    self._save_locked()
+                    return True
+            return False
+
+    def reorder(self, item_ids: list[str]) -> None:
+        state = self.load()
+        with self._lock:
+            by_id = {it.id: it for it in state.items}
+            reordered: list[ItemRecord] = []
+            for iid in item_ids:
+                if iid in by_id:
+                    reordered.append(by_id.pop(iid))
+            reordered.extend(by_id.values())
+            state.items = reordered
+            self._save_locked()
+
+    # ------------------------------------------------------------------
+    # Item state transitions
+    # ------------------------------------------------------------------
+
+    def set_item_state(self, item_id: str, new_state: ItemState) -> None:
+        state = self.load()
+        with self._lock:
+            for item in state.items:
+                if item.id == item_id:
+                    item.state = new_state
+                    self._save_locked()
+                    return
+
+    def append_attempt(self, item_id: str, attempt: AttemptRecord) -> None:
+        state = self.load()
+        with self._lock:
+            for item in state.items:
+                if item.id == item_id:
+                    item.attempts.append(attempt)
+                    self._save_locked()
+                    return
+
+    def close_latest_attempt(
+        self,
+        item_id: str,
+        *,
+        outcome: AttemptOutcome,
+        summary: Optional[str] = None,
+        block_reason: Optional[str] = None,
+    ) -> None:
+        state = self.load()
+        with self._lock:
+            for item in state.items:
+                if item.id == item_id and item.attempts:
+                    latest = item.attempts[-1]
+                    if latest.outcome is None:
+                        latest.outcome = outcome
+                        latest.ended_at = _now_iso()
+                        if summary is not None:
+                            latest.summary = summary
+                        if block_reason is not None:
+                            latest.block_reason = block_reason
+                        self._save_locked()
+                    return
+
+    def increment_interrupted(self, item_id: str) -> int:
+        state = self.load()
+        with self._lock:
+            for item in state.items:
+                if item.id == item_id:
+                    item.interrupted_count += 1
+                    self._save_locked()
+                    return item.interrupted_count
+            return 0
+
+    # ------------------------------------------------------------------
+    # Queue-level state
+    # ------------------------------------------------------------------
+
+    def set_queue_state(self, new_state: QueueRunState) -> None:
+        state = self.load()
+        with self._lock:
+            state.state = new_state
+            self._save_locked()
+
+    def set_chat_session_id(self, sid: Optional[str]) -> None:
+        state = self.load()
+        with self._lock:
+            state.chat_session_id = sid
+            self._save_locked()
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def head(self) -> Optional[ItemRecord]:
+        state = self.load()
+        for item in state.items:
+            if item.state in (ItemState.QUEUED, ItemState.RUNNING):
+                return item
+        return None
+
+    def next_queued(self) -> Optional[ItemRecord]:
+        state = self.load()
+        for item in state.items:
+            if item.state == ItemState.QUEUED:
+                return item
+        return None
+
+    def snapshot(self) -> dict:
+        state = self.load()
+        return state.model_dump(mode="json")
