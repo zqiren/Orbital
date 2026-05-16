@@ -179,6 +179,22 @@ class QueueStore:
             state.items = reordered
             self._save_locked()
 
+    def move_to_head(self, item_id: str) -> bool:
+        """Move an item to the front of the queue (after any RUNNING items).
+        Used by reclaim to give an interrupted item priority on retry."""
+        state = self.load()
+        with self._lock:
+            for idx, item in enumerate(state.items):
+                if item.id == item_id:
+                    state.items.pop(idx)
+                    insert_at = sum(
+                        1 for it in state.items if it.state == ItemState.RUNNING
+                    )
+                    state.items.insert(insert_at, item)
+                    self._save_locked()
+                    return True
+            return False
+
     # ------------------------------------------------------------------
     # Item state transitions
     # ------------------------------------------------------------------
