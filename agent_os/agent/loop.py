@@ -591,6 +591,38 @@ class AgentLoop:
                             should_intercept = True
 
                         if should_intercept:
+                            # Phase 3: under queue-draining state, an
+                            # approval-required tool call is a block signal,
+                            # not a pause. Skip on_intercept (no UI card —
+                            # the dispatcher records this as the block reason)
+                            # and exit the loop. The dispatcher rotates the
+                            # session and proceeds to the next queued item.
+                            if self._queue_state == "draining":
+                                _block_reason = (
+                                    f"approval required for tool '{tc['name']}'"
+                                )
+                                _args_str = ""
+                                try:
+                                    _args_str = json.dumps(tc.get("arguments") or {})[:200]
+                                except (TypeError, ValueError):
+                                    _args_str = ""
+                                if _args_str and _args_str not in ("{}", '""'):
+                                    _block_reason += f" (args: {_args_str})"
+                                self._exit_reason = "blocked"
+                                self._exit_block_reason = _block_reason
+                                self._session.append({
+                                    "role": "system",
+                                    "content": f"Task blocked: {_block_reason}",
+                                    "source": "queue_signal",
+                                    "signal": "blocked",
+                                    "payload": {
+                                        "reason": _block_reason,
+                                        "tool": tc["name"],
+                                    },
+                                })
+                                exit_outer = True
+                                break
+
                             reasoning = response.text if response.text and response.text.strip() else None
                             try:
                                 self._interceptor.on_intercept(

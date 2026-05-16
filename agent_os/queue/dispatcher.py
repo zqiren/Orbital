@@ -52,11 +52,13 @@ class QueueDispatcher:
         store: QueueStore,
         agent_manager,
         ws_manager=None,
+        max_runtime_seconds: int = 1800,
     ):
         self._project_id = project_id
         self._store = store
         self._agent_manager = agent_manager
         self._ws = ws_manager
+        self._max_runtime_seconds = max_runtime_seconds
         self._task: Optional[asyncio.Task] = None
         self._stopping = False
         self._idle_event = asyncio.Event()
@@ -195,8 +197,34 @@ class QueueDispatcher:
             )
             return
 
-        # Wait for the loop to finish this run.
-        await self._wait_for_loop_done()
+        # Wait for the loop to finish this run, bounded by max_runtime_seconds.
+        try:
+            await asyncio.wait_for(
+                self._wait_for_loop_done(),
+                timeout=self._max_runtime_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "dispatcher(%s): item %s exceeded runtime cap %ds; terminating",
+                self._project_id, item.id, self._max_runtime_seconds,
+            )
+            try:
+                if loop_obj is not None:
+                    await loop_obj.terminate()
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): terminate after watchdog failed",
+                    self._project_id,
+                )
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.INTERRUPTED,
+                block_reason="exceeded runtime cap",
+            )
+            self._store.set_item_state(item.id, ItemState.BLOCKED)
+            self._broadcast_advance(item.id, "interrupted")
+            await self._rotate_session_for_advance()
+            return
 
         # Read exit_reason and route the outcome.
         loop_obj = self._agent_manager.get_loop(self._project_id)

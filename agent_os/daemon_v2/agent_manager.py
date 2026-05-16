@@ -1865,11 +1865,18 @@ class AgentManager:
         if existing is not None:
             return
         store = self.get_queue_store(project_id, workspace=workspace)
+        max_runtime = 1800
+        try:
+            if hasattr(self._project_store, "get_max_runtime_seconds"):
+                max_runtime = self._project_store.get_max_runtime_seconds(project_id)
+        except Exception:
+            pass
         dispatcher = QueueDispatcher(
             project_id=project_id,
             store=store,
             agent_manager=self,
             ws_manager=self._ws,
+            max_runtime_seconds=max_runtime,
         )
         self._dispatchers[project_id] = dispatcher
         await dispatcher.start()
