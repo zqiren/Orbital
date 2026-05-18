@@ -67,7 +67,11 @@ async def test_first_attempt_injection_is_wrapped_with_header(tmp_path):
         pytest.fail("inject_message was never called")
 
     project_id, content = mgr.injected[0]
-    expected = f"[QUEUE ITEM | id={item.id} | attempt=1]\nmy content"
+    expected = (
+        f"[QUEUE ITEM | id={item.id} | attempt=1]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+        + "my content"
+    )
     assert project_id == "proj_header"
     assert content == expected, (
         f"expected exact wrapped content\n  expected: {expected!r}\n"
@@ -80,7 +84,7 @@ async def test_first_attempt_injection_is_wrapped_with_header(tmp_path):
 @pytest.mark.asyncio
 async def test_header_includes_item_id_and_attempt_number(tmp_path):
     """The header format is load-bearing for the agent contract — assert
-    the exact tokens, not just substrings."""
+    the exact tokens plus the embedded HEADER_CONTRACT block."""
     store = QueueStore(tmp_path / "queue.json")
     item = store.add_item("write a file")
 
@@ -98,8 +102,11 @@ async def test_header_includes_item_id_and_attempt_number(tmp_path):
 
     assert len(mgr.injected) == 1
     _, content = mgr.injected[0]
-    first_line, _, body = content.partition("\n")
+    first_line, _, rest = content.partition("\n")
     assert first_line == f"[QUEUE ITEM | id={item.id} | attempt=1]"
+    # Contract block sits between metadata line and user content.
+    assert rest.startswith(QueueDispatcher.HEADER_CONTRACT)
+    body = rest[len(QueueDispatcher.HEADER_CONTRACT):]
     assert body == "write a file"
 
     await dispatcher.shutdown()

@@ -133,11 +133,15 @@ async def test_dispatcher_picks_first_item_and_routes_text_to_block(dispatcher):
         assert it.attempts[0].outcome == AttemptOutcome.BLOCKED
         assert "contract violation" in (it.attempts[0].block_reason or "")
 
-    # First inject_message call carries the [QUEUE ITEM | id | attempt] header
-    # introduced by Concern 3.
+    # First inject_message call carries the metadata header AND the queue
+    # contract block (H1 verification: contract moved from system prompt to
+    # the per-item header for better signal compliance).
+    from agent_os.queue.dispatcher import QueueDispatcher
     first_call_args, _ = mgr.inject_message.await_args_list[0]
     assert first_call_args[1] == (
-        f"[QUEUE ITEM | id={item1.id} | attempt=1]\nfirst"
+        f"[QUEUE ITEM | id={item1.id} | attempt=1]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+        + "first"
     )
 
 

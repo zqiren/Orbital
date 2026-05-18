@@ -2,43 +2,26 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: the rendered management-agent system prompt contains the D3
-queue-contract section verbatim (Concern 4 of
-TASK-queue-architecture-amendments.md).
+"""Regression: the queue contract is delivered via the per-item dispatcher
+header, NOT the system prompt.
 
-If this test fails after a prompt refactor, do NOT relax the assertion —
-the agent's behavioral guarantees depend on the exact wording (queue-item
-header recognition, mandatory signal-or-violation rule, tool-discard
-short-circuit, chat-message carve-out)."""
+H1 verification (12 LLM calls, 2 models × 2 placements × 3 samples)
+showed header-only delivery gives strictly better final outcomes than
+system-prompt delivery. The contract was moved from PromptBuilder's
+cached prefix into QueueDispatcher.HEADER_CONTRACT. This file pins
+that decision: the system prompt must NOT carry the contract, and the
+header must.
+
+If a future refactor tries to move the contract back to the system
+prompt, these tests fail and force a re-read of the H1 results.
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
-
-
-# Verbatim D3 contract text. Any character drift here (em-dash → hyphen,
-# casing changes, paragraph collapse, etc.) breaks the contract test.
-_D3_CONTRACT = (
-    "You operate inside an Orbital project. When a queue item is dispatched to you, "
-    "you will receive it as a user message with a `[QUEUE ITEM | id=... | attempt=...]` "
-    "header. When operating on a queue item, you MUST end your work by calling exactly "
-    "one of:\n"
-    "- `mark_task_complete(summary)` if you finished the task.\n"
-    "- `mark_task_blocked(reason)` if you cannot proceed — stuck, missing credentials, "
-    "ambiguous requirements, or you need to ask the user a clarifying question. Put any "
-    "question for the user directly in the `reason` field; the user will see it and respond.\n"
-    "\n"
-    "Do not exit with plain text on a queue item. Plain-text exit is a contract violation "
-    "and the queue cannot advance.\n"
-    "\n"
-    "When you call a queue signal, any other tools you call in the same response are "
-    "discarded. Finish all other work first, then call the signal alone.\n"
-    "\n"
-    "When operating on a chat message (no queue header), respond conversationally as "
-    "normal — no signal required."
-)
+from agent_os.queue.dispatcher import QueueDispatcher
 
 
 def _build_minimal_context(workspace: str) -> PromptContext:
@@ -55,33 +38,84 @@ def _build_minimal_context(workspace: str) -> PromptContext:
     )
 
 
-def test_cached_prefix_contains_verbatim_d3_contract(tmp_path):
-    """The cached prefix is where _queue_signals() lives. Asserting on the
-    cached portion ensures the contract text is part of the prefix-cached
-    block (so the model always sees it, and we don't pay tokens for it on
-    every turn)."""
+# ---------------------------------------------------------------------------
+# Negative: the system prompt must NOT carry the queue contract
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_does_not_contain_queue_contract(tmp_path):
+    """The rendered system prompt (any of cached / semi-stable / dynamic
+    sections) must not contain the contract. The contract is delivered in
+    the per-item dispatcher header instead."""
     ctx = _build_minimal_context(str(tmp_path))
-    cached, _semi, _dynamic = PromptBuilder(workspace=str(tmp_path)).build(ctx)
-    assert _D3_CONTRACT in cached, (
-        "verbatim D3 contract text not found in cached system-prompt prefix.\n"
-        "Expected the D3 block to appear inside the cached section as a "
-        "contiguous substring. If the prompt was refactored, restore the "
-        "exact wording — the agent's contract depends on it."
+    cached, semi, dynamic = PromptBuilder(workspace=str(tmp_path)).build(ctx)
+    full = cached + semi + dynamic
+    # The most distinctive phrase from HEADER_CONTRACT — used as the
+    # canary. If this appears in the system prompt the contract has
+    # leaked back in.
+    assert "You are working on a queue item" not in full, (
+        "queue contract text leaked into the system prompt. The contract "
+        "must live in QueueDispatcher.HEADER_CONTRACT only — H1 verified "
+        "header-only delivery is strictly better than system-prompt "
+        "delivery for ambiguous tasks."
     )
+    # Also assert the old D3 boilerplate is gone.
+    assert "you MUST end your work by calling exactly" not in full
+    assert "Plain-text exit is a contract violation" not in full
 
 
-def test_d3_contract_mentions_each_required_signal(tmp_path):
-    """Belt-and-suspenders: even if the verbatim assertion above is
-    accidentally weakened, this test catches partial regressions where
-    one of the required pieces of the contract is dropped."""
-    ctx = _build_minimal_context(str(tmp_path))
-    cached, _semi, _dynamic = PromptBuilder(workspace=str(tmp_path)).build(ctx)
-    # Queue item header signal
-    assert "[QUEUE ITEM | id=... | attempt=...]" in cached
-    # Mandatory signal-or-violation rule
-    assert "contract violation" in cached
-    # Both signals named
-    assert "mark_task_complete" in cached
-    assert "mark_task_blocked" in cached
-    # Tool-discard short-circuit
-    assert "discarded" in cached
+def test_queue_signals_section_is_empty(tmp_path):
+    """The _queue_signals section is now a stub. Verify nothing slips back in."""
+    pb = PromptBuilder(workspace=str(tmp_path))
+    assert pb._queue_signals() == ""
+
+
+# ---------------------------------------------------------------------------
+# Positive: the dispatcher header carries the contract
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_header_contract_names_both_signals():
+    """HEADER_CONTRACT must reference both queue signal tools and forbid
+    plain text. These three pieces are the contract minimum."""
+    h = QueueDispatcher.HEADER_CONTRACT
+    assert "mark_task_complete" in h
+    assert "mark_task_blocked" in h
+    # Some phrasing forbidding plain text exit
+    assert "plain text" in h.lower() or "do not respond with text" in h.lower() or "do not end with plain text" in h.lower()
+
+
+def test_dispatcher_header_contract_is_consistent_with_corrective_turn():
+    """HEADER_CONTRACT and CORRECTIVE_TURN_PROMPT must use the same two
+    tool names and the same plain-text-forbidden rule. Drift between the
+    two confuses weaker models that lean on consistency in nearby context
+    (this is exactly the H1 observation)."""
+    h = QueueDispatcher.HEADER_CONTRACT
+    c = QueueDispatcher.CORRECTIVE_TURN_PROMPT
+    for tool in ("mark_task_complete", "mark_task_blocked"):
+        assert tool in h, f"{tool} missing from HEADER_CONTRACT"
+        assert tool in c, f"{tool} missing from CORRECTIVE_TURN_PROMPT"
+    # Both must forbid plain-text exit in some form
+    h_low = h.lower()
+    c_low = c.lower()
+    assert "plain text" in h_low or "with plain text" in h_low or "with text" in h_low
+    assert "with text" in c_low or "plain text" in c_low
+
+
+def test_dispatcher_header_contract_appears_in_wrapped_item():
+    """End-to-end: when the dispatcher wraps an item, the wrapped string
+    contains HEADER_CONTRACT verbatim between the metadata line and the
+    item content. This is the wire contract the agent sees."""
+    from agent_os.queue.models import ItemRecord
+    item = ItemRecord(content="do the thing")
+    attempt_number = 1
+    header = (
+        f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+    )
+    wrapped = header + item.content
+    # Structure: metadata line, then contract, then content.
+    lines = wrapped.split("\n", 1)
+    assert lines[0] == f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]"
+    assert wrapped[len(lines[0]) + 1:].startswith(QueueDispatcher.HEADER_CONTRACT)
+    assert wrapped.endswith("do the thing")
