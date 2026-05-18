@@ -137,7 +137,7 @@ class AgentLoop:
         self._exit_reason: str = "text"
         self._exit_summary: str | None = None
         self._exit_block_reason: str | None = None
-        # "chat" (default) preserves legacy approval-pause; "draining" makes
+        # "chat" (default) preserves legacy approval-pause; "running" makes
         # the dispatcher treat approval-required tool calls as blocks. The
         # dispatcher sets this before each run via agent_manager helpers.
         self._queue_state: str = "chat"
@@ -591,13 +591,13 @@ class AgentLoop:
                             should_intercept = True
 
                         if should_intercept:
-                            # Phase 3: under queue-draining state, an
+                            # Phase 3: under queue-running state, an
                             # approval-required tool call is a block signal,
                             # not a pause. Skip on_intercept (no UI card —
                             # the dispatcher records this as the block reason)
                             # and exit the loop. The dispatcher rotates the
                             # session and proceeds to the next queued item.
-                            if self._queue_state == "draining":
+                            if self._queue_state == "running":
                                 _block_reason = (
                                     f"approval required for tool '{tc['name']}'"
                                 )

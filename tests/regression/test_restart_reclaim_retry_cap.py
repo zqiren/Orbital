@@ -39,7 +39,7 @@ def test_repeated_interruption_results_in_blocked(tmp_path):
     )
 
     summary = dispatcher.reclaim_on_startup()
-    assert summary["queue_state"] == "draining"
+    assert summary["queue_state"] == "running"
     # This time it gets blocked, not reclaimed
     assert summary["reclaimed_items"] == []
     assert summary["blocked_items"] == [item.id]

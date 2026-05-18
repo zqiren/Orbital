@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Phase 5: a DRAINING queue with a running item at daemon startup means
+"""Phase 5: a RUNNING queue with a running item at daemon startup means
 the previous attempt was interrupted. Close it, requeue at head, bump
 interrupted_count.
 """
@@ -23,7 +23,7 @@ from agent_os.queue.models import (
 from agent_os.queue.store import QueueStore
 
 
-def test_draining_running_item_is_reclaimed_at_head(tmp_path):
+def test_running_queue_running_item_is_reclaimed_at_head(tmp_path):
     store = QueueStore(tmp_path / "queue.json")
     # Three items: the second one was running when the daemon died.
     a = store.add_item("first queued")
@@ -31,17 +31,17 @@ def test_draining_running_item_is_reclaimed_at_head(tmp_path):
     c = store.add_item("third queued")
     store.set_item_state(b.id, ItemState.RUNNING)
     store.append_attempt(b.id, AttemptRecord(session_id="b_sess"))
-    # Queue is still DRAINING — user did NOT stop before the crash.
+    # Queue is still RUNNING — user did NOT pause before the crash.
 
     mgr = MagicMock()
     dispatcher = QueueDispatcher(
-        project_id="proj_draining_reclaim",
+        project_id="proj_running_reclaim",
         store=store,
         agent_manager=mgr,
     )
 
     summary = dispatcher.reclaim_on_startup()
-    assert summary["queue_state"] == "draining"
+    assert summary["queue_state"] == "running"
     assert summary["reclaimed_items"] == [b.id]
     assert summary["blocked_items"] == []
 
@@ -60,4 +60,4 @@ def test_draining_running_item_is_reclaimed_at_head(tmp_path):
     assert state.items[1].id == a.id
     assert state.items[2].id == c.id
     # Queue state itself is unchanged
-    assert state.state == QueueRunState.DRAINING
+    assert state.state == QueueRunState.RUNNING

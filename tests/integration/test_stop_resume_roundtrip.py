@@ -238,13 +238,13 @@ async def test_full_stop_resume_roundtrip(tmp_path):
 
     # === STOP ===
     stop_result = await dispatcher.stop()
-    assert stop_result["status"] == "stopped"
+    assert stop_result["status"] == "paused"
     chat_sid = stop_result["chat_session_id"]
     assert chat_sid.startswith("chat_")
 
-    # Queue state is STOPPED, item 1 still RUNNING (attempt preserved)
+    # Queue state is PAUSED, item 1 still RUNNING (attempt preserved)
     state = store.load()
-    assert state.state == QueueRunState.STOPPED
+    assert state.state == QueueRunState.PAUSED
     assert state.items[0].state == ItemState.RUNNING
     assert state.items[0].attempts[-1].outcome is None  # NOT closed
     assert state.chat_session_id == chat_sid
@@ -274,7 +274,7 @@ async def test_full_stop_resume_roundtrip(tmp_path):
     # Script the next loop run to complete the item
     mgr.queue_next_exit("complete", summary="finally done")
     resume_result = await dispatcher.resume()
-    assert resume_result["status"] == "draining"
+    assert resume_result["status"] == "running"
     assert resume_result["resumed_item_id"] == item1.id
 
     # Wait for item 1 to complete and item 2 to start
@@ -295,8 +295,8 @@ async def test_full_stop_resume_roundtrip(tmp_path):
     # Item 1's resumed attempt used the SAME session id as the parked one
     assert state.items[0].attempts[-1].session_id == parked_sid
 
-    # Queue back to draining
-    assert state.state == QueueRunState.DRAINING
+    # Queue back to running
+    assert state.state == QueueRunState.RUNNING
 
     await dispatcher.shutdown()
 
