@@ -947,6 +947,111 @@ class AgentManager:
         except ImportError:
             pass
 
+    def has_handle(self, project_id: str) -> bool:
+        """Return True if an agent handle exists for the project.
+
+        Distinct from ``is_running``: a handle may exist with a finished task
+        (loop idle but session alive). Callers that need to know whether the
+        agent is actively executing should use ``is_running``; callers that
+        need to know whether the agent has *ever* been started in this
+        process (i.e. whether the dispatcher and other lifecycle components
+        exist) should use this.
+
+        F7 note: handles are keyed by ``(project_id, session_id)`` since
+        the multi-session foundation (#22). For queue auto-start the check
+        is project-level: any handle keyed under ``project_id`` counts.
+        """
+        return any(pid == project_id for (pid, _sid) in self._handles.keys())
+
+    def _build_agent_config_from_project(self, project_id: str) -> AgentConfig:
+        """Construct an AgentConfig for ``project_id`` from the project store.
+
+        Used by auto-start paths (inject_message Case 3 and the queue items
+        route) so the same derivation logic — autonomy resolution, sub-agent
+        availability, API key/model/base_url fallback through credential and
+        settings stores — runs in one place.
+
+        Raises:
+            KeyError: if no project exists for ``project_id``.
+        """
+        from agent_os.agent.prompt_builder import Autonomy
+
+        project = self._project_store.get_project(project_id)
+        if project is None:
+            raise KeyError(f"No project found for '{project_id}'")
+
+        autonomy_str = project.get("autonomy", "hands_off")
+        try:
+            autonomy = Autonomy(autonomy_str)
+        except ValueError:
+            autonomy = Autonomy.HANDS_OFF
+
+        # Available sub-agents = installed minus the project's
+        # disabled_sub_agents denylist. Legacy ``enabled_sub_agents`` is
+        # informational-only in v1.
+        disabled = set(project.get("disabled_sub_agents", []) or [])
+        if self._setup_engine is not None:
+            available = self._setup_engine.check_all()
+            enabled_sub_agents = [
+                a.slug for a in available
+                if a.installed and a.slug != "built-in"
+                and a.slug not in disabled
+            ]
+        else:
+            enabled_sub_agents = [
+                s for s in (project.get("enabled_sub_agents") or [])
+                if s not in disabled
+            ]
+
+        # Global settings provide fallbacks for missing project-level LLM
+        # config; the credential store provides the live global API key.
+        global_settings = self._settings_store.get() if self._settings_store else None
+        cred_key = self._credential_store.get_api_key() if self._credential_store else None
+        api_key = (project.get("api_key")
+                   or cred_key
+                   or (global_settings.llm.api_key if global_settings else None)
+                   or "")
+        base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+        model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
+
+        return AgentConfig(
+            workspace=project["workspace"],
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            autonomy=autonomy,
+            sdk=project.get("sdk", "openai"),
+            provider=project.get("provider", "custom"),
+            project_name=project.get("name", ""),
+            project_instructions=project.get("instructions", ""),
+            enabled_sub_agents=enabled_sub_agents or [],
+            disabled_sub_agents=list(disabled),
+            budget_limit_usd=project.get("budget_limit_usd"),
+            budget_action=project.get("budget_action", "ask"),
+        )
+
+    async def ensure_agent_started(self, project_id: str) -> bool:
+        """Start the agent for ``project_id`` if it is not already running.
+
+        Used by the queue items route to auto-start an agent when a queue
+        item is added to a project with no live agent. Unlike
+        ``inject_message`` Case 3, this does NOT pass an initial_message —
+        the queue dispatcher's ``_run`` loop picks up the new item via the
+        store and wraps it with a ``[QUEUE ITEM]`` header before injection.
+
+        Returns:
+            True if a new agent was started, False if a handle already
+            existed (no-op in that case).
+
+        Raises:
+            KeyError: if no project exists for ``project_id``.
+        """
+        if self.has_handle(project_id):
+            return False
+        config = self._build_agent_config_from_project(project_id)
+        await self.start_agent(project_id, config)
+        return True
+
     async def inject_system_message(self, project_id: str, content: str,
                                     *, session_id: str | None = None) -> str:
         """Inject a system message into the management agent's session.
@@ -1008,60 +1113,7 @@ class AgentManager:
         if handle is None:
             # Case 3: no handle — auto-start from project store
             logger.info("inject_message(%s): no handle, auto-starting agent", project_id)
-            from agent_os.agent.prompt_builder import Autonomy
-
-            project = self._project_store.get_project(project_id)
-            if project is None:
-                raise KeyError(f"No project found for '{project_id}'")
-
-            autonomy_str = project.get("autonomy", "hands_off")
-            try:
-                autonomy = Autonomy(autonomy_str)
-            except ValueError:
-                autonomy = Autonomy.HANDS_OFF
-
-            # Compute available sub-agents from setup_engine, minus the
-            # project's disabled_sub_agents denylist. Legacy ``enabled_sub_agents``
-            # is informational-only in v1.
-            disabled = set(project.get("disabled_sub_agents", []) or [])
-            if self._setup_engine is not None:
-                available = self._setup_engine.check_all()
-                enabled_sub_agents = [
-                    a.slug for a in available
-                    if a.installed and a.slug != "built-in"
-                    and a.slug not in disabled
-                ]
-            else:
-                enabled_sub_agents = [
-                    s for s in (project.get("enabled_sub_agents") or [])
-                    if s not in disabled
-                ]
-
-            # Use global settings as fallback for missing project-level LLM config
-            global_settings = self._settings_store.get() if self._settings_store else None
-            cred_key = self._credential_store.get_api_key() if self._credential_store else None
-            api_key = (project.get("api_key")
-                       or cred_key
-                       or (global_settings.llm.api_key if global_settings else None)
-                       or "")
-            base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-            model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-            config = AgentConfig(
-                workspace=project["workspace"],
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                autonomy=autonomy,
-                sdk=project.get("sdk", "openai"),
-                provider=project.get("provider", "custom"),
-                project_name=project.get("name", ""),
-                project_instructions=project.get("instructions", ""),
-                enabled_sub_agents=enabled_sub_agents or [],
-                disabled_sub_agents=list(disabled),
-                budget_limit_usd=project.get("budget_limit_usd"),
-                budget_action=project.get("budget_action", "ask"),
-            )
+            config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce, session_id=session_id)
             return "started"
@@ -1180,61 +1232,10 @@ class AgentManager:
 
         if handle is None:
             # Auto-start a fresh agent (stale stopped session was cleaned up).
-            # Re-derive config from the project store — this path is reached
-            # when the original handle existed but the session was stopped,
-            # so the variables from the early handle-is-None block are absent.
-            from agent_os.agent.prompt_builder import Autonomy as _Autonomy
-
-            proj = self._project_store.get_project(project_id)
-            if proj is None:
-                raise KeyError(f"No project found for '{project_id}'")
-
-            autonomy_str = proj.get("autonomy", "hands_off")
-            try:
-                _autonomy = _Autonomy(autonomy_str)
-            except ValueError:
-                _autonomy = _Autonomy.HANDS_OFF
-
-            # Available sub-agents = installed - disabled_sub_agents.
-            # Legacy ``enabled_sub_agents`` is ignored in v1.
-            _disabled = set(proj.get("disabled_sub_agents", []) or [])
-            if self._setup_engine is not None:
-                available = self._setup_engine.check_all()
-                _enabled_sub = [
-                    a.slug for a in available
-                    if a.installed and a.slug != "built-in"
-                    and a.slug not in _disabled
-                ]
-            else:
-                _enabled_sub = [
-                    s for s in (proj.get("enabled_sub_agents") or [])
-                    if s not in _disabled
-                ]
-
-            global_settings = self._settings_store.get() if self._settings_store else None
-            cred_key = self._credential_store.get_api_key() if self._credential_store else None
-            _api_key = (proj.get("api_key")
-                        or cred_key
-                        or (global_settings.llm.api_key if global_settings else None)
-                        or "")
-            _base_url = proj.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-            _model = proj.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-            config = AgentConfig(
-                workspace=proj["workspace"],
-                model=_model,
-                api_key=_api_key,
-                base_url=_base_url,
-                autonomy=_autonomy,
-                sdk=proj.get("sdk", "openai"),
-                provider=proj.get("provider", "custom"),
-                project_name=proj.get("name", ""),
-                project_instructions=proj.get("instructions", ""),
-                enabled_sub_agents=_enabled_sub or [],
-                disabled_sub_agents=list(_disabled),
-                budget_limit_usd=proj.get("budget_limit_usd"),
-                budget_action=proj.get("budget_action", "ask"),
-            )
+            # Re-derive config from the project store via the shared helper —
+            # this path is reached when the original handle existed but the
+            # session was stopped, so we need a fresh AgentConfig.
+            config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce, session_id=session_id)
             return "started"

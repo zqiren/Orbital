@@ -893,6 +893,28 @@ async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
         source=(req.source or "user"),
         idempotency_key=req.idempotency_key,
     )
+
+    # Concern 2 of TASK-queue-architecture-amendments.md:
+    # Auto-start the agent if no handle exists, so a dispatcher comes up
+    # to drain the item. Respect PAUSED — the user explicitly paused, so
+    # the item must wait for Resume rather than firing the loop now.
+    # Auto-start does NOT pass an initial_message; the dispatcher's _run
+    # loop picks up the queued item via the store and (per Concern 3)
+    # wraps it with a `[QUEUE ITEM]` header before injection.
+    if _agent_manager is not None and not _agent_manager.has_handle(project_id):
+        from agent_os.queue.models import QueueRunState
+        if store.load().state != QueueRunState.PAUSED:
+            try:
+                await _agent_manager.ensure_agent_started(project_id)
+            except Exception:
+                # Don't fail the add — the item is already persisted. The
+                # user can /queue/resume or otherwise start the agent
+                # manually to retry.
+                logger.exception(
+                    "queue auto-start failed for project %s; item %s left queued",
+                    project_id, item.id,
+                )
+
     dispatcher = _agent_manager.get_dispatcher(project_id) if _agent_manager else None
     if dispatcher is not None:
         dispatcher.notify_new_item()
