@@ -2,37 +2,38 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: auto-start on first item respects PAUSED queue state.
+"""Regression: queue state transitions respect PAUSED.
 
-Concern 2 of TASK-queue-architecture-amendments.md: when adding a queue
-item to a project whose queue is PAUSED, the route must NOT auto-start
-the agent. The user explicitly paused; the item stays QUEUED and waits
-for ``POST /queue/resume``.
+After the items-route auto-start was removed, PAUSED still has special
+behavior at the explicit /queue/start endpoint: rather than ignoring the
+paused state, /queue/start treats PAUSED as a resume request and
+delegates to dispatcher.resume(), which hot-resumes any parked attempt.
 
-Without this guard, the auto-start would bypass the pause and surprise
-the user with a running agent they had stopped.
+These tests verify:
+- Adding items while paused: persists, no state change, no auto-start.
+- /queue/start while paused: delegates to resume (parked session reused).
+- /queue/resume (legacy alias): still works for the same purpose.
 """
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from agent_os.api.routes import agents_v2
-from agent_os.api.routes.agents_v2 import QueueAddItemRequest, add_queue_item
+from agent_os.api.routes.agents_v2 import (
+    QueueAddItemRequest,
+    add_queue_item,
+    resume_queue,
+    start_queue,
+)
 from agent_os.queue.models import ItemState, QueueRunState
 from agent_os.queue.store import QueueStore
 
 
-# ---------------------------------------------------------------------------
-# Helpers — replicate the route-globals patching pattern
-# ---------------------------------------------------------------------------
-
-
 class _Globals:
-    """Context-manager that snapshots and restores agents_v2 module globals."""
-
     def __init__(self, **patches):
         self._patches = patches
         self._original = {}
@@ -48,8 +49,14 @@ class _Globals:
             setattr(agents_v2, name, value)
 
 
+def _write_project_state(workspace):
+    orbital = os.path.join(str(workspace), "orbital")
+    os.makedirs(orbital, exist_ok=True)
+    with open(os.path.join(orbital, "PROJECT_STATE.md"), "w", encoding="utf-8") as f:
+        f.write("# state\n")
+
+
 def _setup_manager(store, *, has_handle=False, dispatcher=None):
-    """Build a MagicMock agent_manager wired to the test store."""
     mgr = MagicMock()
     mgr.has_handle = MagicMock(return_value=has_handle)
     mgr.ensure_agent_started = AsyncMock(return_value=True)
@@ -69,133 +76,114 @@ def _setup_project_store(workspace, project_id):
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Items route while paused — staging-only, no state changes
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_auto_start_skipped_when_queue_paused(tmp_path):
-    """Queue is PAUSED, no handle, POST item:
-       - item is persisted (QUEUED state, queue stays PAUSED)
-       - ensure_agent_started is NOT called
-       - notify_new_item is not called (no dispatcher exists)
-    """
-    project_id = "proj_paused_skip"
-
+async def test_items_route_while_paused_persists_only(tmp_path):
+    """Queue PAUSED, POST item: item is persisted (QUEUED), queue stays
+    PAUSED, no auto-start fires (the items route no longer auto-starts
+    regardless of state)."""
+    project_id = "proj_paused_persist"
     store = QueueStore(tmp_path / "queue.json")
     store.set_queue_state(QueueRunState.PAUSED)
 
     agent_manager = _setup_manager(store, has_handle=False, dispatcher=None)
     project_store = _setup_project_store(tmp_path, project_id)
-    ws_manager = MagicMock()
 
     with _Globals(
         _agent_manager=agent_manager,
         _project_store=project_store,
-        _ws_manager=ws_manager,
+        _ws_manager=MagicMock(),
     ):
-        req = QueueAddItemRequest(content="will wait for resume")
-        result = await add_queue_item(project_id, req)
+        await add_queue_item(project_id, QueueAddItemRequest(content="will wait"))
 
-    # Item persisted but queue still paused; item state is QUEUED.
     state = store.load()
     assert state.state == QueueRunState.PAUSED
     assert len(state.items) == 1
-    assert state.items[0].content == "will wait for resume"
     assert state.items[0].state == ItemState.QUEUED
-
-    # Critical: the auto-start hook MUST be skipped while paused.
     agent_manager.ensure_agent_started.assert_not_called()
 
-    # And no dispatcher exists, so notify is not invoked.
-    assert result["item"]["id"] == state.items[0].id
-
 
 @pytest.mark.asyncio
-async def test_auto_start_fires_when_queue_running(tmp_path):
-    """Mirror-image: queue is RUNNING (default), no handle, POST item:
-       - ensure_agent_started IS called.
-    Confirms the paused-check is the only thing gating auto-start."""
-    project_id = "proj_running_starts"
-
-    store = QueueStore(tmp_path / "queue.json")
-    assert store.load().state == QueueRunState.RUNNING
-
-    fake_dispatcher = MagicMock()
-    fake_dispatcher.notify_new_item = MagicMock()
-    agent_manager = _setup_manager(
-        store, has_handle=False, dispatcher=fake_dispatcher,
-    )
-    project_store = _setup_project_store(tmp_path, project_id)
-    ws_manager = MagicMock()
-
-    with _Globals(
-        _agent_manager=agent_manager,
-        _project_store=project_store,
-        _ws_manager=ws_manager,
-    ):
-        req = QueueAddItemRequest(content="please run me")
-        await add_queue_item(project_id, req)
-
-    agent_manager.ensure_agent_started.assert_awaited_once_with(project_id)
-    fake_dispatcher.notify_new_item.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_auto_start_skipped_when_paused_and_handle_already_exists(tmp_path):
-    """Paused + already-running agent: nothing weird should happen.
-       Auto-start is skipped because handle exists; notify_new_item still
-       fires so the dispatcher sees the new item next tick (and respects
-       paused state on its own)."""
-    project_id = "proj_paused_with_handle"
-
+async def test_items_route_while_paused_notifies_existing_dispatcher(tmp_path):
+    """Paused + existing dispatcher (agent up but queue paused): item
+    is persisted and dispatcher gets a nudge. Dispatcher's own _run
+    loop ignores nudges while state is PAUSED, so this is harmless."""
+    project_id = "proj_paused_notify"
     store = QueueStore(tmp_path / "queue.json")
     store.set_queue_state(QueueRunState.PAUSED)
 
     fake_dispatcher = MagicMock()
     fake_dispatcher.notify_new_item = MagicMock()
+
     agent_manager = _setup_manager(
         store, has_handle=True, dispatcher=fake_dispatcher,
     )
     project_store = _setup_project_store(tmp_path, project_id)
-    ws_manager = MagicMock()
 
     with _Globals(
         _agent_manager=agent_manager,
         _project_store=project_store,
-        _ws_manager=ws_manager,
+        _ws_manager=MagicMock(),
     ):
-        req = QueueAddItemRequest(content="waiting")
-        await add_queue_item(project_id, req)
+        await add_queue_item(project_id, QueueAddItemRequest(content="waiting"))
 
     agent_manager.ensure_agent_started.assert_not_called()
     fake_dispatcher.notify_new_item.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_resume_transitions_paused_to_running(tmp_path):
-    """After an item is added under PAUSED, POST /queue/resume must
-    flip the queue back to RUNNING so the dispatcher can pick the
-    item up. This guarantees the path the user takes to ungate work
-    actually does ungate it.
+# ---------------------------------------------------------------------------
+# /queue/start while paused — delegates to dispatcher.resume()
+# ---------------------------------------------------------------------------
 
-    The dispatcher's own _run loop is not exercised here — we only
-    assert that the resume() entry point flips queue state. End-to-end
-    item execution after resume is covered by the existing stop/resume
-    roundtrip tests.
-    """
-    project_id = "proj_resume_unblocks"
+
+@pytest.mark.asyncio
+async def test_start_queue_while_paused_calls_resume(tmp_path):
+    """POST /queue/start on PAUSED queue → dispatcher.resume() runs,
+    queue flips to RUNNING. Mirrors the old /queue/resume semantics so
+    parked attempts hot-resume rather than starting fresh sessions."""
+    project_id = "proj_paused_to_running"
+    _write_project_state(tmp_path)
 
     store = QueueStore(tmp_path / "queue.json")
     store.set_queue_state(QueueRunState.PAUSED)
 
-    # The route's resume endpoint requires a dispatcher to be present;
-    # we mock one and verify it's the dispatcher's resume() that actually
-    # toggles state.  Set up a fake dispatcher whose resume() flips the
-    # store back to RUNNING (which the real dispatcher does too).
     async def fake_resume():
         store.set_queue_state(QueueRunState.RUNNING)
-        return {"status": "resumed"}
+        return {"status": "running", "resumed_item_id": None}
+
+    fake_dispatcher = MagicMock()
+    fake_dispatcher.resume = AsyncMock(side_effect=fake_resume)
+
+    agent_manager = _setup_manager(
+        store, has_handle=True, dispatcher=fake_dispatcher,
+    )
+    project_store = _setup_project_store(tmp_path, project_id)
+
+    with _Globals(
+        _agent_manager=agent_manager,
+        _project_store=project_store,
+        _ws_manager=MagicMock(),
+    ):
+        await start_queue(project_id)
+
+    fake_dispatcher.resume.assert_awaited_once()
+    assert store.load().state == QueueRunState.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_resume_alias_still_works(tmp_path):
+    """The legacy /queue/resume endpoint stays as an alias for
+    dispatcher.resume() so existing frontends keep working."""
+    project_id = "proj_legacy_resume"
+    store = QueueStore(tmp_path / "queue.json")
+    store.set_queue_state(QueueRunState.PAUSED)
+
+    async def fake_resume():
+        store.set_queue_state(QueueRunState.RUNNING)
+        return {"status": "running"}
 
     fake_dispatcher = MagicMock()
     fake_dispatcher.resume = AsyncMock(side_effect=fake_resume)
@@ -204,8 +192,7 @@ async def test_resume_transitions_paused_to_running(tmp_path):
     agent_manager.get_dispatcher = MagicMock(return_value=fake_dispatcher)
 
     with _Globals(_agent_manager=agent_manager):
-        from agent_os.api.routes.agents_v2 import resume_queue
         await resume_queue(project_id)
 
-    assert store.load().state == QueueRunState.RUNNING
     fake_dispatcher.resume.assert_awaited_once()
+    assert store.load().state == QueueRunState.RUNNING
