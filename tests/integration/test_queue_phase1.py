@@ -4,12 +4,16 @@
 
 """Phase-1 integration tests for the queue dispatcher.
 
-Phase 1 scope: dispatcher pulls items, marks them running, and stalls (no
-signal detection yet). These tests exercise the QueueDispatcher directly
-against a mocked AgentManager that simulates the inject_message + loop-task
-contract. The dispatcher itself is unmodified across the phases — its
-Phase 2+ behaviour is added by reading loop._exit_reason after the task
-completes.
+Phase 1 scope: dispatcher pulls items, marks them running, and (post
+Concern 4) routes a text-only loop exit through the contract-violation
+path — closing the attempt as BLOCKED. These tests exercise the
+QueueDispatcher directly against a mocked AgentManager that simulates the
+inject_message + loop-task contract.
+
+History: pre-Concern-4 the dispatcher stalled on text-only exits; the
+phase-1 assertion below was 'item ends RUNNING with 1 attempt and no
+outcome'. After Concern 4 the same scenario must end with the item
+BLOCKED and the attempt closed with a contract-violation reason.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.queue.dispatcher import QueueDispatcher
-from agent_os.queue.models import ItemState, QueueRunState
+from agent_os.queue.models import AttemptOutcome, ItemState, QueueRunState
 from agent_os.queue.store import QueueStore
 
 
@@ -36,6 +40,19 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
     mgr = MagicMock()
     mgr.get_session = MagicMock(return_value=_FakeSession(session_id))
     mgr.inject_message = AsyncMock(return_value="delivered")
+    # Concern 4: dispatcher rotates the session on every terminal exit
+    # (including the text-only contract-violation path). MagicMock would
+    # return a non-awaitable for new_session, so we patch it with an
+    # AsyncMock that mints a fresh session id on each call.
+    counter = {"n": 0}
+
+    async def _new_session(_pid):
+        counter["n"] += 1
+        new_sid = f"{session_id}_r{counter['n']}"
+        mgr.get_session.return_value = _FakeSession(new_sid)
+        return {"status": "new_session"}
+
+    mgr.new_session = _new_session
 
     # The "loop task" — completes immediately, simulating a text-only exit.
     async def _instant_loop():
@@ -80,44 +97,48 @@ async def test_adding_items_persists_to_disk(store):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_marks_first_item_running_then_stalls(dispatcher):
+async def test_dispatcher_picks_first_item_and_routes_text_to_block(dispatcher):
+    """Post-Concern-4: the dispatcher injects item 1, the loop exits
+    text-only (mock default), and the contract-violation path closes the
+    attempt as BLOCKED + rotates. With multiple items queued, subsequent
+    items get the same treatment (the mock always returns text-only) until
+    all reach BLOCKED."""
     d, mgr, store = dispatcher
     item1 = store.add_item("first")
-    item2 = store.add_item("second")
-    item3 = store.add_item("third")
+    store.add_item("second")
+    store.add_item("third")
 
     await d.start()
     d.notify_new_item()
 
-    # Wait up to 5s for the dispatcher to pick up item1 and stall on it.
-    for _ in range(50):
+    # Wait for the dispatcher to drain all three items into terminal state.
+    for _ in range(100):
         await asyncio.sleep(0.1)
         state = store.load()
-        if (
-            state.items[0].state == ItemState.RUNNING
-            and len(state.items[0].attempts) == 1
+        if all(
+            it.state == ItemState.BLOCKED for it in state.items
         ):
             break
     else:
-        pytest.fail("Dispatcher did not advance item to running state within 5s")
+        state = store.load()
+        pytest.fail(
+            "Dispatcher did not block all items within 10s. Final: "
+            + ", ".join(f"{it.id}={it.state.value}" for it in state.items)
+        )
 
-    # Phase 1 contract: only item 1 has moved. Items 2 and 3 are still queued.
     state = store.load()
-    assert state.items[0].state == ItemState.RUNNING
-    assert state.items[1].state == ItemState.QUEUED
-    assert state.items[2].state == ItemState.QUEUED
+    for it in state.items:
+        assert it.state == ItemState.BLOCKED
+        assert len(it.attempts) == 1
+        assert it.attempts[0].outcome == AttemptOutcome.BLOCKED
+        assert "contract violation" in (it.attempts[0].block_reason or "")
 
-    # The dispatcher should have invoked inject_message exactly once,
-    # with the item content wrapped in the [QUEUE ITEM | id | attempt]
-    # header introduced by Concern 3 of the queue-architecture amendments.
-    mgr.inject_message.assert_awaited_once()
-    args, _ = mgr.inject_message.call_args
-    assert args[1] == f"[QUEUE ITEM | id={item1.id} | attempt=1]\nfirst"
-
-    # Give the stall some breathing room and assert item 2 STILL hasn't started.
-    await asyncio.sleep(0.5)
-    state = store.load()
-    assert state.items[1].state == ItemState.QUEUED
+    # First inject_message call carries the [QUEUE ITEM | id | attempt] header
+    # introduced by Concern 3.
+    first_call_args, _ = mgr.inject_message.await_args_list[0]
+    assert first_call_args[1] == (
+        f"[QUEUE ITEM | id={item1.id} | attempt=1]\nfirst"
+    )
 
 
 @pytest.mark.asyncio

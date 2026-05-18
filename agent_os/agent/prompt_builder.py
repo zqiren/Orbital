@@ -380,21 +380,31 @@ class PromptBuilder:
         )
 
     def _queue_signals(self) -> str:
+        # D3 contract (Concern 4 of TASK-queue-architecture-amendments.md):
+        # the body below is the verbatim contract text the agent is taught.
+        # Tests assert the D3 block appears in the cached prompt as a
+        # substring, so do NOT alter any character inside the triple-quoted
+        # block. The "## Queue Signals" header is local section formatting
+        # outside the contract block.
         return (
             "## Queue Signals\n\n"
-            "When you are working on a queued task, signal completion or "
-            "block status via these tools:\n"
-            "- `mark_task_complete(summary)` — the task is done. The "
-            "dispatcher advances to the next queued item.\n"
-            "- `mark_task_blocked(reason)` — the task cannot proceed. The "
-            "dispatcher bypasses this item.\n\n"
-            "IMPORTANT: When you call either signal, ANY other tools you "
-            "call in the same response are DISCARDED. Finish all of your "
-            "work first (read files, write changes, run commands), and "
-            "then on a separate final response call the signal on its own.\n\n"
-            "If the user is chatting with you (no active queued task), do "
-            "NOT call these signals — the dispatcher is idle and they will "
-            "have no effect."
+            "You operate inside an Orbital project. When a queue item is dispatched to you, "
+            "you will receive it as a user message with a `[QUEUE ITEM | id=... | attempt=...]` "
+            "header. When operating on a queue item, you MUST end your work by calling exactly "
+            "one of:\n"
+            "- `mark_task_complete(summary)` if you finished the task.\n"
+            "- `mark_task_blocked(reason)` if you cannot proceed — stuck, missing credentials, "
+            "ambiguous requirements, or you need to ask the user a clarifying question. Put any "
+            "question for the user directly in the `reason` field; the user will see it and respond.\n"
+            "\n"
+            "Do not exit with plain text on a queue item. Plain-text exit is a contract violation "
+            "and the queue cannot advance.\n"
+            "\n"
+            "When you call a queue signal, any other tools you call in the same response are "
+            "discarded. Finish all other work first, then call the signal alone.\n"
+            "\n"
+            "When operating on a chat message (no queue header), respond conversationally as "
+            "normal — no signal required."
         )
 
     def _onboarding_or_directive(self, context: PromptContext) -> str:

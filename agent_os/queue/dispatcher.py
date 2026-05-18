@@ -6,7 +6,8 @@
 
 The dispatcher owns one asyncio.Task per project. It pulls queued items,
 runs the agent loop on the project's session, and routes on three exit
-signals: complete → advance, blocked → bypass, text → stall for chat.
+signals: complete → advance, blocked → bypass, text → contract violation
+(Concern 4: agent must declare an outcome on queue items).
 
 The dispatcher does NOT own the agent loop — AgentManager does. The
 dispatcher reads loop._exit_reason after each run via AgentManager.get_loop.
@@ -67,9 +68,11 @@ class QueueDispatcher:
         self._task: Optional[asyncio.Task] = None
         self._shutting_down = False
         self._idle_event = asyncio.Event()
-        # Per-item stall flag: a text-only exit means "pause for question",
-        # so we sit on the item until the user removes it, resumes via
-        # injection, or the queue is stopped.
+        # Legacy per-item stall flag. Concern 4 removed the queue-item code
+        # path that set this — text-only exits on queue items are now
+        # contract violations and rotate immediately. The field is retained
+        # (and still cleared on resume) because the _run loop's idle guard
+        # reads it; nothing in the queue dispatch path sets it anymore.
         self._stalled_item_id: Optional[str] = None
         # Increments on every stop(). _await_and_handle snapshots this at
         # the start of an attempt; if the generation differs at the end, a
@@ -498,12 +501,32 @@ class QueueDispatcher:
             self._idle_event.set()
             return
 
-        # text-only → stall
-        logger.info(
-            "dispatcher(%s): item %s exited text-only; stalling for user input",
+        # text-only on a queue item → contract violation (Concern 4).
+        # The agent exited without declaring complete/blocked. We close the
+        # attempt as BLOCKED with the contract-violation reason, rotate the
+        # session, mark the item BLOCKED, and broadcast advance — same shape
+        # as an explicit mark_task_blocked. The _stalled_item_id machinery
+        # is intentionally left untouched on this path: queue items never
+        # stall on text-only now. Chat-mode loops never reach this method.
+        contract_reason = (
+            "agent exited without declaring outcome — contract violation"
+        )
+        self._store.close_latest_attempt(
+            item.id,
+            outcome=AttemptOutcome.BLOCKED,
+            block_reason=contract_reason,
+        )
+        await self._rotate_session_for_advance()
+        self._store.set_item_state(item.id, ItemState.BLOCKED)
+        logger.warning(
+            "dispatcher(%s): item %s blocked by contract violation "
+            "(text-only exit on queue item)",
             self._project_id, item.id,
         )
-        self._stalled_item_id = item.id
+        self._broadcast_advance(item.id, "blocked")
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
 
     async def _rotate_session_for_advance(self) -> None:
         try:
