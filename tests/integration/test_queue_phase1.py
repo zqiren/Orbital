@@ -107,10 +107,12 @@ async def test_dispatcher_marks_first_item_running_then_stalls(dispatcher):
     assert state.items[1].state == ItemState.QUEUED
     assert state.items[2].state == ItemState.QUEUED
 
-    # The dispatcher should have invoked inject_message exactly once
+    # The dispatcher should have invoked inject_message exactly once,
+    # with the item content wrapped in the [QUEUE ITEM | id | attempt]
+    # header introduced by Concern 3 of the queue-architecture amendments.
     mgr.inject_message.assert_awaited_once()
     args, _ = mgr.inject_message.call_args
-    assert args[1] == "first"
+    assert args[1] == f"[QUEUE ITEM | id={item1.id} | attempt=1]\nfirst"
 
     # Give the stall some breathing room and assert item 2 STILL hasn't started.
     await asyncio.sleep(0.5)

@@ -361,13 +361,19 @@ class QueueDispatcher:
             await self._wait_idle()
             return
 
+        # Compute attempt_number BEFORE append_attempt so the header reflects
+        # the new attempt's 1-based index. First dispatch: len(attempts)==0
+        # → attempt_number=1. Concern-5 retries arrive with prior attempts
+        # already recorded, so the counter naturally increments.
+        attempt_number = len(item.attempts) + 1
+
         self._store.set_item_state(item.id, ItemState.RUNNING)
         attempt = AttemptRecord(session_id=session.session_id)
         self._store.append_attempt(item.id, attempt)
 
         logger.info(
-            "dispatcher(%s): dispatching item %s (session=%s)",
-            self._project_id, item.id, session.session_id,
+            "dispatcher(%s): dispatching item %s attempt=%d (session=%s)",
+            self._project_id, item.id, attempt_number, session.session_id,
         )
 
         loop_obj = self._agent_manager.get_loop(self._project_id)
@@ -377,9 +383,12 @@ class QueueDispatcher:
             except Exception:
                 pass
 
+        header = f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
+        wrapped_content = header + item.content
+
         try:
             await self._agent_manager.inject_message(
-                self._project_id, item.content,
+                self._project_id, wrapped_content,
             )
         except Exception:
             logger.exception(
