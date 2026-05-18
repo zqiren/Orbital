@@ -28,7 +28,7 @@ def test_load_creates_empty_on_first_access(tmp_path):
     store = _store(tmp_path)
     state = store.load()
     assert isinstance(state, QueueState)
-    assert state.state == QueueRunState.DRAINING
+    assert state.state == QueueRunState.RUNNING
     assert state.items == []
     assert (tmp_path / "queue.json").exists()
 
@@ -160,9 +160,9 @@ def test_reorder_appends_unmentioned_items(tmp_path):
 
 def test_set_queue_state_persists(tmp_path):
     store = _store(tmp_path)
-    store.set_queue_state(QueueRunState.STOPPED)
+    store.set_queue_state(QueueRunState.PAUSED)
     state = QueueStore(tmp_path / "queue.json").load()
-    assert state.state == QueueRunState.STOPPED
+    assert state.state == QueueRunState.PAUSED
 
 
 def test_corrupt_file_falls_back_to_empty(tmp_path):
@@ -170,7 +170,7 @@ def test_corrupt_file_falls_back_to_empty(tmp_path):
     store = QueueStore(tmp_path / "queue.json")
     state = store.load()
     assert state.items == []
-    assert state.state == QueueRunState.DRAINING
+    assert state.state == QueueRunState.RUNNING
 
 
 def test_head_returns_running_or_queued(tmp_path):
@@ -220,6 +220,6 @@ def test_snapshot_serializes_enums(tmp_path):
     # Round-trip through JSON to mimic an HTTP response
     serialized = json.dumps(snap)
     parsed = json.loads(serialized)
-    assert parsed["state"] == "draining"
+    assert parsed["state"] == "running"
     assert parsed["items"][0]["state"] == "queued"
     assert parsed["items"][0]["source"] == "user"

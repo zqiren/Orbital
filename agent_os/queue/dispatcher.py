@@ -15,8 +15,9 @@ Stop/resume (Phase 4): stop() terminates the live attempt's loop without
 closing the attempt and swaps the active session to a dedicated per-project
 chat session. resume() swaps back to the parked attempt session and starts
 a fresh loop run on it. The dispatcher task stays alive across stop/resume
-cycles; it just transitions between DRAINING (drain queue) and STOPPED
-(idle while user chats) states.
+cycles; it just transitions between RUNNING (drain queue) and PAUSED
+(idle while user chats) states. After an advance drains the last queueable
+item, the store auto-transitions the queue to IDLE.
 """
 
 from __future__ import annotations
@@ -93,10 +94,10 @@ class QueueDispatcher:
         """Reconcile queue state with on-disk records at daemon startup.
 
         Contract per D6:
-        - If queue state is STOPPED: leave everything as is. The user
-          previously stopped the queue; the same chat-mode applies after
+        - If queue state is PAUSED: leave everything as is. The user
+          previously paused the queue; the same chat-mode applies after
           restart. The dispatcher will idle until /queue/resume.
-        - If queue state is DRAINING and items are in RUNNING state: those
+        - Otherwise (RUNNING or IDLE) and items are in RUNNING state: those
           attempts were interrupted by daemon death. Close each open
           attempt with outcome=INTERRUPTED, increment interrupted_count.
           interrupted_count >= 2 → mark BLOCKED (poison pill protection).
@@ -111,14 +112,14 @@ class QueueDispatcher:
             "reclaimed_items": [],
             "blocked_items": [],
         }
-        if state.state == QueueRunState.STOPPED:
+        if state.state == QueueRunState.PAUSED:
             logger.info(
-                "dispatcher(%s): startup with STOPPED queue; no reclaim",
+                "dispatcher(%s): startup with PAUSED queue; no reclaim",
                 self._project_id,
             )
             return summary
 
-        # DRAINING: walk items in RUNNING state.
+        # RUNNING / IDLE: walk items in RUNNING state.
         for item in list(state.items):
             if item.state != ItemState.RUNNING:
                 continue
@@ -175,8 +176,8 @@ class QueueDispatcher:
         NOT close the in-flight attempt or rotate. The session JSONL is
         preserved so resume can pick up exactly where things left off."""
         self._stop_generation += 1
-        # Set queue state first so the main loop sees STOPPED on its next tick.
-        self._store.set_queue_state(QueueRunState.STOPPED)
+        # Set queue state first so the main loop sees PAUSED on its next tick.
+        self._store.set_queue_state(QueueRunState.PAUSED)
 
         # Terminate the live attempt's loop, if any. AgentManager.switch_session
         # does the terminate; we additionally clear sub-agents under a budget.
@@ -215,20 +216,20 @@ class QueueDispatcher:
                 self._project_id,
             )
 
-        self._broadcast_state_changed(QueueRunState.STOPPED.value)
+        self._broadcast_state_changed(QueueRunState.PAUSED.value)
         logger.info(
-            "dispatcher(%s): stopped; active session is chat_session=%s",
+            "dispatcher(%s): paused; active session is chat_session=%s",
             self._project_id, chat_sid,
         )
-        return {"status": "stopped", "chat_session_id": chat_sid}
+        return {"status": "paused", "chat_session_id": chat_sid}
 
     async def resume(self) -> dict:
         """Re-activate queue draining. If a parked attempt exists, swap the
         active session back to it and start a new loop run on the same
-        session. Otherwise, just set the queue back to draining and let the
+        session. Otherwise, just set the queue back to running and let the
         main loop pick up the next queued item."""
         self._stalled_item_id = None
-        self._store.set_queue_state(QueueRunState.DRAINING)
+        self._store.set_queue_state(QueueRunState.RUNNING)
 
         # Find a parked attempt: head item in RUNNING with an attempts list.
         head = self._store.head()
@@ -254,7 +255,7 @@ class QueueDispatcher:
             loop_obj = self._agent_manager.get_loop(self._project_id)
             if loop_obj is not None:
                 try:
-                    loop_obj._queue_state = "draining"
+                    loop_obj._queue_state = "running"
                 except Exception:
                     pass
             # Spawn a handler task: it starts the loop and waits for exit.
@@ -263,9 +264,9 @@ class QueueDispatcher:
             # No parked attempt — kick the main loop in case items are queued.
             self._idle_event.set()
 
-        self._broadcast_state_changed(QueueRunState.DRAINING.value)
+        self._broadcast_state_changed(QueueRunState.RUNNING.value)
         return {
-            "status": "draining",
+            "status": "running",
             "resumed_item_id": parked_item.id if parked_item else None,
         }
 
@@ -291,8 +292,15 @@ class QueueDispatcher:
         try:
             while not self._shutting_down:
                 try:
+                    # Catch deletions that occurred while idle/paused so an
+                    # emptied queue advances to IDLE without needing an
+                    # advance event to trigger the helper.
+                    self._store.auto_idle_if_empty()
                     qstate = self._store.load()
-                    if qstate.state == QueueRunState.STOPPED:
+                    if qstate.state in (
+                        QueueRunState.PAUSED,
+                        QueueRunState.IDLE,
+                    ):
                         await self._wait_idle()
                         continue
 
@@ -365,7 +373,7 @@ class QueueDispatcher:
         loop_obj = self._agent_manager.get_loop(self._project_id)
         if loop_obj is not None:
             try:
-                loop_obj._queue_state = "draining"
+                loop_obj._queue_state = "running"
             except Exception:
                 pass
 
@@ -423,6 +431,8 @@ class QueueDispatcher:
             await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.BLOCKED)
             self._broadcast_advance(item.id, "interrupted")
+            if self._store.auto_idle_if_empty():
+                self._broadcast_state_changed(QueueRunState.IDLE.value)
             self._idle_event.set()
             return
 
@@ -456,6 +466,8 @@ class QueueDispatcher:
                 "dispatcher(%s): item %s completed", self._project_id, item.id,
             )
             self._broadcast_advance(item.id, "completed")
+            if self._store.auto_idle_if_empty():
+                self._broadcast_state_changed(QueueRunState.IDLE.value)
             self._idle_event.set()
             return
 
@@ -472,6 +484,8 @@ class QueueDispatcher:
                 self._project_id, item.id, exit_block_reason or "(no reason)",
             )
             self._broadcast_advance(item.id, "blocked")
+            if self._store.auto_idle_if_empty():
+                self._broadcast_state_changed(QueueRunState.IDLE.value)
             self._idle_event.set()
             return
 

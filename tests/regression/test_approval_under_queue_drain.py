@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: under queue-draining state, an approval-required tool call
+"""Regression: under queue-running state, an approval-required tool call
 translates to a block exit rather than a pause.
 
 This is the Phase 3 contract: a supervised-autonomy agent that hits an
@@ -106,8 +106,8 @@ def _tool_call_chunk(name: str, args: dict, *, call_id: str = "call_1"):
 
 
 @pytest.mark.asyncio
-async def test_draining_state_makes_approval_a_block(tmp_path):
-    session = Session.new("sess_draining_test", str(tmp_path))
+async def test_running_state_makes_approval_a_block(tmp_path):
+    session = Session.new("sess_running_test", str(tmp_path))
     interceptor = _AlwaysInterceptInterceptor()
     registry = _RecordingRegistry()
     provider = _OneShotProvider([
@@ -121,7 +121,7 @@ async def test_draining_state_makes_approval_a_block(tmp_path):
         context_manager=_FakeContextManager(session),
         interceptor=interceptor,
     )
-    loop._queue_state = "draining"
+    loop._queue_state = "running"
 
     await loop.run("execute the write")
 

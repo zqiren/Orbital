@@ -958,7 +958,7 @@ async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
 
 @router.post("/projects/{project_id}/queue/stop")
 async def stop_queue(project_id: str) -> dict:
-    """Pause queue draining and switch the active session to chat mode."""
+    """Pause the queue and switch the active session to chat mode."""
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
     dispatcher = _agent_manager.get_dispatcher(project_id)
@@ -972,7 +972,7 @@ async def stop_queue(project_id: str) -> dict:
 
 @router.post("/projects/{project_id}/queue/resume")
 async def resume_queue(project_id: str) -> dict:
-    """Resume queue draining. If an attempt was parked, hot-resume it."""
+    """Resume the queue. If an attempt was parked, hot-resume it."""
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
     dispatcher = _agent_manager.get_dispatcher(project_id)

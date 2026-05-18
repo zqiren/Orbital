@@ -58,7 +58,14 @@ class QueueStore:
                 return self._state
             try:
                 text = self._path.read_text(encoding="utf-8")
-                self._state = QueueState.model_validate_json(text)
+                # Pre-validate migration: rename legacy state values
+                # (draining → running, stopped → paused) in the raw JSON so
+                # the strict pydantic enum doesn't reject them. Save back to
+                # disk so the migration is applied permanently on first read.
+                migrated_text, migrated = self._migrate_state_values(text)
+                self._state = QueueState.model_validate_json(migrated_text)
+                if migrated:
+                    self._save_locked()
             except (OSError, ValueError, json.JSONDecodeError):
                 logger.warning(
                     "queue.json at %s is corrupt; starting from empty",
@@ -67,6 +74,33 @@ class QueueStore:
                 self._state = QueueState()
                 self._save_locked()
             return self._state
+
+    @staticmethod
+    def _migrate_state_values(text: str) -> tuple[str, bool]:
+        """Translate legacy queue.state values to the new vocabulary.
+
+        Legacy → new mapping:
+          "draining" → "running"
+          "stopped"  → "paused"
+
+        Returns (possibly-modified-json-text, was_migrated). Operates on the
+        raw JSON before pydantic parsing so the strict QueueRunState enum
+        accepts the file. Idempotent: leaves modern values untouched.
+        """
+        try:
+            parsed = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            return text, False
+        if not isinstance(parsed, dict):
+            return text, False
+        legacy = parsed.get("state")
+        if legacy == "draining":
+            parsed["state"] = "running"
+        elif legacy == "stopped":
+            parsed["state"] = "paused"
+        else:
+            return text, False
+        return json.dumps(parsed), True
 
     def save(self) -> None:
         with self._lock:
@@ -259,6 +293,32 @@ class QueueStore:
         with self._lock:
             state.state = new_state
             self._save_locked()
+
+    def auto_idle_if_empty(self) -> bool:
+        """Transition the queue to IDLE when no queueable items remain.
+
+        "Queueable" means items in QUEUED, RUNNING, or BLOCKED state — i.e.
+        anything the dispatcher could ever pick up or surface. DONE items are
+        terminal and ignored.
+
+        Called by the dispatcher after each advance and on every main-loop
+        tick. Triggers regardless of current state (RUNNING → IDLE on the
+        last advance; PAUSED → IDLE when the user removes the last item
+        from a paused queue). No-op when already IDLE or when queueable
+        items remain.
+
+        Returns True if the state was changed, False otherwise.
+        """
+        state = self.load()
+        with self._lock:
+            queueable = {ItemState.QUEUED, ItemState.RUNNING, ItemState.BLOCKED}
+            if any(it.state in queueable for it in state.items):
+                return False
+            if state.state == QueueRunState.IDLE:
+                return False
+            state.state = QueueRunState.IDLE
+            self._save_locked()
+            return True
 
     def set_chat_session_id(self, sid: Optional[str]) -> None:
         state = self.load()

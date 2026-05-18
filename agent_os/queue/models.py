@@ -39,8 +39,9 @@ class AttemptOutcome(str, Enum):
 
 
 class QueueRunState(str, Enum):
-    DRAINING = "draining"
-    STOPPED = "stopped"
+    RUNNING = "running"
+    PAUSED = "paused"
+    IDLE = "idle"
 
 
 def _now_iso() -> str:
@@ -76,6 +77,6 @@ class ItemRecord(BaseModel):
 
 class QueueState(BaseModel):
     version: int = 1
-    state: QueueRunState = QueueRunState.DRAINING
+    state: QueueRunState = QueueRunState.RUNNING
     items: List[ItemRecord] = Field(default_factory=list)
     chat_session_id: Optional[str] = None

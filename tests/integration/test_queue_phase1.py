@@ -158,12 +158,12 @@ async def test_disk_state_matches_in_memory_after_each_mutation(store, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_idles_when_queue_stopped(store):
-    store.set_queue_state(QueueRunState.STOPPED)
+async def test_dispatcher_idles_when_queue_paused(store):
+    store.set_queue_state(QueueRunState.PAUSED)
     store.add_item("first")
     mgr = _make_mock_manager()
     d = QueueDispatcher(
-        project_id="proj_stopped",
+        project_id="proj_paused",
         store=store,
         agent_manager=mgr,
     )
