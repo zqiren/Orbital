@@ -857,6 +857,11 @@ class QueueReorderRequest(BaseModel):
     item_ids: list[str]
 
 
+class QueueRetryRequest(BaseModel):
+    mode: str  # "edit" | "answer"
+    input: str
+
+
 def _resolve_queue_store(project_id: str):
     """Return a QueueStore for the project even if no agent is running.
 
@@ -1004,6 +1009,41 @@ async def resume_queue(project_id: str) -> dict:
             detail="No active dispatcher; start the agent first",
         )
     return await dispatcher.resume()
+
+
+@router.post("/projects/{project_id}/queue/items/{item_id}/retry")
+async def retry_queue_item(
+    project_id: str, item_id: str, req: QueueRetryRequest,
+) -> dict:
+    """Retry a BLOCKED queue item, hot-resuming the prior attempt's session.
+
+    mode="answer": inject `input` raw — for question-card answers.
+    mode="edit":  re-wrap `input` with `[QUEUE ITEM | id | attempt=N+1]`.
+    """
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    if not req.input or not req.input.strip():
+        raise HTTPException(status_code=400, detail="input must be non-empty")
+    if req.mode not in ("edit", "answer"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'edit' or 'answer'",
+        )
+    try:
+        return await dispatcher.retry_blocked_item(
+            item_id, req.input, mode=req.mode,
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"item {item_id} not found",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/agents/{project_id}/approve")
