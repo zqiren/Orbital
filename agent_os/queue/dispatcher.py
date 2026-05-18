@@ -288,6 +288,134 @@ class QueueDispatcher:
         await self._await_and_handle(item)
 
     # ------------------------------------------------------------------
+    # Concern 5: retry a BLOCKED item on its preserved session
+    # ------------------------------------------------------------------
+
+    async def retry_blocked_item(
+        self, item_id: str, new_input: str, *, mode: str,
+    ) -> dict:
+        """Re-dispatch a BLOCKED item on the same session as its prior attempt.
+
+        mode="answer": inject `new_input` raw (used by question-card answers).
+        mode="edit":   wrap with `[QUEUE ITEM | id=... | attempt=N+1]` header.
+
+        Hot-resume semantics: pulls the most recent attempt's session_id and
+        calls AgentManager.switch_session to reload that JSONL as the active
+        session. switch_session also resets `_cold_resume_injected` and
+        related ContextManager flags so memory files re-read fresh on the
+        next loop run. A new AttemptRecord is appended sharing the prior
+        session_id (we are continuing it, not opening a new one).
+        """
+        if mode not in ("answer", "edit"):
+            raise ValueError(f"mode must be 'answer' or 'edit', got {mode!r}")
+
+        # 1. Look up the item; assert BLOCKED + has a prior attempt
+        qstate = self._store.load()
+        item = next((it for it in qstate.items if it.id == item_id), None)
+        if item is None:
+            raise KeyError(f"item {item_id} not found")
+        if item.state != ItemState.BLOCKED:
+            raise ValueError(
+                f"item {item_id} is not BLOCKED (state={item.state.value})"
+            )
+        if not item.attempts:
+            raise ValueError(
+                f"item {item_id} has no attempts to retry from"
+            )
+
+        # 2. Pull session_id from the most recent attempt
+        prior_session_id = item.attempts[-1].session_id
+
+        # 3 + 4. Swap the active session back to the parked attempt's JSONL.
+        # switch_session resets _cold_resume_injected / _recovery_injected /
+        # _window_factor / _last_usage_pct on the ContextManager for us.
+        try:
+            await self._agent_manager.switch_session(
+                self._project_id, prior_session_id, start_loop=False,
+            )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): switch to prior session %s failed for retry "
+                "of item %s",
+                self._project_id, prior_session_id, item_id,
+            )
+            raise
+
+        # 5. Mint a new attempt record. attempt_number is len+1; the new
+        # attempt reuses prior_session_id because retries continue the
+        # same JSONL, they don't open a new one.
+        attempt_number = len(item.attempts) + 1
+        self._store.append_attempt(
+            item_id, AttemptRecord(session_id=prior_session_id),
+        )
+
+        # 7. State → RUNNING. Also set loop._queue_state so Phase-3
+        # approval-as-block behaviour fires on the retry.
+        self._store.set_item_state(item_id, ItemState.RUNNING)
+        loop_obj = self._agent_manager.get_loop(self._project_id)
+        if loop_obj is not None:
+            try:
+                loop_obj._queue_state = "running"
+            except Exception:
+                pass
+
+        # 6. Inject — header for edit, raw for answer.
+        if mode == "edit":
+            injected = (
+                f"[QUEUE ITEM | id={item_id} | attempt={attempt_number}]\n"
+                f"{new_input}"
+            )
+        else:  # mode == "answer"
+            injected = new_input
+
+        try:
+            await self._agent_manager.inject_message(
+                self._project_id, injected,
+            )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): inject failed during retry of item %s",
+                self._project_id, item_id,
+            )
+            self._store.close_latest_attempt(
+                item_id,
+                outcome=AttemptOutcome.INTERRUPTED,
+                block_reason="inject failed during retry",
+            )
+            self._store.set_item_state(item_id, ItemState.BLOCKED)
+            raise
+
+        logger.info(
+            "dispatcher(%s): retrying item %s attempt=%d on session=%s "
+            "(mode=%s)",
+            self._project_id, item_id, attempt_number, prior_session_id, mode,
+        )
+
+        # 8. Spawn a handler task that awaits the loop and routes the exit
+        # through the standard handler — same shape as _resume_attempt.
+        # Note: inject_message (Case 2: idle session + alive handle) already
+        # calls _start_loop internally, so we do NOT call _start_loop here.
+        asyncio.create_task(self._retry_attempt_handler(item))
+
+        self._broadcast_state_changed(QueueRunState.RUNNING.value)
+        return {
+            "status": "retry_started",
+            "item_id": item_id,
+            "attempt_number": attempt_number,
+            "session_id": prior_session_id,
+            "mode": mode,
+        }
+
+    async def _retry_attempt_handler(self, item: ItemRecord) -> None:
+        """Wait for the retry's loop run to finish and route the exit.
+
+        Mirrors the shape of _resume_attempt — _await_and_handle only reads
+        `item.id`, so the stale `state` / `attempts` on the captured item
+        object don't cause incorrect routing.
+        """
+        await self._await_and_handle(item)
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
