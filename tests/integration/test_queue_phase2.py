@@ -107,7 +107,7 @@ async def test_three_item_pipeline_complete_blocked_text(tmp_path):
     mgr = _ScriptedAgentManager([
         {"reason": "complete", "summary": "wrote the code"},
         {"reason": "blocked", "block_reason": "no prod creds"},
-        {"reason": "text"},  # stalls
+        {"reason": "text"},  # contract violation — Concern 4
     ])
 
     dispatcher = QueueDispatcher(
@@ -118,12 +118,12 @@ async def test_three_item_pipeline_complete_blocked_text(tmp_path):
     await dispatcher.start()
     dispatcher.notify_new_item()
 
-    # Wait for items 1 and 2 to be processed (advance) and item 3 to be
-    # running and stalled (no advance).
+    # Concern 4: all three items reach a terminal state. Item 3's text-only
+    # exit is now a contract violation and routes through the blocked path.
     ok = await _wait_until(lambda: (
         store.load().items[0].state == ItemState.DONE
         and store.load().items[1].state == ItemState.BLOCKED
-        and store.load().items[2].state == ItemState.RUNNING
+        and store.load().items[2].state == ItemState.BLOCKED
     ), timeout=10.0)
 
     if not ok:
@@ -142,20 +142,23 @@ async def test_three_item_pipeline_complete_blocked_text(tmp_path):
     assert state.items[0].attempts[0].outcome == AttemptOutcome.COMPLETED
     assert state.items[0].attempts[0].summary == "wrote the code"
 
-    # Item 2: blocked
+    # Item 2: explicitly blocked
     assert state.items[1].id == item2.id
     assert state.items[1].state == ItemState.BLOCKED
     assert state.items[1].attempts[0].outcome == AttemptOutcome.BLOCKED
     assert state.items[1].attempts[0].block_reason == "no prod creds"
 
-    # Item 3: still running (stalled because text-only)
+    # Item 3: blocked-by-contract-violation (Concern 4)
     assert state.items[2].id == item3.id
-    assert state.items[2].state == ItemState.RUNNING
+    assert state.items[2].state == ItemState.BLOCKED
     assert len(state.items[2].attempts) == 1
-    assert state.items[2].attempts[0].outcome is None
+    assert state.items[2].attempts[0].outcome == AttemptOutcome.BLOCKED
+    assert "contract violation" in (
+        state.items[2].attempts[0].block_reason or ""
+    )
 
-    # Session rotation happened twice (after items 1 and 2; item 3 stalled)
-    assert mgr.new_session_calls == 2
+    # Session rotation happened after each of the three terminal exits.
+    assert mgr.new_session_calls == 3
 
     await dispatcher.shutdown()
 
@@ -193,14 +196,19 @@ async def test_each_attempt_records_its_own_session_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_text_only_exit_does_not_rotate_session(tmp_path):
+async def test_text_only_exit_is_contract_violation_and_rotates(tmp_path):
+    """Concern 4 inversion: text-only exit on a queue item is now a contract
+    violation, not a stall. The dispatcher MUST close the attempt as BLOCKED
+    with a contract-violation reason and rotate the session — same shape as
+    an explicit mark_task_blocked. The pre-Concern-4 behavior (stall, no
+    rotation) is exactly what this assertion now forbids."""
     store = QueueStore(tmp_path / "queue.json")
-    store.add_item("just chat")
+    item = store.add_item("just chat")
 
     mgr = _ScriptedAgentManager([{"reason": "text"}])
 
     dispatcher = QueueDispatcher(
-        project_id="proj_no_rotate",
+        project_id="proj_contract_violation",
         store=store,
         agent_manager=mgr,
     )
@@ -208,15 +216,28 @@ async def test_text_only_exit_does_not_rotate_session(tmp_path):
     dispatcher.notify_new_item()
 
     ok = await _wait_until(
-        lambda: store.load().items[0].state == ItemState.RUNNING
-        and len(store.load().items[0].attempts) == 1,
+        lambda: store.load().items[0].state == ItemState.BLOCKED,
         timeout=5.0,
     )
-    assert ok
+    if not ok:
+        state = store.load()
+        await dispatcher.shutdown()
+        pytest.fail(
+            f"item never reached BLOCKED. final state: "
+            f"{state.items[0].state.value}, attempts={state.items[0].attempts}"
+        )
 
-    # Give time for any incorrect rotation to happen
-    await asyncio.sleep(0.5)
-    assert mgr.new_session_calls == 0
-    assert store.load().items[0].state == ItemState.RUNNING
+    state = store.load()
+    assert state.items[0].id == item.id
+    assert state.items[0].state == ItemState.BLOCKED
+    assert len(state.items[0].attempts) == 1
+    attempt = state.items[0].attempts[0]
+    assert attempt.outcome == AttemptOutcome.BLOCKED
+    assert "contract violation" in (attempt.block_reason or ""), (
+        f"expected 'contract violation' in block_reason, "
+        f"got: {attempt.block_reason!r}"
+    )
+    # Rotation MUST have happened — pre-Concern-4 this was 0.
+    assert mgr.new_session_calls == 1
 
     await dispatcher.shutdown()
