@@ -726,6 +726,9 @@ async def get_queue(project_id: str) -> dict:
 
 @router.post("/projects/{project_id}/queue/items")
 async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
+    """Persist a queue item. Does NOT auto-start the agent or transition
+    queue state. Staging-only: the user explicitly starts the queue via
+    POST /queue/start (or implicitly via /queue/resume if paused)."""
     if not req.content or not req.content.strip():
         raise HTTPException(status_code=400, detail="content must be non-empty")
     store = _resolve_queue_store(project_id)
@@ -738,27 +741,10 @@ async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
         idempotency_key=req.idempotency_key,
     )
 
-    # Concern 2 of TASK-queue-architecture-amendments.md:
-    # Auto-start the agent if no handle exists, so a dispatcher comes up
-    # to drain the item. Respect PAUSED — the user explicitly paused, so
-    # the item must wait for Resume rather than firing the loop now.
-    # Auto-start does NOT pass an initial_message; the dispatcher's _run
-    # loop picks up the queued item via the store and (per Concern 3)
-    # wraps it with a `[QUEUE ITEM]` header before injection.
-    if _agent_manager is not None and not _agent_manager.has_handle(project_id):
-        from agent_os.queue.models import QueueRunState
-        if store.load().state != QueueRunState.PAUSED:
-            try:
-                await _agent_manager.ensure_agent_started(project_id)
-            except Exception:
-                # Don't fail the add — the item is already persisted. The
-                # user can /queue/resume or otherwise start the agent
-                # manually to retry.
-                logger.exception(
-                    "queue auto-start failed for project %s; item %s left queued",
-                    project_id, item.id,
-                )
-
+    # If a dispatcher already exists (queue is RUNNING or PAUSED with the
+    # agent up), notify it so it can pick up this new item on its next tick.
+    # If no dispatcher (queue IDLE or no agent), the item sits queued until
+    # the user clicks Start.
     dispatcher = _agent_manager.get_dispatcher(project_id) if _agent_manager else None
     if dispatcher is not None:
         dispatcher.notify_new_item()
@@ -836,9 +822,112 @@ async def stop_queue(project_id: str) -> dict:
     return await dispatcher.stop()
 
 
+def _project_has_completed_onboarding(project: dict) -> bool:
+    """Onboarding signal: PROJECT_STATE.md exists.
+
+    PROJECT_STATE.md is written by run_session_end_routine (the LLM-driven
+    summarizer) after the first session ends — which only happens after
+    the user has had at least one back-and-forth in chat. Before that the
+    project has no captured context and unattended queue dispatch is
+    premature. After that, the project has memory files and the agent
+    can resume into a real state.
+    """
+    workspace = project.get("workspace", "")
+    if not workspace:
+        return False
+    return os.path.exists(ProjectPaths(workspace).project_state)
+
+
+@router.post("/projects/{project_id}/queue/start")
+async def start_queue(project_id: str) -> dict:
+    """Start (or resume) draining the queue.
+
+    Three branches based on current queue state:
+    - RUNNING: no-op, returns {"status": "already_running"}.
+    - PAUSED:  hot-resume the parked attempt session via dispatcher.resume().
+    - IDLE:    ensure the agent is running (auto-start if needed), flip queue
+               state to RUNNING, kick the dispatcher.
+
+    Gated by onboarding completion: PROJECT_STATE.md must exist on disk
+    (written by the session-end routine after the first chat session
+    completes). Before onboarding the queue cannot start — the user must
+    chat with the agent first so the project has captured context to
+    operate against.
+    """
+    from agent_os.queue.models import QueueRunState
+
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    if _project_store is None:
+        raise HTTPException(status_code=503, detail="Project store not ready")
+
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    if not _project_has_completed_onboarding(project):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Complete onboarding in Chat first — the project has no "
+                "captured state yet (PROJECT_STATE.md missing). Send a "
+                "message in the Chat tab, let the agent respond, and try "
+                "starting the queue again."
+            ),
+        )
+
+    store = _resolve_queue_store(project_id)
+    current_state = store.load().state
+    has_handle = _agent_manager.has_handle(project_id)
+
+    # True no-op only when the queue says RUNNING AND an agent is actually
+    # up to back that claim. State-without-handle (e.g. fresh project whose
+    # queue defaulted to RUNNING but no agent has started, or daemon restart
+    # that didn't auto-resume) needs to fall through to the auto-start path.
+    if current_state == QueueRunState.RUNNING and has_handle:
+        return {"status": "already_running"}
+
+    if current_state == QueueRunState.PAUSED:
+        # Existing resume behavior — hot-resumes any parked attempt.
+        dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is None:
+            # No dispatcher (agent was torn down) — auto-start, then resume.
+            await _agent_manager.ensure_agent_started(project_id)
+            dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is None:
+            raise HTTPException(status_code=500, detail="Dispatcher unavailable after start")
+        return await dispatcher.resume()
+
+    # IDLE, or RUNNING-without-handle: auto-start the agent if needed and
+    # ensure queue state is RUNNING so the dispatcher will drain.
+    if not has_handle:
+        try:
+            await _agent_manager.ensure_agent_started(project_id)
+        except Exception as e:
+            logger.exception("queue start: agent auto-start failed for %s", project_id)
+            raise HTTPException(status_code=500, detail=f"Agent auto-start failed: {e}")
+    if current_state != QueueRunState.RUNNING:
+        store.set_queue_state(QueueRunState.RUNNING)
+        if _ws_manager is not None:
+            _ws_manager.broadcast(project_id, {
+                "type": "queue.state_changed",
+                "project_id": project_id,
+                "state": QueueRunState.RUNNING.value,
+            })
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is not None:
+        dispatcher.notify_new_item()
+    return {"status": "running"}
+
+
 @router.post("/projects/{project_id}/queue/resume")
 async def resume_queue(project_id: str) -> dict:
-    """Resume the queue. If an attempt was parked, hot-resume it."""
+    """Resume the queue. If an attempt was parked, hot-resume it.
+
+    Kept as an alias for /queue/start so existing frontends that emit
+    /queue/resume keep working. New code should call /queue/start, which
+    handles both idle→running and paused→running.
+    """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
     dispatcher = _agent_manager.get_dispatcher(project_id)
