@@ -359,11 +359,15 @@ class QueueDispatcher:
             except Exception:
                 pass
 
-        # 6. Inject — header for edit, raw for answer.
+        # 6. Inject — headered re-wrap for edit, raw user message for answer.
+        # Edit-mode reuses the same HEADER_CONTRACT block as a first dispatch
+        # so the agent sees the same contract on every queue-item user
+        # message regardless of attempt number.
         if mode == "edit":
             injected = (
                 f"[QUEUE ITEM | id={item_id} | attempt={attempt_number}]\n"
-                f"{new_input}"
+                + self.HEADER_CONTRACT
+                + new_input
             )
         else:  # mode == "answer"
             injected = new_input
@@ -514,7 +518,10 @@ class QueueDispatcher:
             except Exception:
                 pass
 
-        header = f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
+        header = (
+            f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
+            + self.HEADER_CONTRACT
+        )
         wrapped_content = header + item.content
 
         try:
@@ -535,126 +542,239 @@ class QueueDispatcher:
 
         await self._await_and_handle(item)
 
+    # ------------------------------------------------------------------
+    # Contract delivery: header + corrective turn
+    # ------------------------------------------------------------------
+
+    # The contract reminder embedded in every queue-item user message,
+    # between the [QUEUE ITEM | id | attempt] metadata line and the item
+    # content. H1 verification (12 LLM calls, 2 models × 2 placements ×
+    # 3 samples) showed header-only delivery yields strictly better final
+    # outcomes than system-prompt delivery — same for Kimi, dramatically
+    # better for deepseek (0/3 → 3/3 signal rate after corrective turn).
+    # First-turn signal rate is 0% under either placement on ambiguous
+    # tasks, so the corrective turn does the load-bearing work; the header
+    # makes the corrective injection legible to the model when it fires.
+    HEADER_CONTRACT = (
+        "You are working on a queue item. When you finish, call "
+        "mark_task_complete(summary). If you cannot proceed — stuck, "
+        "missing info, need to ask the user — call mark_task_blocked(reason); "
+        "put any question for the user directly in reason. Do not end "
+        "with plain text.\n"
+    )
+
+    # The stern message the dispatcher injects when the agent exits
+    # text-only on its first turn of an attempt. The agent gets ONE more
+    # chance to signal correctly before the dispatcher records a contract
+    # violation. Keep the two tool names and the "no plain text" rule
+    # in sync with HEADER_CONTRACT — drift between the two would confuse
+    # weaker models that lean on consistency in nearby context.
+    CORRECTIVE_TURN_PROMPT = (
+        "[SYSTEM: You exited without declaring outcome. Call "
+        "mark_task_complete if you finished the task, or mark_task_blocked "
+        "if you cannot proceed. Do not respond with text. This is your "
+        "final turn — the next text-only exit will be recorded as a "
+        "contract violation and the queue will advance past this item.]"
+    )
+
     async def _await_and_handle(self, item: ItemRecord) -> None:
         """Wait for the in-flight loop task to finish then route the outcome
-        based on AgentLoop._exit_reason. Honors the watchdog and stop signals."""
-        loop_obj = self._agent_manager.get_loop(self._project_id)
-        gen_at_start = self._stop_generation
+        based on AgentLoop._exit_reason. Honors watchdog, stop, and (CHANGE
+        2 of the architecture amendments) gives the agent one corrective
+        turn if it exits text-only on a queue item.
 
-        try:
-            await asyncio.wait_for(
-                self._wait_for_loop_done(),
-                timeout=self._max_runtime_seconds,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "dispatcher(%s): item %s exceeded runtime cap %ds; terminating",
-                self._project_id, item.id, self._max_runtime_seconds,
-            )
+        The corrective_turn_used flag is a local variable, so a retry of a
+        blocked item (which calls _await_and_handle afresh from
+        _retry_attempt_handler) gets its own corrective turn.
+        """
+        corrective_turn_used = False
+
+        while True:
+            loop_obj = self._agent_manager.get_loop(self._project_id)
+            gen_at_start = self._stop_generation
+
             try:
-                if loop_obj is not None:
-                    await loop_obj.terminate()
-            except Exception:
-                logger.exception(
-                    "dispatcher(%s): terminate after watchdog failed",
-                    self._project_id,
+                await asyncio.wait_for(
+                    self._wait_for_loop_done(),
+                    timeout=self._max_runtime_seconds,
                 )
-            self._store.close_latest_attempt(
-                item.id,
-                outcome=AttemptOutcome.INTERRUPTED,
-                block_reason="exceeded runtime cap",
-            )
-            # Rotate BEFORE setting state to BLOCKED so a parallel main-loop
-            # tick can't pick up the next queued item while the rotation is
-            # still in flight. Belt-and-suspenders with the head-RUNNING
-            # guard in _run.
-            await self._rotate_session_for_advance()
-            self._store.set_item_state(item.id, ItemState.BLOCKED)
-            self._broadcast_advance(item.id, "interrupted")
-            if self._store.auto_idle_if_empty():
-                self._broadcast_state_changed(QueueRunState.IDLE.value)
-            self._idle_event.set()
-            return
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "dispatcher(%s): item %s exceeded runtime cap %ds; terminating",
+                    self._project_id, item.id, self._max_runtime_seconds,
+                )
+                try:
+                    if loop_obj is not None:
+                        await loop_obj.terminate()
+                except Exception:
+                    logger.exception(
+                        "dispatcher(%s): terminate after watchdog failed",
+                        self._project_id,
+                    )
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.INTERRUPTED,
+                    block_reason="exceeded runtime cap",
+                )
+                self._log_attempt_close(
+                    item.id, "interrupted",
+                    first_turn_signaled=False,
+                    corrective_used=corrective_turn_used,
+                )
+                # Rotate BEFORE setting state to BLOCKED so a parallel main-loop
+                # tick can't pick up the next queued item while the rotation is
+                # still in flight. Belt-and-suspenders with the head-RUNNING
+                # guard in _run.
+                await self._rotate_session_for_advance()
+                self._store.set_item_state(item.id, ItemState.BLOCKED)
+                self._broadcast_advance(item.id, "interrupted")
+                if self._store.auto_idle_if_empty():
+                    self._broadcast_state_changed(QueueRunState.IDLE.value)
+                self._idle_event.set()
+                return
 
-        # If stop() was called mid-attempt, the loop was terminated by
-        # switch_session. We MUST NOT close the attempt — preserve it
-        # exactly as it was so resume can pick up cleanly.
-        if self._stop_generation != gen_at_start:
-            logger.info(
-                "dispatcher(%s): item %s loop terminated by stop; "
-                "attempt preserved (no close, no advance, no rotation)",
-                self._project_id, item.id,
-            )
-            return
+            # If stop() was called mid-attempt, the loop was terminated by
+            # switch_session. We MUST NOT close the attempt — preserve it
+            # exactly as it was so resume can pick up cleanly.
+            if self._stop_generation != gen_at_start:
+                logger.info(
+                    "dispatcher(%s): item %s loop terminated by stop; "
+                    "attempt preserved (no close, no advance, no rotation)",
+                    self._project_id, item.id,
+                )
+                return
 
-        loop_obj = self._agent_manager.get_loop(self._project_id)
-        exit_reason = getattr(loop_obj, "_exit_reason", "text") if loop_obj else "text"
-        exit_summary = getattr(loop_obj, "_exit_summary", None) if loop_obj else None
-        exit_block_reason = (
-            getattr(loop_obj, "_exit_block_reason", None) if loop_obj else None
-        )
-
-        if exit_reason == "complete":
-            self._store.close_latest_attempt(
-                item.id,
-                outcome=AttemptOutcome.COMPLETED,
-                summary=exit_summary or "",
+            loop_obj = self._agent_manager.get_loop(self._project_id)
+            exit_reason = getattr(loop_obj, "_exit_reason", "text") if loop_obj else "text"
+            exit_summary = getattr(loop_obj, "_exit_summary", None) if loop_obj else None
+            exit_block_reason = (
+                getattr(loop_obj, "_exit_block_reason", None) if loop_obj else None
             )
-            await self._rotate_session_for_advance()
-            self._store.set_item_state(item.id, ItemState.DONE)
-            logger.info(
-                "dispatcher(%s): item %s completed", self._project_id, item.id,
-            )
-            self._broadcast_advance(item.id, "completed")
-            if self._store.auto_idle_if_empty():
-                self._broadcast_state_changed(QueueRunState.IDLE.value)
-            self._idle_event.set()
-            return
 
-        if exit_reason == "blocked":
+            if exit_reason == "complete":
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.COMPLETED,
+                    summary=exit_summary or "",
+                )
+                self._log_attempt_close(
+                    item.id, "completed",
+                    first_turn_signaled=not corrective_turn_used,
+                    corrective_used=corrective_turn_used,
+                )
+                await self._rotate_session_for_advance()
+                self._store.set_item_state(item.id, ItemState.DONE)
+                self._broadcast_advance(item.id, "completed")
+                if self._store.auto_idle_if_empty():
+                    self._broadcast_state_changed(QueueRunState.IDLE.value)
+                self._idle_event.set()
+                return
+
+            if exit_reason == "blocked":
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.BLOCKED,
+                    block_reason=exit_block_reason or "",
+                )
+                self._log_attempt_close(
+                    item.id, "blocked",
+                    first_turn_signaled=not corrective_turn_used,
+                    corrective_used=corrective_turn_used,
+                    reason=exit_block_reason,
+                )
+                await self._rotate_session_for_advance()
+                self._store.set_item_state(item.id, ItemState.BLOCKED)
+                self._broadcast_advance(item.id, "blocked")
+                if self._store.auto_idle_if_empty():
+                    self._broadcast_state_changed(QueueRunState.IDLE.value)
+                self._idle_event.set()
+                return
+
+            # text-only on a queue item.
+            # CHANGE 2: give the agent ONE corrective turn before recording
+            # a contract violation. Inject a stern system reminder telling
+            # the agent it must call a signal next, then restart the loop
+            # on the same session and wait for the next exit.
+            if not corrective_turn_used:
+                logger.info(
+                    "dispatcher(%s): item %s exited text-only; injecting "
+                    "corrective system message and restarting loop",
+                    self._project_id, item.id,
+                )
+                try:
+                    await self._agent_manager.inject_system_message(
+                        self._project_id, self.CORRECTIVE_TURN_PROMPT,
+                    )
+                except Exception:
+                    # If inject fails we cannot ask the agent again — fall
+                    # through to the violation branch. Leave the flag False
+                    # so the reason text reflects the actual situation
+                    # (the agent didn't get a corrective turn).
+                    logger.exception(
+                        "dispatcher(%s): corrective-turn injection failed; "
+                        "falling through to contract-violation close",
+                        self._project_id,
+                    )
+                else:
+                    # Inject succeeded; loop is restarting. Mark the flag
+                    # so a SECOND text-only exit gets the "ignored" message.
+                    corrective_turn_used = True
+                    continue
+
+            # Either:
+            # (a) this is the second text-only exit (corrective turn was
+            #     used and ignored), or
+            # (b) the corrective injection itself failed and we're now
+            #     forced to record a violation.
+            # Both are contract violations from the queue's perspective.
+            contract_reason = (
+                "agent exited without declaring outcome — contract "
+                "violation (corrective turn ignored)"
+                if corrective_turn_used
+                else "agent exited without declaring outcome — contract violation"
+            )
             self._store.close_latest_attempt(
                 item.id,
                 outcome=AttemptOutcome.BLOCKED,
-                block_reason=exit_block_reason or "",
+                block_reason=contract_reason,
+            )
+            self._log_attempt_close(
+                item.id, "violation",
+                first_turn_signaled=False,
+                corrective_used=corrective_turn_used,
+                reason=contract_reason,
             )
             await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.BLOCKED)
-            logger.info(
-                "dispatcher(%s): item %s blocked: %s",
-                self._project_id, item.id, exit_block_reason or "(no reason)",
-            )
             self._broadcast_advance(item.id, "blocked")
             if self._store.auto_idle_if_empty():
                 self._broadcast_state_changed(QueueRunState.IDLE.value)
             self._idle_event.set()
             return
 
-        # text-only on a queue item → contract violation (Concern 4).
-        # The agent exited without declaring complete/blocked. We close the
-        # attempt as BLOCKED with the contract-violation reason, rotate the
-        # session, mark the item BLOCKED, and broadcast advance — same shape
-        # as an explicit mark_task_blocked. The _stalled_item_id machinery
-        # is intentionally left untouched on this path: queue items never
-        # stall on text-only now. Chat-mode loops never reach this method.
-        contract_reason = (
-            "agent exited without declaring outcome — contract violation"
+    def _log_attempt_close(
+        self,
+        item_id: str,
+        outcome: str,
+        *,
+        first_turn_signaled: bool,
+        corrective_used: bool,
+        reason: str | None = None,
+    ) -> None:
+        """Structured single-line log for an attempt close.
+
+        Pin format: every attempt produces exactly one of these lines, with
+        a consistent set of fields. Lets us tail `dispatcher(.*): close `
+        and extract first-turn signal rate over a session without parsing
+        free-form messages.
+        """
+        reason_snip = (reason or "").replace("\n", " ")[:80]
+        logger.info(
+            "dispatcher(%s): close item=%s outcome=%s "
+            "first_turn_signaled=%s corrective_used=%s reason=%r",
+            self._project_id, item_id, outcome,
+            first_turn_signaled, corrective_used, reason_snip,
         )
-        self._store.close_latest_attempt(
-            item.id,
-            outcome=AttemptOutcome.BLOCKED,
-            block_reason=contract_reason,
-        )
-        await self._rotate_session_for_advance()
-        self._store.set_item_state(item.id, ItemState.BLOCKED)
-        logger.warning(
-            "dispatcher(%s): item %s blocked by contract violation "
-            "(text-only exit on queue item)",
-            self._project_id, item.id,
-        )
-        self._broadcast_advance(item.id, "blocked")
-        if self._store.auto_idle_if_empty():
-            self._broadcast_state_changed(QueueRunState.IDLE.value)
-        self._idle_event.set()
 
     async def _rotate_session_for_advance(self) -> None:
         try:

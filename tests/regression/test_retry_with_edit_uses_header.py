@@ -63,10 +63,16 @@ async def test_retry_edit_wraps_with_attempt_2_header(tmp_path):
     assert result["attempt_number"] == 2
     assert result["session_id"] == "sess_A"
 
-    # Exact wire format.
-    expected = f"[QUEUE ITEM | id={item.id} | attempt=2]\nedited content"
+    # Exact wire format — header includes the same HEADER_CONTRACT block
+    # as a first dispatch so the agent sees the contract on every queue
+    # user message.
+    expected = (
+        f"[QUEUE ITEM | id={item.id} | attempt=2]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+        + "edited content"
+    )
     assert mgr.injected_messages == [expected], (
-        f"edit-mode retry must wrap with header\n"
+        f"edit-mode retry must wrap with header + contract\n"
         f"  expected: {expected!r}\n  actual:   {mgr.injected_messages!r}"
     )
 
@@ -116,7 +122,11 @@ async def test_retry_edit_header_uses_correct_attempt_number_after_many(
     )
 
     assert result["attempt_number"] == 5
-    expected = f"[QUEUE ITEM | id={item.id} | attempt=5]\ntry this instead"
+    expected = (
+        f"[QUEUE ITEM | id={item.id} | attempt=5]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+        + "try this instead"
+    )
     assert mgr.injected_messages == [expected]
 
     await dispatcher.shutdown()

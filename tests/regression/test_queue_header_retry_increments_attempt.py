@@ -89,7 +89,11 @@ async def test_second_dispatch_of_same_item_uses_attempt_two(tmp_path):
         pytest.fail("dispatcher never re-injected the item")
 
     _, content = mgr.injected[0]
-    expected = f"[QUEUE ITEM | id={item.id} | attempt=2]\nredo me"
+    expected = (
+        f"[QUEUE ITEM | id={item.id} | attempt=2]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+        + "redo me"
+    )
     assert content == expected, (
         f"expected attempt=2 wrapping on the re-dispatch\n"
         f"  expected: {expected!r}\n  actual:   {content!r}"
@@ -134,7 +138,10 @@ async def test_attempt_counter_continues_past_two(tmp_path):
     assert ok, "dispatcher never re-injected the item"
 
     _, content = mgr.injected[0]
-    assert content.startswith(f"[QUEUE ITEM | id={item.id} | attempt=4]\n")
+    assert content.startswith(
+        f"[QUEUE ITEM | id={item.id} | attempt=4]\n"
+        + QueueDispatcher.HEADER_CONTRACT
+    )
     assert content.endswith("stubborn item")
 
     await dispatcher.shutdown()
