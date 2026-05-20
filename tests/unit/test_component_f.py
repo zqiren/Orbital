@@ -934,6 +934,77 @@ class TestAgentManager:
             "proj_1", Autonomy.HANDS_OFF, session_id="sess_a"
         ) is False
 
+    @pytest.mark.asyncio
+    async def test_two_sessions_one_project_are_isolated(self):
+        """Two sessions in one project route to distinct handles.
+
+        Phase 3c-overnight isolation invariant: a message injected into
+        session A must reach only session A's session object, never
+        session B's. Likewise for read APIs (is_running, get_run_status,
+        get_session, get_pending_approval).
+        """
+        mgr, _, _, _, _ = self._make_manager()
+
+        # Set up two distinct handles for the same project under
+        # different session ids. Session A is running, session B is idle.
+        session_a = MagicMock(name="session_a")
+        task_a = MagicMock()
+        task_a.done.return_value = False  # A is running
+        handle_a = MagicMock(
+            session=session_a, task=task_a,
+            interceptor=MagicMock(_pending_approvals={}),
+        )
+        session_a.is_stopped.return_value = False
+        session_a._paused_for_approval = False
+
+        session_b = MagicMock(name="session_b")
+        task_b = MagicMock()
+        task_b.done.return_value = True  # B is idle
+        handle_b = MagicMock(
+            session=session_b, task=task_b,
+            interceptor=MagicMock(_pending_approvals={}),
+        )
+        session_b.is_stopped.return_value = False
+        session_b._paused_for_approval = False
+
+        mgr._handles[("proj_iso", "sess_a")] = handle_a
+        mgr._handles[("proj_iso", "sess_b")] = handle_b
+
+        # --- inject_message routes to correct session ---
+        # Injecting into A (running) queues into A only.
+        result_a = await mgr.inject_message(
+            "proj_iso", "msg-for-a", session_id="sess_a",
+        )
+        assert result_a == "queued"
+        session_a.queue_message.assert_called_once_with("msg-for-a", nonce=None)
+        session_b.queue_message.assert_not_called()
+
+        # Injecting into B (idle) hot-resumes B only — append on B's session.
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
+            result_b = await mgr.inject_message(
+                "proj_iso", "msg-for-b", session_id="sess_b",
+            )
+            assert result_b == "delivered"
+            session_b.append.assert_called_once()
+            appended = session_b.append.call_args[0][0]
+            assert appended["content"] == "msg-for-b"
+            # A's session must NOT have received the new append.
+            session_a.append.assert_not_called()
+            # _start_loop must be called with session_id="sess_b".
+            mock_start.assert_awaited_once_with("proj_iso", session_id="sess_b")
+
+        # --- read APIs respect session_id ---
+        assert mgr.is_running("proj_iso", session_id="sess_a") is True
+        assert mgr.is_running("proj_iso", session_id="sess_b") is False
+        assert mgr.get_run_status("proj_iso", session_id="sess_a") == "running"
+        assert mgr.get_run_status("proj_iso", session_id="sess_b") == "idle"
+        assert mgr.get_session("proj_iso", session_id="sess_a") is session_a
+        assert mgr.get_session("proj_iso", session_id="sess_b") is session_b
+        # Default-session lookup against this project returns None — neither
+        # handle was registered under the default sentinel.
+        assert mgr.get_session("proj_iso") is None
+        assert mgr.is_running("proj_iso") is False
+
 
 # ---------------------------------------------------------------------------
 # ProjectStore tests
