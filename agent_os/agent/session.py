@@ -17,7 +17,7 @@ import threading
 from datetime import datetime, timezone
 
 from agent_os.agent.token_utils import estimate_message_tokens
-from agent_os.utils.file_lock import FileLock
+from agent_os.utils.file_lock import session_lock
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,10 @@ class Session:
         self._filepath = filepath
         self._messages: list[dict] = []
         self._lock = threading.Lock()
-        self._file_lock = FileLock(filepath + ".lock")
+        # Strategy is selected by AGENT_OS_USE_SENTINEL_LOCK; default is
+        # DirectFileLock on the JSONL data file itself (no `.lock` sentinel
+        # artifact on disk). See agent_os/utils/file_lock.py.
+        self._file_lock = session_lock(filepath)
 
         # Session identity (set by new(); derived from filename for load())
         self.session_id: str = os.path.splitext(os.path.basename(filepath))[0]
