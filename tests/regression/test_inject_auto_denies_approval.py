@@ -244,7 +244,7 @@ class TestInjectResponseShape:
         # Stub agent_manager.inject_message to return the dismissal dict
         agent_manager = MagicMock()
 
-        async def _inject(project_id, content, *, nonce=None):
+        async def _inject(project_id, content, *, nonce=None, session_id=None):
             return {
                 "status": "delivered",
                 "approval_dismissed": True,
@@ -286,7 +286,7 @@ class TestInjectResponseShape:
 
         agent_manager = MagicMock()
 
-        async def _inject(project_id, content, *, nonce=None):
+        async def _inject(project_id, content, *, nonce=None, session_id=None):
             return "delivered"
 
         agent_manager.inject_message = _inject

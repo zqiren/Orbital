@@ -144,6 +144,10 @@ class InjectRequest(BaseModel):
     target: str | None = None
     nonce: str | None = None
     attachments: list[InjectAttachment] | None = None
+    # Phase 3c multi-loop: select which chat session within the project
+    # to deliver the message to. Omit (or pass null) for single-loop
+    # back-compat — the daemon collapses to DEFAULT_SESSION_ID.
+    session_id: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -703,6 +707,7 @@ async def inject_message(project_id: str, req: InjectRequest):
         # deliberate v1 audit-field asymmetry.
         result = await _agent_manager.inject_message(
             project_id, effective_content, nonce=req.nonce,
+            session_id=req.session_id,
         )
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,

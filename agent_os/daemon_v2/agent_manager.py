@@ -600,10 +600,16 @@ class AgentManager:
                 )
 
         # 5. Session
+        # ``session_uuid`` is the JSONL-filename stem (sanitized project
+        # name + uuid4 hex), NOT the chat-session identifier. We bind it
+        # to a fresh local so the outer ``session_id`` kwarg (the chat
+        # session id) is not clobbered for the rest of this method —
+        # downstream WS broadcasts and callbacks must use the chat
+        # session id, not the JSONL stem.
         sanitized = _sanitize_project_name(config.project_name)
-        session_id = f"{sanitized}_{uuid4().hex[:8]}"
+        session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
         session = Session.new(
-            session_id, config.workspace,
+            session_uuid, config.workspace,
             provider=config.provider,
             model=config.model,
             sdk=config.sdk,
