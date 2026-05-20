@@ -143,7 +143,7 @@ def test_new_session_stops_subagents_via_http():
             task=None,
             config_snapshot={"workspace": workspace},
         )
-        mgr._handles[project_id] = handle
+        mgr._handles[(project_id, "default")] = handle
 
         project_store.get_project.return_value = {
             "project_id": project_id,
@@ -183,7 +183,7 @@ def test_new_session_stops_subagents_via_http():
             )
 
             # ---- New session is distinct from old ----
-            new_handle = mgr._handles[project_id]
+            new_handle = mgr._handles[(project_id, "default")]
             assert new_handle.session.session_id != "old_subagent_session", (
                 "New session must be distinct from old session"
             )
@@ -228,7 +228,7 @@ def test_new_session_subagent_stop_all_timeout_does_not_block():
             task=None,
             config_snapshot={"workspace": workspace},
         )
-        mgr._handles[project_id] = handle
+        mgr._handles[(project_id, "default")] = handle
 
         project_store.get_project.return_value = {
             "project_id": project_id,
@@ -261,7 +261,7 @@ def test_new_session_subagent_stop_all_timeout_does_not_block():
             assert body.get("status") == "ok", f"Expected status 'ok': {body}"
 
             # New session must still be built despite the timeout
-            new_handle = mgr._handles[project_id]
+            new_handle = mgr._handles[(project_id, "default")]
             assert new_handle.session.session_id != "old_timeout_session", (
                 "New session must be built even when stop_all times out"
             )

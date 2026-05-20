@@ -148,7 +148,7 @@ def _make_agent_manager_with_running_loop(workspace, project_id, project_name,
         task=None,
         config_snapshot={"workspace": workspace, "model": "fake-slow"},
     )
-    mgr._handles[project_id] = handle
+    mgr._handles[(project_id, "default")] = handle
     return mgr, ws, project_store, handle
 
 
@@ -355,7 +355,7 @@ async def test_new_session_terminates_old_loop():
             )
 
             # New session JSONL must exist and be the new handle's session.
-            new_handle = mgr._handles.get(project_id)
+            new_handle = mgr._handles.get((project_id, "default"))
             assert new_handle is not None
             new_session_path = new_handle.session._filepath
             assert os.path.isfile(new_session_path), (

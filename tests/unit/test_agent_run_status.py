@@ -48,7 +48,7 @@ class TestGetRunStatus:
         handle.session._paused_for_approval = False
         handle.task = MagicMock()
         handle.task.done.return_value = False
-        manager._handles["proj_1"] = handle
+        manager._handles[("proj_1", "default")] = handle
 
         assert manager.get_run_status("proj_1") == "running"
 
@@ -59,7 +59,7 @@ class TestGetRunStatus:
         handle.session._paused_for_approval = False
         handle.task = MagicMock()
         handle.task.done.return_value = True
-        manager._handles["proj_1"] = handle
+        manager._handles[("proj_1", "default")] = handle
 
         assert manager.get_run_status("proj_1") == "idle"
 
@@ -68,7 +68,7 @@ class TestGetRunStatus:
         handle = MagicMock()
         handle.session.is_stopped.return_value = True
         handle.task = None
-        manager._handles["proj_1"] = handle
+        manager._handles[("proj_1", "default")] = handle
 
         assert manager.get_run_status("proj_1") == "stopped"
 
@@ -79,7 +79,7 @@ class TestGetRunStatus:
         handle.session._paused_for_approval = False
         handle.task = MagicMock()
         handle.task.done.return_value = True
-        manager._handles["proj_1"] = handle
+        manager._handles[("proj_1", "default")] = handle
 
         poll_task = MagicMock()
         poll_task.done.return_value = False

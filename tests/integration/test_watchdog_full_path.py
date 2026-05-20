@@ -117,7 +117,7 @@ async def test_watchdog_full_path_stops_wedged_subagents():
     )
 
     # Register a project handle so the watchdog doesn't short-circuit
-    manager._handles[PROJECT_ID] = _make_handle(task_done=True)
+    manager._handles[(PROJECT_ID, "default")] = _make_handle(task_done=True)
 
     # Run the watchdog with patched poll count and sleep
     with (
@@ -165,7 +165,7 @@ async def test_watchdog_full_path_no_stop_when_subagents_idle():
         activity_translator=MagicMock(),
         process_manager=MagicMock(),
     )
-    manager._handles[PROJECT_ID] = _make_handle(task_done=True)
+    manager._handles[(PROJECT_ID, "default")] = _make_handle(task_done=True)
 
     with (
         patch.object(type(manager), "_MAX_IDLE_POLLS", new=1),

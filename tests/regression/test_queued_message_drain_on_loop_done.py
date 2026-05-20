@@ -54,7 +54,7 @@ def test_on_loop_done_checks_queued_messages(manager):
     task.exception.return_value = None
     handle.task = task
 
-    manager._handles["proj_test"] = handle
+    manager._handles[("proj_test", "default")] = handle
 
     callback = manager._on_loop_done("proj_test")
     callback(task)
@@ -78,7 +78,7 @@ def test_on_loop_done_appends_queued_messages_to_session(manager):
     task.exception.return_value = None
     handle.task = task
 
-    manager._handles["proj_test"] = handle
+    manager._handles[("proj_test", "default")] = handle
 
     callback = manager._on_loop_done("proj_test")
 
@@ -112,7 +112,7 @@ def test_on_loop_done_broadcasts_idle_when_no_queued_messages(manager):
     task.exception.return_value = None
     handle.task = task
 
-    manager._handles["proj_test"] = handle
+    manager._handles[("proj_test", "default")] = handle
 
     callback = manager._on_loop_done("proj_test")
     callback(task)

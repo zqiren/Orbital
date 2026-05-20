@@ -31,7 +31,9 @@ from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import (
     DEFAULT_SESSION_ID,
     AgentConfig,
+    SessionKey,
     detect_os,
+    make_session_key,
     resolve_api_key,
 )
 
@@ -81,7 +83,12 @@ class AgentManager:
         self._user_credential_store = user_credential_store
         self._trigger_manager = None  # set after TriggerManager is created
         self._provider_registry = provider_registry or ProviderRegistry()
-        self._handles: dict[str, ProjectHandle] = {}
+        # ``_handles`` is keyed by ``SessionKey == (project_id, session_id)``
+        # so multiple chat sessions within the same project can each own a
+        # distinct loop / session / context-manager bundle. Single-loop
+        # callers route through ``DEFAULT_SESSION_ID`` automatically via
+        # ``_resolve_session_id`` + ``make_session_key``.
+        self._handles: dict[SessionKey, ProjectHandle] = {}
         self._idle_poll_tasks: dict[str, asyncio.Task] = {}  # project_id -> poll task
         self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
@@ -106,16 +113,24 @@ class AgentManager:
         if state_file is None:
             return
         agents: dict[str, dict] = {}
-        for pid, handle in self._handles.items():
+        for (pid, sid), handle in self._handles.items():
             # Only include agents with a running task
             if handle.task is None or handle.task.done():
                 continue
-            agents[pid] = {
+            # State file historically keys by ``pid`` alone. Multi-loop
+            # support is opt-in for callers — we preserve the legacy shape
+            # for default sessions and additionally emit a compact
+            # ``project_id::session_id`` form for non-default sessions so
+            # auto-resume can find them after restart.
+            entry = {
                 "status": "running",
                 "config_snapshot": getattr(handle, 'config_snapshot', {}),
                 "started_at": getattr(handle, 'started_at', ""),
                 "shutdown_clean": False,
+                "session_id": sid,
             }
+            key = pid if sid == DEFAULT_SESSION_ID else f"{pid}::{sid}"
+            agents[key] = entry
         state = {
             "version": 1,
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
@@ -196,7 +211,7 @@ class AgentManager:
         self.mark_shutdown_clean()
 
         # Append shutdown marker to each active session
-        for pid, handle in list(self._handles.items()):
+        for (pid, sid), handle in list(self._handles.items()):
             try:
                 if hasattr(handle.session, 'append'):
                     handle.session.append({
@@ -205,12 +220,15 @@ class AgentManager:
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
             except Exception:
-                logger.warning("Failed to append shutdown marker for project %s", pid)
+                logger.warning(
+                    "Failed to append shutdown marker for project %s session %s",
+                    pid, sid,
+                )
 
         # Stop all running agents with a timeout
         stop_tasks = []
-        for pid in list(self._handles.keys()):
-            stop_tasks.append(self.stop_agent(pid))
+        for pid, sid in list(self._handles.keys()):
+            stop_tasks.append(self.stop_agent(pid, session_id=sid))
         if stop_tasks:
             try:
                 await asyncio.wait_for(
@@ -262,9 +280,25 @@ class AgentManager:
             return
 
         resumed = 0
-        for project_id, agent_state in agents.items():
+        for state_key, agent_state in agents.items():
             if agent_state.get("status") != "running":
                 continue
+
+            # State-file key shape:
+            #   - legacy single-loop entries: ``project_id``
+            #   - multi-loop entries:         ``project_id::session_id``
+            # An explicit ``session_id`` field is also written by
+            # ``_write_state``; prefer it when present so we don't need to
+            # parse ambiguous separators in the project id.
+            session_id_for_resume = agent_state.get("session_id")
+            if "::" in state_key and session_id_for_resume is None:
+                project_id, _, parsed_sid = state_key.partition("::")
+                session_id_for_resume = parsed_sid
+            else:
+                project_id = state_key
+            session_id_for_resume = (
+                session_id_for_resume or DEFAULT_SESSION_ID
+            )
 
             try:
                 # Load fresh project config from store (may have changed)
@@ -348,12 +382,15 @@ class AgentManager:
                     project_id, config,
                     initial_message=None,
                     trigger_source="auto_resume",
+                    session_id=session_id_for_resume,
                 )
 
                 # If the previous session was interrupted (not a clean shutdown),
                 # inject a system warning so the agent knows to verify state.
                 if not agent_state.get("shutdown_clean", False):
-                    handle = self._handles.get(project_id)
+                    handle = self._handles.get(
+                        make_session_key(project_id, session_id_for_resume)
+                    )
                     if handle and hasattr(handle.session, "append"):
                         handle.session.append({
                             "role": "system",
@@ -378,10 +415,12 @@ class AgentManager:
 
     def _record_approval_decision(self, project_id: str, tool_name: str,
                                    tool_args: dict, decision: str,
-                                   deny_reason: str | None = None) -> None:
+                                   deny_reason: str | None = None,
+                                   *, session_id: str | None = None) -> None:
         """Append approval/denial record to {workspace}/orbital/approval_history.jsonl."""
         from agent_os.agent.project_paths import ProjectPaths
-        handle = self._handles.get(project_id)
+        session_id = self._resolve_session_id(session_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return
         # Derive workspace from config snapshot
@@ -414,19 +453,19 @@ class AgentManager:
                           session_id: str | None = None) -> None:
         """Wire all components and start the loop.
 
-        ``session_id`` is accepted for forward compatibility with the
-        Phase 3c multi-loop refactor. Today it is normalized and ignored
-        for storage purposes (handles are still keyed by ``project_id``);
-        a later commit re-keys ``_handles`` to ``(project_id, session_id)``.
+        ``session_id`` selects which chat session within the project this
+        loop will own. When omitted it defaults to ``DEFAULT_SESSION_ID``,
+        preserving single-loop behavior.
         """
         session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
         # Guard: check if already running
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(sk)
         if handle is not None:
             if handle.task is not None and not handle.task.done():
                 raise ValueError("Agent already running for this project")
             # Stale handle: clean up
-            del self._handles[project_id]
+            del self._handles[sk]
 
         # Guard: check platform capabilities (skip for NullProvider / no isolation)
         if self._platform_provider is not None:
@@ -720,11 +759,11 @@ class AgentManager:
             },
             started_at=datetime.now(timezone.utc).isoformat(),
         )
-        self._handles[project_id] = project_handle
+        self._handles[sk] = project_handle
 
         # 11. Start loop task
         task = asyncio.create_task(loop.run(initial_message, initial_nonce=initial_nonce))
-        task.add_done_callback(self._on_loop_done(project_id))
+        task.add_done_callback(self._on_loop_done(project_id, session_id=session_id))
         project_handle.task = task
 
         # 14. Broadcast running
@@ -858,10 +897,11 @@ class AgentManager:
         If the loop is running, defers the message for safe insertion after the
         current tool batch completes (avoids breaking assistant→tool sequences).
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects which chat session within the project to
+        target; defaults to the single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return "no_session"
 
@@ -873,7 +913,7 @@ class AgentManager:
                 "source": "daemon",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
-            await self._start_loop(project_id)
+            await self._start_loop(project_id, session_id=session_id)
             return "delivered"
 
         # Loop is running — defer for safe insertion after tool batch
@@ -891,10 +931,12 @@ class AgentManager:
         2. Loop idle + session alive -> hot resume (returns "delivered")
         3. No session -> auto-start agent with message (returns "started")
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects which chat session within the project to
+        target; defaults to the single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
         if handle is None:
             # Case 3: no handle — auto-start from project store
             logger.info("inject_message(%s): no handle, auto-starting agent", project_id)
@@ -953,7 +995,7 @@ class AgentManager:
                 budget_action=project.get("budget_action", "ask"),
             )
             await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce)
+                                  initial_nonce=nonce, session_id=session_id)
             return "started"
 
         # New user message resets approve-all bypass (new task context)
@@ -1003,6 +1045,7 @@ class AgentManager:
                         pending.get("tool_args", {}),
                         "denied",
                         deny_reason="User sent a new message while approval was pending",
+                        session_id=session_id,
                     )
 
                 # 4. Clean up interceptor state.
@@ -1055,7 +1098,7 @@ class AgentManager:
                 })
 
             # 10. Restart the loop to process the new user message.
-            await self._start_loop(project_id)
+            await self._start_loop(project_id, session_id=session_id)
             return {
                 "status": "delivered",
                 "approval_dismissed": True,
@@ -1064,7 +1107,7 @@ class AgentManager:
 
         # Case 2: loop idle — append message and hot-resume
         if handle is not None and handle.session.is_stopped():
-            del self._handles[project_id]
+            del self._handles[sk]
             handle = None
 
         if handle is None:
@@ -1125,7 +1168,7 @@ class AgentManager:
                 budget_action=proj.get("budget_action", "ask"),
             )
             await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce)
+                                  initial_nonce=nonce, session_id=session_id)
             return "started"
 
         if handle.task is not None and handle.task.done():
@@ -1154,32 +1197,34 @@ class AgentManager:
         if nonce:
             user_msg["nonce"] = nonce
         handle.session.append(user_msg)
-        await self._start_loop(project_id)
+        await self._start_loop(project_id, session_id=session_id)
         return "delivered"
 
     def is_running(self, project_id: str, *,
                    session_id: str | None = None) -> bool:
-        """Return True if an agent loop is actively running for this project.
+        """Return True if an agent loop is actively running for this session.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return False
         return handle.task is not None and not handle.task.done()
 
     def get_run_status(self, project_id: str, *,
                        session_id: str | None = None) -> str:
-        """Return the current runtime status for a project.
+        """Return the current runtime status for a session.
 
         Returns one of: 'running', 'pending_approval', 'waiting', 'idle',
         'stopped', 'error'.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return "idle"
         if handle.session.is_stopped():
@@ -1203,10 +1248,11 @@ class AgentManager:
         Returns True if the running agent was updated, False if no agent
         is running (disk-only update is sufficient in that case).
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return False
         handle.interceptor.update_preset(preset)
@@ -1220,15 +1266,16 @@ class AgentManager:
 
     def get_pending_approval(self, project_id: str, *,
                              session_id: str | None = None) -> dict | None:
-        """Return the pending approval payload for a project, or None.
+        """Return the pending approval payload for a session, or None.
 
         Used by the REST recovery endpoint so mobile clients can fetch
         approval card data when they miss the WebSocket event.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return None
         if not handle.session._paused_for_approval:
@@ -1244,10 +1291,11 @@ class AgentManager:
                       session_id: str | None = None) -> None:
         """Approve a pending tool call and execute it.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
@@ -1266,11 +1314,14 @@ class AgentManager:
         if handle.session.has_result_for(tool_call_id):
             handle.interceptor.remove_pending(tool_call_id)
             handle.session.resume()
-            await self._start_loop(project_id)
+            await self._start_loop(project_id, session_id=session_id)
             return
 
         handle.interceptor.record_approval(pending["tool_name"], pending["tool_args"])
-        self._record_approval_decision(project_id, pending["tool_name"], pending["tool_args"], "approved")
+        self._record_approval_decision(
+            project_id, pending["tool_name"], pending["tool_args"], "approved",
+            session_id=session_id,
+        )
 
         if approve_all:
             handle.interceptor.activate_bypass_all()
@@ -1325,16 +1376,17 @@ class AgentManager:
             })
 
         handle.session.resume()
-        await self._start_loop(project_id)
+        await self._start_loop(project_id, session_id=session_id)
 
     async def deny(self, project_id: str, tool_call_id: str, reason: str, *,
                    session_id: str | None = None) -> None:
         """Deny a pending tool call.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
@@ -1351,6 +1403,7 @@ class AgentManager:
             self._record_approval_decision(
                 project_id, pending["tool_name"], pending["tool_args"],
                 "denied", deny_reason=reason,
+                session_id=session_id,
             )
 
         # Guard: don't append a second result if one already exists
@@ -1362,7 +1415,7 @@ class AgentManager:
 
         handle.interceptor.remove_pending(tool_call_id)
         handle.session.resume()
-        await self._start_loop(project_id)
+        await self._start_loop(project_id, session_id=session_id)
 
     async def new_session(self, project_id: str, *,
                           session_id: str | None = None) -> dict:
@@ -1372,10 +1425,13 @@ class AgentManager:
         interceptor) but swaps the session object.  Layer 1 workspace files
         (PROJECT_STATE.md, DECISIONS.md, …) are untouched.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session whose Session object is
+        rotated; defaults to the single-loop default session. The
+        underlying handle keeping the project loop alive is preserved
+        either way.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return {"status": "no_active_session"}
 
@@ -1501,12 +1557,13 @@ class AgentManager:
 
     async def cancel_message(self, project_id: str, *,
                              session_id: str | None = None) -> dict:
-        """Interrupt current turn for project. Agent stays alive; session preserved.
+        """Interrupt current turn for session. Agent stays alive; session preserved.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects the chat session; defaults to the
+        single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return {"status": "no_agent"}
         if handle.task is None or handle.task.done():
@@ -1533,10 +1590,13 @@ class AgentManager:
                          session_id: str | None = None) -> None:
         """Stop agent and clean up.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects which chat session's loop to stop. Other
+        sessions in the same project continue running. Defaults to the
+        single-loop default session for back-compat.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
@@ -1580,7 +1640,7 @@ class AgentManager:
             "source": "management",
         })
 
-        self._handles.pop(project_id, None)
+        self._handles.pop(sk, None)
 
         # Update daemon state, stop heartbeat, and allow sleep if no agents remain
         self._write_state()
@@ -1591,15 +1651,19 @@ class AgentManager:
                     session_id: str | None = None):
         """Return session for a project, or None.
 
-        ``session_id`` is accepted for forward compatibility (multi-loop).
+        ``session_id`` selects which chat session to look up; defaults to
+        the single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(project_id)
+        handle = self._handles.get(make_session_key(project_id, session_id))
         return handle.session if handle else None
 
-    async def _start_loop(self, project_id: str) -> None:
+    async def _start_loop(self, project_id: str, *,
+                          session_id: str | None = None) -> None:
         """Start a new loop.run() on existing session (hot resume)."""
-        handle = self._handles.get(project_id)
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
         if handle is None:
             return
 
@@ -1625,7 +1689,9 @@ class AgentManager:
                 fb.update_api_key(fresh_key)
 
         task = asyncio.create_task(handle.loop.run())
-        task.add_done_callback(self._on_loop_done(project_id))
+        task.add_done_callback(
+            self._on_loop_done(project_id, session_id=session_id)
+        )
         handle.task = task
 
         self._ws.broadcast(project_id, {
@@ -1649,8 +1715,17 @@ class AgentManager:
 
     _MAX_IDLE_POLLS = 150  # 5 minutes at 2s intervals
 
-    def _on_loop_done(self, project_id: str):
-        """Returns done-callback for the loop asyncio.Task."""
+    def _on_loop_done(self, project_id: str, *,
+                      session_id: str | None = None):
+        """Returns done-callback for the loop asyncio.Task.
+
+        ``session_id`` selects which handle in ``_handles`` this callback
+        targets. When omitted, the default session is assumed (single-loop
+        back-compat path used by hot-resume).
+        """
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+
         def callback(task: asyncio.Task):
             try:
                 exc = task.exception()
@@ -1672,11 +1747,11 @@ class AgentManager:
                 })
                 return
 
-            handle = self._handles.get(project_id)
+            handle = self._handles.get(sk)
             if not handle:
                 return
             if handle.session.is_stopped():
-                self._handles.pop(project_id, None)
+                self._handles.pop(sk, None)
                 self._ws.broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -1719,7 +1794,9 @@ class AgentManager:
                     if q_nonce:
                         q_msg["nonce"] = q_nonce
                     handle.session.append(q_msg)
-                asyncio.ensure_future(self._start_loop(project_id))
+                asyncio.ensure_future(
+                    self._start_loop(project_id, session_id=session_id)
+                )
                 return
 
             # Check if sub-agents are still actively running (not just alive)
@@ -1733,7 +1810,7 @@ class AgentManager:
                     "source": "management",
                 })
                 poll_task = asyncio.ensure_future(
-                    self._check_sub_agents_done(project_id)
+                    self._check_sub_agents_done(project_id, session_id=session_id)
                 )
                 self._idle_poll_tasks[project_id] = poll_task
             else:
@@ -1750,12 +1827,19 @@ class AgentManager:
             self._allow_sleep_if_idle()
         return callback
 
-    async def _check_sub_agents_done(self, project_id: str) -> None:
-        """Poll until sub-agents finish, then broadcast idle."""
+    async def _check_sub_agents_done(self, project_id: str, *,
+                                     session_id: str | None = None) -> None:
+        """Poll until sub-agents finish, then broadcast idle.
+
+        ``session_id`` selects the session whose handle gates the poll;
+        defaults to the single-loop default session.
+        """
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
         for _ in range(self._MAX_IDLE_POLLS):
             await asyncio.sleep(2.0)
 
-            handle = self._handles.get(project_id)
+            handle = self._handles.get(sk)
             if handle is None or handle.session.is_stopped():
                 return
 

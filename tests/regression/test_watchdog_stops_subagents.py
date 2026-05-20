@@ -75,7 +75,7 @@ def _make_manager(sub_agent_status: str = "running") -> tuple[AgentManager, Magi
         process_manager=MagicMock(),
     )
     # Populate _handles so the watchdog doesn't short-circuit on "handle is None"
-    manager._handles[PROJECT_ID] = _make_handle(task_done=True)
+    manager._handles[(PROJECT_ID, "default")] = _make_handle(task_done=True)
 
     return manager, mock_ws, mock_sam
 

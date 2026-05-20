@@ -150,7 +150,7 @@ async def test_hot_resume_uses_updated_key(tmp_path):
     config = _make_config(str(tmp_path), api_key="old-key")
     await mgr.start_agent(project_id, config)
 
-    handle = mgr._handles[project_id]
+    handle = mgr._handles[(project_id, "default")]
     assert handle.provider.api_key == "old-key"
 
     # Simulate loop finishing (cancel the real task)
@@ -194,7 +194,7 @@ async def test_hot_resume_no_op_when_key_unchanged(tmp_path):
     config = _make_config(str(tmp_path), api_key="same-key")
     await mgr.start_agent(project_id, config)
 
-    handle = mgr._handles[project_id]
+    handle = mgr._handles[(project_id, "default")]
     original_client = handle.provider._openai_client
 
     # Cancel the running task

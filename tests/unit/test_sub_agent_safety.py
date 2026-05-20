@@ -344,7 +344,7 @@ class TestIdleStatus:
             interceptor=MagicMock(),
             task=MagicMock(done=MagicMock(return_value=task_done)),
         )
-        mgr._handles[project_id] = handle
+        mgr._handles[(project_id, "default")] = handle
         return handle
 
     @pytest.mark.asyncio

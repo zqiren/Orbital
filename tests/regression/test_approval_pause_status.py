@@ -62,7 +62,7 @@ class TestOnLoopDonePendingApproval:
 
     def test_broadcasts_pending_approval_when_paused(self, manager):
         handle, task_mock = _make_handle(paused_for_approval=True)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         callback = manager._on_loop_done("proj_test")
         callback(task_mock)
@@ -76,7 +76,7 @@ class TestOnLoopDonePendingApproval:
 
     def test_does_not_broadcast_idle_when_paused(self, manager):
         handle, task_mock = _make_handle(paused_for_approval=True)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         callback = manager._on_loop_done("proj_test")
         callback(task_mock)
@@ -90,7 +90,7 @@ class TestOnLoopDonePendingApproval:
     def test_broadcasts_idle_when_not_paused(self, manager):
         """Normal case: no approval pause -> broadcasts idle."""
         handle, task_mock = _make_handle(paused_for_approval=False)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         callback = manager._on_loop_done("proj_test")
         callback(task_mock)
@@ -106,14 +106,14 @@ class TestGetRunStatusPendingApproval:
 
     def test_returns_pending_approval_when_paused(self, manager):
         handle, _ = _make_handle(paused_for_approval=True)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         status = manager.get_run_status("proj_test")
         assert status == "pending_approval"
 
     def test_returns_idle_when_not_paused(self, manager):
         handle, _ = _make_handle(paused_for_approval=False)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         status = manager.get_run_status("proj_test")
         assert status == "idle"

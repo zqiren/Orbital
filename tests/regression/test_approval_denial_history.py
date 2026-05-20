@@ -217,7 +217,7 @@ class TestInjectMessageDuringApproval:
         task_mock.exception.return_value = None
         handle.task = task_mock
 
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
@@ -259,7 +259,7 @@ class TestInjectMessageDuringApproval:
         task_mock.exception.return_value = None
         handle.task = task_mock
 
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
 
         result = await manager.inject_message("proj_test", "hello")
@@ -289,7 +289,7 @@ class TestOnLoopDoneApprovalBeforeQueueDrain:
         task.exception.return_value = None
         handle.task = task
 
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         callback = manager._on_loop_done("proj_test")
         callback(task)
@@ -318,7 +318,7 @@ class TestOnLoopDoneApprovalBeforeQueueDrain:
         task.exception.return_value = None
         handle.task = task
 
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         callback = manager._on_loop_done("proj_test")
         with patch("asyncio.ensure_future") as mock_ef:

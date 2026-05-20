@@ -213,7 +213,7 @@ class TestQueuedMessageNonce:
         mock_handle.session = mock_session
         mock_handle.interceptor = None
 
-        mgr._handles["proj_q"] = mock_handle
+        mgr._handles[("proj_q", "default")] = mock_handle
 
         result = await mgr.inject_message("proj_q", "queued msg", nonce="q-nonce")
 
@@ -294,7 +294,7 @@ class TestOnLoopDoneNonce:
         task.exception.return_value = None
         handle.task = task
 
-        mgr._handles["proj_d"] = handle
+        mgr._handles[("proj_d", "default")] = handle
 
         callback = mgr._on_loop_done("proj_d")
         mock_future = MagicMock()

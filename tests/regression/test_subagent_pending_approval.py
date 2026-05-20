@@ -213,7 +213,7 @@ class TestMainAgentPriority:
         interceptor.on_intercept(tool_call, [])
 
         handle = _make_handle_with_interceptor(paused=True, interceptor=interceptor)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         result = manager.get_pending_approval("proj_test")
         assert result is not None

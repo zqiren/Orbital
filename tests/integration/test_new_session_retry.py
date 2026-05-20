@@ -173,7 +173,7 @@ def test_new_session_llm_retry_on_timeout_via_http(caplog):
             task=None,
             config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
         )
-        mgr._handles[project_id] = handle
+        mgr._handles[(project_id, "default")] = handle
 
         project_store.get_project.return_value = {
             "project_id": project_id,
@@ -209,7 +209,7 @@ def test_new_session_llm_retry_on_timeout_via_http(caplog):
             )
 
             # ---- New session file on disk ----
-            new_handle = mgr._handles[project_id]
+            new_handle = mgr._handles[(project_id, "default")]
             new_session_id = new_handle.session.session_id
             assert new_session_id != "old_session_http_retry"
 

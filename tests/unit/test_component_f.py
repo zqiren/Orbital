@@ -692,7 +692,7 @@ class TestAgentManager:
 
             await mgr.start_agent("proj_1", config)
 
-            assert "proj_1" in mgr._handles
+            assert ("proj_1", "default") in mgr._handles
             # Should broadcast running status
             ws.broadcast.assert_called()
 
@@ -734,7 +734,7 @@ class TestAgentManager:
         mock_session = MagicMock()
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        mgr._handles["proj_1"] = MagicMock(session=mock_session, task=mock_task)
+        mgr._handles[("proj_1", "default")] = MagicMock(session=mock_session, task=mock_task)
 
         await mgr.inject_message("proj_1", "hello")
         mock_session.queue_message.assert_called_once_with("hello", nonce=None)
@@ -753,7 +753,7 @@ class TestAgentManager:
         mock_task.exception.return_value = None
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             await mgr.inject_message("proj_1", "continue work")
@@ -775,7 +775,7 @@ class TestAgentManager:
         mock_task.exception.return_value = RuntimeError("LLM timeout")
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             result = await mgr.inject_message("proj_1", "are you there?")
@@ -803,7 +803,7 @@ class TestAgentManager:
         mock_task.exception.side_effect = asyncio.CancelledError()
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             result = await mgr.inject_message("proj_1", "hello again")
@@ -824,7 +824,7 @@ class TestAgentManager:
         mock_loop = MagicMock(terminate=AsyncMock())
         handle = MagicMock(session=mock_session, task=mock_task,
                            loop=mock_loop)
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         await mgr.stop_agent("proj_1")
         # Task is still pending (one `await asyncio.sleep(0)` is not enough
@@ -855,7 +855,7 @@ class TestAgentManager:
             session=mock_session, task=mock_task, interceptor=mock_interceptor,
             registry=mock_registry, loop=MagicMock()
         )
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
             await mgr.approve("proj_1", "tc_1")
@@ -880,7 +880,7 @@ class TestAgentManager:
             session=mock_session, task=mock_task, interceptor=mock_interceptor,
             loop=MagicMock()
         )
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
             await mgr.deny("proj_1", "tc_1", "Not safe")
@@ -892,17 +892,19 @@ class TestAgentManager:
 
     @pytest.mark.asyncio
     async def test_inject_message_accepts_session_id_kwarg(self):
-        """Forward-compat: session_id kwarg accepted, behavior unchanged."""
+        """session_id kwarg routes to the matching (project, session) handle."""
         mgr, ws, _, _, _ = self._make_manager()
 
-        # Simulate a running handle so we hit the simple "queued" path
+        # Register a running handle under an explicit session id.
         mock_session = MagicMock()
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        mgr._handles["proj_1"] = MagicMock(session=mock_session, task=mock_task)
+        mgr._handles[("proj_1", "sess_a")] = MagicMock(
+            session=mock_session, task=mock_task,
+        )
 
-        # Calling with session_id must succeed and route to the same queue
-        # path (storage is still project_id-keyed at this commit).
+        # Calling with the matching session_id reaches the queued-path
+        # for that exact handle (storage is now SessionKey-keyed).
         result = await mgr.inject_message("proj_1", "hi", session_id="sess_a")
         assert result == "queued"
         mock_session.queue_message.assert_called_once_with("hi", nonce=None)

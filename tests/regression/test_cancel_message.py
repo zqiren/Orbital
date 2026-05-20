@@ -76,7 +76,7 @@ def _make_active_handle(mgr, project_id: str):
         interceptor=MagicMock(),
         task=task,
     )
-    mgr._handles[project_id] = handle
+    mgr._handles[(project_id, "default")] = handle
     return handle, task
 
 
@@ -156,7 +156,7 @@ async def test_cancel_message_does_not_stop_session():
     handle.session.stop.assert_not_called()
 
     # Handle must still be in _handles
-    assert pid in mgr._handles
+    assert (pid, "default") in mgr._handles
 
     # Sub-agent stop_all must not be called
     sub_agent_mgr.stop_all.assert_not_awaited()

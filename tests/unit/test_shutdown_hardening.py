@@ -75,7 +75,7 @@ class TestStateFile:
     def test_write_state_creates_file(self, tmp_path):
         """_write_state creates daemon-state.json with correct JSON structure."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["proj-1"] = _make_handle(task_done=False)
+        mgr._handles[("proj-1", "default")] = _make_handle(task_done=False)
 
         mgr._write_state()
 
@@ -91,9 +91,9 @@ class TestStateFile:
     def test_write_state_only_running_agents(self, tmp_path):
         """Only agents with running tasks appear in the state file."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["running"] = _make_handle(task_done=False)
-        mgr._handles["done"] = _make_handle(task_done=True)
-        mgr._handles["no-task"] = _make_handle(task_is_none=True)
+        mgr._handles[("running", "default")] = _make_handle(task_done=False)
+        mgr._handles[("done", "default")] = _make_handle(task_done=True)
+        mgr._handles[("no-task", "default")] = _make_handle(task_is_none=True)
 
         mgr._write_state()
 
@@ -105,7 +105,7 @@ class TestStateFile:
     def test_write_state_atomic(self, tmp_path):
         """_write_state uses a .tmp file and replaces atomically."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
         # We verify by checking the final file exists and no .tmp lingers
         mgr._write_state()
@@ -139,7 +139,7 @@ class TestStateFile:
         """_write_state creates parent directories if missing."""
         mgr = _make_manager(tmp_path)
         mgr._state_file = tmp_path / "nested" / "deep" / "daemon-state.json"
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
         mgr._write_state()
 
@@ -151,7 +151,7 @@ class TestStateFile:
         """config_snapshot is included in the state file."""
         mgr = _make_manager(tmp_path)
         snapshot = {"workspace": "/home/user/project", "model": "claude-3"}
-        mgr._handles["p1"] = _make_handle(task_done=False, config_snapshot=snapshot)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False, config_snapshot=snapshot)
 
         mgr._write_state()
 
@@ -213,7 +213,7 @@ class TestHeartbeat:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.done.return_value = False
         mgr._heartbeat_task = mock_task
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
         mgr._stop_heartbeat_if_idle()
 
@@ -232,7 +232,7 @@ class TestHeartbeat:
     async def test_heartbeat_writes_state_periodically(self, tmp_path):
         """_start_heartbeat writes state and sleeps in a loop."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
         call_count = 0
         original_write = mgr._write_state
@@ -306,7 +306,7 @@ class TestShutdownMethod:
         """shutdown() appends daemon_shutdown marker to each session."""
         mgr = _make_manager(tmp_path)
         handle = _make_handle(task_done=False)
-        mgr._handles["p1"] = handle
+        mgr._handles[("p1", "default")] = handle
 
         # Mock stop_agent to prevent actual cleanup
         mgr.stop_agent = AsyncMock()
@@ -323,8 +323,8 @@ class TestShutdownMethod:
     async def test_shutdown_stops_all_agents(self, tmp_path):
         """shutdown() calls stop_agent for each handle."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["p1"] = _make_handle(task_done=False)
-        mgr._handles["p2"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
+        mgr._handles[("p2", "default")] = _make_handle(task_done=False)
         mgr.stop_agent = AsyncMock()
 
         await mgr.shutdown()
@@ -360,9 +360,9 @@ class TestShutdownMethod:
     async def test_shutdown_timeout(self, tmp_path):
         """shutdown() handles timeout gracefully when stop_agent is slow."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
-        async def slow_stop(pid):
+        async def slow_stop(pid, *, session_id=None):
             await asyncio.sleep(10)
 
         mgr.stop_agent = slow_stop
@@ -490,8 +490,10 @@ class TestAutoResume:
 
         # Mock start_agent to just populate _handles
         mock_handle = _make_handle(task_done=False)
-        async def fake_start(pid, config, initial_message=None, trigger_source=None):
-            mgr._handles[pid] = mock_handle
+        async def fake_start(pid, config, initial_message=None,
+                             trigger_source=None, session_id=None):
+            sid = session_id or "default"
+            mgr._handles[(pid, sid)] = mock_handle
 
         mgr.start_agent = AsyncMock(side_effect=fake_start)
 
@@ -544,8 +546,10 @@ class TestAutoResume:
         )
 
         mock_handle = _make_handle(task_done=False)
-        async def fake_start(pid, config, initial_message=None, trigger_source=None):
-            mgr._handles[pid] = mock_handle
+        async def fake_start(pid, config, initial_message=None,
+                             trigger_source=None, session_id=None):
+            sid = session_id or "default"
+            mgr._handles[(pid, sid)] = mock_handle
 
         mgr.start_agent = AsyncMock(side_effect=fake_start)
 
@@ -644,7 +648,7 @@ class TestSleepPrevention:
         platform = MagicMock()
         mgr = _make_manager(tmp_path, platform_provider=platform)
         mgr._sleep_handle = "handle-1"
-        mgr._handles["p1"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
 
         mgr._allow_sleep_if_idle()
 

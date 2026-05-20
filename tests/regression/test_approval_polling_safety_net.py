@@ -101,7 +101,7 @@ class TestPollSurfacesNewApproval:
         )
 
         handle = _make_handle(paused=True, interceptor=interceptor)
-        manager._handles["proj_poll"] = handle
+        manager._handles[("proj_poll", "default")] = handle
 
         result = manager.get_pending_approval("proj_poll")
         assert result is not None
@@ -141,7 +141,7 @@ class TestPollDedup:
         interceptor.on_intercept(tool_call, [])
 
         handle = _make_handle(paused=True, interceptor=interceptor)
-        manager._handles["proj_dedup"] = handle
+        manager._handles[("proj_dedup", "default")] = handle
 
         # Simulate multiple poll cycles
         result_1 = manager.get_pending_approval("proj_dedup")
@@ -187,7 +187,7 @@ class TestPollConditional:
             project_id="proj_active",
         )
         handle = _make_handle(paused=False, interceptor=interceptor)
-        manager._handles["proj_active"] = handle
+        manager._handles[("proj_active", "default")] = handle
 
         result = manager.get_pending_approval("proj_active")
         assert result is None
@@ -208,7 +208,7 @@ class TestPollConditional:
         interceptor.on_intercept(tool_call, [])
 
         handle = _make_handle(paused=True, interceptor=interceptor)
-        manager._handles["proj_resolve"] = handle
+        manager._handles[("proj_resolve", "default")] = handle
 
         # Before resolve: approval is present
         assert manager.get_pending_approval("proj_resolve") is not None
@@ -272,7 +272,7 @@ class TestReconnectRecoveryContract:
         )
 
         handle = _make_handle(paused=True, interceptor=interceptor)
-        manager._handles["proj_reconnect"] = handle
+        manager._handles[("proj_reconnect", "default")] = handle
 
         # Step 1: after reconnect, the frontend polls /run-status.
         # The backend MUST report the paused state as 'pending_approval'

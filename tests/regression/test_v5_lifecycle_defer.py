@@ -233,7 +233,7 @@ class TestInjectSystemMessage:
         mock_task.exception.return_value = None
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             result = await mgr.inject_system_message("proj_1", "lifecycle event")
@@ -255,7 +255,7 @@ class TestInjectSystemMessage:
         mock_task.done.return_value = False  # Loop is running
 
         handle = MagicMock(session=mock_session, task=mock_task)
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         result = await mgr.inject_system_message("proj_1", "[Sub-agent] claude-code started")
 
