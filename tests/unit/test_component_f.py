@@ -113,6 +113,37 @@ class TestModels:
         assert evt.source == "management"
         assert evt.tool_name == "read"
 
+    def test_default_session_id_constant(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID
+
+        # The constant must be a non-empty string; back-compat code paths
+        # rely on it as a stable sentinel for the single-loop default.
+        assert isinstance(DEFAULT_SESSION_ID, str)
+        assert DEFAULT_SESSION_ID == "default"
+
+    def test_make_session_key_with_explicit_session(self):
+        from agent_os.daemon_v2.models import make_session_key
+
+        key = make_session_key("proj_1", "sess_abc")
+        assert key == ("proj_1", "sess_abc")
+        # ``SessionKey`` is a plain tuple alias — concrete value must be a tuple.
+        assert isinstance(key, tuple)
+        assert len(key) == 2
+
+    def test_make_session_key_default(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+
+        # Both omission and explicit ``None`` collapse to the default sentinel.
+        assert make_session_key("proj_1") == ("proj_1", DEFAULT_SESSION_ID)
+        assert make_session_key("proj_1", None) == ("proj_1", DEFAULT_SESSION_ID)
+
+    def test_make_session_key_empty_string_treated_as_none(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+
+        # Empty string is falsy — we collapse to the default so callers do not
+        # have to special-case "" themselves.
+        assert make_session_key("proj_1", "") == ("proj_1", DEFAULT_SESSION_ID)
+
 
 # ---------------------------------------------------------------------------
 # MessageRouter tests
