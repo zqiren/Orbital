@@ -1019,6 +1019,51 @@ class TestAgentManager:
         ) is False
 
     @pytest.mark.asyncio
+    async def test_cancel_message_broadcast_carries_session_id(self):
+        """cancel_message broadcasts the agent.status payload with session_id.
+
+        Multi-loop contract: every status broadcast originating in
+        AgentManager must carry a session_id discriminator so clients
+        can route by session. cancel_message is one of the simplest
+        broadcast paths to validate without standing up a full loop.
+        """
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # Two handles, two sessions, both running.
+        for sid in ("sess_a", "sess_b"):
+            session = MagicMock()
+            session.is_stopped.return_value = False
+            session._paused_for_approval = False
+            task = MagicMock()
+            task.done.return_value = False
+            loop = MagicMock()
+            loop.cancel_turn = AsyncMock()
+            mgr._handles[("proj_ws", sid)] = MagicMock(
+                session=session, task=task, loop=loop,
+            )
+
+        # Cancel session A only — should produce one broadcast tagged sess_a.
+        result = await mgr.cancel_message("proj_ws", session_id="sess_a")
+        assert result == {"status": "cancelled"}
+
+        ws.broadcast.assert_called_once()
+        broadcast_pid, payload = ws.broadcast.call_args[0]
+        assert broadcast_pid == "proj_ws"
+        assert payload["type"] == "agent.status"
+        assert payload["status"] == "idle"
+        # Critical: session_id field is present and matches the cancelled session.
+        assert payload["session_id"] == "sess_a"
+
+        # Cancel session B — second broadcast tagged sess_b, A's handle is
+        # untouched.
+        ws.broadcast.reset_mock()
+        result = await mgr.cancel_message("proj_ws", session_id="sess_b")
+        assert result == {"status": "cancelled"}
+        ws.broadcast.assert_called_once()
+        _, payload_b = ws.broadcast.call_args[0]
+        assert payload_b["session_id"] == "sess_b"
+
+    @pytest.mark.asyncio
     async def test_two_sessions_one_project_are_isolated(self):
         """Two sessions in one project route to distinct handles.
 
