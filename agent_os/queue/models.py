@@ -16,7 +16,7 @@ from enum import Enum
 from typing import List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Source(str, Enum):
@@ -76,7 +76,11 @@ class ItemRecord(BaseModel):
 
 
 class QueueState(BaseModel):
+    # extra="ignore" lets us deserialize older queue.json files that still
+    # carry the now-removed chat_session_id field (and any other tail
+    # fields added then dropped) without raising ValidationError.
+    model_config = ConfigDict(extra="ignore")
+
     version: int = 1
     state: QueueRunState = QueueRunState.RUNNING
     items: List[ItemRecord] = Field(default_factory=list)
-    chat_session_id: Optional[str] = None

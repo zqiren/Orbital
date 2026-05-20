@@ -1066,7 +1066,14 @@ class AgentLoop:
 
         Internal helper used by cancel_turn() once it has already claimed
         the per-turn marker slot via _cancellation_marker_appended_this_turn.
+
+        Sets _exit_reason = "cancelled" synchronously so the queue
+        dispatcher's _await_and_handle observes the cancellation as soon as
+        the loop task terminates. Setting this here (rather than from the
+        dispatcher) makes the signal correct for any cancel path, including
+        the /cancel HTTP verb that doesn't go through QueueDispatcher.pause.
         """
+        self._exit_reason = "cancelled"
         self._session.append({
             "role": "system",
             "content": "[cancelled by user]",
