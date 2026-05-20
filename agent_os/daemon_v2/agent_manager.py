@@ -1655,6 +1655,43 @@ class AgentManager:
         self._stop_heartbeat_if_idle()
         self._allow_sleep_if_idle()
 
+    def list_sessions(self, project_id: str) -> list[dict]:
+        """Return a list of active/idle sessions for a project.
+
+        Each entry has ``session_id``, ``status`` (running | pending_approval |
+        waiting | idle | stopped), and ``session_uuid`` (the per-loop
+        Session.session_id, useful for jsonl path correlation).
+
+        Multi-loop callers use this to render a session list. Single-loop
+        callers that have never set an explicit session_id will see at most
+        one entry under ``session_id == DEFAULT_SESSION_ID``.
+        """
+        sessions = []
+        for (pid, sid), handle in self._handles.items():
+            if pid != project_id:
+                continue
+            # Inline get_run_status to avoid double dict lookup.
+            if handle.session.is_stopped():
+                status = "stopped"
+            elif handle.session._paused_for_approval:
+                status = "pending_approval"
+            elif handle.task is not None and not handle.task.done():
+                status = "running"
+            else:
+                poll_task = self._idle_poll_tasks.get(project_id)
+                if poll_task is not None and not poll_task.done():
+                    status = "waiting"
+                else:
+                    status = "idle"
+            sessions.append({
+                "session_id": sid,
+                "status": status,
+                "session_uuid": getattr(handle.session, "session_id", None),
+            })
+        # Stable ordering — default session first, then alphabetical for others.
+        sessions.sort(key=lambda s: (s["session_id"] != DEFAULT_SESSION_ID, s["session_id"]))
+        return sessions
+
     def get_session(self, project_id: str, *,
                     session_id: str | None = None):
         """Return session for a project, or None.
