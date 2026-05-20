@@ -957,6 +957,14 @@ class AgentManager:
 
         ``session_id`` selects which chat session within the project to
         target; defaults to the single-loop default session.
+
+        Lazy session minting (Phase 3c multi-loop): when ``session_id``
+        names a chat session that does not yet have a handle but the
+        project itself exists in the project_store, this method falls
+        through Case 3 and ``start_agent`` mints a fresh handle under
+        ``(project_id, session_id)``. The newly minted session shares
+        the project's workspace and config; it does NOT inherit
+        conversation history from any other session in the same project.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)

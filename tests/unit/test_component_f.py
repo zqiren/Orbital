@@ -1019,6 +1019,75 @@ class TestAgentManager:
         ) is False
 
     @pytest.mark.asyncio
+    async def test_inject_message_mints_new_session_lazily(self):
+        """An unknown session_id in inject_message mints a fresh handle.
+
+        Phase 3c lazy-session-minting contract: when inject_message is
+        called with a session_id that has no handle in _handles but the
+        project itself exists, AgentManager falls through to start_agent
+        which registers a new handle under (project_id, session_id).
+        Existing handles in the same project are untouched.
+        """
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # An existing "default" session for proj_lazy.
+        existing_session = MagicMock(name="default_session")
+        existing_task = MagicMock()
+        existing_task.done.return_value = False
+        # config_snapshot must be a real dict — _write_state json-serializes it.
+        existing_handle = MagicMock(
+            session=existing_session, task=existing_task,
+            config_snapshot={"workspace": "/tmp/lazy_ws", "model": "gpt-4"},
+            started_at="2026-01-01T00:00:00+00:00",
+        )
+        mgr._handles[("proj_lazy", "default")] = existing_handle
+
+        # Make project_store.get_project return a minimal project dict so
+        # start_agent's auto-derive path has data to work with.
+        mgr._project_store.get_project.return_value = {
+            "workspace": "/tmp/lazy_ws",
+            "name": "Lazy",
+            "autonomy": "hands_off",
+            "model": "gpt-4",
+            "api_key": "sk-test",
+            "sdk": "openai",
+            "provider": "custom",
+            "enabled_sub_agents": [],
+        }
+
+        # Patch heavy dependencies of start_agent so the test runs in-process.
+        with patch("agent_os.daemon_v2.agent_manager.LLMProvider"), \
+             patch("agent_os.daemon_v2.agent_manager.ToolRegistry") as MockReg, \
+             patch("agent_os.daemon_v2.agent_manager.PromptBuilder"), \
+             patch("agent_os.daemon_v2.agent_manager.Session") as MockSession, \
+             patch("agent_os.daemon_v2.agent_manager.ContextManager"), \
+             patch("agent_os.daemon_v2.agent_manager.AgentLoop") as MockLoop, \
+             patch("agent_os.daemon_v2.agent_manager.AutonomyInterceptor"):
+
+            MockSession.new.return_value = MagicMock()
+            mock_reg = MagicMock()
+            mock_reg.tool_names.return_value = ["read"]
+            MockReg.return_value = mock_reg
+            mock_loop = MagicMock()
+            mock_loop.run = AsyncMock()
+            MockLoop.return_value = mock_loop
+
+            result = await mgr.inject_message(
+                "proj_lazy", "hello from new session",
+                session_id="sess_fresh",
+            )
+
+        # The auto-start branch returns "started".
+        assert result == "started"
+        # The new session handle was minted.
+        assert ("proj_lazy", "sess_fresh") in mgr._handles
+        # The existing default handle is untouched.
+        assert mgr._handles[("proj_lazy", "default")] is existing_handle
+        # The existing session must NOT have received the new message.
+        existing_session.queue_message.assert_not_called()
+        existing_session.append.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cancel_message_broadcast_carries_session_id(self):
         """cancel_message broadcasts the agent.status payload with session_id.
 
