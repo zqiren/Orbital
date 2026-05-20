@@ -632,6 +632,90 @@ class TestSubAgentManager:
             assert len(active) == 1
             assert active[0]["handle"] == "claudecode"
 
+    @pytest.mark.asyncio
+    async def test_concurrent_dispatch_from_two_sessions_is_isolated(self):
+        """Sub-agent dispatch from two sessions in one project stays isolated.
+
+        Phase 3c-overnight: each chat session owns its own adapter slate;
+        starting the same handle in two sessions yields two distinct
+        adapters, list_active scoped to each session returns only that
+        session's adapters, and stop_all on one session does not touch
+        the other.
+        """
+        mgr, pm = self._make_manager()
+
+        # Patch CLIAdapter so every constructor call yields a fresh mock.
+        adapters_created: list = []
+
+        def make_adapter(*args, **kwargs):
+            inst = AsyncMock()
+            inst.is_alive = MagicMock(return_value=True)
+            inst.is_idle = MagicMock(return_value=False)
+            inst.display_name = kwargs.get("display_name", "ClaudeCode")
+            inst.handle = kwargs.get("handle", "claudecode")
+            adapters_created.append(inst)
+            return inst
+
+        with patch(
+            "agent_os.daemon_v2.sub_agent_manager.CLIAdapter",
+            side_effect=make_adapter,
+        ):
+            # Concurrent starts in two sessions of the same project.
+            results = await asyncio.gather(
+                mgr.start("proj_iso", "claudecode", session_id="sess_a"),
+                mgr.start("proj_iso", "claudecode", session_id="sess_b"),
+            )
+
+        assert all("Started" in r for r in results), f"unexpected start results: {results}"
+
+        # Each session ended up with its own adapter slate.
+        assert ("proj_iso", "sess_a") in mgr._adapters
+        assert ("proj_iso", "sess_b") in mgr._adapters
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_a")]
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_b")]
+        # Two distinct adapter objects were created — not one shared.
+        adapter_a = mgr._adapters[("proj_iso", "sess_a")]["claudecode"]
+        adapter_b = mgr._adapters[("proj_iso", "sess_b")]["claudecode"]
+        assert adapter_a is not adapter_b
+        assert adapter_a in adapters_created
+        assert adapter_b in adapters_created
+
+        # list_active is scoped to the session.
+        active_a = mgr.list_active("proj_iso", session_id="sess_a")
+        active_b = mgr.list_active("proj_iso", session_id="sess_b")
+        assert len(active_a) == 1 and active_a[0]["handle"] == "claudecode"
+        assert len(active_b) == 1 and active_b[0]["handle"] == "claudecode"
+        # Default-session list is empty — neither was registered under default.
+        assert mgr.list_active("proj_iso") == []
+
+        # stop_all on sess_a tears down only A's adapter slate.
+        await mgr.stop_all("proj_iso", session_id="sess_a")
+        assert mgr._adapters.get(("proj_iso", "sess_a"), {}) == {}
+        # B's slate is untouched.
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_b")]
+        adapter_a.stop.assert_awaited()
+        adapter_b.stop.assert_not_awaited()
+
+        # update_sub_agent_autonomy targets a single session as well.
+        # Use sess_b — only B's transport (if any) should be touched. We
+        # set _transport with an update_autonomy spy on both adapters and
+        # confirm A is untouched.
+        from agent_os.agent.prompt_builder import Autonomy
+        spy_a = MagicMock()
+        spy_b = MagicMock()
+        # A is gone after stop_all, re-attach to verify isolation.
+        mgr._adapters.setdefault(("proj_iso", "sess_a"), {})["claudecode"] = adapter_a
+        adapter_a._transport = MagicMock()
+        adapter_a._transport.update_autonomy = spy_a
+        adapter_b._transport = MagicMock()
+        adapter_b._transport.update_autonomy = spy_b
+
+        mgr.update_sub_agent_autonomy(
+            "proj_iso", Autonomy.HANDS_OFF, session_id="sess_b",
+        )
+        spy_a.assert_not_called()
+        spy_b.assert_called_once_with(Autonomy.HANDS_OFF)
+
 
 # ---------------------------------------------------------------------------
 # AgentManager tests
