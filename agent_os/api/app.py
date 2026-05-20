@@ -284,6 +284,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _start_triggers():
         await trigger_manager.start()
 
+    # 6c. Start the project-store flush task: runtime fields (budget spend in
+    # particular) are batch-written on a fixed interval instead of per-turn.
+    # See agent_os/daemon_v2/project_store.py module docstring.
+    @app.on_event("startup")
+    async def _start_project_store_flush():
+        await project_store.start_flush_task()
+
     @app.on_event("shutdown")
     async def _release_pid():
         release_pid_file()
@@ -291,6 +298,12 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     @app.on_event("shutdown")
     async def _stop_triggers():
         await trigger_manager.stop()
+
+    # Graceful-shutdown contract: drain any pending runtime updates so the
+    # last few LLM-call's worth of budget spend lands on disk before exit.
+    @app.on_event("shutdown")
+    async def _stop_project_store_flush():
+        await project_store.stop_flush_task()
 
     # 7. Configure routes
     agents_v2.configure(project_store, agent_manager, ws_manager, sub_agent_manager,

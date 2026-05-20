@@ -2,13 +2,30 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""JSON-file-based project store."""
+"""JSON-file-based project store.
 
+Runtime fields (``runtime.budget_spent_usd`` in particular) are written on
+every LLM call, which made the per-turn ``_save()`` call the dominant disk
+write of the daemon. Track C3 (perf): batch runtime writes in memory and
+flush them to ``projects.json`` on a fixed interval, on graceful shutdown,
+or when an accumulated dollar threshold is crossed.
+
+Semantics are unchanged: ``get_project`` always returns the freshest in-memory
+value, so reads after writes are consistent even before a flush hits disk.
+Only the disk-write cadence changes.
+"""
+
+import asyncio
 import json
+import logging
 import os
 import re
+import threading
 from uuid import uuid4
 
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_NOTIFICATION_PREFS = {
@@ -27,15 +44,75 @@ DEFAULT_PROJECT_FIELDS: dict = {
     "default_skills_reconciled": False,
 }
 
+# Queue runtime cap defaults. Applied lazily when reading
+# get_max_runtime_seconds so legacy projects use the default without a
+# migration.
+DEFAULT_MAX_RUNTIME_SECONDS = 1800  # 30 min
+MIN_MAX_RUNTIME_SECONDS = 60
+MAX_MAX_RUNTIME_SECONDS = 86400  # 24h
+
+
+# Default cadence: flush dirty runtime state to disk every 10 seconds.
+# Worst-case data-loss window on hard crash is bounded by this.
+DEFAULT_FLUSH_INTERVAL_SECONDS = 10.0
+
+# Default threshold: if accumulated unflushed spend for any single project
+# crosses this dollar value, flush synchronously. Bounds data loss in
+# dollar terms in addition to time terms — useful for high-cost models
+# where 10 seconds of activity could be several dollars.
+DEFAULT_BUDGET_FLUSH_THRESHOLD_USD = 0.50
+
 
 class ProjectStore:
-    """CRUD for projects using JSON files on disk."""
+    """CRUD for projects using JSON files on disk.
 
-    def __init__(self, data_dir: str):
+    Runtime fields (e.g. ``budget_spent_usd``) are write-batched: kept in
+    memory and flushed to disk on a timer, on shutdown, or on a threshold
+    crossing. See module docstring.
+    """
+
+    def __init__(
+        self,
+        data_dir: str,
+        flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
+        budget_flush_threshold_usd: float = DEFAULT_BUDGET_FLUSH_THRESHOLD_USD,
+    ):
         self._data_dir = data_dir
         self._projects_file = os.path.join(data_dir, "projects.json")
         self._projects: dict[str, dict] = {}
         self._load()
+
+        # Batching configuration
+        self._flush_interval = flush_interval_seconds
+        self._budget_flush_threshold = budget_flush_threshold_usd
+
+        # In-memory pending runtime updates per project. Keyed by project_id,
+        # value is the merged "runtime" dict awaiting a flush. We mirror the
+        # update into self._projects immediately so reads are consistent;
+        # this dict tracks WHAT needs to land on disk.
+        self._pending_runtime: dict[str, dict] = {}
+
+        # Telemetry: counts since last successful flush (per project) and
+        # cumulative count of timer ticks that found nothing to flush.
+        self._runtime_updates_since_flush: dict[str, int] = {}
+        self._skipped_flushes: int = 0
+
+        # Baseline of budget_spent_usd that's been confirmed-on-disk.
+        # Used to compute the unflushed delta for the threshold check.
+        # Populated lazily on first update_runtime for that project.
+        self._disk_budget_baseline: dict[str, float] = {}
+
+        # Sync lock guards mutation of the in-memory dicts above. update_runtime
+        # is called from inside the agent loop's async run() (synchronously,
+        # from the same event-loop thread), but flush_runtime may also be
+        # invoked from a background asyncio task or a test thread, so we
+        # protect the dict mutations with a threading lock. Disk I/O happens
+        # outside the lock to avoid holding it across a syscall.
+        self._lock = threading.Lock()
+
+        # Background flush task handle (set by start_flush_task).
+        self._flush_task: asyncio.Task | None = None
+        self._flush_stop_event: asyncio.Event | None = None
 
     def _agent_name_taken(self, agent_name: str, exclude_pid: str | None = None) -> bool:
         """Check if agent_name is already used by another project."""
@@ -124,17 +201,198 @@ class ProjectStore:
     def update_runtime(self, project_id: str, updates: dict) -> None:
         """Update runtime-managed fields (separate from user-editable config).
 
-        Stored under a "runtime" key in the project dict.
+        Stored under a "runtime" key in the project dict. Unlike user-facing
+        updates, this does NOT immediately rewrite ``projects.json`` — the
+        change lands in memory and is flushed asynchronously. ``get_project``
+        sees the new value immediately; disk consistency is restored on the
+        next flush tick, on graceful shutdown, or when an accumulated
+        ``budget_spent_usd`` delta crosses the configured threshold.
+
+        Callers that need synchronous on-disk persistence should call
+        ``flush_runtime()`` after the update.
         """
-        project = self._projects.get(project_id)
-        if project is None:
+        must_flush_now = False
+        with self._lock:
+            project = self._projects.get(project_id)
+            if project is None:
+                return
+            # Mirror into the live project dict so reads are consistent.
+            runtime = project.setdefault("runtime", {})
+            runtime.update(updates)
+            # Track in pending state for next flush.
+            self._pending_runtime.setdefault(project_id, {}).update(updates)
+            # Increment telemetry counter.
+            self._runtime_updates_since_flush[project_id] = (
+                self._runtime_updates_since_flush.get(project_id, 0) + 1
+            )
+            # Threshold check: only triggered by budget_spent_usd updates.
+            if "budget_spent_usd" in updates:
+                # Baseline = whatever is currently on disk. Lazily seed from
+                # the loaded value the first time we see this project.
+                if project_id not in self._disk_budget_baseline:
+                    # On first update for this project, seed the baseline from
+                    # whatever is currently on disk (0.0 if no prior runtime
+                    # block). This bounds the threshold check against actual
+                    # disk state, not against the in-memory in-flight state.
+                    self._disk_budget_baseline[project_id] = (
+                        self._load_disk_baseline(project_id)
+                    )
+                delta = abs(
+                    float(updates["budget_spent_usd"])
+                    - self._disk_budget_baseline[project_id]
+                )
+                if delta >= self._budget_flush_threshold:
+                    must_flush_now = True
+
+        if must_flush_now:
+            self.flush_runtime()
+
+    def _load_disk_baseline(self, project_id: str) -> float:
+        """Read the on-disk budget value for this project at load time.
+
+        Used to seed the threshold-check baseline. If the file is fresh
+        (no runtime block) the baseline is 0.0.
+        """
+        # Re-read from a snapshot of what _load saw — that's exactly what
+        # the constructor put into self._projects, so we don't need to hit
+        # disk again here. But if the project was just created in-process
+        # and immediately had update_runtime called, no flush has happened
+        # yet, so the on-disk view is also 0.0.
+        # We approximate "on-disk budget" by reading projects.json.
+        try:
+            if os.path.exists(self._projects_file):
+                with open(self._projects_file, "r", encoding="utf-8") as f:
+                    on_disk = json.load(f)
+                return float(
+                    on_disk.get(project_id, {})
+                    .get("runtime", {})
+                    .get("budget_spent_usd", 0.0)
+                )
+        except (OSError, ValueError, KeyError):
+            pass
+        return 0.0
+
+    def flush_runtime(self) -> None:
+        """Persist any pending runtime updates to ``projects.json``.
+
+        Idempotent: if no updates are pending, increments the
+        ``_skipped_flushes`` counter and returns without touching disk.
+        Safe to call from any thread.
+        """
+        # Snapshot pending state under the lock, then release it before
+        # doing disk I/O. The lock protects dict mutation only.
+        with self._lock:
+            if not self._pending_runtime:
+                self._skipped_flushes += 1
+                return
+            # Compute the new baseline for each project being flushed.
+            new_baselines: dict[str, float] = {}
+            for pid, pending in self._pending_runtime.items():
+                if "budget_spent_usd" in pending:
+                    new_baselines[pid] = float(pending["budget_spent_usd"])
+            project_count = len(self._pending_runtime)
+            update_count = sum(self._runtime_updates_since_flush.values())
+            # Clear pending + counters BEFORE the write. The in-memory
+            # self._projects already holds the merged state from
+            # update_runtime, so _save() will write it.
+            self._pending_runtime.clear()
+            self._runtime_updates_since_flush.clear()
+            for pid, baseline in new_baselines.items():
+                self._disk_budget_baseline[pid] = baseline
+
+        # Disk I/O outside the lock.
+        try:
+            self._save()
+            logger.info(
+                "project_store: flushed runtime updates "
+                "(projects=%d, updates=%d, skipped_total=%d)",
+                project_count, update_count, self._skipped_flushes,
+            )
+        except Exception:
+            logger.exception("project_store: failed to flush runtime updates")
+            # Best-effort: do not re-queue, since self._projects has the
+            # merged state and the next update will trigger another flush.
+            # A persistent disk failure should surface in the logs.
+
+    async def start_flush_task(self) -> None:
+        """Spawn the periodic flush task on the running event loop.
+
+        Idempotent: a second call is a no-op if the task is already running.
+        Must be called from inside an asyncio event loop (e.g. a FastAPI
+        startup handler).
+        """
+        if self._flush_task is not None and not self._flush_task.done():
             return
-        runtime = project.setdefault("runtime", {})
-        runtime.update(updates)
-        self._save()
+        self._flush_stop_event = asyncio.Event()
+        self._flush_task = asyncio.create_task(self._flush_loop())
+        logger.info(
+            "project_store: started flush task (interval=%.1fs, threshold=$%.2f)",
+            self._flush_interval, self._budget_flush_threshold,
+        )
+
+    async def stop_flush_task(self) -> None:
+        """Stop the periodic flush task and drain pending state.
+
+        Graceful-shutdown contract: any in-memory updates land on disk
+        before this returns (modulo disk errors, which are logged).
+        Idempotent.
+        """
+        if self._flush_stop_event is not None:
+            self._flush_stop_event.set()
+        task = self._flush_task
+        self._flush_task = None
+        if task is not None:
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("project_store: flush task did not stop in time; cancelling")
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        # Final drain even if the task was already dead.
+        self.flush_runtime()
+
+    async def _flush_loop(self) -> None:
+        """Background task body: flush on every interval until stopped."""
+        assert self._flush_stop_event is not None
+        try:
+            while not self._flush_stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._flush_stop_event.wait(),
+                        timeout=self._flush_interval,
+                    )
+                    # If we get here, stop was signalled — exit loop.
+                    break
+                except asyncio.TimeoutError:
+                    # Normal path: interval elapsed without a stop signal.
+                    pass
+                try:
+                    self.flush_runtime()
+                except Exception:
+                    logger.exception("project_store: flush_loop iteration failed")
+        except asyncio.CancelledError:
+            # Outer cancel — re-raise so awaiters see it.
+            raise
 
     def delete_project(self, project_id: str) -> None:
         if self._projects.get(project_id, {}).get("is_scratch"):
             raise ValueError("cannot delete scratch project")
+        # Flush any pending runtime updates for this project before deleting
+        # so we don't strand updates in memory pointing at a removed key.
+        with self._lock:
+            self._pending_runtime.pop(project_id, None)
+            self._runtime_updates_since_flush.pop(project_id, None)
+            self._disk_budget_baseline.pop(project_id, None)
         self._projects.pop(project_id, None)
         self._save()
+
+    def get_max_runtime_seconds(self, project_id: str) -> int:
+        """Return the per-attempt runtime cap. Falls back to default."""
+        project = self._projects.get(project_id) or {}
+        value = project.get("max_runtime_seconds")
+        if not isinstance(value, int):
+            return DEFAULT_MAX_RUNTIME_SECONDS
+        return max(MIN_MAX_RUNTIME_SECONDS, min(MAX_MAX_RUNTIME_SECONDS, value))
