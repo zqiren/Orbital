@@ -392,7 +392,28 @@ class SubAgentManager:
                 # Lazily create THIS sub-agent's MEMORY.md (not peers — see
                 # regression test 5: peer memory files are not created at
                 # dispatch of another sub-agent).
-                ensure_memory_md(workspace, handle)
+                #
+                # Skip the create when the manifest's transport drops
+                # system_prompt (PTY / ACP today — see Track D investigation
+                # 2026-05-20 at TASK/INVESTIGATION-sub-agent-memory-write-path.md).
+                # The sub-agent never learns about the file via Orbital, so
+                # the stub is a permanent orphan with zero user benefit.
+                # Mirrors the auto-resolution in `_resolve_transport`:
+                # `auto` + non-pipe mode → pty, which also drops.
+                transport_hint = getattr(manifest.runtime, "transport", "auto")
+                runtime_mode = getattr(manifest.runtime, "mode", None)
+                skips_system_prompt = (
+                    transport_hint in ("pty", "acp")
+                    or (transport_hint == "auto" and runtime_mode != "pipe")
+                )
+                if skips_system_prompt:
+                    logger.info(
+                        "Skipping ensure_memory_md for project=%s handle=%s "
+                        "(transport=%s mode=%s does not forward system_prompt).",
+                        project_id, handle, transport_hint, runtime_mode,
+                    )
+                else:
+                    ensure_memory_md(workspace, handle)
 
                 system_prompt = render_sub_agent_prompt(
                     workspace=workspace,
