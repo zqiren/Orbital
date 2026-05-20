@@ -28,7 +28,12 @@ from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
-from agent_os.daemon_v2.models import AgentConfig, detect_os, resolve_api_key
+from agent_os.daemon_v2.models import (
+    DEFAULT_SESSION_ID,
+    AgentConfig,
+    detect_os,
+    resolve_api_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,17 @@ class AgentManager:
         self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
+
+    @staticmethod
+    def _resolve_session_id(session_id: str | None) -> str:
+        """Normalize an optional ``session_id`` to a non-empty string.
+
+        Callers may pass ``None`` (single-loop legacy path) or an explicit
+        chat session id (multi-loop path). Both are funneled through the
+        same normalization here so call-site code does not need to know
+        about the ``DEFAULT_SESSION_ID`` sentinel.
+        """
+        return session_id or DEFAULT_SESSION_ID
 
     # ── Daemon state file (shutdown hardening) ──────────────────────────
 
@@ -394,8 +410,16 @@ class AgentManager:
                           initial_message: str | None = None,
                           trigger_source: str | None = None,
                           trigger_name: str | None = None,
-                          initial_nonce: str | None = None) -> None:
-        """Wire all components and start the loop."""
+                          initial_nonce: str | None = None,
+                          session_id: str | None = None) -> None:
+        """Wire all components and start the loop.
+
+        ``session_id`` is accepted for forward compatibility with the
+        Phase 3c multi-loop refactor. Today it is normalized and ignored
+        for storage purposes (handles are still keyed by ``project_id``);
+        a later commit re-keys ``_handles`` to ``(project_id, session_id)``.
+        """
+        session_id = self._resolve_session_id(session_id)
         # Guard: check if already running
         handle = self._handles.get(project_id)
         if handle is not None:
@@ -825,14 +849,18 @@ class AgentManager:
         except ImportError:
             pass
 
-    async def inject_system_message(self, project_id: str, content: str) -> str:
+    async def inject_system_message(self, project_id: str, content: str,
+                                    *, session_id: str | None = None) -> str:
         """Inject a system message into the management agent's session.
 
         Used by the lifecycle observer for sub-agent state notifications.
         If the management agent is idle, appends directly and starts a new loop.
         If the loop is running, defers the message for safe insertion after the
         current tool batch completes (avoids breaking assistant→tool sequences).
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return "no_session"
@@ -852,7 +880,9 @@ class AgentManager:
         handle.session.defer_message(content, role="system", source="daemon")
         return "deferred"
 
-    async def inject_message(self, project_id: str, content: str, *, nonce: str | None = None) -> "str | dict":
+    async def inject_message(self, project_id: str, content: str, *,
+                             nonce: str | None = None,
+                             session_id: str | None = None) -> "str | dict":
         """Inject a message. Four cases:
         1. Loop running -> queue (returns "queued")
         1b. Loop paused for approval -> auto-deny pending, deliver, resume
@@ -860,7 +890,10 @@ class AgentManager:
             dismissed_tool_call_id=<id>)
         2. Loop idle + session alive -> hot resume (returns "delivered")
         3. No session -> auto-start agent with message (returns "started")
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             # Case 3: no handle — auto-start from project store
@@ -1124,19 +1157,28 @@ class AgentManager:
         await self._start_loop(project_id)
         return "delivered"
 
-    def is_running(self, project_id: str) -> bool:
-        """Return True if an agent loop is actively running for this project."""
+    def is_running(self, project_id: str, *,
+                   session_id: str | None = None) -> bool:
+        """Return True if an agent loop is actively running for this project.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return False
         return handle.task is not None and not handle.task.done()
 
-    def get_run_status(self, project_id: str) -> str:
+    def get_run_status(self, project_id: str, *,
+                       session_id: str | None = None) -> str:
         """Return the current runtime status for a project.
 
         Returns one of: 'running', 'pending_approval', 'waiting', 'idle',
         'stopped', 'error'.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return "idle"
@@ -1154,12 +1196,16 @@ class AgentManager:
             return "waiting"
         return "idle"
 
-    def update_autonomy(self, project_id: str, preset) -> bool:
+    def update_autonomy(self, project_id: str, preset, *,
+                        session_id: str | None = None) -> bool:
         """Push a new autonomy preset to a running agent's interceptor.
 
         Returns True if the running agent was updated, False if no agent
         is running (disk-only update is sufficient in that case).
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return False
@@ -1172,12 +1218,16 @@ class AgentManager:
             self._sub_agent_manager.update_sub_agent_autonomy(project_id, preset)
         return True
 
-    def get_pending_approval(self, project_id: str) -> dict | None:
+    def get_pending_approval(self, project_id: str, *,
+                             session_id: str | None = None) -> dict | None:
         """Return the pending approval payload for a project, or None.
 
         Used by the REST recovery endpoint so mobile clients can fetch
         approval card data when they miss the WebSocket event.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return None
@@ -1190,8 +1240,13 @@ class AgentManager:
 
     async def approve(self, project_id: str, tool_call_id: str,
                       reply_text: str | None = None, *,
-                      approve_all: bool = False) -> None:
-        """Approve a pending tool call and execute it."""
+                      approve_all: bool = False,
+                      session_id: str | None = None) -> None:
+        """Approve a pending tool call and execute it.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
@@ -1272,8 +1327,13 @@ class AgentManager:
         handle.session.resume()
         await self._start_loop(project_id)
 
-    async def deny(self, project_id: str, tool_call_id: str, reason: str) -> None:
-        """Deny a pending tool call."""
+    async def deny(self, project_id: str, tool_call_id: str, reason: str, *,
+                   session_id: str | None = None) -> None:
+        """Deny a pending tool call.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
@@ -1304,13 +1364,17 @@ class AgentManager:
         handle.session.resume()
         await self._start_loop(project_id)
 
-    async def new_session(self, project_id: str) -> dict:
+    async def new_session(self, project_id: str, *,
+                          session_id: str | None = None) -> dict:
         """Archive the current session and create a fresh one.
 
         Preserves the project handle (loop, provider, registry, context_manager,
         interceptor) but swaps the session object.  Layer 1 workspace files
         (PROJECT_STATE.md, DECISIONS.md, …) are untouched.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
         """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return {"status": "no_active_session"}
@@ -1435,8 +1499,13 @@ class AgentManager:
             "new_session_id": new_session_id,
         }
 
-    async def cancel_message(self, project_id: str) -> dict:
-        """Interrupt current turn for project. Agent stays alive; session preserved."""
+    async def cancel_message(self, project_id: str, *,
+                             session_id: str | None = None) -> dict:
+        """Interrupt current turn for project. Agent stays alive; session preserved.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             return {"status": "no_agent"}
@@ -1460,8 +1529,13 @@ class AgentManager:
         })
         return {"status": "cancelled"}
 
-    async def stop_agent(self, project_id: str) -> None:
-        """Stop agent and clean up."""
+    async def stop_agent(self, project_id: str, *,
+                         session_id: str | None = None) -> None:
+        """Stop agent and clean up.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
@@ -1513,8 +1587,13 @@ class AgentManager:
         self._stop_heartbeat_if_idle()
         self._allow_sleep_if_idle()
 
-    def get_session(self, project_id: str):
-        """Return session for a project, or None."""
+    def get_session(self, project_id: str, *,
+                    session_id: str | None = None):
+        """Return session for a project, or None.
+
+        ``session_id`` is accepted for forward compatibility (multi-loop).
+        """
+        session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(project_id)
         return handle.session if handle else None
 

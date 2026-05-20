@@ -890,6 +890,48 @@ class TestAgentManager:
             assert "DENIED" in call_args[0][1]
             mock_session.resume.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_inject_message_accepts_session_id_kwarg(self):
+        """Forward-compat: session_id kwarg accepted, behavior unchanged."""
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # Simulate a running handle so we hit the simple "queued" path
+        mock_session = MagicMock()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mgr._handles["proj_1"] = MagicMock(session=mock_session, task=mock_task)
+
+        # Calling with session_id must succeed and route to the same queue
+        # path (storage is still project_id-keyed at this commit).
+        result = await mgr.inject_message("proj_1", "hi", session_id="sess_a")
+        assert result == "queued"
+        mock_session.queue_message.assert_called_once_with("hi", nonce=None)
+
+    def test_synchronous_entry_points_accept_session_id_kwarg(self):
+        """Forward-compat: sync entry points all accept session_id kwarg.
+
+        Each entry point must accept the kwarg and behave identically to
+        the no-kwarg form at this commit (storage is still project_id-keyed).
+        """
+        from agent_os.agent.prompt_builder import Autonomy
+
+        mgr, _, _, _, _ = self._make_manager()
+
+        # No handle yet — read paths return the idle / no-handle answer.
+        assert mgr.is_running("proj_1") is False
+        assert mgr.is_running("proj_1", session_id="sess_a") is False
+        assert mgr.get_run_status("proj_1") == "idle"
+        assert mgr.get_run_status("proj_1", session_id="sess_a") == "idle"
+        assert mgr.get_pending_approval("proj_1") is None
+        assert mgr.get_pending_approval("proj_1", session_id="sess_a") is None
+        assert mgr.get_session("proj_1") is None
+        assert mgr.get_session("proj_1", session_id="sess_a") is None
+        # update_autonomy returns False when no agent is running.
+        assert mgr.update_autonomy("proj_1", Autonomy.HANDS_OFF) is False
+        assert mgr.update_autonomy(
+            "proj_1", Autonomy.HANDS_OFF, session_id="sess_a"
+        ) is False
+
 
 # ---------------------------------------------------------------------------
 # ProjectStore tests
