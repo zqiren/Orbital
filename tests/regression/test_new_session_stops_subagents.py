@@ -105,7 +105,7 @@ async def test_new_session_calls_stop_all():
     # We intercept Session.new to track call order.
     original_stop_all = mock_sam.stop_all
 
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         call_order.append("stop_all")
 
     mock_sam.stop_all.side_effect = _recording_stop_all
@@ -146,8 +146,9 @@ async def test_new_session_calls_stop_all():
     assert result.get("status") == "ok", f"Expected ok, got {result}"
 
     # T06 contract: stop_all must be called EXACTLY ONCE, with the correct
-    # project_id, AFTER session-end and BEFORE the new session is built.
-    mock_sam.stop_all.assert_called_once_with(PROJECT_ID)
+    # project_id (and the default session id), AFTER session-end and BEFORE
+    # the new session is built.
+    mock_sam.stop_all.assert_called_once_with(PROJECT_ID, session_id="default")
 
     # Verify canonical ordering
     assert call_order == ["session_end", "stop_all", "session_new"], (
@@ -424,7 +425,7 @@ async def test_new_session_ordering_terminate_before_stop_all():
             pass
 
     # (c) stop_all after session-end
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         call_order.append("stop_all")
 
     mock_sam.stop_all.side_effect = _recording_stop_all

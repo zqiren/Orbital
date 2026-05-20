@@ -186,7 +186,7 @@ class TestCheckSubAgentsDone:
 
         # First poll: still active. Second poll: done.
         call_count = [0]
-        def list_active_side_effect(pid):
+        def list_active_side_effect(pid, *, session_id=None):
             call_count[0] += 1
             if call_count[0] <= 1:
                 return [{"handle": "agent-a"}]

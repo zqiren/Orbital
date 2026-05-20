@@ -10,9 +10,9 @@ real HTTP path so the route → AgentManager.new_session → stop_all chain is
 exercised end-to-end at the request level.
 
 Test scenario: project with a mock sub-agent adapter registered in
-_adapters[project_id]. POST /new-session; assert:
+_adapters[(project_id, "default")]. POST /new-session; assert:
   - HTTP 200 within 30s
-  - _adapters[project_id] is empty after rotation (or stop_all was called)
+  - _adapters[(project_id, "default")] is empty after rotation (or stop_all was called)
   - New session has no inherited sub-agent state
 """
 
@@ -116,7 +116,7 @@ def test_new_session_stops_subagents_via_http():
 
     stop_all_mock = AsyncMock()
 
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         stop_all_calls.append(pid)
 
     stop_all_mock.side_effect = _recording_stop_all
@@ -129,7 +129,7 @@ def test_new_session_stops_subagents_via_http():
         mock_adapter = MagicMock()
         mock_adapter.is_alive.return_value = True
         mock_adapter.is_idle.return_value = False
-        sub_agent_mgr._adapters[project_id] = {"helper-1": mock_adapter}
+        sub_agent_mgr._adapters[(project_id, "default")] = {"helper-1": mock_adapter}
 
         # Build a session handle (task=None = idle agent)
         session = Session.new("old_subagent_session", workspace)
@@ -208,7 +208,7 @@ def test_new_session_subagent_stop_all_timeout_does_not_block():
     project_name = "SubAgent Timeout Test"
 
     # T06: stop_all is called exactly once. Make it hang indefinitely.
-    async def _hanging_stop_all(pid: str) -> None:
+    async def _hanging_stop_all(pid: str, *, session_id=None) -> None:
         # Simulate indefinite hang — the wait_for budget will cancel us
         await asyncio.sleep(9999)
 

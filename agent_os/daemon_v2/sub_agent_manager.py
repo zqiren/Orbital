@@ -14,6 +14,11 @@ import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
+from agent_os.daemon_v2.models import (
+    DEFAULT_SESSION_ID,
+    SessionKey,
+    make_session_key,
+)
 from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
 
 logger = logging.getLogger(__name__)
@@ -39,10 +44,17 @@ class SubAgentManager:
         # WebSocketManager used to surface CLAUDE.md interference banners.
         # Optional: when None we fall back to process_manager._ws if set.
         self._ws_manager = ws_manager
-        self._adapters: dict[str, dict[str, object]] = {}  # project_id -> {handle -> adapter}
+        # ``_adapters`` is keyed by ``SessionKey == (project_id, session_id)``
+        # so each chat session within a project owns an independent slate of
+        # active sub-agents. Single-loop callers route through
+        # ``DEFAULT_SESSION_ID`` via ``_resolve_session_id``.
+        self._adapters: dict[SessionKey, dict[str, object]] = {}
         self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
-        self._lifecycle_locks: dict[str, asyncio.Lock] = {}  # project_id -> lock
-        self._stopping: set[str] = set()  # project_ids currently in stop_all
+        # Per-session lifecycle lock — concurrent sub-agent dispatch from
+        # two sessions in the same project must not serialize behind a
+        # single project-level lock.
+        self._lifecycle_locks: dict[SessionKey, asyncio.Lock] = {}
+        self._stopping: set[SessionKey] = set()  # sessions currently in stop_all
         # CLAUDE.md interference state for this orbital session.
         # Maps (project_id, content_hash) -> "warned" | "dismissed".
         # Cleared on daemon restart (in-memory only).
@@ -59,12 +71,25 @@ class SubAgentManager:
         # explicitly out of F4's scope (§5.3).
         self._memory_write_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
-    def _get_lock(self, project_id: str) -> asyncio.Lock:
-        """Get or create the per-project lifecycle lock."""
-        lock = self._lifecycle_locks.get(project_id)
+    @staticmethod
+    def _resolve_session_id(session_id: str | None) -> str:
+        """Normalize optional ``session_id`` to a non-empty string.
+
+        Mirror of ``AgentManager._resolve_session_id`` — both managers
+        share the same back-compat sentinel so single-loop callers do
+        not need to know about ``DEFAULT_SESSION_ID``.
+        """
+        return session_id or DEFAULT_SESSION_ID
+
+    def _get_lock(self, project_id: str,
+                  session_id: str | None = None) -> asyncio.Lock:
+        """Get or create the per-session lifecycle lock."""
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        lock = self._lifecycle_locks.get(sk)
         if lock is None:
             lock = asyncio.Lock()
-            self._lifecycle_locks[project_id] = lock
+            self._lifecycle_locks[sk] = lock
         return lock
 
     def _get_memory_write_lock(
@@ -119,13 +144,20 @@ class SubAgentManager:
                 f.write(content)
         return path
 
-    async def start(self, project_id: str, handle: str, depth: int = 0) -> str:
-        """Create adapter from config, call adapter.start(), register with process_manager."""
-        if project_id in self._stopping:
+    async def start(self, project_id: str, handle: str, depth: int = 0,
+                    *, session_id: str | None = None) -> str:
+        """Create adapter from config, call adapter.start(), register with process_manager.
+
+        ``session_id`` selects which chat session this sub-agent attaches to.
+        Defaults to ``DEFAULT_SESSION_ID`` for single-loop back-compat.
+        """
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        if sk in self._stopping:
             return "Error: project is shutting down, cannot start new agents"
 
-        # Breadth check: limit concurrent sub-agents per project
-        current_count = len(self._adapters.get(project_id, {}))
+        # Breadth check: limit concurrent sub-agents per session
+        current_count = len(self._adapters.get(sk, {}))
         if current_count >= MAX_CONCURRENT_SUBAGENTS:
             return (
                 f"Error: concurrent sub-agent limit reached "
@@ -135,7 +167,9 @@ class SubAgentManager:
 
         # New path: use registry + setup_engine if available
         if self._registry is not None and self._setup_engine is not None:
-            return await self._start_from_registry(project_id, handle)
+            return await self._start_from_registry(
+                project_id, handle, session_id=session_id,
+            )
 
         # Legacy path: use adapter_configs
         config = self._adapter_configs.get(handle)
@@ -159,7 +193,7 @@ class SubAgentManager:
             platform_provider=self._platform_provider,
             project_id=project_id,
         )
-        lock = self._get_lock(project_id)
+        lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
             try:
                 await adapter.start(config)
@@ -169,9 +203,9 @@ class SubAgentManager:
                 except Exception:
                     pass
                 return f"Error: adapter start failed: {e}"
-            if project_id not in self._adapters:
-                self._adapters[project_id] = {}
-            self._adapters[project_id][handle] = adapter
+            if sk not in self._adapters:
+                self._adapters[sk] = {}
+            self._adapters[sk][handle] = adapter
 
         # Create transcript if workspace is available
         transcript = None
@@ -364,13 +398,16 @@ class SubAgentManager:
         """
         self._claudemd_warning_state[(project_id, content_hash)] = "dismissed"
 
-    async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0) -> str:
+    async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
+                                   *, session_id: str | None = None) -> str:
         """Start a sub-agent using the manifest registry and setup engine."""
-        if project_id in self._stopping:
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        if sk in self._stopping:
             return "Error: project is shutting down, cannot start new agents"
 
-        # Breadth check: limit concurrent sub-agents per project
-        current_count = len(self._adapters.get(project_id, {}))
+        # Breadth check: limit concurrent sub-agents per session
+        current_count = len(self._adapters.get(sk, {}))
         if current_count >= MAX_CONCURRENT_SUBAGENTS:
             return (
                 f"Error: concurrent sub-agent limit reached "
@@ -529,7 +566,7 @@ class SubAgentManager:
             transport=transport,
         )
 
-        lock = self._get_lock(project_id)
+        lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
             try:
                 await adapter.start(config)
@@ -539,9 +576,9 @@ class SubAgentManager:
                 except Exception:
                     pass
                 return f"Error: adapter start failed: {e}"
-            if project_id not in self._adapters:
-                self._adapters[project_id] = {}
-            self._adapters[project_id][handle] = adapter
+            if sk not in self._adapters:
+                self._adapters[sk] = {}
+            self._adapters[sk][handle] = adapter
 
         # Create transcript for this sub-agent
         transcript = None
@@ -564,14 +601,20 @@ class SubAgentManager:
 
         return f"Started {manifest.name}"
 
-    async def send(self, project_id: str, handle: str, message: str) -> str:
+    async def send(self, project_id: str, handle: str, message: str,
+                   *, session_id: str | None = None) -> str:
         """Dispatch message to adapter without blocking on response.
 
         Returns immediately with a transcript path acknowledgement.
         The response will appear asynchronously in the transcript and
         via WebSocket broadcast.
+
+        ``session_id`` selects which session's adapter slate to dispatch
+        through; defaults to ``DEFAULT_SESSION_ID``.
         """
-        adapters = self._adapters.get(project_id, {})
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        adapters = self._adapters.get(sk, {})
         adapter = adapters.get(handle)
         if adapter is None:
             return f"Error: agent '{handle}' not running for project '{project_id}'"
@@ -698,11 +741,18 @@ class SubAgentManager:
         finally:
             adapter._background_send_task = None
 
-    async def stop(self, project_id: str, handle: str) -> str:
-        """Stop adapter, deregister from process_manager."""
-        lock = self._get_lock(project_id)
+    async def stop(self, project_id: str, handle: str, *,
+                   session_id: str | None = None) -> str:
+        """Stop adapter, deregister from process_manager.
+
+        ``session_id`` selects which session's adapter slate to stop in;
+        defaults to ``DEFAULT_SESSION_ID``.
+        """
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
-            adapters = self._adapters.get(project_id, {})
+            adapters = self._adapters.get(sk, {})
             adapter = adapters.pop(handle, None)
         if adapter is None:
             return f"Agent '{handle}' not running"
@@ -711,9 +761,11 @@ class SubAgentManager:
 
         return f"Stopped {handle}"
 
-    def status(self, project_id: str, handle: str) -> str:
+    def status(self, project_id: str, handle: str, *,
+               session_id: str | None = None) -> str:
         """Return 'running' | 'idle' | 'stopped' | 'unknown'."""
-        adapters = self._adapters.get(project_id, {})
+        session_id = self._resolve_session_id(session_id)
+        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         adapter = adapters.get(handle)
         if adapter is None:
             return "unknown"
@@ -723,13 +775,15 @@ class SubAgentManager:
             return "idle"
         return "running"
 
-    def get_pending_sub_agent_approval(self, project_id: str) -> dict | None:
-        """Return the first pending sub-agent approval for a project, or None.
+    def get_pending_sub_agent_approval(self, project_id: str, *,
+                                       session_id: str | None = None) -> dict | None:
+        """Return the first pending sub-agent approval for a session, or None.
 
         Used by the REST recovery endpoint so clients can fetch sub-agent
         approval card data when they miss the WebSocket event.
         """
-        adapters = self._adapters.get(project_id, {})
+        session_id = self._resolve_session_id(session_id)
+        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         for handle, adapter in adapters.items():
             transport = getattr(adapter, '_transport', None)
             if transport is None:
@@ -750,12 +804,15 @@ class SubAgentManager:
                 }
         return None
 
-    async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str, approved: bool) -> bool:
+    async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str,
+                                         approved: bool, *,
+                                         session_id: str | None = None) -> bool:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
         """
-        adapters = self._adapters.get(project_id, {})
+        session_id = self._resolve_session_id(session_id)
+        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         for handle, adapter in adapters.items():
             transport = getattr(adapter, '_transport', None)
             if transport is not None and hasattr(transport, 'respond_to_permission'):
@@ -766,34 +823,46 @@ class SubAgentManager:
                     return True
         return False
 
-    def update_sub_agent_autonomy(self, project_id: str, preset) -> None:
+    def update_sub_agent_autonomy(self, project_id: str, preset, *,
+                                  session_id: str | None = None) -> None:
         """Propagate autonomy preset change to all active SDK sub-agent transports."""
-        adapters = self._adapters.get(project_id, {})
+        session_id = self._resolve_session_id(session_id)
+        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         for handle, adapter in adapters.items():
             transport = getattr(adapter, '_transport', None)
             if transport is not None and hasattr(transport, 'update_autonomy'):
                 transport.update_autonomy(preset)
 
-    async def stop_all(self, project_id: str) -> None:
-        """Stop all sub-agent adapters for a project."""
-        self._stopping.add(project_id)
+    async def stop_all(self, project_id: str, *,
+                       session_id: str | None = None) -> None:
+        """Stop all sub-agent adapters for a session.
+
+        ``session_id`` selects which session's adapter slate to drain;
+        defaults to ``DEFAULT_SESSION_ID``. Other sessions in the same
+        project are unaffected.
+        """
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        self._stopping.add(sk)
         try:
-            lock = self._get_lock(project_id)
+            lock = self._get_lock(project_id, session_id=session_id)
             async with lock:
-                adapters = self._adapters.get(project_id, {})
+                adapters = self._adapters.get(sk, {})
                 handles = list(adapters.keys())
             for handle in handles:
                 try:
-                    await self.stop(project_id, handle)
+                    await self.stop(project_id, handle, session_id=session_id)
                 except Exception as e:
                     logger.warning("Failed to stop sub-agent %s: %s", handle, e)
         finally:
-            self._stopping.discard(project_id)
-            self._lifecycle_locks.pop(project_id, None)
+            self._stopping.discard(sk)
+            self._lifecycle_locks.pop(sk, None)
 
-    def list_active(self, project_id: str) -> list[dict]:
-        """Return [{'handle', 'display_name', 'status'}, ...]"""
-        adapters = self._adapters.get(project_id, {})
+    def list_active(self, project_id: str, *,
+                    session_id: str | None = None) -> list[dict]:
+        """Return [{'handle', 'display_name', 'status'}, ...] for a session."""
+        session_id = self._resolve_session_id(session_id)
+        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         result = []
         for handle, adapter in adapters.items():
             if adapter.is_alive():

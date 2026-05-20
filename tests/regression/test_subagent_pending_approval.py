@@ -122,7 +122,7 @@ class TestGetPendingSubAgentApproval:
             tool_input={"file_path": "/tmp/foo.py", "old_string": "a", "new_string": "b"},
         )
         adapter = _make_mock_adapter(transport=transport)
-        sam._adapters["proj_x"] = {"claude-code": adapter}
+        sam._adapters[("proj_x", "default")] = {"claude-code": adapter}
 
         result = sam.get_pending_sub_agent_approval("proj_x")
         assert result is not None
@@ -136,7 +136,7 @@ class TestGetPendingSubAgentApproval:
         sam = _make_sub_agent_manager()
         transport = _make_mock_transport()  # no pending approvals
         adapter = _make_mock_adapter(transport=transport)
-        sam._adapters["proj_x"] = {"claude-code": adapter}
+        sam._adapters[("proj_x", "default")] = {"claude-code": adapter}
 
         result = sam.get_pending_sub_agent_approval("proj_x")
         assert result is None
@@ -149,7 +149,7 @@ class TestGetPendingSubAgentApproval:
     def test_returns_none_when_adapter_has_no_transport(self):
         sam = _make_sub_agent_manager()
         adapter = _make_mock_adapter(transport=None)
-        sam._adapters["proj_x"] = {"legacy-agent": adapter}
+        sam._adapters[("proj_x", "default")] = {"legacy-agent": adapter}
 
         result = sam.get_pending_sub_agent_approval("proj_x")
         assert result is None
@@ -165,7 +165,7 @@ class TestGetPendingSubAgentApproval:
         )
         adapter_clean = _make_mock_adapter(transport=transport_clean)
         adapter_pending = _make_mock_adapter(transport=transport_pending)
-        sam._adapters["proj_x"] = {
+        sam._adapters[("proj_x", "default")] = {
             "agent-a": adapter_clean,
             "agent-b": adapter_pending,
         }
@@ -184,7 +184,7 @@ class TestGetPendingSubAgentApproval:
         # Deliberately no _pending_approval_data attribute
         del transport._pending_approval_data
         adapter = _make_mock_adapter(transport=transport)
-        sam._adapters["proj_x"] = {"agent-c": adapter}
+        sam._adapters[("proj_x", "default")] = {"agent-c": adapter}
 
         result = sam.get_pending_sub_agent_approval("proj_x")
         assert result is not None

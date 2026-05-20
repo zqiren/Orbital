@@ -33,7 +33,7 @@ class TestNonBlockingSend:
         slow_adapter.is_alive = MagicMock(return_value=True)
         slow_adapter.is_idle = MagicMock(return_value=False)
 
-        sam._adapters["proj1"] = {"slow-agent": slow_adapter}
+        sam._adapters[("proj1", "default")] = {"slow-agent": slow_adapter}
 
         # Create transcript
         transcript = SubAgentTranscript(str(tmp_path), "slow-agent", "t001")
@@ -61,7 +61,7 @@ class TestNonBlockingSend:
         adapter._transport = None
         adapter.is_alive = MagicMock(return_value=True)
 
-        sam._adapters["proj1"] = {"claude-code": adapter}
+        sam._adapters[("proj1", "default")] = {"claude-code": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "claude-code", "t001")
         sam._transcripts[("proj1", "claude-code")] = transcript
 
@@ -93,7 +93,7 @@ class TestNonBlockingSend:
         adapter.send = AsyncMock()
         adapter._transport = None
 
-        sam._adapters["proj1"] = {"agent-x": adapter}
+        sam._adapters[("proj1", "default")] = {"agent-x": adapter}
         # No transcript registered
 
         result = await sam.send("proj1", "agent-x", "hello")
@@ -114,7 +114,7 @@ class TestNonBlockingSend:
         adapter = MagicMock()
         adapter._transport = transport
 
-        sam._adapters["proj1"] = {"sdk-agent": adapter}
+        sam._adapters[("proj1", "default")] = {"sdk-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "sdk-agent", "t001")
         sam._transcripts[("proj1", "sdk-agent")] = transcript
 
@@ -139,7 +139,7 @@ class TestNonBlockingSend:
         adapter._transport = transport
         adapter.send = AsyncMock()
 
-        sam._adapters["proj1"] = {"pipe-agent": adapter}
+        sam._adapters[("proj1", "default")] = {"pipe-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "pipe-agent", "t001")
         sam._transcripts[("proj1", "pipe-agent")] = transcript
 
@@ -251,7 +251,7 @@ class TestNonBlockingSend:
         adapter.send = failing_send
         adapter._transport = None
 
-        sam._adapters["proj1"] = {"fail-agent": adapter}
+        sam._adapters[("proj1", "default")] = {"fail-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "fail-agent", "t001")
         sam._transcripts[("proj1", "fail-agent")] = transcript
 

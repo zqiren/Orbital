@@ -53,9 +53,10 @@ def _make_sub_agent_manager(**kwargs):
 
 def _register_adapter(mgr, project_id, handle, adapter):
     """Directly inject an adapter into SubAgentManager for testing."""
-    if project_id not in mgr._adapters:
-        mgr._adapters[project_id] = {}
-    mgr._adapters[project_id][handle] = adapter
+    sk = (project_id, "default")
+    if sk not in mgr._adapters:
+        mgr._adapters[sk] = {}
+    mgr._adapters[sk][handle] = adapter
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +283,7 @@ class TestCancelRace:
         await stop_task
 
         assert ("shutting down" in result.lower() or
-                "agent-b" not in mgr._adapters.get("proj1", {}))
+                "agent-b" not in mgr._adapters.get(("proj1", "default"), {}))
 
     @pytest.mark.asyncio
     async def test_concurrent_start_stop_no_deadlock(self):

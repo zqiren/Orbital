@@ -58,9 +58,10 @@ def _make_sub_agent_manager():
 
 def _register_adapter(mgr, project_id, handle, adapter):
     """Directly inject an adapter into SubAgentManager for testing."""
-    if project_id not in mgr._adapters:
-        mgr._adapters[project_id] = {}
-    mgr._adapters[project_id][handle] = adapter
+    sk = (project_id, "default")
+    if sk not in mgr._adapters:
+        mgr._adapters[sk] = {}
+    mgr._adapters[sk][handle] = adapter
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +145,7 @@ class TestBreadthLimit:
         result = await mgr.start("proj-1", "agent-extra")
         assert "limit" in result.lower() or "concurrent" in result.lower()
         # Should not have been added
-        assert "agent-extra" not in mgr._adapters.get("proj-1", {})
+        assert "agent-extra" not in mgr._adapters.get(("proj-1", "default"), {})
 
     @pytest.mark.asyncio
     async def test_breadth_freed_on_completion(self):
@@ -157,7 +158,7 @@ class TestBreadthLimit:
         # Stop one
         await mgr.stop("proj-1", "agent-0")
         # Now count should be MAX-1, new start should pass breadth check
-        count = len(mgr._adapters.get("proj-1", {}))
+        count = len(mgr._adapters.get(("proj-1", "default"), {}))
         assert count == MAX_CONCURRENT_SUBAGENTS - 1
 
     @pytest.mark.asyncio

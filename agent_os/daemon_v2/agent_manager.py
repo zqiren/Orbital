@@ -601,11 +601,17 @@ class AgentManager:
         workspace_files.ensure_dir()
 
         # 9. Context manager
+        # Bind session_id into the lambda explicitly so the captured value
+        # tracks the session this loop owns rather than a late-binding
+        # closure on a mutable name.
+        _sid_for_provider = session_id
         context_manager = ContextManager(
             session, prompt_builder, base_prompt_context,
             model_context_limit=model_info.context_window,
             workspace_files=workspace_files,
-            sub_agent_provider=lambda: self._sub_agent_manager.list_active(project_id),
+            sub_agent_provider=lambda: self._sub_agent_manager.list_active(
+                project_id, session_id=_sid_for_provider,
+            ),
         )
 
         # 10. Interceptor
@@ -1261,7 +1267,9 @@ class AgentManager:
         )
         # Also propagate to sub-agent transports (SDK filtering)
         if self._sub_agent_manager is not None:
-            self._sub_agent_manager.update_sub_agent_autonomy(project_id, preset)
+            self._sub_agent_manager.update_sub_agent_autonomy(
+                project_id, preset, session_id=session_id,
+            )
         return True
 
     def get_pending_approval(self, project_id: str, *,
@@ -1478,7 +1486,7 @@ class AgentManager:
         # rotation indefinitely on a wedged adapter. (T06)
         try:
             await asyncio.wait_for(
-                self._sub_agent_manager.stop_all(project_id),
+                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
                 timeout=10.0,
             )
         except asyncio.TimeoutError:
@@ -1606,7 +1614,7 @@ class AgentManager:
             poll_task.cancel()
 
         # Stop sub-agents (uses stopping flag to reject concurrent starts)
-        await self._sub_agent_manager.stop_all(project_id)
+        await self._sub_agent_manager.stop_all(project_id, session_id=session_id)
 
         # Close browser pages for this project
         if self._browser_manager is not None:
@@ -1800,7 +1808,9 @@ class AgentManager:
                 return
 
             # Check if sub-agents are still actively running (not just alive)
-            active = self._sub_agent_manager.list_active(project_id)
+            active = self._sub_agent_manager.list_active(
+                project_id, session_id=session_id,
+            )
             busy = [a for a in active if a.get("status") != "idle"]
             if busy:
                 self._ws.broadcast(project_id, {
@@ -1847,7 +1857,9 @@ class AgentManager:
             if handle.task is not None and not handle.task.done():
                 return
 
-            active = self._sub_agent_manager.list_active(project_id)
+            active = self._sub_agent_manager.list_active(
+                project_id, session_id=session_id,
+            )
             busy = [a for a in active if a.get("status") != "idle"]
             if not busy:
                 self._ws.broadcast(project_id, {
@@ -1862,7 +1874,7 @@ class AgentManager:
         logger.warning("Sub-agent poll timeout for project %s, forcing stop", project_id)
         try:
             await asyncio.wait_for(
-                self._sub_agent_manager.stop_all(project_id),
+                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
                 timeout=10.0,
             )
         except asyncio.TimeoutError:

@@ -57,7 +57,7 @@ class TestStoppingFlag:
 
         adapter.stop = slow_stop
 
-        mgr._adapters["proj"] = {"agent-a": adapter}
+        mgr._adapters[("proj", "default")] = {"agent-a": adapter}
 
         # Run stop_all and start concurrently
         start_result = None
@@ -82,19 +82,19 @@ class TestStoppingFlag:
         mgr, pm = _make_manager()
         adapter = _make_mock_adapter()
         adapter.stop = AsyncMock(side_effect=RuntimeError("stop failed"))
-        mgr._adapters["proj"] = {"agent-a": adapter}
+        mgr._adapters[("proj", "default")] = {"agent-a": adapter}
 
         await mgr.stop_all("proj")
 
         # Flag should be cleared — start should work now
-        assert "proj" not in mgr._stopping
+        assert ("proj", "default") not in mgr._stopping
 
     @pytest.mark.asyncio
     async def test_stopping_flag_cleared_on_empty_project(self):
         """stop_all on a project with no adapters should still clear cleanly."""
         mgr, pm = _make_manager()
         await mgr.stop_all("proj")
-        assert "proj" not in mgr._stopping
+        assert ("proj", "default") not in mgr._stopping
 
 
 class TestLifecycleLock:
@@ -207,7 +207,7 @@ class TestDefensiveCleanup:
         assert "adapter start failed" in result
         adapter.stop.assert_called_once()
         # Adapter should NOT be registered
-        assert "agent-a" not in mgr._adapters.get("proj", {})
+        assert "agent-a" not in mgr._adapters.get(("proj", "default"), {})
 
     @pytest.mark.asyncio
     async def test_failed_start_cleanup_does_not_raise(self):
@@ -241,24 +241,24 @@ class TestLockCleanup:
     async def test_lock_removed_after_stop_all(self):
         """stop_all cleans up the lifecycle lock for the project."""
         mgr, pm = _make_manager()
-        mgr._adapters["proj"] = {}
+        mgr._adapters[("proj", "default")] = {}
         # Force lock creation
         mgr._get_lock("proj")
-        assert "proj" in mgr._lifecycle_locks
+        assert ("proj", "default") in mgr._lifecycle_locks
 
         await mgr.stop_all("proj")
 
-        assert "proj" not in mgr._lifecycle_locks
+        assert ("proj", "default") not in mgr._lifecycle_locks
 
     @pytest.mark.asyncio
     async def test_lock_recreated_on_new_start(self):
         """After stop_all cleans up the lock, a new start creates a fresh one."""
         mgr, pm = _make_manager()
-        mgr._adapters["proj"] = {}
+        mgr._adapters[("proj", "default")] = {}
         await mgr.stop_all("proj")
-        assert "proj" not in mgr._lifecycle_locks
+        assert ("proj", "default") not in mgr._lifecycle_locks
 
         # _get_lock should create a new one
         lock = mgr._get_lock("proj")
         assert lock is not None
-        assert "proj" in mgr._lifecycle_locks
+        assert ("proj", "default") in mgr._lifecycle_locks

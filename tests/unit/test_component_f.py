@@ -578,8 +578,8 @@ class TestSubAgentManager:
             MockAdapter.return_value = mock_instance
 
             result = await mgr.start("proj_1", "claudecode")
-            assert "proj_1" in mgr._adapters
-            assert "claudecode" in mgr._adapters["proj_1"]
+            assert ("proj_1", "default") in mgr._adapters
+            assert "claudecode" in mgr._adapters[("proj_1", "default")]
             mock_instance.start.assert_awaited_once()
             pm.start.assert_awaited_once()
 

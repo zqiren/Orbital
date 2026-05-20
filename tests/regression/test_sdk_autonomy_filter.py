@@ -330,7 +330,7 @@ class TestSubAgentManagerAutonomyWiring:
         mock_transport.update_autonomy = MagicMock()
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters["proj_1"] = {"claude-code": mock_adapter}
+        mgr._adapters[("proj_1", "default")] = {"claude-code": mock_adapter}
 
         mgr.update_sub_agent_autonomy("proj_1", Autonomy.HANDS_OFF)
 
@@ -348,7 +348,7 @@ class TestSubAgentManagerAutonomyWiring:
         mock_transport = MagicMock(spec=[])  # empty spec = no attributes
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters["proj_1"] = {"other-agent": mock_adapter}
+        mgr._adapters[("proj_1", "default")] = {"other-agent": mock_adapter}
 
         # Should not raise
         mgr.update_sub_agent_autonomy("proj_1", Autonomy.CHECK_IN)

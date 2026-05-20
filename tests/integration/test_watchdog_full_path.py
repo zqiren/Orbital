@@ -57,28 +57,33 @@ class _WedgedSubAgentManager:
     """Minimal SubAgentManager stand-in where sub-agents never go idle.
 
     Tracks stop_all calls. The internal _adapters dict is maintained so
-    we can assert no orphan adapters remain after stop_all.
+    we can assert no orphan adapters remain after stop_all. Now keyed by
+    ``SessionKey`` to match the post-multi-loop SubAgentManager shape.
     """
 
     def __init__(self):
-        self.stop_all_calls: list[str] = []
-        # Simulate one adapter registered for the project
-        self._adapters: dict[str, dict] = {
-            PROJECT_ID: {"handle-001": MagicMock()}
+        self.stop_all_calls: list[tuple[str, str]] = []
+        # Simulate one adapter registered for the default session of PROJECT_ID
+        self._adapters: dict[tuple[str, str], dict] = {
+            (PROJECT_ID, "default"): {"handle-001": MagicMock()}
         }
 
-    def list_active(self, project_id: str) -> list[dict]:
+    def list_active(self, project_id: str, *,
+                    session_id: str | None = None) -> list[dict]:
         """Always report a running sub-agent (wedged — never goes idle)."""
-        adapters = self._adapters.get(project_id, {})
+        sid = session_id or "default"
+        adapters = self._adapters.get((project_id, sid), {})
         return [
             {"handle": h, "display_name": "wedged-helper", "status": "running"}
             for h in adapters
         ]
 
-    async def stop_all(self, project_id: str) -> None:
+    async def stop_all(self, project_id: str, *,
+                       session_id: str | None = None) -> None:
         """Record the call and remove the adapters (simulates a successful stop)."""
-        self.stop_all_calls.append(project_id)
-        self._adapters.pop(project_id, None)
+        sid = session_id or "default"
+        self.stop_all_calls.append((project_id, sid))
+        self._adapters.pop((project_id, sid), None)
 
 
 # ------------------------------------------------------------------ #
@@ -132,13 +137,13 @@ async def test_watchdog_full_path_stops_wedged_subagents():
         f"Expected exactly 1 idle broadcast, got {len(idle_broadcasts)}: {broadcast_messages}"
     )
 
-    # 2. stop_all must have been invoked with the correct project_id
-    assert wedged_sam.stop_all_calls == [PROJECT_ID], (
+    # 2. stop_all must have been invoked with the correct (project_id, session_id)
+    assert wedged_sam.stop_all_calls == [(PROJECT_ID, "default")], (
         f"stop_all not called correctly: {wedged_sam.stop_all_calls}"
     )
 
     # 3. No orphan adapters remaining
-    remaining = wedged_sam._adapters.get(PROJECT_ID, {})
+    remaining = wedged_sam._adapters.get((PROJECT_ID, "default"), {})
     assert not remaining, f"Orphan adapters still present: {remaining}"
 
 
