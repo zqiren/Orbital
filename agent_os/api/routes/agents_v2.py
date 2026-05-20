@@ -1489,12 +1489,25 @@ async def update_sub_agent_memory(
     path = _memory_md_path_for(workspace, agent_slug)
     parent = os.path.dirname(path)
     try:
-        os.makedirs(parent, exist_ok=True)
         # Per spec: PUT-creates-file path writes user content directly,
         # without the daemon's canonical header. The UI is overwriting
         # MEMORY.md from scratch.
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(body.content)
+        #
+        # F4 / dispatch 2026-05-20 §5: route through SubAgentManager's
+        # locked write helper when available so a UI overwrite cannot
+        # interleave with a concurrent daemon-side ``ensure_memory_md``.
+        # When ``_sub_agent_manager`` is None (e.g. in tests that don't
+        # wire it) we fall back to the unguarded write — those code paths
+        # were unprotected before this change too, so the fallback is not
+        # a regression.
+        if _sub_agent_manager is not None:
+            await _sub_agent_manager.write_memory_md(
+                workspace, project_id, agent_slug, body.content,
+            )
+        else:
+            os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(body.content)
     except OSError as e:
         raise HTTPException(
             status_code=500,

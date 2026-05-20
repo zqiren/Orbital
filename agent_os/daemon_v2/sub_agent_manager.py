@@ -47,6 +47,17 @@ class SubAgentManager:
         # Maps (project_id, content_hash) -> "warned" | "dismissed".
         # Cleared on daemon restart (in-memory only).
         self._claudemd_warning_state: dict[tuple[str, str], str] = {}
+        # Per-(project_id, agent_slug) locks guarding ORBITAL-SIDE writes to a
+        # sub-agent's MEMORY.md. Track F4 / dispatch 2026-05-20 §5.
+        #
+        # PARTIAL COVERAGE: this protects Orbital's own touches (lazy creation
+        # via ensure_memory_md, UI overwrite via the PUT endpoint, future
+        # Orbital-side reads). It does NOT prevent claude.exe from racing
+        # directly against the file — that path is entirely external to the
+        # daemon (per TASK/INVESTIGATION-sub-agent-memory-write-path.md Track D
+        # 2026-05-20). Intercepting claude.exe's I/O is architectural rework,
+        # explicitly out of F4's scope (§5.3).
+        self._memory_write_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def _get_lock(self, project_id: str) -> asyncio.Lock:
         """Get or create the per-project lifecycle lock."""
@@ -55,6 +66,58 @@ class SubAgentManager:
             lock = asyncio.Lock()
             self._lifecycle_locks[project_id] = lock
         return lock
+
+    def _get_memory_write_lock(
+        self, project_id: str, agent_slug: str,
+    ) -> asyncio.Lock:
+        """Get or lazily create the per-(project, agent) MEMORY.md write lock.
+
+        Synchronous dict op; the returned lock is acquired via ``async with``
+        at the call site. See ``self._memory_write_locks`` docstring above
+        for the partial-coverage caveat: this lock only serializes
+        Orbital-mediated writes, not claude.exe's own direct file writes.
+        """
+        key = (project_id, agent_slug)
+        lock = self._memory_write_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._memory_write_locks[key] = lock
+        return lock
+
+    async def ensure_memory_md_locked(
+        self, workspace: str, project_id: str, agent_slug: str,
+    ) -> str:
+        """Lock-guarded wrapper around ``ensure_memory_md``.
+
+        Used by ``_start_from_registry`` at lazy-create time. Returns the
+        MEMORY.md path. PARTIAL COVERAGE caveat applies — see
+        ``self._memory_write_locks``.
+        """
+        from agent_os.agent.sub_agent_prompt import ensure_memory_md
+        lock = self._get_memory_write_lock(project_id, agent_slug)
+        async with lock:
+            return ensure_memory_md(workspace, agent_slug)
+
+    async def write_memory_md(
+        self, workspace: str, project_id: str, agent_slug: str, content: str,
+    ) -> str:
+        """Lock-guarded full-overwrite write of MEMORY.md.
+
+        Used by the UI overwrite endpoint at
+        ``agent_os/api/routes/agents_v2.py:update_sub_agent_memory``.
+        Creates the parent directory if missing, writes the full content,
+        returns the path. PARTIAL COVERAGE caveat applies — see
+        ``self._memory_write_locks``.
+        """
+        from agent_os.agent.sub_agent_prompt import _memory_md_path
+        path = _memory_md_path(workspace, agent_slug)
+        parent = os.path.dirname(path)
+        lock = self._get_memory_write_lock(project_id, agent_slug)
+        async with lock:
+            os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        return path
 
     async def start(self, project_id: str, handle: str, depth: int = 0) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager."""
@@ -413,7 +476,13 @@ class SubAgentManager:
                         project_id, handle, transport_hint, runtime_mode,
                     )
                 else:
-                    ensure_memory_md(workspace, handle)
+                    # F4 / dispatch 2026-05-20 §5: lock-guarded variant. Two
+                    # concurrent dispatches of the same sub-agent within one
+                    # project will serialize through ``_memory_write_locks``.
+                    # PARTIAL COVERAGE: does not block claude.exe's own writes.
+                    await self.ensure_memory_md_locked(
+                        workspace, project_id, handle,
+                    )
 
                 system_prompt = render_sub_agent_prompt(
                     workspace=workspace,
