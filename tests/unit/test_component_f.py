@@ -1252,6 +1252,84 @@ class TestRESTEndpoints:
         resp = app_client.get("/api/v2/agents/nonexistent/chat")
         assert resp.status_code == 404
 
+    def test_list_sessions_404_for_unknown_project(self, app_client):
+        """GET /projects/{pid}/sessions returns 404 for unknown project."""
+        resp = app_client.get("/api/v2/projects/nonexistent/sessions")
+        assert resp.status_code == 404
+
+    def test_list_sessions_empty_for_idle_project(self, app_client, tmp_path):
+        """A project with no active sessions returns an empty list."""
+        create_resp = app_client.post("/api/v2/projects", json={
+            "name": "EmptySessions",
+            "workspace": str(tmp_path),
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        pid = create_resp.json()["project_id"]
+
+        resp = app_client.get(f"/api/v2/projects/{pid}/sessions")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"project_id": pid, "sessions": []}
+
+    def test_list_sessions_returns_active_and_idle(self, app_client, tmp_path):
+        """Sessions endpoint returns running and idle entries with correct shape.
+
+        We inject handles directly into the agent_manager to simulate two
+        concurrent sessions in the same project — one running, one idle.
+        """
+        from agent_os.api.routes import agents_v2
+
+        # Create the project so 404 doesn't fire.
+        create_resp = app_client.post("/api/v2/projects", json={
+            "name": "MultiSessionList",
+            "workspace": str(tmp_path),
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        pid = create_resp.json()["project_id"]
+
+        # Inject two handles directly into the agent manager.
+        mgr = agents_v2._agent_manager
+
+        running_session = MagicMock(name="running_session")
+        running_session.is_stopped.return_value = False
+        running_session._paused_for_approval = False
+        running_session.session_id = "uuid-run"
+        running_task = MagicMock()
+        running_task.done.return_value = False
+        mgr._handles[(pid, "default")] = MagicMock(
+            session=running_session, task=running_task,
+        )
+
+        idle_session = MagicMock(name="idle_session")
+        idle_session.is_stopped.return_value = False
+        idle_session._paused_for_approval = False
+        idle_session.session_id = "uuid-idle"
+        idle_task = MagicMock()
+        idle_task.done.return_value = True
+        mgr._handles[(pid, "sess_b")] = MagicMock(
+            session=idle_session, task=idle_task,
+        )
+
+        try:
+            resp = app_client.get(f"/api/v2/projects/{pid}/sessions")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["project_id"] == pid
+            sessions = body["sessions"]
+            assert len(sessions) == 2
+            # Default session is sorted first.
+            assert sessions[0]["session_id"] == "default"
+            assert sessions[0]["status"] == "running"
+            assert sessions[0]["session_uuid"] == "uuid-run"
+            assert sessions[1]["session_id"] == "sess_b"
+            assert sessions[1]["status"] == "idle"
+            assert sessions[1]["session_uuid"] == "uuid-idle"
+        finally:
+            mgr._handles.pop((pid, "default"), None)
+            mgr._handles.pop((pid, "sess_b"), None)
+
     def test_chat_history_no_sessions_returns_empty(self, app_client, tmp_path):
         """Chat endpoint returns empty array when project exists but no sessions."""
         resp = app_client.post("/api/v2/projects", json={
