@@ -32,6 +32,98 @@ _IS_WINDOWS = sys.platform == "win32"
 # need an asyncio.Lock unless tests show flakiness under concurrent dispatch.
 _completed_session_ends: set[str] = set()
 
+# Per-(project_id, "session_log") asyncio.Lock cache. SESSION_LOG.md is the
+# only read-modify-write file in run_session_end_routine: we read current
+# contents, append the new entry, and may rewrite with a cap. If two
+# session-end routines (e.g. the loop fire-and-forget path and the
+# new_session() pre-archival path, or two concurrent periodic refreshes)
+# race here AND the OCC stat-compare aborts one of them, we have already
+# burned an LLM call for nothing. Serializing the SESSION_LOG critical
+# section avoids that waste — the OCC pattern then only catches genuine
+# user mid-edits, not internal contention.
+#
+# Lock entries are created lazily and never removed. The dict grows at
+# most one entry per project_id over a daemon lifetime, which is bounded
+# by user-installed projects — negligible memory.
+_session_log_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _get_session_log_lock(project_id: str) -> asyncio.Lock:
+    """Return the (project_id, "session_log") asyncio.Lock, creating it lazily.
+
+    Safe to call from any event loop on the daemon process — asyncio.Lock
+    binds to the running loop on first acquisition, and SESSION_LOG writes
+    happen on the agent loop's event loop in all production callers.
+    """
+    key = (project_id, "session_log")
+    lock = _session_log_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_log_locks[key] = lock
+    return lock
+
+
+def _stat_mtime_ns(path: str) -> int | None:
+    """Return st_mtime_ns for path, or None if the file does not exist.
+
+    Used as the OCC baseline / observation for metadata-file writes. Uses
+    nanosecond precision so very fast user edits (within the same coarse
+    second) are still detected as conflicts.
+    """
+    try:
+        return os.stat(path).st_mtime_ns
+    except FileNotFoundError:
+        return None
+    except OSError:
+        # Permission error or transient I/O failure: treat as "unknown",
+        # which forces a conflict on comparison and aborts the write.
+        # Safer than silently overwriting a file we cannot stat.
+        return None
+
+
+def _occ_write_metadata(
+    workspace_files: "WorkspaceFileManager",
+    file_key: str,
+    new_content: str,
+    baseline_mtime: int | None,
+    *,
+    project_id: str,
+) -> bool:
+    """Atomic write of a metadata file gated on the baseline mtime.
+
+    Returns True if the write succeeded, False if it was aborted because
+    the file's mtime no longer matches the captured baseline (signalling
+    that the user — or some other writer — modified the file between
+    when the session-end routine read it for the LLM prompt and now).
+
+    On abort, a structured WARNING is logged with project_id, file path,
+    both mtimes, and a cache_thrash_telemetry=True marker so the field
+    is greppable in production logs for future analysis.
+
+    The "file did not exist at baseline AND still does not exist now"
+    case is treated as a non-conflict — both observed states are None,
+    so we proceed with the initial write.
+    """
+    filepath = workspace_files._file_path(file_key)
+    observed_mtime = _stat_mtime_ns(filepath)
+    if observed_mtime != baseline_mtime:
+        logger.warning(
+            "session_end: OCC abort on %s — user mid-edit detected "
+            "(project_id=%s baseline_mtime=%s observed_mtime=%s "
+            "cache_thrash_telemetry=True)",
+            file_key, project_id, baseline_mtime, observed_mtime,
+            extra={
+                "project_id": project_id,
+                "file_path": filepath,
+                "baseline_mtime": baseline_mtime,
+                "observed_mtime": observed_mtime,
+                "cache_thrash_telemetry": True,
+            },
+        )
+        return False
+    workspace_files.write(file_key, new_content)
+    return True
+
 
 def _atomic_replace(src: str, dst: str) -> None:
     """os.replace with retry on Windows (target may be briefly open)."""
@@ -514,6 +606,7 @@ async def run_session_end_routine(
     *,
     session_id: str,
     bypass_idempotency: bool = False,
+    project_id: str = "",
 ) -> None:
     """Generate and write workspace files at session end.
 
@@ -532,12 +625,42 @@ async def run_session_end_routine(
     this routine mid-session without being blocked by an earlier /new call.
     The completion set is also skipped on the write side when bypass=True,
     so the guard remains intact for future non-bypass calls.
+
+    project_id: optional, used for structured OCC-abort log fields. Empty
+    string is accepted so tests and legacy callers continue to work; in
+    production callers (agent_manager.start_agent, new_session, the
+    periodic-refresh callback) the real project_id should be passed so
+    the cache_thrash_telemetry warnings are attributable.
+
+    OCC (Optimistic Concurrency Control) on metadata writes:
+      PROJECT_STATE.md, DECISIONS.md, LESSONS.md, CONTEXT.md, and
+      SESSION_LOG.md are all gated on a baseline mtime captured before
+      the LLM is invoked. If the user (or any external editor) modifies
+      one of these files while the LLM is generating the new content,
+      the corresponding write is aborted with a structured warning and
+      the other files still write normally. SESSION_LOG.md is a
+      read-modify-write target, so an asyncio.Lock keyed by
+      (project_id, "session_log") wraps its OCC block to prevent two
+      session-end routines from racing on it and burning LLM calls.
     """
     # Idempotency guard: short-circuit if this session already completed.
     # Bypassed for periodic mid-session refresh triggers.
     if not bypass_idempotency and session_id in _completed_session_ends:
         logger.info("session_end skipped: already completed for %s", session_id)
         return
+
+    # OCC baseline: capture mtimes BEFORE the LLM runs. This is the
+    # version of each file that the prompt-builder fed the LLM as input
+    # context. If the file's mtime changes between now and the
+    # post-LLM write, we know a third party touched the file and we
+    # must abort the corresponding write to avoid clobbering their
+    # edits. SESSION_LOG's baseline is captured here for symmetry but
+    # the lock+re-stat below uses a fresh baseline inside the critical
+    # section, since the write content depends on the live file.
+    _occ_baselines: dict[str, int | None] = {
+        key: _stat_mtime_ns(workspace_files._file_path(key))
+        for key in ("state", "decisions", "lessons", "context")
+    }
 
     # 1. Gather session summary
     summary = _build_session_summary(session)
@@ -579,10 +702,13 @@ async def run_session_end_routine(
         logger.warning("Session-end routine: failed to parse LLM response, skipping file updates")
         return
 
-    # 5. Write files
+    # 5. Write files (OCC-gated; see _occ_write_metadata)
     # PROJECT_STATE: full overwrite (always)
     if result.get("project_state"):
-        workspace_files.write("state", result["project_state"])
+        _occ_write_metadata(
+            workspace_files, "state", result["project_state"],
+            _occ_baselines["state"], project_id=project_id,
+        )
 
     # DECISIONS: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file (safer than blanking on a
@@ -595,14 +721,21 @@ async def run_session_end_routine(
             keep="last",
             filename="decisions",
         )
-        workspace_files.write("decisions", decisions_content)
+        _occ_write_metadata(
+            workspace_files, "decisions", decisions_content,
+            _occ_baselines["decisions"], project_id=project_id,
+        )
     else:
         logger.info("session_end: no updates for decisions, preserving existing file")
 
-    # SESSION_LOG: always append, then mechanically cap on disk.
-    # Read cap lives in build_cold_resume_context / build_session_end_prompt;
-    # this block enforces the WRITE cap so the file does not grow without
-    # bound. Reuses _truncate_session_log verbatim — no format changes.
+    # SESSION_LOG: read-modify-write under (project_id, "session_log")
+    # asyncio.Lock to avoid two session-end routines racing here and
+    # forcing one of them to abort post-LLM. Inside the lock we capture
+    # a FRESH baseline mtime (because something other than this routine
+    # could have written between the prompt build and now), read the
+    # current contents, append the new entry, then write back atomically
+    # — gated on the baseline being intact. A separate OCC check guards
+    # the cap-driven rewrite that may follow the append.
     #
     # Guard: only invoke truncation when the marker count genuinely
     # exceeds the write cap. _truncate_session_log's split on '## Session'
@@ -610,19 +743,35 @@ async def run_session_end_routine(
     # count keeps malformed-but-harmless files intact when no pruning is
     # required.
     if result.get("session_log_entry"):
-        workspace_files.append("session_log", "\n" + result["session_log_entry"])
-
-        current = workspace_files.read("session_log") or ""
-        before_count = len(re.findall(r'(?m)^## Session ', current))
-        if before_count > _SESSION_LOG_WRITE_CAP:
-            truncated = _truncate_session_log(current, _SESSION_LOG_WRITE_CAP)
-            if truncated != current:
-                after_count = len(re.findall(r'(?m)^## Session ', truncated))
-                workspace_files.write("session_log", truncated)
-                logger.info(
-                    "session_log truncated: %d → %d entries",
-                    before_count, after_count,
-                )
+        session_log_path = workspace_files._file_path("session_log")
+        async with _get_session_log_lock(project_id):
+            session_log_baseline = _stat_mtime_ns(session_log_path)
+            current_existing = workspace_files.read("session_log") or ""
+            appended = current_existing + "\n" + result["session_log_entry"]
+            if _occ_write_metadata(
+                workspace_files, "session_log", appended,
+                session_log_baseline, project_id=project_id,
+            ):
+                # Re-stat after our own write to set a fresh baseline
+                # for the (optional) cap rewrite. The cap rewrite is a
+                # second mutation of the same file, so it gets its own
+                # OCC guard against any user edit landing between our
+                # append and the truncate.
+                cap_baseline = _stat_mtime_ns(session_log_path)
+                current = workspace_files.read("session_log") or ""
+                before_count = len(re.findall(r'(?m)^## Session ', current))
+                if before_count > _SESSION_LOG_WRITE_CAP:
+                    truncated = _truncate_session_log(current, _SESSION_LOG_WRITE_CAP)
+                    if truncated != current:
+                        after_count = len(re.findall(r'(?m)^## Session ', truncated))
+                        if _occ_write_metadata(
+                            workspace_files, "session_log", truncated,
+                            cap_baseline, project_id=project_id,
+                        ):
+                            logger.info(
+                                "session_log truncated: %d → %d entries",
+                                before_count, after_count,
+                            )
 
     # LESSONS: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file.
@@ -634,7 +783,10 @@ async def run_session_end_routine(
             keep="first",
             filename="lessons",
         )
-        workspace_files.write("lessons", lessons_content)
+        _occ_write_metadata(
+            workspace_files, "lessons", lessons_content,
+            _occ_baselines["lessons"], project_id=project_id,
+        )
     else:
         logger.info("session_end: no updates for lessons, preserving existing file")
 
@@ -648,7 +800,10 @@ async def run_session_end_routine(
             keep="last",
             filename="context",
         )
-        workspace_files.write("context", context_content)
+        _occ_write_metadata(
+            workspace_files, "context", context_content,
+            _occ_baselines["context"], project_id=project_id,
+        )
     else:
         logger.info("session_end: no updates for context, preserving existing file")
 
