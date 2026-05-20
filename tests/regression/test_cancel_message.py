@@ -100,6 +100,8 @@ async def test_cancel_message_calls_cancel_turn():
         "type": "agent.status",
         "project_id": pid,
         "status": "idle",
+        # session_id is stamped additively by _broadcast (multi-loop).
+        "session_id": "default",
     })
 
     # Cleanup task

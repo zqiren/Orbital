@@ -105,6 +105,24 @@ class AgentManager:
         """
         return session_id or DEFAULT_SESSION_ID
 
+    def _broadcast(self, project_id: str, payload: dict,
+                   session_id: str | None = None) -> None:
+        """Wrap ``self._ws.broadcast`` to stamp an additive ``session_id`` field.
+
+        The existing project-keyed subscription model is unchanged — every
+        client subscribed to ``project_id`` still receives the payload.
+        The new field lets multi-loop-aware clients filter by session
+        without breaking single-loop clients (which simply ignore the
+        extra field). When ``session_id`` is omitted at the call site,
+        ``DEFAULT_SESSION_ID`` is stamped so consumers can rely on the
+        field being present on every payload.
+        """
+        sid = self._resolve_session_id(session_id)
+        # Don't overwrite a session_id already set by the caller (rare,
+        # but cleaner than special-casing): the call site's choice wins.
+        payload.setdefault("session_id", sid)
+        self._ws.broadcast(project_id, payload)
+
     # ── Daemon state file (shutdown hardening) ──────────────────────────
 
     def _write_state(self) -> None:
@@ -637,13 +655,13 @@ class AgentManager:
         async def session_end_refresh_callback(trigger_name: str) -> None:
             from datetime import datetime, timezone
             ts = datetime.now(timezone.utc).isoformat()
-            self._ws.broadcast(project_id, {
+            self._broadcast(project_id, {
                 "type": "state_refresh.lifecycle",
                 "project_id": project_id,
                 "status": "in_progress",
                 "trigger": trigger_name,
                 "timestamp": ts,
-            })
+            }, session_id=session_id)
             try:
                 await run_session_end_routine(
                     session=session,
@@ -654,38 +672,38 @@ class AgentManager:
                     bypass_idempotency=True,
                     project_id=project_id,
                 )
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "done",
                     "trigger": trigger_name,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }, session_id=session_id)
                 logger.info(
                     "State refresh complete (project=%s trigger=%s)",
                     project_id, trigger_name,
                 )
             except asyncio.TimeoutError:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "skipped",
                     "trigger": trigger_name,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }, session_id=session_id)
                 logger.warning(
                     "State refresh timed out (skipped) (project=%s trigger=%s)",
                     project_id, trigger_name,
                 )
                 raise
             except Exception:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "state_refresh.lifecycle",
                     "project_id": project_id,
                     "status": "failed",
                     "trigger": trigger_name,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }, session_id=session_id)
                 logger.exception(
                     "State refresh failed (project=%s trigger=%s)",
                     project_id, trigger_name,
@@ -781,7 +799,7 @@ class AgentManager:
         }
         if trigger_source:
             status_event["trigger_source"] = trigger_source
-        self._ws.broadcast(project_id, status_event)
+        self._broadcast(project_id, status_event, session_id=session_id)
 
         # 15. Daemon state checkpoint + heartbeat + sleep prevention
         self._ensure_heartbeat_running()
@@ -1096,12 +1114,12 @@ class AgentManager:
             # 9. Broadcast approval resolved so the approval card can show
             #    "Denied" via the normal WS path.
             if dismissed_tc_id:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "approval.resolved",
                     "project_id": project_id,
                     "tool_call_id": dismissed_tc_id,
                     "resolution": "denied",
-                })
+                }, session_id=session_id)
 
             # 10. Restart the loop to process the new user message.
             await self._start_loop(project_id, session_id=session_id)
@@ -1540,18 +1558,18 @@ class AgentManager:
 
         # 10. Broadcast new_session event, then idle so frontend status
         #     doesn't stay stuck (enables repeat /new invocations).
-        self._ws.broadcast(project_id, {
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "new_session",
             "source": "management",
-        })
-        self._ws.broadcast(project_id, {
+        }, session_id=session_id)
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "idle",
             "source": "management",
-        })
+        }, session_id=session_id)
 
         logger.info(
             "new_session(%s): archived %s, created %s",
@@ -1587,11 +1605,11 @@ class AgentManager:
         # (loop.py:779), so the JSONL is durable by the time we reach this
         # line. If cancel_turn is later refactored to defer the marker write,
         # this ordering assumption needs to be revisited.
-        self._ws.broadcast(project_id, {
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "idle",
-        })
+        }, session_id=session_id)
         return {"status": "cancelled"}
 
     async def stop_agent(self, project_id: str, *,
@@ -1641,12 +1659,12 @@ class AgentManager:
             # downstream code that observes it.
             handle.session.stop()
 
-        self._ws.broadcast(project_id, {
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "stopped",
             "source": "management",
-        })
+        }, session_id=session_id)
 
         self._handles.pop(sk, None)
 
@@ -1739,12 +1757,12 @@ class AgentManager:
         )
         handle.task = task
 
-        self._ws.broadcast(project_id, {
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "running",
             "source": "management",
-        })
+        }, session_id=session_id)
 
     def _on_message(self, project_id: str):
         """Returns callback for session.on_append."""
@@ -1775,21 +1793,21 @@ class AgentManager:
             try:
                 exc = task.exception()
             except asyncio.CancelledError:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "stopped",
                     "source": "management",
-                })
+                }, session_id=session_id)
                 return
             if exc:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "error",
                     "reason": str(exc),
                     "source": "management",
-                })
+                }, session_id=session_id)
                 return
 
             handle = self._handles.get(sk)
@@ -1797,11 +1815,11 @@ class AgentManager:
                 return
             if handle.session.is_stopped():
                 self._handles.pop(sk, None)
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "stopped",
-                })
+                }, session_id=session_id)
                 return
 
             # Drain any deferred messages (lifecycle notifications)
@@ -1812,12 +1830,12 @@ class AgentManager:
             # or broadcast idle while a tool call is awaiting user decision.
             # Queued messages will be drained after the approval is resolved.
             if handle.session._paused_for_approval:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "pending_approval",
                     "source": "management",
-                })
+                }, session_id=session_id)
                 self._write_state()
                 return
 
@@ -1850,23 +1868,23 @@ class AgentManager:
             )
             busy = [a for a in active if a.get("status") != "idle"]
             if busy:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "waiting",
                     "source": "management",
-                })
+                }, session_id=session_id)
                 poll_task = asyncio.ensure_future(
                     self._check_sub_agents_done(project_id, session_id=session_id)
                 )
                 self._idle_poll_tasks[project_id] = poll_task
             else:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "idle",
                     "source": "management",
-                })
+                }, session_id=session_id)
 
             # Update daemon state after loop completes
             self._write_state()
@@ -1899,12 +1917,12 @@ class AgentManager:
             )
             busy = [a for a in active if a.get("status") != "idle"]
             if not busy:
-                self._ws.broadcast(project_id, {
+                self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
                     "status": "idle",
                     "source": "management",
-                })
+                }, session_id=session_id)
                 return
 
         # Max polls exceeded — stop sub-agents, then force idle
@@ -1920,9 +1938,9 @@ class AgentManager:
             )
         except Exception:
             logger.exception("Watchdog stop_all raised for project %s", project_id)
-        self._ws.broadcast(project_id, {
+        self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
             "status": "idle",
             "source": "management",
-        })
+        }, session_id=session_id)
