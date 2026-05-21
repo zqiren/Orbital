@@ -3,12 +3,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Send, Square, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
-import { api, apiWithTotal } from '../config';
+import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
+import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { transformChatHistory, truncateResult } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+import AttachmentChip from './AttachmentChip';
+import { uploadFile } from '../lib/attachment-upload';
+import { buildAttachmentsBlock } from '../lib/attachment-parsing';
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
+
+interface PendingAttachment {
+  id: string;
+  file: File;
+  filename: string;
+  mime: string;
+  size: number;
+  status: 'pending' | 'uploading' | 'done' | 'error';
+  uploadedPath?: string;
+  thumbnailUrl?: string;
+  errorMessage?: string;
+}
+
+function genId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
 type CapsuleChild = AgentRunItem['items'][number];
@@ -288,9 +313,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [dragCounter, setDragCounter] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
@@ -1049,9 +1077,203 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     setTimeout(() => handleSend(), 0);
   }
 
+  // ---- Attachment helpers ------------------------------------------------
+
+  const uploadAttachment = useCallback(
+    async (att: PendingAttachment) => {
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === att.id ? { ...a, status: 'uploading' as const } : a,
+        ),
+      );
+      try {
+        const baseUrl = isRelayMode ? window.location.origin : BASE_URL;
+        const { path, size } = await uploadFile({
+          projectId,
+          file: att.file,
+          baseUrl,
+          isRelayMode,
+        });
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id
+              ? { ...a, status: 'done' as const, uploadedPath: path, size }
+              : a,
+          ),
+        );
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Upload failed';
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id
+              ? { ...a, status: 'error' as const, errorMessage: message }
+              : a,
+          ),
+        );
+      }
+    },
+    [projectId],
+  );
+
+  const addAttachments = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setAttachments((prev) => {
+        const room = MAX_ATTACHMENTS - prev.length;
+        if (room <= 0) {
+          setInjectError(`Maximum of ${MAX_ATTACHMENTS} attachments per message.`);
+          return prev;
+        }
+        const usable = files.slice(0, room);
+        if (files.length > usable.length) {
+          setInjectError(`Only ${MAX_ATTACHMENTS} attachments allowed per message.`);
+        }
+        const additions: PendingAttachment[] = usable.map((file) => {
+          const id = genId();
+          const isImage = file.type.startsWith('image/');
+          const thumbnailUrl = isImage ? URL.createObjectURL(file) : undefined;
+          const tooBig = file.size > MAX_ATTACHMENT_BYTES;
+          const att: PendingAttachment = {
+            id,
+            file,
+            filename: file.name,
+            mime: file.type || 'application/octet-stream',
+            size: file.size,
+            status: tooBig ? 'error' : 'pending',
+            thumbnailUrl,
+            errorMessage: tooBig
+              ? 'File exceeds 10 MB limit'
+              : undefined,
+          };
+          return att;
+        });
+
+        // Kick off uploads for the valid ones on the next tick so React has
+        // committed the new chip state.
+        setTimeout(() => {
+          for (const a of additions) {
+            if (a.status === 'pending') {
+              uploadAttachment(a);
+            }
+          }
+        }, 0);
+
+        return [...prev, ...additions];
+      });
+    },
+    [uploadAttachment],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target?.thumbnailUrl) {
+        try {
+          URL.revokeObjectURL(target.thumbnailUrl);
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const retryAttachment = useCallback(
+    (id: string) => {
+      setAttachments((prev) => {
+        const target = prev.find((a) => a.id === id);
+        if (!target) return prev;
+        const reset: PendingAttachment = {
+          ...target,
+          status: 'pending',
+          errorMessage: undefined,
+        };
+        setTimeout(() => uploadAttachment(reset), 0);
+        return prev.map((a) => (a.id === id ? reset : a));
+      });
+    },
+    [uploadAttachment],
+  );
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((prev) => {
+      for (const a of prev) {
+        if (a.thumbnailUrl) {
+          try {
+            URL.revokeObjectURL(a.thumbnailUrl);
+          } catch {
+            // ignore
+          }
+        }
+      }
+      return [];
+    });
+  }, []);
+
+  function handleFilePickerChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) addAttachments(files);
+    e.target.value = '';
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((it) => it.kind === 'file')
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length > 0) {
+      e.preventDefault();
+      addAttachments(files);
+    }
+  }
+
+  function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setDragCounter((n) => n + 1);
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragCounter((n) => Math.max(0, n - 1));
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragCounter(0);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) addAttachments(files);
+  }
+
+  const anyUploading = attachments.some((a) => a.status === 'uploading');
+  const anyDone = attachments.some((a) => a.status === 'done');
+  const allError =
+    attachments.length > 0 && attachments.every((a) => a.status === 'error');
+  const hasText = inputText.trim().length > 0;
+  // Send is enabled when there is text OR a done chip, AND no chip is uploading.
+  const canSend =
+    !anyUploading &&
+    !allError &&
+    (hasText || anyDone) &&
+    !(attachments.length > 0 && !hasText && !anyDone);
+  const disabledReason = anyUploading
+    ? 'Waiting for uploads…'
+    : allError && !hasText
+      ? 'Remove failed attachments or retry'
+      : '';
+
   async function handleSend() {
     const text = inputText.trim();
-    if (!text) return;
+    const doneAttachments = attachments.filter((a) => a.status === 'done');
+    if (!text && doneAttachments.length === 0) return;
+    if (anyUploading) return;
 
     // Slash command: /new
     if (text === '/new') {
@@ -1074,10 +1296,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     localNoncesRef.current.set(nonce, 0);
 
+    const attachmentsPayload = doneAttachments.map((a) => ({
+      path: a.uploadedPath!,
+      mime: a.mime,
+      size: a.size,
+    }));
+    // Build the same prefix the backend will emit, so the optimistic local
+    // user_message has the identical wire content as the WS echo will.
+    const wireContent = buildAttachmentsBlock(attachmentsPayload) + content;
+
     setInputText('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+    clearAttachments();
 
     setItems((prev) => {
       const afterCapsule = finalizeLiveCapsule(prev, 'completed');
@@ -1085,7 +1317,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         ...afterCapsule,
         {
           type: 'user_message',
-          content: content,
+          content: wireContent,
           timestamp: new Date().toISOString(),
           ...(target && { target }),
         },
@@ -1095,7 +1327,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
     try {
-      const result = await injectMessage(projectId, content, target, nonce);
+      const result = await injectMessage(
+        projectId,
+        content,
+        target,
+        nonce,
+        attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+      );
       // If the backend auto-denied a pending approval because we sent this
       // message while paused, immediately mark the approval card as denied
       // so the user sees the transition without waiting for the WS echo.
@@ -1180,8 +1418,24 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }
 
+  const isDragActive = dragCounter > 0;
+
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragActive && (
+        <div
+          className="absolute inset-0 z-50 bg-background/80 border-2 border-dashed border-accent rounded flex items-center justify-center pointer-events-none"
+          data-testid="chat-drop-overlay"
+        >
+          <span className="text-lg font-medium">Drop files to attach</span>
+        </div>
+      )}
       {claudemdWarning && (
         <ClaudemdWarningBanner
           projectId={projectId}
@@ -1473,7 +1727,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       )}
 
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-background max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
-        <div className="relative flex items-center gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
+        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredCommands.map((cmd, i) => (
@@ -1516,54 +1770,96 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               )}
             </div>
           )}
-          <textarea
-            ref={textareaRef}
-            value={inputText}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Send a message..."
-            rows={1}
-            className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed"
-          />
-          {(agentStatus === 'running' || agentStatus === 'waiting') ? (
-            <>
-              <button
-                type="button"
-                onClick={() => cancelMessage(projectId)}
-                onTouchEnd={(e) => { e.preventDefault(); cancelMessage(projectId); }}
-                className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
-              >
-                <Square size={18} />
-              </button>
+          {attachments.length > 0 && (
+            <div
+              className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto"
+              data-testid="chip-strip"
+            >
+              {attachments.map((a) => (
+                <AttachmentChip
+                  key={a.id}
+                  filename={a.filename}
+                  mime={a.mime}
+                  size={a.size}
+                  status={a.status}
+                  thumbnailUrl={a.thumbnailUrl}
+                  errorMessage={a.errorMessage}
+                  onRemove={() => removeAttachment(a.id)}
+                  onRetry={a.status === 'error' ? () => retryAttachment(a.id) : undefined}
+                />
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              multiple
+              ref={fileInputRef}
+              className="hidden"
+              onChange={handleFilePickerChange}
+              data-testid="attachment-file-input"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach files"
+              className="shrink-0 p-2 text-secondary hover:text-primary rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+            >
+              <Plus size={18} />
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={inputText}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder="Send a message..."
+              rows={1}
+              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed"
+            />
+            {(agentStatus === 'running' || agentStatus === 'waiting') ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => cancelMessage(projectId)}
+                  onTouchEnd={(e) => { e.preventDefault(); cancelMessage(projectId); }}
+                  className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+                >
+                  <Square size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
+                  disabled={!canSend}
+                  title={disabledReason || undefined}
+                  className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
+                    canSend
+                      ? 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
+                      : 'bg-secondary/20 text-secondary/40 cursor-default'
+                  }`}
+                >
+                  Queue
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 onClick={handleSend}
                 onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
-                disabled={!inputText.trim()}
-                className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
-                  inputText.trim()
-                    ? 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
-                    : 'bg-secondary/20 text-secondary/40 cursor-default'
+                aria-disabled={!canSend}
+                disabled={!canSend}
+                title={disabledReason || undefined}
+                className={`shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
+                  canSend
+                    ? 'text-accent hover:bg-accent/10'
+                    : 'text-secondary opacity-40'
                 }`}
               >
-                Queue
+                <Send size={18} />
               </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSend}
-              onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
-              aria-disabled={!inputText.trim()}
-              className={`shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
-                inputText.trim()
-                  ? 'text-accent hover:bg-accent/10'
-                  : 'text-secondary opacity-40'
-              }`}
-            >
-              <Send size={18} />
-            </button>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>
