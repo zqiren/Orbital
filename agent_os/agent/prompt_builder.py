@@ -81,6 +81,17 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
         "Trigger an immediate checkpoint of project state files. Call when "
         "meaningful work has accumulated and you want to persist it."
     ),
+    "mark_task_complete": (
+        "Signal that the current queued task is finished. Exits the loop "
+        "and tells the dispatcher to advance to the next item. Other tools "
+        "in the same response are DISCARDED — do all work first, then call this."
+    ),
+    "mark_task_blocked": (
+        "Signal that the current queued task cannot proceed (missing "
+        "credentials, ambiguous spec, blocked by another task, etc.). Exits "
+        "the loop and bypasses this item. Other tools in the same response "
+        "are DISCARDED — call this on its own with a clear reason."
+    ),
 }
 
 _BROWSER_USAGE_PROMPT = """\
@@ -223,6 +234,7 @@ class PromptBuilder:
             self._safety(context),
             self._status_reporting(),
             self._error_recovery(),
+            self._queue_signals(),
         ]))
         semi_stable = _SEP.join(filter(None, [
             self._trigger_context(context),
@@ -366,6 +378,17 @@ class PromptBuilder:
             "- If the same error occurs 2+ times, try a different approach.\n"
             "- Do not loop on the same failing strategy."
         )
+
+    def _queue_signals(self) -> str:
+        # The queue contract used to live here. H1 verification (12 LLM
+        # calls, 2 models × 2 placements × 3 samples) showed header-only
+        # delivery yields strictly better final outcomes — deepseek went
+        # from 0/3 to 3/3 signal rate after the corrective turn. The
+        # contract now travels in the dispatcher's per-item header
+        # (QueueDispatcher.HEADER_CONTRACT), placed adjacent to the item
+        # content so weaker models keep the contract in nearby context.
+        # Chat-mode messages carry no header and remain plain conversation.
+        return ""
 
     def _onboarding_or_directive(self, context: PromptContext) -> str:
         """Return onboarding prompt if project_goals.md missing, else directive."""

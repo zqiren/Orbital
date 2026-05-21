@@ -144,6 +144,54 @@ class InjectAttachment(BaseModel):
         return v
 
 
+_MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
+
+class InjectAttachment(BaseModel):
+    """A single attachment reference passed to /inject.
+
+    The path is workspace-relative (the upload endpoint stores files under
+    ``uploads/`` by default). The route validates the path resolves inside
+    the workspace and that the declared size matches the file on disk
+    before building the ``<attached_files>...</attached_files>`` prefix.
+    """
+
+    path: str
+    mime: str
+    size: int
+
+    @field_validator("path")
+    @classmethod
+    def reject_absolute_or_traversal(cls, v: str) -> str:
+        if not v or len(v) > 1024:
+            raise ValueError("path empty or too long")
+        if v.startswith("/") or v.startswith("\\"):
+            raise ValueError("path must be relative")
+        if "\x00" in v:
+            raise ValueError("path contains NUL")
+        # Normalise backslash separators before splitting so a Windows-style
+        # relative path like ``uploads\\foo.png`` is treated the same as
+        # ``uploads/foo.png`` for the purpose of '..' detection.
+        parts = v.replace("\\", "/").split("/")
+        if any(p == ".." for p in parts):
+            raise ValueError("path may not contain '..' segments")
+        return v
+
+    @field_validator("mime")
+    @classmethod
+    def validate_mime(cls, v: str) -> str:
+        if not _MIME_PATTERN.match(v):
+            raise ValueError("invalid mime type")
+        return v
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, v: int) -> int:
+        if v < 0 or v > 10 * 1024 * 1024:
+            raise ValueError("size out of range (0..10MB)")
+        return v
+
+
 class InjectRequest(BaseModel):
     content: str
     target: str | None = None
@@ -833,6 +881,306 @@ async def stop_agent(project_id: str):
 async def new_session(project_id: str):
     result = await _agent_manager.new_session(project_id)
     return result
+
+
+# ---- Queue routes (Phase 1) ----
+
+class QueueAddItemRequest(BaseModel):
+    content: str
+    file_refs: list[str] | None = None
+    priority: int | None = 0
+    review_before_advance: bool | None = False
+    source: str | None = "user"
+    idempotency_key: str | None = None
+
+
+class QueueEditItemRequest(BaseModel):
+    content: str | None = None
+    file_refs: list[str] | None = None
+    priority: int | None = None
+    review_before_advance: bool | None = None
+
+
+class QueueReorderRequest(BaseModel):
+    item_ids: list[str]
+
+
+class QueueRetryRequest(BaseModel):
+    mode: str  # "edit" | "answer"
+    input: str
+
+
+def _resolve_queue_store(project_id: str):
+    """Return a QueueStore for the project even if no agent is running.
+
+    Falls through to project_store for the workspace lookup so that GET on
+    the queue endpoint works before an agent is ever started.
+    """
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    project = _project_store.get_project(project_id) if _project_store else None
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    workspace = project.get("workspace") or ""
+    if not workspace:
+        raise HTTPException(status_code=400, detail="Project has no workspace")
+    return _agent_manager.get_queue_store(project_id, workspace=workspace)
+
+
+@router.get("/projects/{project_id}/queue")
+async def get_queue(project_id: str) -> dict:
+    store = _resolve_queue_store(project_id)
+    return store.snapshot()
+
+
+@router.post("/projects/{project_id}/queue/items")
+async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
+    """Persist a queue item. Does NOT auto-start the agent or transition
+    queue state. Staging-only: the user explicitly starts the queue via
+    POST /queue/start (or implicitly via /queue/resume if paused)."""
+    if not req.content or not req.content.strip():
+        raise HTTPException(status_code=400, detail="content must be non-empty")
+    store = _resolve_queue_store(project_id)
+    item = store.add_item(
+        content=req.content,
+        file_refs=req.file_refs or [],
+        priority=int(req.priority or 0),
+        review_before_advance=bool(req.review_before_advance),
+        source=(req.source or "user"),
+        idempotency_key=req.idempotency_key,
+    )
+
+    # If a dispatcher already exists (queue is RUNNING or PAUSED with the
+    # agent up), notify it so it can pick up this new item on its next tick.
+    # If no dispatcher (queue IDLE or no agent), the item sits queued until
+    # the user clicks Start.
+    dispatcher = _agent_manager.get_dispatcher(project_id) if _agent_manager else None
+    if dispatcher is not None:
+        dispatcher.notify_new_item()
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_added",
+            "project_id": project_id,
+            "item_id": item.id,
+        })
+    return {"item": item.model_dump(mode="json")}
+
+
+@router.patch("/projects/{project_id}/queue/items/{item_id}")
+async def edit_queue_item(project_id: str, item_id: str, req: QueueEditItemRequest) -> dict:
+    store = _resolve_queue_store(project_id)
+    item = store.edit_item(
+        item_id,
+        content=req.content,
+        file_refs=req.file_refs,
+        priority=req.priority,
+        review_before_advance=req.review_before_advance,
+    )
+    if item is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Item not found or not in queued state (only queued items can be edited)",
+        )
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_edited",
+            "project_id": project_id,
+            "item_id": item_id,
+        })
+    return {"item": item.model_dump(mode="json")}
+
+
+@router.delete("/projects/{project_id}/queue/items/{item_id}")
+async def delete_queue_item(project_id: str, item_id: str) -> dict:
+    store = _resolve_queue_store(project_id)
+    removed = store.remove_item(item_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.item_removed",
+            "project_id": project_id,
+            "item_id": item_id,
+        })
+    return {"status": "removed"}
+
+
+@router.post("/projects/{project_id}/queue/reorder")
+async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
+    store = _resolve_queue_store(project_id)
+    store.reorder(req.item_ids)
+    if _ws_manager is not None:
+        _ws_manager.broadcast(project_id, {
+            "type": "queue.reordered",
+            "project_id": project_id,
+        })
+    return {"status": "reordered"}
+
+
+@router.post("/projects/{project_id}/queue/stop")
+async def stop_queue(project_id: str) -> dict:
+    """Pause the queue and switch the active session to chat mode."""
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    return await dispatcher.stop()
+
+
+def _project_has_completed_onboarding(project: dict) -> bool:
+    """Onboarding signal: PROJECT_STATE.md exists.
+
+    PROJECT_STATE.md is written by run_session_end_routine (the LLM-driven
+    summarizer) after the first session ends — which only happens after
+    the user has had at least one back-and-forth in chat. Before that the
+    project has no captured context and unattended queue dispatch is
+    premature. After that, the project has memory files and the agent
+    can resume into a real state.
+    """
+    workspace = project.get("workspace", "")
+    if not workspace:
+        return False
+    return os.path.exists(ProjectPaths(workspace).project_state)
+
+
+@router.post("/projects/{project_id}/queue/start")
+async def start_queue(project_id: str) -> dict:
+    """Start (or resume) draining the queue.
+
+    Three branches based on current queue state:
+    - RUNNING: no-op, returns {"status": "already_running"}.
+    - PAUSED:  hot-resume the parked attempt session via dispatcher.resume().
+    - IDLE:    ensure the agent is running (auto-start if needed), flip queue
+               state to RUNNING, kick the dispatcher.
+
+    Gated by onboarding completion: PROJECT_STATE.md must exist on disk
+    (written by the session-end routine after the first chat session
+    completes). Before onboarding the queue cannot start — the user must
+    chat with the agent first so the project has captured context to
+    operate against.
+    """
+    from agent_os.queue.models import QueueRunState
+
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    if _project_store is None:
+        raise HTTPException(status_code=503, detail="Project store not ready")
+
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    if not _project_has_completed_onboarding(project):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Complete onboarding in Chat first — the project has no "
+                "captured state yet (PROJECT_STATE.md missing). Send a "
+                "message in the Chat tab, let the agent respond, and try "
+                "starting the queue again."
+            ),
+        )
+
+    store = _resolve_queue_store(project_id)
+    current_state = store.load().state
+    has_handle = _agent_manager.has_handle(project_id)
+
+    # True no-op only when the queue says RUNNING AND an agent is actually
+    # up to back that claim. State-without-handle (e.g. fresh project whose
+    # queue defaulted to RUNNING but no agent has started, or daemon restart
+    # that didn't auto-resume) needs to fall through to the auto-start path.
+    if current_state == QueueRunState.RUNNING and has_handle:
+        return {"status": "already_running"}
+
+    if current_state == QueueRunState.PAUSED:
+        # Existing resume behavior — hot-resumes any parked attempt.
+        dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is None:
+            # No dispatcher (agent was torn down) — auto-start, then resume.
+            await _agent_manager.ensure_agent_started(project_id)
+            dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is None:
+            raise HTTPException(status_code=500, detail="Dispatcher unavailable after start")
+        return await dispatcher.resume()
+
+    # IDLE, or RUNNING-without-handle: auto-start the agent if needed and
+    # ensure queue state is RUNNING so the dispatcher will drain.
+    if not has_handle:
+        try:
+            await _agent_manager.ensure_agent_started(project_id)
+        except Exception as e:
+            logger.exception("queue start: agent auto-start failed for %s", project_id)
+            raise HTTPException(status_code=500, detail=f"Agent auto-start failed: {e}")
+    if current_state != QueueRunState.RUNNING:
+        store.set_queue_state(QueueRunState.RUNNING)
+        if _ws_manager is not None:
+            _ws_manager.broadcast(project_id, {
+                "type": "queue.state_changed",
+                "project_id": project_id,
+                "state": QueueRunState.RUNNING.value,
+            })
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is not None:
+        dispatcher.notify_new_item()
+    return {"status": "running"}
+
+
+@router.post("/projects/{project_id}/queue/resume")
+async def resume_queue(project_id: str) -> dict:
+    """Resume the queue. If an attempt was parked, hot-resume it.
+
+    Kept as an alias for /queue/start so existing frontends that emit
+    /queue/resume keep working. New code should call /queue/start, which
+    handles both idle→running and paused→running.
+    """
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    return await dispatcher.resume()
+
+
+@router.post("/projects/{project_id}/queue/items/{item_id}/retry")
+async def retry_queue_item(
+    project_id: str, item_id: str, req: QueueRetryRequest,
+) -> dict:
+    """Retry a BLOCKED queue item, hot-resuming the prior attempt's session.
+
+    mode="answer": inject `input` raw — for question-card answers.
+    mode="edit":  re-wrap `input` with `[QUEUE ITEM | id | attempt=N+1]`.
+    """
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active dispatcher; start the agent first",
+        )
+    if not req.input or not req.input.strip():
+        raise HTTPException(status_code=400, detail="input must be non-empty")
+    if req.mode not in ("edit", "answer"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'edit' or 'answer'",
+        )
+    try:
+        return await dispatcher.retry_blocked_item(
+            item_id, req.input, mode=req.mode,
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"item {item_id} not found",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/agents/{project_id}/approve")

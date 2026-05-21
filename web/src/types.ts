@@ -268,6 +268,42 @@ export interface WorkspaceClaudemdWarningEvent {
   matched_token: string;
 }
 
+export interface QueueItemAddedEvent {
+  type: 'queue.item_added';
+  project_id: string;
+  item_id: string;
+}
+
+export interface QueueItemEditedEvent {
+  type: 'queue.item_edited';
+  project_id: string;
+  item_id: string;
+}
+
+export interface QueueItemRemovedEvent {
+  type: 'queue.item_removed';
+  project_id: string;
+  item_id: string;
+}
+
+export interface QueueItemAdvancedEvent {
+  type: 'queue.item_advanced';
+  project_id: string;
+  item_id: string;
+  outcome: 'completed' | 'blocked' | 'interrupted';
+}
+
+export interface QueueStateChangedEvent {
+  type: 'queue.state_changed';
+  project_id: string;
+  state: 'draining' | 'stopped';
+}
+
+export interface QueueReorderedEvent {
+  type: 'queue.reordered';
+  project_id: string;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
   | StreamDeltaEvent
@@ -284,7 +320,48 @@ export type WebSocketEvent =
   | TriggerFiredEvent
   | TriggerSkippedEvent
   | StateRefreshLifecycleEvent
-  | WorkspaceClaudemdWarningEvent;
+  | WorkspaceClaudemdWarningEvent
+  | QueueItemAddedEvent
+  | QueueItemEditedEvent
+  | QueueItemRemovedEvent
+  | QueueItemAdvancedEvent
+  | QueueStateChangedEvent
+  | QueueReorderedEvent;
+
+// Queue resource types (mirror agent_os/queue/models.py)
+export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';
+export type QueueAttemptOutcome = 'completed' | 'blocked' | 'interrupted' | 'cancelled';
+export type QueueRunState = 'draining' | 'stopped';
+
+export interface QueueAttempt {
+  session_id: string;
+  started_at: string;
+  ended_at: string | null;
+  outcome: QueueAttemptOutcome | null;
+  summary: string | null;
+  block_reason: string | null;
+}
+
+export interface QueueItem {
+  id: string;
+  content: string;
+  file_refs: string[];
+  priority: number;
+  review_before_advance: boolean;
+  state: QueueItemState;
+  source: 'user' | 'upload';
+  attempts: QueueAttempt[];
+  idempotency_key: string | null;
+  interrupted_count: number;
+  created_at: string;
+}
+
+export interface QueueSnapshot {
+  version: number;
+  state: QueueRunState;
+  items: QueueItem[];
+  chat_session_id: string | null;
+}
 
 export interface FileEntry {
   name: string;

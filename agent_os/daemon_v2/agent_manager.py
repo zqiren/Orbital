@@ -24,6 +24,7 @@ from agent_os.agent.prompt_builder import PromptBuilder, PromptContext
 from agent_os.agent.providers.openai_compat import LLMProvider
 from agent_os.agent.session import Session
 from agent_os.agent.tools.registry import ToolRegistry
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
@@ -36,6 +37,8 @@ from agent_os.daemon_v2.models import (
     make_session_key,
     resolve_api_key,
 )
+from agent_os.queue.dispatcher import QueueDispatcher
+from agent_os.queue.store import QueueStore
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,9 @@ class AgentManager:
         self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
+        # Queue infrastructure (per project)
+        self._queue_stores: dict[str, QueueStore] = {}
+        self._dispatchers: dict[str, QueueDispatcher] = {}
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
@@ -819,9 +825,25 @@ class AgentManager:
         self._prevent_sleep_if_needed()
         self._write_state()
 
+        # 16. Queue dispatcher (Phase 1 — passive; Phase 2+ wires advancement)
+        await self._ensure_dispatcher(project_id, config.workspace)
+
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
                         project_id: str = "", vision_enabled: bool = False) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
+        # Queue signal tools — always registered, used by the queue dispatcher
+        # to detect attempt completion. Detection happens at response-parsing
+        # time in AgentLoop, before tool dispatch, so these classes' execute()
+        # serves only as a defensive fallback path.
+        try:
+            from agent_os.agent.tools.queue_signals import (
+                MarkTaskBlockedTool,
+                MarkTaskCompleteTool,
+            )
+            registry.register(MarkTaskCompleteTool())
+            registry.register(MarkTaskBlockedTool())
+        except ImportError:
+            logger.warning("queue signal tools failed to register", exc_info=True)
         try:
             from agent_os.agent.tools.read import ReadTool
             registry.register(ReadTool(workspace=config.workspace))
@@ -925,6 +947,111 @@ class AgentManager:
         except ImportError:
             pass
 
+    def has_handle(self, project_id: str) -> bool:
+        """Return True if an agent handle exists for the project.
+
+        Distinct from ``is_running``: a handle may exist with a finished task
+        (loop idle but session alive). Callers that need to know whether the
+        agent is actively executing should use ``is_running``; callers that
+        need to know whether the agent has *ever* been started in this
+        process (i.e. whether the dispatcher and other lifecycle components
+        exist) should use this.
+
+        F7 note: handles are keyed by ``(project_id, session_id)`` since
+        the multi-session foundation (#22). For queue auto-start the check
+        is project-level: any handle keyed under ``project_id`` counts.
+        """
+        return any(pid == project_id for (pid, _sid) in self._handles.keys())
+
+    def _build_agent_config_from_project(self, project_id: str) -> AgentConfig:
+        """Construct an AgentConfig for ``project_id`` from the project store.
+
+        Used by auto-start paths (inject_message Case 3 and the queue items
+        route) so the same derivation logic — autonomy resolution, sub-agent
+        availability, API key/model/base_url fallback through credential and
+        settings stores — runs in one place.
+
+        Raises:
+            KeyError: if no project exists for ``project_id``.
+        """
+        from agent_os.agent.prompt_builder import Autonomy
+
+        project = self._project_store.get_project(project_id)
+        if project is None:
+            raise KeyError(f"No project found for '{project_id}'")
+
+        autonomy_str = project.get("autonomy", "hands_off")
+        try:
+            autonomy = Autonomy(autonomy_str)
+        except ValueError:
+            autonomy = Autonomy.HANDS_OFF
+
+        # Available sub-agents = installed minus the project's
+        # disabled_sub_agents denylist. Legacy ``enabled_sub_agents`` is
+        # informational-only in v1.
+        disabled = set(project.get("disabled_sub_agents", []) or [])
+        if self._setup_engine is not None:
+            available = self._setup_engine.check_all()
+            enabled_sub_agents = [
+                a.slug for a in available
+                if a.installed and a.slug != "built-in"
+                and a.slug not in disabled
+            ]
+        else:
+            enabled_sub_agents = [
+                s for s in (project.get("enabled_sub_agents") or [])
+                if s not in disabled
+            ]
+
+        # Global settings provide fallbacks for missing project-level LLM
+        # config; the credential store provides the live global API key.
+        global_settings = self._settings_store.get() if self._settings_store else None
+        cred_key = self._credential_store.get_api_key() if self._credential_store else None
+        api_key = (project.get("api_key")
+                   or cred_key
+                   or (global_settings.llm.api_key if global_settings else None)
+                   or "")
+        base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+        model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
+
+        return AgentConfig(
+            workspace=project["workspace"],
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            autonomy=autonomy,
+            sdk=project.get("sdk", "openai"),
+            provider=project.get("provider", "custom"),
+            project_name=project.get("name", ""),
+            project_instructions=project.get("instructions", ""),
+            enabled_sub_agents=enabled_sub_agents or [],
+            disabled_sub_agents=list(disabled),
+            budget_limit_usd=project.get("budget_limit_usd"),
+            budget_action=project.get("budget_action", "ask"),
+        )
+
+    async def ensure_agent_started(self, project_id: str) -> bool:
+        """Start the agent for ``project_id`` if it is not already running.
+
+        Used by the queue items route to auto-start an agent when a queue
+        item is added to a project with no live agent. Unlike
+        ``inject_message`` Case 3, this does NOT pass an initial_message —
+        the queue dispatcher's ``_run`` loop picks up the new item via the
+        store and wraps it with a ``[QUEUE ITEM]`` header before injection.
+
+        Returns:
+            True if a new agent was started, False if a handle already
+            existed (no-op in that case).
+
+        Raises:
+            KeyError: if no project exists for ``project_id``.
+        """
+        if self.has_handle(project_id):
+            return False
+        config = self._build_agent_config_from_project(project_id)
+        await self.start_agent(project_id, config)
+        return True
+
     async def inject_system_message(self, project_id: str, content: str,
                                     *, session_id: str | None = None) -> str:
         """Inject a system message into the management agent's session.
@@ -986,60 +1113,7 @@ class AgentManager:
         if handle is None:
             # Case 3: no handle — auto-start from project store
             logger.info("inject_message(%s): no handle, auto-starting agent", project_id)
-            from agent_os.agent.prompt_builder import Autonomy
-
-            project = self._project_store.get_project(project_id)
-            if project is None:
-                raise KeyError(f"No project found for '{project_id}'")
-
-            autonomy_str = project.get("autonomy", "hands_off")
-            try:
-                autonomy = Autonomy(autonomy_str)
-            except ValueError:
-                autonomy = Autonomy.HANDS_OFF
-
-            # Compute available sub-agents from setup_engine, minus the
-            # project's disabled_sub_agents denylist. Legacy ``enabled_sub_agents``
-            # is informational-only in v1.
-            disabled = set(project.get("disabled_sub_agents", []) or [])
-            if self._setup_engine is not None:
-                available = self._setup_engine.check_all()
-                enabled_sub_agents = [
-                    a.slug for a in available
-                    if a.installed and a.slug != "built-in"
-                    and a.slug not in disabled
-                ]
-            else:
-                enabled_sub_agents = [
-                    s for s in (project.get("enabled_sub_agents") or [])
-                    if s not in disabled
-                ]
-
-            # Use global settings as fallback for missing project-level LLM config
-            global_settings = self._settings_store.get() if self._settings_store else None
-            cred_key = self._credential_store.get_api_key() if self._credential_store else None
-            api_key = (project.get("api_key")
-                       or cred_key
-                       or (global_settings.llm.api_key if global_settings else None)
-                       or "")
-            base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-            model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-            config = AgentConfig(
-                workspace=project["workspace"],
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                autonomy=autonomy,
-                sdk=project.get("sdk", "openai"),
-                provider=project.get("provider", "custom"),
-                project_name=project.get("name", ""),
-                project_instructions=project.get("instructions", ""),
-                enabled_sub_agents=enabled_sub_agents or [],
-                disabled_sub_agents=list(disabled),
-                budget_limit_usd=project.get("budget_limit_usd"),
-                budget_action=project.get("budget_action", "ask"),
-            )
+            config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce, session_id=session_id)
             return "started"
@@ -1158,61 +1232,10 @@ class AgentManager:
 
         if handle is None:
             # Auto-start a fresh agent (stale stopped session was cleaned up).
-            # Re-derive config from the project store — this path is reached
-            # when the original handle existed but the session was stopped,
-            # so the variables from the early handle-is-None block are absent.
-            from agent_os.agent.prompt_builder import Autonomy as _Autonomy
-
-            proj = self._project_store.get_project(project_id)
-            if proj is None:
-                raise KeyError(f"No project found for '{project_id}'")
-
-            autonomy_str = proj.get("autonomy", "hands_off")
-            try:
-                _autonomy = _Autonomy(autonomy_str)
-            except ValueError:
-                _autonomy = _Autonomy.HANDS_OFF
-
-            # Available sub-agents = installed - disabled_sub_agents.
-            # Legacy ``enabled_sub_agents`` is ignored in v1.
-            _disabled = set(proj.get("disabled_sub_agents", []) or [])
-            if self._setup_engine is not None:
-                available = self._setup_engine.check_all()
-                _enabled_sub = [
-                    a.slug for a in available
-                    if a.installed and a.slug != "built-in"
-                    and a.slug not in _disabled
-                ]
-            else:
-                _enabled_sub = [
-                    s for s in (proj.get("enabled_sub_agents") or [])
-                    if s not in _disabled
-                ]
-
-            global_settings = self._settings_store.get() if self._settings_store else None
-            cred_key = self._credential_store.get_api_key() if self._credential_store else None
-            _api_key = (proj.get("api_key")
-                        or cred_key
-                        or (global_settings.llm.api_key if global_settings else None)
-                        or "")
-            _base_url = proj.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-            _model = proj.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-            config = AgentConfig(
-                workspace=proj["workspace"],
-                model=_model,
-                api_key=_api_key,
-                base_url=_base_url,
-                autonomy=_autonomy,
-                sdk=proj.get("sdk", "openai"),
-                provider=proj.get("provider", "custom"),
-                project_name=proj.get("name", ""),
-                project_instructions=proj.get("instructions", ""),
-                enabled_sub_agents=_enabled_sub or [],
-                disabled_sub_agents=list(_disabled),
-                budget_limit_usd=proj.get("budget_limit_usd"),
-                budget_action=proj.get("budget_action", "ask"),
-            )
+            # Re-derive config from the project store via the shared helper —
+            # this path is reached when the original handle existed but the
+            # session was stopped, so we need a fresh AgentConfig.
+            config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce, session_id=session_id)
             return "started"
@@ -1607,9 +1630,15 @@ class AgentManager:
         if hasattr(cm, '_last_usage_pct'):
             cm._last_usage_pct = 0.0
 
-        # 8. Swap session in handle
+        # 8. Swap session in handle (and on the loop instance — loop._session
+        # is set in __init__ and never updated; if we leave it stale, the
+        # loop's own session.append calls in subsequent runs go to the OLD
+        # JSONL while cm.prepare reads from the NEW one. Sync to avoid that
+        # divergence.)
         handle.session = new_session
         handle.task = None
+        if hasattr(handle.loop, "_session"):
+            handle.loop._session = new_session
 
         # 10. Broadcast new_session event, then idle so frontend status
         #     doesn't stay stuck (enables repeat /new invocations).
@@ -1688,6 +1717,16 @@ class AgentManager:
         handle = self._handles.get(sk)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
+
+        # Shut down the queue dispatcher first so it doesn't try to drain
+        # mid-stop. shutdown() is the full-teardown variant — distinct from
+        # the Phase 4 stop() which only pauses draining.
+        dispatcher = self._dispatchers.pop(project_id, None)
+        if dispatcher is not None:
+            try:
+                await dispatcher.shutdown()
+            except Exception:
+                logger.warning("dispatcher shutdown failed for %s", project_id, exc_info=True)
 
         # Cancel idle poll task if running
         poll_task = self._idle_poll_tasks.pop(project_id, None)
@@ -1783,6 +1822,213 @@ class AgentManager:
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         return handle.session if handle else None
+
+    # ── Queue helpers (Phase 1) ─────────────────────────────────────────
+    # F7 note: the queue is per-project, not per-session. The single-active-
+    # loop slot model (Track E foundation + #23) guarantees at most one
+    # handle keyed under each project_id; queue helpers scan ``self._handles``
+    # for that project's handle without needing to know which session_id
+    # currently holds the slot. The dispatcher may swap the active session
+    # via ``switch_session`` (e.g. from default → ``chat_<uuid>`` on pause,
+    # or back to a parked attempt's session on resume), and these helpers
+    # transparently track the new key.
+
+    def _find_project_handle(self, project_id: str):
+        """Return the (single) ProjectHandle for ``project_id`` regardless of
+        which session_id it is currently keyed under, or None.
+
+        Used by per-project queue helpers that don't know (or care) what
+        session is currently active in the slot.
+        """
+        for (pid, _sid), handle in self._handles.items():
+            if pid == project_id:
+                return handle
+        return None
+
+    def get_active_session(self, project_id: str):
+        """Return the project's active session regardless of session_id, or None.
+
+        Distinct from ``get_session(project_id)`` which defaults to a strict
+        default-session lookup (and returns None when isolation tests use
+        non-default session ids). The queue dispatcher uses this because
+        after ``switch_session`` to ``chat_<uuid>`` (queue stop) or to a
+        parked attempt's id (queue resume), the dispatcher needs to find
+        whatever session currently holds the project's single slot — not
+        the default sentinel which may not exist.
+        """
+        handle = self._find_project_handle(project_id)
+        return handle.session if handle is not None else None
+
+    def get_queue_store(self, project_id: str, workspace: str | None = None) -> QueueStore:
+        """Return the QueueStore for a project, creating it on first access.
+
+        Workspace is looked up from the active handle when omitted; pass it
+        explicitly only from reclaim/startup paths where no handle exists yet.
+        """
+        store = self._queue_stores.get(project_id)
+        if store is not None:
+            return store
+        if workspace is None:
+            handle = self._find_project_handle(project_id)
+            if handle is None:
+                project = self._project_store.get_project(project_id)
+                if project is None:
+                    raise KeyError(f"No project '{project_id}'")
+                workspace = project.get("workspace") or ""
+            else:
+                workspace = handle.config_snapshot.get("workspace", "")
+        if not workspace:
+            raise ValueError(f"No workspace known for project '{project_id}'")
+        paths = ProjectPaths(workspace)
+        store = QueueStore(paths.queue_file)
+        self._queue_stores[project_id] = store
+        return store
+
+    def get_dispatcher(self, project_id: str) -> "QueueDispatcher | None":
+        return self._dispatchers.get(project_id)
+
+    def get_loop_task(self, project_id: str) -> "asyncio.Task | None":
+        """Used by the QueueDispatcher to await the inner loop task."""
+        handle = self._find_project_handle(project_id)
+        return handle.task if handle else None
+
+    def get_loop(self, project_id: str):
+        """Return the AgentLoop object so the dispatcher can read exit_reason."""
+        handle = self._find_project_handle(project_id)
+        return handle.loop if handle else None
+
+    def get_sub_agent_manager(self):
+        return self._sub_agent_manager
+
+    async def switch_session(
+        self,
+        project_id: str,
+        session_id: str,
+        *,
+        start_loop: bool = False,
+    ):
+        """Swap the active session for a project to the given session_id.
+
+        Used by the queue dispatcher for stop (switch to chat) and resume
+        (switch back to a parked attempt). Unlike new_session(), this does
+        NOT run the pre-flush routine, stop sub-agents, or mint a new id —
+        the caller owns those decisions.
+
+        If the JSONL for session_id exists, it is loaded; otherwise a fresh
+        session with that id is created. Loop, ContextManager and handle
+        references are all kept consistent.
+
+        F7 note: ``self._handles`` is keyed by ``(project_id, session_id)``
+        (SessionKey tuple) after the multi-session foundation (#22). We scan
+        for any handle under ``project_id`` (single-slot discipline: at most
+        one) and re-key it to the new ``session_id`` after the swap so
+        downstream lookups (which use ``make_session_key``) find it.
+        """
+        old_sk = next(
+            (sk for sk in self._handles.keys() if sk[0] == project_id),
+            None,
+        )
+        if old_sk is None:
+            return None
+        handle = self._handles[old_sk]
+
+        # Stop the loop if running, but skip pre-flush. The caller decides
+        # whether to preserve the session (stop) or rotate (new_session).
+        if handle.task is not None and not handle.task.done():
+            await handle.loop.terminate()
+            try:
+                await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning(
+                    "switch_session(%s): loop did not stop gracefully",
+                    project_id,
+                )
+
+        workspace = handle.config_snapshot.get("workspace", "")
+        paths = ProjectPaths(workspace)
+        session_path = paths.session_file(session_id)
+
+        snap = handle.config_snapshot
+        if os.path.exists(session_path):
+            new_session = Session.load(session_path)
+            new_session.session_id = session_id
+        else:
+            new_session = Session.new(
+                session_id, workspace,
+                provider=snap.get("provider", "unknown"),
+                model=snap.get("model", "unknown"),
+                sdk=snap.get("sdk", "unknown"),
+                fallback_models=snap.get("fallback_models", []),
+            )
+
+        new_session.on_append = self._on_message(project_id)
+        new_session.on_stream = self._on_stream(project_id)
+
+        cm = handle.context_manager
+        if hasattr(cm, "_session"):
+            cm._session = new_session
+        if hasattr(cm, "_cold_resume_injected"):
+            cm._cold_resume_injected = False
+        if hasattr(cm, "_recovery_injected"):
+            cm._recovery_injected = False
+        if hasattr(cm, "_window_factor"):
+            cm._window_factor = 1.0
+        if hasattr(cm, "_last_usage_pct"):
+            cm._last_usage_pct = 0.0
+
+        handle.session = new_session
+        handle.task = None
+        if hasattr(handle.loop, "_session"):
+            handle.loop._session = new_session
+
+        # Re-key the handle under the new session_id (F7: tuple-keyed
+        # handles must move with the session swap so downstream
+        # ``make_session_key(project_id, session_id)`` lookups land here).
+        new_sk = make_session_key(project_id, session_id)
+        if new_sk != old_sk:
+            del self._handles[old_sk]
+            self._handles[new_sk] = handle
+
+        if start_loop:
+            await self._start_loop(project_id, session_id=session_id)
+
+        return new_session
+
+    async def _ensure_dispatcher(self, project_id: str, workspace: str) -> None:
+        """Create + start the dispatcher for this project if not already running."""
+        existing = self._dispatchers.get(project_id)
+        if existing is not None:
+            return
+        store = self.get_queue_store(project_id, workspace=workspace)
+        max_runtime = 1800
+        try:
+            if hasattr(self._project_store, "get_max_runtime_seconds"):
+                max_runtime = self._project_store.get_max_runtime_seconds(project_id)
+        except Exception:
+            pass
+        dispatcher = QueueDispatcher(
+            project_id=project_id,
+            store=store,
+            agent_manager=self,
+            ws_manager=self._ws,
+            max_runtime_seconds=max_runtime,
+        )
+        # D6: reclaim before starting the dispatch task. Doing it pre-start
+        # ensures the first tick of _run sees a coherent queue.
+        try:
+            reclaim_summary = dispatcher.reclaim_on_startup()
+            if reclaim_summary.get("reclaimed_items") or reclaim_summary.get("blocked_items"):
+                logger.info(
+                    "dispatcher(%s): startup reclaim: %s",
+                    project_id, reclaim_summary,
+                )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): reclaim_on_startup raised; continuing",
+                project_id,
+            )
+        self._dispatchers[project_id] = dispatcher
+        await dispatcher.start()
 
     async def _start_loop(self, project_id: str, *,
                           session_id: str | None = None) -> None:

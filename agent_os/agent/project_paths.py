@@ -28,6 +28,7 @@ _CONTEXT = "CONTEXT.md"
 _PROJECT_GOALS = "project_goals.md"
 _USER_DIRECTIVES = "user_directives.md"
 _APPROVAL_HISTORY = "approval_history.jsonl"
+_QUEUE = "queue.json"
 
 
 class ProjectPaths:
@@ -172,3 +173,7 @@ class ProjectPaths:
     @property
     def approval_history(self) -> str:
         return os.path.join(self.orbital_dir, _APPROVAL_HISTORY)
+
+    @property
+    def queue_file(self) -> str:
+        return os.path.join(self.orbital_dir, _QUEUE)
