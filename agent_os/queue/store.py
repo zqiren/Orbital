@@ -320,12 +320,6 @@ class QueueStore:
             self._save_locked()
             return True
 
-    def set_chat_session_id(self, sid: Optional[str]) -> None:
-        state = self.load()
-        with self._lock:
-            state.chat_session_id = sid
-            self._save_locked()
-
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------

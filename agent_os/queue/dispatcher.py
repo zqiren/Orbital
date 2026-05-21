@@ -12,13 +12,14 @@ signals: complete → advance, blocked → bypass, text → contract violation
 The dispatcher does NOT own the agent loop — AgentManager does. The
 dispatcher reads loop._exit_reason after each run via AgentManager.get_loop.
 
-Stop/resume (Phase 4): stop() terminates the live attempt's loop without
-closing the attempt and swaps the active session to a dedicated per-project
-chat session. resume() swaps back to the parked attempt session and starts
-a fresh loop run on it. The dispatcher task stays alive across stop/resume
-cycles; it just transitions between RUNNING (drain queue) and PAUSED
-(idle while user chats) states. After an advance drains the last queueable
-item, the store auto-transitions the queue to IDLE.
+Pause/resume: pause() cancels the live attempt's turn (via cancel_turn) so
+the agent comes to rest on the parked attempt's session — without rotating
+or swapping sessions. The user's chat messages while paused land in that
+same parked attempt session, so on resume the agent sees the clarifying
+turns in conversation history. resume() flips queue state back to RUNNING
+and re-spawns a loop run on the parked attempt. The dispatcher task stays
+alive across pause/resume cycles. After an advance drains the last
+queueable item, the store auto-transitions the queue to IDLE.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import uuid4
 
 from agent_os.queue.models import (
     AttemptOutcome,
@@ -98,8 +98,8 @@ class QueueDispatcher:
 
         Contract per D6:
         - If queue state is PAUSED: leave everything as is. The user
-          previously paused the queue; the same chat-mode applies after
-          restart. The dispatcher will idle until /queue/resume.
+          previously paused the queue; the dispatcher will idle until
+          /queue/resume (or /queue/start) is invoked.
         - Otherwise (RUNNING or IDLE) and items are in RUNNING state: those
           attempts were interrupted by daemon death. Close each open
           attempt with outcome=INTERRUPTED, increment interrupted_count.
@@ -174,16 +174,21 @@ class QueueDispatcher:
     # ------------------------------------------------------------------
 
     async def stop(self) -> dict:
-        """Pause queue draining. Switch the active session to a dedicated
-        per-project chat session, terminate any live attempt loop, but do
-        NOT close the in-flight attempt or rotate. The session JSONL is
-        preserved so resume can pick up exactly where things left off."""
+        """Pause queue draining. Cancel the live attempt's turn so the agent
+        comes to rest on the parked attempt's session — without rotating or
+        swapping sessions. User chat messages while paused land in that same
+        parked session; on resume the agent sees them in conversation history.
+
+        The in-flight attempt is NOT closed and the queue is NOT advanced —
+        both will happen on resume via _await_and_handle's cancelled-branch
+        early-return preserving the attempt for resume to pick up.
+        """
         self._stop_generation += 1
         # Set queue state first so the main loop sees PAUSED on its next tick.
         self._store.set_queue_state(QueueRunState.PAUSED)
 
-        # Terminate the live attempt's loop, if any. AgentManager.switch_session
-        # does the terminate; we additionally clear sub-agents under a budget.
+        # Terminate any sub-agents under a budget so they don't keep churning
+        # against the user while the dispatcher is paused.
         sub_mgr = self._agent_manager.get_sub_agent_manager()
         if sub_mgr is not None:
             try:
@@ -202,35 +207,38 @@ class QueueDispatcher:
                     self._project_id,
                 )
 
-        # Mint or reuse the chat session id, persist it, then swap.
-        qstate = self._store.load()
-        chat_sid = qstate.chat_session_id
-        if not chat_sid:
-            chat_sid = f"chat_{uuid4().hex[:12]}"
-            self._store.set_chat_session_id(chat_sid)
-
-        try:
-            await self._agent_manager.switch_session(
-                self._project_id, chat_sid, start_loop=False,
-            )
-        except Exception:
-            logger.exception(
-                "dispatcher(%s): switch to chat session failed",
-                self._project_id,
-            )
+        # Halt the active loop via terminate(). Internally this calls
+        # cancel_turn() (which writes the cancellation marker synchronously
+        # and sets loop._exit_reason = "cancelled"), then session.stop() +
+        # task.cancel() so the loop task actually exits. The dispatcher's
+        # _await_and_handle then reads _exit_reason and takes the
+        # cancelled-branch early return. The session JSONL is preserved
+        # in place — no rotation, no swap — so chat messages sent during
+        # pause land in the parked attempt's session, and resume picks up
+        # exactly where pause left off.
+        loop_obj = self._agent_manager.get_loop(self._project_id)
+        if loop_obj is not None:
+            try:
+                await loop_obj.terminate()
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): terminate during pause raised; continuing",
+                    self._project_id,
+                )
 
         self._broadcast_state_changed(QueueRunState.PAUSED.value)
         logger.info(
-            "dispatcher(%s): paused; active session is chat_session=%s",
-            self._project_id, chat_sid,
+            "dispatcher(%s): paused; parked attempt session preserved",
+            self._project_id,
         )
-        return {"status": "paused", "chat_session_id": chat_sid}
+        return {"status": "paused"}
 
     async def resume(self) -> dict:
-        """Re-activate queue draining. If a parked attempt exists, swap the
-        active session back to it and start a new loop run on the same
-        session. Otherwise, just set the queue back to running and let the
-        main loop pick up the next queued item."""
+        """Re-activate queue draining. If a parked attempt exists, start a
+        new loop run on its already-active session (no swap needed — pause
+        left the session in place). Otherwise, just set the queue back to
+        running and let the main loop pick up the next queued item.
+        """
         self._stalled_item_id = None
         self._store.set_queue_state(QueueRunState.RUNNING)
 
@@ -244,17 +252,9 @@ class QueueDispatcher:
                 "dispatcher(%s): resuming item %s on parked session %s",
                 self._project_id, parked_item.id, session_id,
             )
-            try:
-                await self._agent_manager.switch_session(
-                    self._project_id, session_id, start_loop=False,
-                )
-            except Exception:
-                logger.exception(
-                    "dispatcher(%s): switch to parked session failed",
-                    self._project_id,
-                )
-            # Set the loop's queue_state before starting it so the approval
-            # branch picks it up.
+            # No switch_session needed — pause did not swap, the parked
+            # session is still active. Set the loop's queue_state so the
+            # approval branch picks it up before _start_loop fires.
             loop_obj = self._agent_manager.get_loop(self._project_id)
             if loop_obj is not None:
                 try:
@@ -657,12 +657,14 @@ class QueueDispatcher:
                 self._idle_event.set()
                 return
 
-            # If stop() was called mid-attempt, the loop was terminated by
-            # switch_session. We MUST NOT close the attempt — preserve it
-            # exactly as it was so resume can pick up cleanly.
+            # If pause() was called mid-attempt, the loop was terminated by
+            # terminate(). We MUST NOT close the attempt — preserve it
+            # exactly as it was so resume can pick up cleanly on the same
+            # session, with any chat messages the user sent in the meantime
+            # already appended to the JSONL.
             if self._stop_generation != gen_at_start:
                 logger.info(
-                    "dispatcher(%s): item %s loop terminated by stop; "
+                    "dispatcher(%s): item %s loop terminated by pause; "
                     "attempt preserved (no close, no advance, no rotation)",
                     self._project_id, item.id,
                 )
@@ -674,6 +676,31 @@ class QueueDispatcher:
             exit_block_reason = (
                 getattr(loop_obj, "_exit_block_reason", None) if loop_obj else None
             )
+
+            # Cancelled out-of-band (e.g. via the /cancel HTTP endpoint while
+            # a queue item is dispatching) — distinct from pause(), which
+            # bumps _stop_generation and is handled by the guard above. The
+            # attempt is closed as INTERRUPTED so it can be reclaimed on the
+            # next dispatch, but the queue is NOT advanced and the session
+            # is NOT rotated — same early-return shape as the pause guard.
+            if exit_reason == "cancelled":
+                logger.info(
+                    "dispatcher(%s): item %s loop exited cancelled; "
+                    "attempt closed INTERRUPTED, no advance, no rotation",
+                    self._project_id, item.id,
+                )
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.INTERRUPTED,
+                    block_reason="cancelled",
+                )
+                self._log_attempt_close(
+                    item.id, "interrupted",
+                    first_turn_signaled=False,
+                    corrective_used=corrective_turn_used,
+                    reason="cancelled",
+                )
+                return
 
             if exit_reason == "complete":
                 self._store.close_latest_attempt(
