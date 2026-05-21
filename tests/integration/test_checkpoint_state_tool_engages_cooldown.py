@@ -119,7 +119,7 @@ def _make_refresh_callback(ws, project_id, session, wfm):
                 provider=None,
                 workspace_files=wfm,
                 utility_provider=None,
-                session_id=session.session_id,
+                session_uuid=session.session_uuid,
                 bypass_idempotency=True,
             )
             ws.broadcast(project_id, {

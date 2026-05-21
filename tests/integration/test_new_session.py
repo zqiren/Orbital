@@ -74,13 +74,16 @@ def _write_layer1_files(workspace: str) -> dict:
     return files
 
 
-def _write_session_file(workspace: str, session_id: str,
+def _write_session_file(workspace: str, session_uuid: str,
                         messages: list[dict]) -> str:
     """Write a session JSONL file at the flat orbital/sessions/ layout and
-    return its absolute path."""
+    return its absolute path.
+
+    ``session_uuid`` is the Format-2 filename stem (see F7 audit).
+    """
     pp = ProjectPaths(workspace)
     os.makedirs(pp.sessions_dir, exist_ok=True)
-    filepath = pp.session_file(session_id)
+    filepath = pp.session_file(session_uuid)
     with open(filepath, "w") as f:
         for msg in messages:
             f.write(json.dumps(msg) + "\n")

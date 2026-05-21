@@ -42,6 +42,7 @@ from agent_os.agent.workspace_files import (
 def _mock_session(session_id="sess_sanity"):
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = [
         {"role": "user", "content": "Hi"},
         {"role": "assistant", "content": "Hello"},
@@ -126,7 +127,7 @@ async def test_lessons_cap_enforced_when_llm_returns_over_cap(tmp_path, caplog):
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
-            session, provider, ws, session_id="s_cap_lessons",
+            session, provider, ws, session_uuid="s_cap_lessons",
         )
 
     on_disk = ws.read("lessons") or ""
@@ -172,7 +173,7 @@ async def test_lessons_exact_duplicate_removed(tmp_path, caplog):
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
-            session, provider, ws, session_id="s_dedup_lessons",
+            session, provider, ws, session_uuid="s_dedup_lessons",
         )
 
     on_disk = ws.read("lessons") or ""
@@ -203,7 +204,7 @@ async def test_decisions_cap_30(tmp_path):
     provider = _mock_provider(_llm_response(decisions=llm_decisions))
 
     await run_session_end_routine(
-        session, provider, ws, session_id="s_cap_decisions",
+        session, provider, ws, session_uuid="s_cap_decisions",
     )
 
     on_disk = ws.read("decisions") or ""
@@ -234,7 +235,7 @@ async def test_context_cap_25(tmp_path):
     provider = _mock_provider(_llm_response(context=llm_context))
 
     await run_session_end_routine(
-        session, provider, ws, session_id="s_cap_context",
+        session, provider, ws, session_uuid="s_cap_context",
     )
 
     on_disk = ws.read("context") or ""
@@ -270,7 +271,7 @@ async def test_parse_failure_falls_back_to_raw_write(tmp_path, caplog):
 
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
-            session, provider, ws, session_id="s_parse_fail",
+            session, provider, ws, session_uuid="s_parse_fail",
         )
 
     on_disk = ws.read("lessons")
@@ -315,7 +316,7 @@ async def test_no_duplicates_no_cap_exceeded_preserves_bytes_exactly(tmp_path):
     provider = _mock_provider(_llm_response(lessons=llm_lessons))
 
     await run_session_end_routine(
-        session, provider, ws, session_id="s_noop_bytes",
+        session, provider, ws, session_uuid="s_noop_bytes",
     )
 
     on_disk = ws.read("lessons")
@@ -355,7 +356,7 @@ async def test_dedup_before_cap(tmp_path):
     provider = _mock_provider(_llm_response(lessons=llm_lessons))
 
     await run_session_end_routine(
-        session, provider, ws, session_id="s_order",
+        session, provider, ws, session_uuid="s_order",
     )
 
     on_disk = ws.read("lessons") or ""
@@ -396,7 +397,7 @@ async def test_empty_llm_response_still_preserves_existing_file(tmp_path):
     provider = _mock_provider(_llm_response(lessons=""))
 
     await run_session_end_routine(
-        session, provider, ws, session_id="s_empty_preserves",
+        session, provider, ws, session_uuid="s_empty_preserves",
     )
 
     after = ws.read("lessons")

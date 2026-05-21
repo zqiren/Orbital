@@ -122,7 +122,7 @@ async def test_clean_baseline_writes_all_five_files(tmp_path):
 
     await run_session_end_routine(
         session, provider, ws,
-        session_id="sess_clean", project_id="proj_clean",
+        session_uuid="sess_clean", project_id="proj_clean",
     )
 
     assert ws.read("state") == "# State\nstate-clean"
@@ -168,7 +168,7 @@ async def test_user_edit_during_llm_aborts_state_write(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
             session, provider, ws,
-            session_id="sess_edit_state", project_id="proj_edit",
+            session_uuid="sess_edit_state", project_id="proj_edit",
         )
 
     # PROJECT_STATE write must be aborted — user's content survives.
@@ -218,7 +218,7 @@ async def test_one_file_aborts_others_still_write(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
             session, provider, ws,
-            session_id="sess_multi", project_id="proj_multi",
+            session_uuid="sess_multi", project_id="proj_multi",
         )
 
     # Lessons abort → user content survives
@@ -253,7 +253,7 @@ async def test_nonexistent_file_baseline_allows_initial_write(tmp_path):
 
     await run_session_end_routine(
         session, provider, ws,
-        session_id="sess_first", project_id="proj_first",
+        session_uuid="sess_first", project_id="proj_first",
     )
 
     # All five files now exist
@@ -293,7 +293,7 @@ async def test_user_creates_file_during_llm_aborts_state_write(tmp_path, caplog)
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
             session, provider, ws,
-            session_id="sess_create_race", project_id="proj_create",
+            session_uuid="sess_create_race", project_id="proj_create",
         )
 
     # User-created content survived; routine did not clobber it.
@@ -355,7 +355,7 @@ async def test_session_log_user_edit_aborts_append(tmp_path, caplog):
         try:
             await run_session_end_routine(
                 session, provider, ws,
-                session_id="sess_sl_user_edit", project_id="proj_sl_user",
+                session_uuid="sess_sl_user_edit", project_id="proj_sl_user",
             )
         finally:
             monkeypatch_target._stat_mtime_ns = original
@@ -405,12 +405,12 @@ async def test_session_log_lock_serializes_concurrent_routines(tmp_path):
     await asyncio.gather(
         run_session_end_routine(
             session1, p1, ws,
-            session_id="sess_a", project_id="proj_conc",
+            session_uuid="sess_a", project_id="proj_conc",
             bypass_idempotency=True,
         ),
         run_session_end_routine(
             session2, p2, ws,
-            session_id="sess_b", project_id="proj_conc",
+            session_uuid="sess_b", project_id="proj_conc",
             bypass_idempotency=True,
         ),
     )
@@ -473,7 +473,7 @@ async def test_log_includes_all_required_structured_fields(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
         await run_session_end_routine(
             session, provider, ws,
-            session_id="sess_struct", project_id="proj_struct_log",
+            session_uuid="sess_struct", project_id="proj_struct_log",
         )
 
     matching = [r for r in caplog.records if "OCC abort" in r.message and "decisions" in r.message]

@@ -101,7 +101,21 @@ export interface ChatMessage {
   _compaction?: boolean;
   _meta?: Record<string, unknown>;
   _activity_descriptions?: Record<string, string>;
+  /**
+   * Format-1 user-facing chat session identity. Stable within a chat thread;
+   * rotates when ``/new-session`` is invoked. Treated as an opaque equality
+   * key in chatTransform.ts (used only to draw session-boundary separators).
+   * See TASK/ACTIVE-session-and-queue-model.md and the F7 audit for the
+   * F1/F2 split.
+   */
   session_id?: string;
+  /**
+   * Format-2 JSONL filename stem (debug-only). Optional because old
+   * pre-canonical-rename messages do not have it; new messages may include
+   * it. The frontend does not key UI off this field — it exists for
+   * debugging and forward-compat.
+   */
+  session_uuid?: string;
   chunk_type?: string;
 }
 

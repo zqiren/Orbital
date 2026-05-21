@@ -97,8 +97,14 @@ class ProjectPaths:
     def sessions_dir(self) -> str:
         return os.path.join(self.orbital_dir, _SESSIONS)
 
-    def session_file(self, session_id: str) -> str:
-        return os.path.join(self.sessions_dir, session_id + ".jsonl")
+    def session_file(self, session_uuid: str) -> str:
+        """Resolve the JSONL file for a session by its Format-2 stem.
+
+        ``session_uuid`` is the on-disk filename stem
+        (``{sanitized_project_name}_{uuid4().hex[:8]}``), NOT the user-facing
+        Format-1 chat id. See ``Session`` docstring for the F1/F2 split.
+        """
+        return os.path.join(self.sessions_dir, session_uuid + ".jsonl")
 
     # ------------------------------------------------------------------
     # Sub-agents
@@ -116,8 +122,13 @@ class ProjectPaths:
     # Tool results
     # ------------------------------------------------------------------
 
-    def tool_results_dir(self, session_id: str) -> str:
-        return os.path.join(self.orbital_dir, _TOOL_RESULTS, session_id)
+    def tool_results_dir(self, session_uuid: str) -> str:
+        """Per-session ``tool-results/`` directory keyed by Format-2 stem.
+
+        ``session_uuid`` is the JSONL filename stem. See ``Session`` for the
+        F1/F2 split.
+        """
+        return os.path.join(self.orbital_dir, _TOOL_RESULTS, session_uuid)
 
     # ------------------------------------------------------------------
     # Output sub-directories

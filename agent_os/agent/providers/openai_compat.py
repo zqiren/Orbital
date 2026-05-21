@@ -112,7 +112,8 @@ def _flatten_multimodal_content(content):
 # Do not "simplify" back to an allowlist without reading that spec.
 ORBITAL_INTERNAL_FIELDS = {
     "timestamp",               # ISO-8601 append time (session.py)
-    "session_id",              # Owning session ID (session.py)
+    "session_id",              # F1 user-facing chat id (session.py)
+    "session_uuid",            # F2 JSONL stem (session.py)
     "source",                  # user / management / sub-agent slug (loop.py, session.py)
     "_meta",                   # Tool-result metadata (session.py)
     "_stubbed",                # Placeholder tool-result marker (session.py)

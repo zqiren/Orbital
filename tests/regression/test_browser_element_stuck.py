@@ -41,7 +41,7 @@ def _make_tool(bm=None):
         project_id="test-project",
         workspace="/workspace",
         autonomy_preset="hands_off",
-        session_id="default",
+        screenshot_namespace="default",
     )
 
 

@@ -311,7 +311,7 @@ class AgentLoop:
                     )
                     self._refresh_task = asyncio.create_task(
                         self._run_refresh("turn_count", iteration),
-                        name=f"refresh-{self._session.session_id}-{iteration}",
+                        name=f"refresh-{self._session.session_uuid}-{iteration}",
                     )
                     try:
                         await self._refresh_task
@@ -343,7 +343,7 @@ class AgentLoop:
                     self._stream_response_with(
                         active_provider, context, tool_schemas,
                     ),
-                    name=f"stream-{self._session.session_id}-{iteration}",
+                    name=f"stream-{self._session.session_uuid}-{iteration}",
                 )
                 try:
                     response = await self._inflight_stream
@@ -723,7 +723,7 @@ class AgentLoop:
                         )
                         self._refresh_task = asyncio.create_task(
                             self._run_refresh("token_pressure", iteration),
-                            name=f"refresh-tp-{self._session.session_id}-{iteration}",
+                            name=f"refresh-tp-{self._session.session_uuid}-{iteration}",
                         )
                         try:
                             await self._refresh_task

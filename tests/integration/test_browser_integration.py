@@ -153,7 +153,7 @@ async def browser_tool(browser_manager, tmp_path):
         project_id="test_project",
         workspace=str(ws),
         autonomy_preset="hands_off",
-        session_id="test_session",
+        screenshot_namespace="test_session",
     )
 
 
@@ -275,7 +275,7 @@ async def test_batch_pauses_at_write_in_checkin(browser_manager, tmp_path, test_
         project_id="test_checkin",
         workspace=str(ws),
         autonomy_preset="check_in",
-        session_id="test_checkin",
+        screenshot_namespace="test_checkin",
     )
 
     with patch(
@@ -321,14 +321,14 @@ async def test_multi_project_isolated_tabs(browser_manager, tmp_path, test_serve
         project_id="proj_a",
         workspace=str(ws_a),
         autonomy_preset="hands_off",
-        session_id="sa",
+        screenshot_namespace="sa",
     )
     tool_b = BrowserTool(
         browser_manager=browser_manager,
         project_id="proj_b",
         workspace=str(ws_b),
         autonomy_preset="hands_off",
-        session_id="sb",
+        screenshot_namespace="sb",
     )
 
     with patch(
@@ -469,7 +469,7 @@ async def test_crash_recovery(browser_manager, tmp_path, test_server):
         project_id="crash_test",
         workspace=str(ws),
         autonomy_preset="hands_off",
-        session_id="cs",
+        screenshot_namespace="cs",
     )
 
     with patch(

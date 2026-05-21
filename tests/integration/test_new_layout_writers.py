@@ -192,6 +192,7 @@ def test_tool_result_lifecycle_writes_to_orbital(ws):
     class FakeSession:
         _filepath = str(session_file)
         session_id = sid
+        session_uuid = sid
 
     msg = {"tool_call_id": "call_abc", "content": "x" * 1000}
     disk_path = _export_to_disk(FakeSession(), msg, "shell", "ls -la", 1)

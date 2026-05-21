@@ -36,6 +36,7 @@ PROJECT_ID = "proj-new-session-stop-all"
 def _make_session(session_id: str = "old_session_123") -> MagicMock:
     mock_session = MagicMock()
     mock_session.session_id = session_id
+    mock_session.session_uuid = session_id
     mock_session.is_stopped.return_value = False
     return mock_session
 
@@ -117,6 +118,7 @@ async def test_new_session_calls_stop_all():
     # Patch Session.new to record its call order
     mock_new_session = MagicMock()
     mock_new_session.session_id = "new_session_abc"
+    mock_new_session.session_uuid = "new_session_abc"
     mock_new_session.on_append = None
     mock_new_session.on_stream = None
 
@@ -127,6 +129,7 @@ async def test_new_session_calls_stop_all():
         # Return a proper mock session
         s = MagicMock()
         s.session_id = "new_session_abc"
+        s.session_uuid = "new_session_abc"
         s.on_append = None
         s.on_stream = None
         return s
@@ -435,6 +438,7 @@ async def test_new_session_ordering_terminate_before_stop_all():
         call_order.append("session_new")
         s = MagicMock()
         s.session_id = "new_ordering_session"
+        s.session_uuid = "new_ordering_session"
         s.on_append = None
         s.on_stream = None
         return s

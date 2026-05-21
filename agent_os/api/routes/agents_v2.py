@@ -89,6 +89,10 @@ class ProjectUpdate(BaseModel):
 class StartAgentRequest(BaseModel):
     project_id: str
     initial_message: str | None = None
+    # Optional Format-1 user-facing chat id. Omitting it means
+    # "use ``DEFAULT_SESSION_ID``" — see
+    # ``TASK/ACTIVE-session-and-queue-model.md`` and the F7 audit.
+    session_id: str | None = None
 
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
@@ -144,9 +148,11 @@ class InjectRequest(BaseModel):
     target: str | None = None
     nonce: str | None = None
     attachments: list[InjectAttachment] | None = None
-    # Phase 3c multi-loop: select which chat session within the project
-    # to deliver the message to. Omit (or pass null) for single-loop
-    # back-compat — the daemon collapses to DEFAULT_SESSION_ID.
+    # F1 (user-facing chat thread id) — select which chat session within
+    # the project to deliver the message to. Omitting it means "use
+    # ``DEFAULT_SESSION_ID``", i.e. single-loop back-compat. See
+    # ``TASK/ACTIVE-session-and-queue-model.md`` and
+    # ``TASK/INVESTIGATION-session-id-canonical-audit.md`` (F7).
     session_id: str | None = None
 
     @field_validator("content")
@@ -244,8 +250,11 @@ def _get_or_create_session(project_id: str, workspace: str):
     from uuid import uuid4
     from agent_os.agent.session import Session
 
-    session_id = f"subagent_{uuid4().hex[:8]}"
-    session = Session.new(session_id, workspace)
+    # F2 storage stem for the sub-agent-only session (the management-agent
+    # session doesn't exist yet). F1 defaults to DEFAULT_SESSION_ID via
+    # ``Session.new``'s default.
+    session_uuid = f"subagent_{uuid4().hex[:8]}"
+    session = Session.new(session_uuid, workspace)
     _sub_agent_sessions[project_id] = session
     return session
 
@@ -615,7 +624,9 @@ async def start_agent(req: StartAgentRequest):
     )
     try:
         await _agent_manager.start_agent(
-            req.project_id, config, initial_message=req.initial_message
+            req.project_id, config,
+            initial_message=req.initial_message,
+            session_id=req.session_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

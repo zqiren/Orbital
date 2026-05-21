@@ -471,9 +471,16 @@ class AgentManager:
                           session_id: str | None = None) -> None:
         """Wire all components and start the loop.
 
-        ``session_id`` selects which chat session within the project this
-        loop will own. When omitted it defaults to ``DEFAULT_SESSION_ID``,
-        preserving single-loop behavior.
+        ``session_id`` is the optional Format-1 user-facing chat id (see
+        ``TASK/ACTIVE-session-and-queue-model.md`` and
+        ``TASK/INVESTIGATION-session-id-canonical-audit.md``). When omitted
+        the session gets the ``DEFAULT_SESSION_ID`` Format-1 value, preserving
+        backward compatibility with single-session-per-project callers. The
+        internal Format-2 storage stem (``session_uuid``) is generated
+        unconditionally below.
+
+        ``self._handles`` is keyed by ``SessionKey == (project_id, session_id)``
+        so each chat session within a project owns an independent ProjectHandle.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -599,17 +606,17 @@ class AgentManager:
                     project_id, exc_info=True,
                 )
 
-        # 5. Session
-        # ``session_uuid`` is the JSONL-filename stem (sanitized project
-        # name + uuid4 hex), NOT the chat-session identifier. We bind it
-        # to a fresh local so the outer ``session_id`` kwarg (the chat
-        # session id) is not clobbered for the rest of this method —
-        # downstream WS broadcasts and callbacks must use the chat
-        # session id, not the JSONL stem.
+        # 5. Session.
+        # ``session_uuid`` is the Format-2 JSONL filename stem (sanitized
+        # project name + uuid4 hex). ``session_id`` is the Format-1 user-facing
+        # chat id (defaulted to DEFAULT_SESSION_ID above when the caller did
+        # not provide one). Downstream WS broadcasts and callbacks must use
+        # the F1 chat id; only filename derivation and idempotency keys use F2.
         sanitized = _sanitize_project_name(config.project_name)
         session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
         session = Session.new(
             session_uuid, config.workspace,
+            session_id=session_id,
             provider=config.provider,
             model=config.model,
             sdk=config.sdk,
@@ -651,7 +658,7 @@ class AgentManager:
                 provider=provider,
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
-                session_id=session.session_id,
+                session_uuid=session.session_uuid,
                 project_id=project_id,
             )
 
@@ -674,7 +681,7 @@ class AgentManager:
                     provider=provider,
                     workspace_files=workspace_files,
                     utility_provider=utility_provider,
-                    session_id=session.session_id,
+                    session_uuid=session.session_uuid,
                     bypass_idempotency=True,
                     project_id=project_id,
                 )
@@ -961,8 +968,9 @@ class AgentManager:
         2. Loop idle + session alive -> hot resume (returns "delivered")
         3. No session -> auto-start agent with message (returns "started")
 
-        ``session_id`` selects which chat session within the project to
-        target; defaults to the single-loop default session.
+        ``session_id`` is the optional Format-1 user-facing chat id; it
+        selects which chat session within the project to target and defaults
+        to the single-loop default session (``DEFAULT_SESSION_ID``).
 
         Lazy session minting (Phase 3c multi-loop): when ``session_id``
         names a chat session that does not yet have a handle but the
@@ -1500,7 +1508,7 @@ class AgentManager:
                     session=handle.session,
                     provider=handle.provider,
                     workspace_files=workspace_files,
-                    session_id=handle.session.session_id,
+                    session_uuid=handle.session.session_uuid,
                     project_id=project_id,
                 ),
                 timeout=200.0,
@@ -1532,17 +1540,23 @@ class AgentManager:
                 project_id,
             )
 
-        # 4. Save old session info
+        # 4. Save old session identity (both formats).
+        # Per dispatch §4.2.1, ``/new-session`` rotates the F1 chat id (new
+        # thread) AND mints a fresh F2 storage stem (new file). The old thread
+        # is archived; the new thread is fresh.
         old_session_id = handle.session.session_id
+        old_session_uuid = handle.session.session_uuid
 
-        # 5. Create new session
+        # 5. Create new session — fresh F1 and F2 both.
         project = self._project_store.get_project(project_id)
         project_name = (project or {}).get("name", "")
         sanitized = _sanitize_project_name(project_name)
-        new_session_id = f"{sanitized}_{uuid4().hex[:8]}"
+        new_session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
+        new_session_id = f"sess_{uuid4().hex[:8]}"
         snap = handle.config_snapshot
         new_session = Session.new(
-            new_session_id, workspace,
+            new_session_uuid, workspace,
+            session_id=new_session_id,
             provider=snap.get("provider", "unknown"),
             model=snap.get("model", "unknown"),
             sdk=snap.get("sdk", "unknown"),
@@ -1586,13 +1600,21 @@ class AgentManager:
         }, session_id=session_id)
 
         logger.info(
-            "new_session(%s): archived %s, created %s",
-            project_id, old_session_id, new_session_id,
+            "new_session(%s): archived %s (uuid %s), created %s (uuid %s)",
+            project_id, old_session_id, old_session_uuid,
+            new_session_id, new_session_uuid,
         )
+        # Response carries both formats: ``old_session_id`` / ``new_session_id``
+        # are the user-facing F1 chat ids (what the frontend cares about for
+        # session-boundary semantics); ``old_session_uuid`` / ``new_session_uuid``
+        # are the F2 JSONL stems for callers that need to address files
+        # directly. See ``TASK/INVESTIGATION-session-id-canonical-audit.md``.
         return {
             "status": "ok",
             "old_session_id": old_session_id,
             "new_session_id": new_session_id,
+            "old_session_uuid": old_session_uuid,
+            "new_session_uuid": new_session_uuid,
         }
 
     async def cancel_message(self, project_id: str, *,

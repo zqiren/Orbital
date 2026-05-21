@@ -89,7 +89,7 @@ def base_prompt_context(workspace, registry):
 
 @pytest.fixture
 def session(workspace):
-    return Session.new(session_id="lifecycle-e2e", workspace=workspace)
+    return Session.new(session_uuid="lifecycle-e2e", workspace=workspace)
 
 
 @pytest.fixture

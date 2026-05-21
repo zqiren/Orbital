@@ -35,6 +35,7 @@ from agent_os.agent.workspace_files import (
 def _mock_session(messages=None, session_id="sess_retry_test"):
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = messages or [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi there!"},
@@ -76,7 +77,7 @@ async def test_succeeds_first_attempt(tmp_path, caplog):
     provider.complete.return_value = resp
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
-        await run_session_end_routine(session, provider, ws, session_id="s_first")
+        await run_session_end_routine(session, provider, ws, session_uuid="s_first")
 
     assert provider.complete.call_count == 1, (
         f"Expected exactly 1 LLM call, got {provider.complete.call_count}"
@@ -110,7 +111,7 @@ async def test_succeeds_after_one_timeout(tmp_path, caplog):
     ]
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
-        await run_session_end_routine(session, provider, ws, session_id="s_one_timeout")
+        await run_session_end_routine(session, provider, ws, session_uuid="s_one_timeout")
 
     assert provider.complete.call_count == 2, (
         f"Expected exactly 2 LLM calls, got {provider.complete.call_count}"
@@ -150,7 +151,7 @@ async def test_succeeds_after_two_timeouts(tmp_path, caplog):
     ]
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
-        await run_session_end_routine(session, provider, ws, session_id="s_two_timeouts")
+        await run_session_end_routine(session, provider, ws, session_uuid="s_two_timeouts")
 
     assert provider.complete.call_count == 3, (
         f"Expected exactly 3 LLM calls, got {provider.complete.call_count}"
@@ -187,7 +188,7 @@ async def test_all_attempts_timeout_propagates(tmp_path, caplog):
 
     with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):
         with pytest.raises((asyncio.TimeoutError, TimeoutError)):
-            await run_session_end_routine(session, provider, ws, session_id="s_all_timeout")
+            await run_session_end_routine(session, provider, ws, session_uuid="s_all_timeout")
 
     # Exactly 3 attempts, no 4th
     assert provider.complete.call_count == 3, (
@@ -218,7 +219,7 @@ async def test_non_timeout_exception_no_retry(tmp_path):
     provider.complete.side_effect = ValueError("bad input")
 
     with pytest.raises(ValueError, match="bad input"):
-        await run_session_end_routine(session, provider, ws, session_id="s_value_error")
+        await run_session_end_routine(session, provider, ws, session_uuid="s_value_error")
 
     # Only one attempt — no retry for non-timeout errors
     assert provider.complete.call_count == 1, (

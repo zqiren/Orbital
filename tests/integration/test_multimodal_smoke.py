@@ -122,7 +122,7 @@ def base_prompt_context(workspace, registry):
 
 @pytest.fixture
 def session(workspace):
-    return Session.new(session_id="multimodal-smoke", workspace=workspace)
+    return Session.new(session_uuid="multimodal-smoke", workspace=workspace)
 
 
 @pytest.fixture

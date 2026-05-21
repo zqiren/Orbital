@@ -138,7 +138,8 @@ def _export_to_disk(
     # but it relies on ProjectPaths.tool_results_dir == dirname(sessions_dir)/tool-results.
     sessions_dir = os.path.dirname(session._filepath)
     parent = os.path.dirname(sessions_dir)
-    tool_results_dir = os.path.join(parent, "tool-results", session.session_id)
+    # tool-results is keyed by the Format-2 stem (filename), not the F1 chat id.
+    tool_results_dir = os.path.join(parent, "tool-results", session.session_uuid)
     os.makedirs(tool_results_dir, exist_ok=True)
 
     filename = f"turn_{iteration}_call_{tool_call_id}.json"

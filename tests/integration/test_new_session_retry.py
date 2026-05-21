@@ -209,11 +209,14 @@ def test_new_session_llm_retry_on_timeout_via_http(caplog):
             )
 
             # ---- New session file on disk ----
+            # Filenames are derived from the F2 stem (session_uuid); the F1
+            # chat id (session_id) is the user-facing thread identity.
+            # ``_handles`` is keyed by SessionKey == (project_id, session_id).
             new_handle = mgr._handles[(project_id, "default")]
-            new_session_id = new_handle.session.session_id
-            assert new_session_id != "old_session_http_retry"
+            new_session_uuid = new_handle.session.session_uuid
+            assert new_session_uuid != "old_session_http_retry"
 
-            new_session_path = ProjectPaths(workspace).session_file(new_session_id)
+            new_session_path = ProjectPaths(workspace).session_file(new_session_uuid)
             assert os.path.isfile(new_session_path), (
                 f"New session JSONL not found at {new_session_path}"
             )
