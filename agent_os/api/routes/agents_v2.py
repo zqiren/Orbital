@@ -144,6 +144,54 @@ class InjectAttachment(BaseModel):
         return v
 
 
+_MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
+
+class InjectAttachment(BaseModel):
+    """A single attachment reference passed to /inject.
+
+    The path is workspace-relative (the upload endpoint stores files under
+    ``uploads/`` by default). The route validates the path resolves inside
+    the workspace and that the declared size matches the file on disk
+    before building the ``<attached_files>...</attached_files>`` prefix.
+    """
+
+    path: str
+    mime: str
+    size: int
+
+    @field_validator("path")
+    @classmethod
+    def reject_absolute_or_traversal(cls, v: str) -> str:
+        if not v or len(v) > 1024:
+            raise ValueError("path empty or too long")
+        if v.startswith("/") or v.startswith("\\"):
+            raise ValueError("path must be relative")
+        if "\x00" in v:
+            raise ValueError("path contains NUL")
+        # Normalise backslash separators before splitting so a Windows-style
+        # relative path like ``uploads\\foo.png`` is treated the same as
+        # ``uploads/foo.png`` for the purpose of '..' detection.
+        parts = v.replace("\\", "/").split("/")
+        if any(p == ".." for p in parts):
+            raise ValueError("path may not contain '..' segments")
+        return v
+
+    @field_validator("mime")
+    @classmethod
+    def validate_mime(cls, v: str) -> str:
+        if not _MIME_PATTERN.match(v):
+            raise ValueError("invalid mime type")
+        return v
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, v: int) -> int:
+        if v < 0 or v > 10 * 1024 * 1024:
+            raise ValueError("size out of range (0..10MB)")
+        return v
+
+
 class InjectRequest(BaseModel):
     content: str
     target: str | None = None
