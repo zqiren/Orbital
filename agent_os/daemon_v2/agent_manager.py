@@ -559,6 +559,7 @@ class AgentManager:
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
                 session_id=session.session_id,
+                project_id=project_id,
             )
 
         # 11a. Periodic state-refresh callback (turn-count / agent-decided /
@@ -582,6 +583,7 @@ class AgentManager:
                     utility_provider=utility_provider,
                     session_id=session.session_id,
                     bypass_idempotency=True,
+                    project_id=project_id,
                 )
                 self._ws.broadcast(project_id, {
                     "type": "state_refresh.lifecycle",
@@ -1339,6 +1341,7 @@ class AgentManager:
                     provider=handle.provider,
                     workspace_files=workspace_files,
                     session_id=handle.session.session_id,
+                    project_id=project_id,
                 ),
                 timeout=200.0,
             )
