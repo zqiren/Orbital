@@ -20,6 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
@@ -153,6 +154,13 @@ class InjectRequest(BaseModel):
     # ``DEFAULT_SESSION_ID``", i.e. single-loop back-compat. See
     # ``TASK/ACTIVE-session-and-queue-model.md`` and
     # ``TASK/INVESTIGATION-session-id-canonical-audit.md`` (F7).
+    #
+    # Also drives the slot-enforcement guard (Track J Phase 1): if a
+    # different session_id is provided AND a different session currently
+    # holds the project's active-loop slot, the inject route returns 202
+    # with a `slot_held` payload instead of routing the message. Absent
+    # or matching session_id skips the check. Per ACTIVE-session-and-queue-
+    # model.md §3.
     session_id: str | None = None
 
     @field_validator("content")
@@ -639,6 +647,36 @@ async def inject_message(project_id: str, req: InjectRequest):
     project = _project_store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Slot enforcement guard (Track J Phase 1, per ACTIVE-session-and-queue-model.md §3
+    # and INVESTIGATION-slot-enforcement-surface.md §5).
+    #
+    # When the caller explicitly addresses a session_id and that is NOT the
+    # session currently holding the project's active-loop slot, reject with
+    # 202 Accepted and a structured `slot_held` payload. The frontend renders
+    # an intermediate notice; future Phase 2 will turn 202 into "queued for
+    # later dispatch" without changing the status code (forward-compat).
+    #
+    # Cases that proceed normally (no guard fires):
+    #   - session_id is absent (backward compat — old clients keep working)
+    #   - no session currently holds the slot (project idle / never started)
+    #   - the requested session matches the holder (same-session continuation)
+    #
+    # Sub-agent dispatches happen INSIDE the holding session's turn and do
+    # not consume a separate slot, so we apply the guard regardless of
+    # `req.target`: a /inject with target= addressed to a non-holding
+    # session would still be a cross-session attempt to start a turn.
+    if req.session_id is not None:
+        holder = _agent_manager.current_holder_session_id(project_id)
+        if holder is not None and holder != req.session_id:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "slot_held",
+                    "holding_session_id": holder,
+                    "message": "Another session in this project is currently running.",
+                },
+            )
 
     # Build the ``<attached_files>...</attached_files>`` prefix BEFORE the branch split so
     # both the management-agent branch and the sub-agent branch see the
