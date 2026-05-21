@@ -155,13 +155,21 @@ class ApiClient:
         *,
         target: str | None = None,
         nonce: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
-        """POST /api/v2/agents/{id}/inject — send a user message."""
+        """POST /api/v2/agents/{id}/inject — send a user message.
+
+        ``attachments`` (optional) is a list of ``{path, mime, size}`` dicts
+        referencing files already uploaded into the project workspace.
+        Behavior is identical to today when omitted or ``None``.
+        """
         body: dict = {"content": content}
         if target is not None:
             body["target"] = target
         if nonce is not None:
             body["nonce"] = nonce
+        if attachments is not None:
+            body["attachments"] = attachments
         resp = await self.post(f"/api/v2/agents/{project_id}/inject", json=body)
         resp.raise_for_status()
         return resp.json()
