@@ -144,6 +144,10 @@ class InjectRequest(BaseModel):
     target: str | None = None
     nonce: str | None = None
     attachments: list[InjectAttachment] | None = None
+    # Phase 3c multi-loop: select which chat session within the project
+    # to deliver the message to. Omit (or pass null) for single-loop
+    # back-compat — the daemon collapses to DEFAULT_SESSION_ID.
+    session_id: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -703,6 +707,7 @@ async def inject_message(project_id: str, req: InjectRequest):
         # deliberate v1 audit-field asymmetry.
         result = await _agent_manager.inject_message(
             project_id, effective_content, nonce=req.nonce,
+            session_id=req.session_id,
         )
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,
@@ -731,6 +736,30 @@ async def get_pending_approval(project_id: str):
     if approval is None:
         return {"pending": False}
     return {"pending": True, **approval}
+
+
+@router.get("/projects/{project_id}/sessions")
+async def list_project_sessions(project_id: str):
+    """Enumerate active and idle chat sessions for a project.
+
+    Phase 3c multi-loop discovery endpoint. Each entry exposes:
+      - ``session_id``: the chat-session identifier (defaults to
+        ``"default"`` under the single-loop back-compat path).
+      - ``status``: one of ``running`` | ``pending_approval`` | ``waiting``
+        | ``idle`` | ``stopped``.
+      - ``session_uuid``: the per-loop ``Session.session_id`` used as the
+        session JSONL filename stem (useful for transcript correlation).
+
+    A project with no active sessions returns ``{"sessions": []}``.
+    The response shape is intentionally a wrapped list — leaves room for
+    future top-level fields (project metadata, totals) without a breaking
+    response change.
+    """
+    if _project_store is not None:
+        if _project_store.get_project(project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+    sessions = _agent_manager.list_sessions(project_id)
+    return {"project_id": project_id, "sessions": sessions}
 
 
 @router.post("/agents/{project_id}/cancel")

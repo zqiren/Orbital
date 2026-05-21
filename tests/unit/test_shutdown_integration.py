@@ -72,7 +72,7 @@ class TestShutdownResumeRoundTrip:
         """Write state -> read state -> verify identical structure."""
         mgr = _make_manager(tmp_path)
         snapshot = {"workspace": "/home/user/proj", "model": "gpt-4", "autonomy": "hands_off"}
-        mgr._handles["proj-1"] = _make_handle(
+        mgr._handles[("proj-1", "default")] = _make_handle(
             task_done=False, config_snapshot=snapshot, started_at="2026-03-01T12:00:00+00:00"
         )
 
@@ -91,7 +91,7 @@ class TestShutdownResumeRoundTrip:
     def test_full_lifecycle(self, tmp_path):
         """start agent -> write state -> mark clean -> read state -> verify shutdown_clean."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["proj-1"] = _make_handle(task_done=False)
+        mgr._handles[("proj-1", "default")] = _make_handle(task_done=False)
 
         # Step 1: Write initial state (running, not clean)
         mgr._write_state()
@@ -106,9 +106,9 @@ class TestShutdownResumeRoundTrip:
     def test_multiple_agents_lifecycle(self, tmp_path):
         """Multiple agents: write, mark clean, verify all marked."""
         mgr = _make_manager(tmp_path)
-        mgr._handles["p1"] = _make_handle(task_done=False)
-        mgr._handles["p2"] = _make_handle(task_done=False)
-        mgr._handles["p3"] = _make_handle(task_done=False)
+        mgr._handles[("p1", "default")] = _make_handle(task_done=False)
+        mgr._handles[("p2", "default")] = _make_handle(task_done=False)
+        mgr._handles[("p3", "default")] = _make_handle(task_done=False)
 
         mgr._write_state()
         state = mgr._read_state()
@@ -143,7 +143,7 @@ class TestUserBehaviorSimulation:
         """Simulate: user starts agent, then shuts down daemon. State should be clean."""
         mgr = _make_manager(tmp_path)
         handle = _make_handle(task_done=False)
-        mgr._handles["user-proj"] = handle
+        mgr._handles[("user-proj", "default")] = handle
         mgr.stop_agent = AsyncMock()
 
         # Write initial state
@@ -189,8 +189,10 @@ class TestUserBehaviorSimulation:
 
         # Simulate crash state
         mock_handle = _make_handle(task_done=False)
-        async def fake_start(pid, config, initial_message=None, trigger_source=None):
-            mgr._handles[pid] = mock_handle
+        async def fake_start(pid, config, initial_message=None,
+                             trigger_source=None, session_id=None):
+            sid = session_id or "default"
+            mgr._handles[(pid, sid)] = mock_handle
 
         mgr.start_agent = AsyncMock(side_effect=fake_start)
 
@@ -248,8 +250,10 @@ class TestUserBehaviorSimulation:
         )
 
         mock_handle = _make_handle(task_done=False)
-        async def fake_start(pid, config, initial_message=None, trigger_source=None):
-            mgr._handles[pid] = mock_handle
+        async def fake_start(pid, config, initial_message=None,
+                             trigger_source=None, session_id=None):
+            sid = session_id or "default"
+            mgr._handles[(pid, sid)] = mock_handle
 
         mgr.start_agent = AsyncMock(side_effect=fake_start)
 
@@ -298,7 +302,7 @@ class TestUserBehaviorSimulation:
         )
 
         # Phase 1: Running agent, write state
-        mgr._handles["cycle-proj"] = _make_handle(task_done=False)
+        mgr._handles[("cycle-proj", "default")] = _make_handle(task_done=False)
         mgr._write_state()
 
         # Phase 2: Shutdown (marks clean, stops agents)
@@ -309,10 +313,12 @@ class TestUserBehaviorSimulation:
         mock_handle = _make_handle(task_done=False)
         resume_count = 0
 
-        async def fake_start(pid, config, initial_message=None, trigger_source=None):
+        async def fake_start(pid, config, initial_message=None,
+                             trigger_source=None, session_id=None):
             nonlocal resume_count
             resume_count += 1
-            mgr._handles[pid] = mock_handle
+            sid = session_id or "default"
+            mgr._handles[(pid, sid)] = mock_handle
 
         mgr.start_agent = AsyncMock(side_effect=fake_start)
 

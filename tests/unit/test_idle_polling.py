@@ -74,7 +74,7 @@ class TestOnLoopDoneWaiting:
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         # Simulate task completing successfully
         mock_task = MagicMock()
@@ -104,7 +104,7 @@ class TestOnLoopDoneWaiting:
         sub_agent_mgr.list_active.return_value = []
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = None
@@ -121,7 +121,7 @@ class TestOnLoopDoneWaiting:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = RuntimeError("boom")
@@ -142,7 +142,7 @@ class TestOnLoopDoneWaiting:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         mock_task = MagicMock()
         mock_task.exception.side_effect = asyncio.CancelledError()
@@ -159,7 +159,7 @@ class TestOnLoopDoneWaiting:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = None
@@ -171,7 +171,7 @@ class TestOnLoopDoneWaiting:
         event = ws.broadcast.call_args[0][1]
         assert event["status"] == "stopped"
         # Handle should be cleaned up
-        assert "proj" not in mgr._handles
+        assert ("proj", "default") not in mgr._handles
 
 
 class TestCheckSubAgentsDone:
@@ -182,11 +182,11 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         # First poll: still active. Second poll: done.
         call_count = [0]
-        def list_active_side_effect(pid):
+        def list_active_side_effect(pid, *, session_id=None):
             call_count[0] += 1
             if call_count[0] <= 1:
                 return [{"handle": "agent-a"}]
@@ -207,7 +207,7 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(task_done=False)  # task not done = loop running
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
@@ -222,7 +222,7 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
@@ -247,7 +247,7 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         # Sub-agents always active (stuck)
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
@@ -278,7 +278,7 @@ class TestStopAgentCancelsPolling:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         # Simulate a running poll task
         mock_poll_task = MagicMock()
@@ -296,7 +296,7 @@ class TestStopAgentCancelsPolling:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles["proj"] = handle
+        mgr._handles[("proj", "default")] = handle
 
         # No poll task — should not raise
         await mgr.stop_agent("proj")

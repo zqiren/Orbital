@@ -150,7 +150,7 @@ class TestNewSessionIdle:
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
             )
-            mgr._handles[project_id] = handle
+            mgr._handles[(project_id, "default")] = handle
 
             project_store.get_project.return_value = {
                 "project_id": project_id,
@@ -169,7 +169,7 @@ class TestNewSessionIdle:
             assert os.path.isfile(old_session_path)
 
             # A new session should exist in the handle
-            new_session = mgr._handles[project_id].session
+            new_session = mgr._handles[(project_id, "default")].session
             assert new_session.session_id != "old_session_abc"
             assert new_session.get_messages() == []
 
@@ -210,7 +210,7 @@ class TestNewSessionPreservesLayer1:
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
             )
-            mgr._handles[project_id] = handle
+            mgr._handles[(project_id, "default")] = handle
 
             project_store.get_project.return_value = {
                 "project_id": project_id,
@@ -262,7 +262,7 @@ class TestNewSessionBroadcasts:
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
             )
-            mgr._handles[project_id] = handle
+            mgr._handles[(project_id, "default")] = handle
 
             project_store.get_project.return_value = {
                 "project_id": project_id,
@@ -326,7 +326,7 @@ class TestNewSessionIsolation:
                 task=done_task,
                 config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
             )
-            mgr._handles[pid_a] = handle_a
+            mgr._handles[(pid_a, "default")] = handle_a
 
             project_store.get_project.return_value = {
                 "project_id": pid_a,

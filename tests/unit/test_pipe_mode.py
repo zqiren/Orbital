@@ -402,7 +402,7 @@ class TestSubAgentManagerPipeWiring:
 
         mock_adapter = AsyncMock()
         mock_adapter._transport = None  # Legacy path: background task
-        mgr._adapters["proj_1"] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
 
         result = await mgr.send("proj_1", "test-agent", "hi")
 
@@ -419,7 +419,7 @@ class TestSubAgentManagerPipeWiring:
 
         mock_adapter = AsyncMock()
         mock_adapter._transport = None  # Legacy path: background task
-        mgr._adapters["proj_1"] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
 
         result = await mgr.send("proj_1", "test-agent", "hi")
 
@@ -462,7 +462,7 @@ class TestSubAgentManagerPipeWiring:
 
         pm = MagicMock()
         mgr = SubAgentManager(process_manager=pm)
-        mgr._adapters["proj_1"] = {"test-agent": adapter}
+        mgr._adapters[("proj_1", "default")] = {"test-agent": adapter}
 
         result = await mgr.send("proj_1", "test-agent", "hello")
 

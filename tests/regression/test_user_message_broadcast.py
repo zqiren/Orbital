@@ -138,7 +138,7 @@ class TestInjectNoncePropagation:
         mock_handle.task = mock_task
         mock_handle.session = mock_session
 
-        mgr._handles["proj_test"] = mock_handle
+        mgr._handles[("proj_test", "default")] = mock_handle
 
         # Patch _start_loop to avoid actually starting an agent loop
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
@@ -178,7 +178,7 @@ class TestInjectNoncePropagation:
         mock_handle.task = mock_task
         mock_handle.session = mock_session
 
-        mgr._handles["proj_test"] = mock_handle
+        mgr._handles[("proj_test", "default")] = mock_handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
             await mgr.inject_message("proj_test", "hi")

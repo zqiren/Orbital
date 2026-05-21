@@ -105,7 +105,7 @@ class TestAgentManagerUpdateAutonomy:
             registry=MagicMock(), context_manager=MagicMock(),
             interceptor=interceptor, task=MagicMock(),
         )
-        mgr._handles["proj-1"] = handle
+        mgr._handles[("proj-1", "default")] = handle
 
         result = mgr.update_autonomy("proj-1", Autonomy.SUPERVISED)
 
@@ -125,7 +125,7 @@ class TestAgentManagerUpdateAutonomy:
             registry=MagicMock(), context_manager=MagicMock(),
             interceptor=interceptor, task=MagicMock(),
         )
-        mgr._handles["proj-1"] = handle
+        mgr._handles[("proj-1", "default")] = handle
 
         mgr.update_autonomy("proj-1", Autonomy.SUPERVISED)
 

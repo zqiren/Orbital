@@ -135,7 +135,7 @@ class TestGetPendingApproval:
         interceptor.on_intercept(tool_call, [{"role": "assistant", "content": "danger"}], reasoning="cleanup")
 
         handle = _make_handle_with_interceptor(paused=True, interceptor=interceptor)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         result = manager.get_pending_approval("proj_test")
         assert result is not None
@@ -152,7 +152,7 @@ class TestGetPendingApproval:
             project_id="proj_test",
         )
         handle = _make_handle_with_interceptor(paused=False, interceptor=interceptor)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         result = manager.get_pending_approval("proj_test")
         assert result is None
@@ -168,7 +168,7 @@ class TestGetPendingApproval:
             project_id="proj_test",
         )
         handle = _make_handle_with_interceptor(paused=True, interceptor=interceptor)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         result = manager.get_pending_approval("proj_test")
         assert result is None
@@ -184,7 +184,7 @@ class TestGetPendingApproval:
         interceptor.on_intercept(tool_call, [])
 
         handle = _make_handle_with_interceptor(paused=True, interceptor=interceptor)
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
 
         result = manager.get_pending_approval("proj_test")
         result["tool_name"] = "MUTATED"

@@ -161,7 +161,7 @@ def _make_agent_manager_with_running_loop(workspace, project_id, project_name,
         task=None,
         config_snapshot={"workspace": workspace, "model": "fake-slow"},
     )
-    mgr._handles[project_id] = handle
+    mgr._handles[(project_id, "default")] = handle
     return mgr, ws, project_store, handle
 
 
@@ -209,7 +209,7 @@ def _inject_mock_handle(mgr, project_id):
         interceptor=MagicMock(),
         task=task,
     )
-    mgr._handles[project_id] = handle
+    mgr._handles[(project_id, "default")] = handle
     return handle, task
 
 
@@ -354,8 +354,8 @@ async def test_cancel_via_http_during_stream():
             )
 
             # Handle still in _handles — agent alive, not torn down.
-            assert project_id in mgr._handles
-            assert mgr._handles[project_id] is handle
+            assert (project_id, "default") in mgr._handles
+            assert mgr._handles[(project_id, "default")] is handle
 
             # /cancel must NOT call stop_all (that's /stop's job).
             mgr._sub_agent_manager.stop_all.assert_not_awaited()
@@ -412,8 +412,8 @@ async def test_cancel_then_send_continues():
         assert resp.json()["status"] == "cancelled"
 
         # Agent handle is still alive, same loop object.
-        assert pid in mgr._handles
-        assert mgr._handles[pid] is handle
+        assert (pid, "default") in mgr._handles
+        assert mgr._handles[(pid, "default")] is handle
 
         # Session not stopped.
         handle.session.stop.assert_not_called()
@@ -450,7 +450,7 @@ async def test_cancel_versus_stop_endpoint_isolation():
         resp_cancel = client.post(f"/api/v2/agents/{pid_cancel}/cancel")
         assert resp_cancel.status_code == 200
         assert resp_cancel.json()["status"] == "cancelled"
-        assert pid_cancel in mgr._handles
+        assert (pid_cancel, "default") in mgr._handles
 
         # /stop — mark target task done first so stop_agent's shield-wait
         # doesn't hang.
@@ -464,9 +464,9 @@ async def test_cancel_versus_stop_endpoint_isolation():
         assert resp_stop.status_code == 200
 
         # /stop'd agent: handle popped.
-        assert pid_stop not in mgr._handles
+        assert (pid_stop, "default") not in mgr._handles
         # /cancel'd agent: handle still alive.
-        assert pid_cancel in mgr._handles
+        assert (pid_cancel, "default") in mgr._handles
     finally:
         client.close()
         _restore(saved)

@@ -113,6 +113,37 @@ class TestModels:
         assert evt.source == "management"
         assert evt.tool_name == "read"
 
+    def test_default_session_id_constant(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID
+
+        # The constant must be a non-empty string; back-compat code paths
+        # rely on it as a stable sentinel for the single-loop default.
+        assert isinstance(DEFAULT_SESSION_ID, str)
+        assert DEFAULT_SESSION_ID == "default"
+
+    def test_make_session_key_with_explicit_session(self):
+        from agent_os.daemon_v2.models import make_session_key
+
+        key = make_session_key("proj_1", "sess_abc")
+        assert key == ("proj_1", "sess_abc")
+        # ``SessionKey`` is a plain tuple alias — concrete value must be a tuple.
+        assert isinstance(key, tuple)
+        assert len(key) == 2
+
+    def test_make_session_key_default(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+
+        # Both omission and explicit ``None`` collapse to the default sentinel.
+        assert make_session_key("proj_1") == ("proj_1", DEFAULT_SESSION_ID)
+        assert make_session_key("proj_1", None) == ("proj_1", DEFAULT_SESSION_ID)
+
+    def test_make_session_key_empty_string_treated_as_none(self):
+        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+
+        # Empty string is falsy — we collapse to the default so callers do not
+        # have to special-case "" themselves.
+        assert make_session_key("proj_1", "") == ("proj_1", DEFAULT_SESSION_ID)
+
 
 # ---------------------------------------------------------------------------
 # MessageRouter tests
@@ -547,8 +578,8 @@ class TestSubAgentManager:
             MockAdapter.return_value = mock_instance
 
             result = await mgr.start("proj_1", "claudecode")
-            assert "proj_1" in mgr._adapters
-            assert "claudecode" in mgr._adapters["proj_1"]
+            assert ("proj_1", "default") in mgr._adapters
+            assert "claudecode" in mgr._adapters[("proj_1", "default")]
             mock_instance.start.assert_awaited_once()
             pm.start.assert_awaited_once()
 
@@ -600,6 +631,90 @@ class TestSubAgentManager:
             active = mgr.list_active("proj_1")
             assert len(active) == 1
             assert active[0]["handle"] == "claudecode"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_dispatch_from_two_sessions_is_isolated(self):
+        """Sub-agent dispatch from two sessions in one project stays isolated.
+
+        Phase 3c-overnight: each chat session owns its own adapter slate;
+        starting the same handle in two sessions yields two distinct
+        adapters, list_active scoped to each session returns only that
+        session's adapters, and stop_all on one session does not touch
+        the other.
+        """
+        mgr, pm = self._make_manager()
+
+        # Patch CLIAdapter so every constructor call yields a fresh mock.
+        adapters_created: list = []
+
+        def make_adapter(*args, **kwargs):
+            inst = AsyncMock()
+            inst.is_alive = MagicMock(return_value=True)
+            inst.is_idle = MagicMock(return_value=False)
+            inst.display_name = kwargs.get("display_name", "ClaudeCode")
+            inst.handle = kwargs.get("handle", "claudecode")
+            adapters_created.append(inst)
+            return inst
+
+        with patch(
+            "agent_os.daemon_v2.sub_agent_manager.CLIAdapter",
+            side_effect=make_adapter,
+        ):
+            # Concurrent starts in two sessions of the same project.
+            results = await asyncio.gather(
+                mgr.start("proj_iso", "claudecode", session_id="sess_a"),
+                mgr.start("proj_iso", "claudecode", session_id="sess_b"),
+            )
+
+        assert all("Started" in r for r in results), f"unexpected start results: {results}"
+
+        # Each session ended up with its own adapter slate.
+        assert ("proj_iso", "sess_a") in mgr._adapters
+        assert ("proj_iso", "sess_b") in mgr._adapters
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_a")]
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_b")]
+        # Two distinct adapter objects were created — not one shared.
+        adapter_a = mgr._adapters[("proj_iso", "sess_a")]["claudecode"]
+        adapter_b = mgr._adapters[("proj_iso", "sess_b")]["claudecode"]
+        assert adapter_a is not adapter_b
+        assert adapter_a in adapters_created
+        assert adapter_b in adapters_created
+
+        # list_active is scoped to the session.
+        active_a = mgr.list_active("proj_iso", session_id="sess_a")
+        active_b = mgr.list_active("proj_iso", session_id="sess_b")
+        assert len(active_a) == 1 and active_a[0]["handle"] == "claudecode"
+        assert len(active_b) == 1 and active_b[0]["handle"] == "claudecode"
+        # Default-session list is empty — neither was registered under default.
+        assert mgr.list_active("proj_iso") == []
+
+        # stop_all on sess_a tears down only A's adapter slate.
+        await mgr.stop_all("proj_iso", session_id="sess_a")
+        assert mgr._adapters.get(("proj_iso", "sess_a"), {}) == {}
+        # B's slate is untouched.
+        assert "claudecode" in mgr._adapters[("proj_iso", "sess_b")]
+        adapter_a.stop.assert_awaited()
+        adapter_b.stop.assert_not_awaited()
+
+        # update_sub_agent_autonomy targets a single session as well.
+        # Use sess_b — only B's transport (if any) should be touched. We
+        # set _transport with an update_autonomy spy on both adapters and
+        # confirm A is untouched.
+        from agent_os.agent.prompt_builder import Autonomy
+        spy_a = MagicMock()
+        spy_b = MagicMock()
+        # A is gone after stop_all, re-attach to verify isolation.
+        mgr._adapters.setdefault(("proj_iso", "sess_a"), {})["claudecode"] = adapter_a
+        adapter_a._transport = MagicMock()
+        adapter_a._transport.update_autonomy = spy_a
+        adapter_b._transport = MagicMock()
+        adapter_b._transport.update_autonomy = spy_b
+
+        mgr.update_sub_agent_autonomy(
+            "proj_iso", Autonomy.HANDS_OFF, session_id="sess_b",
+        )
+        spy_a.assert_not_called()
+        spy_b.assert_called_once_with(Autonomy.HANDS_OFF)
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +776,7 @@ class TestAgentManager:
 
             await mgr.start_agent("proj_1", config)
 
-            assert "proj_1" in mgr._handles
+            assert ("proj_1", "default") in mgr._handles
             # Should broadcast running status
             ws.broadcast.assert_called()
 
@@ -703,7 +818,7 @@ class TestAgentManager:
         mock_session = MagicMock()
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        mgr._handles["proj_1"] = MagicMock(session=mock_session, task=mock_task)
+        mgr._handles[("proj_1", "default")] = MagicMock(session=mock_session, task=mock_task)
 
         await mgr.inject_message("proj_1", "hello")
         mock_session.queue_message.assert_called_once_with("hello", nonce=None)
@@ -722,7 +837,7 @@ class TestAgentManager:
         mock_task.exception.return_value = None
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             await mgr.inject_message("proj_1", "continue work")
@@ -744,7 +859,7 @@ class TestAgentManager:
         mock_task.exception.return_value = RuntimeError("LLM timeout")
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             result = await mgr.inject_message("proj_1", "are you there?")
@@ -772,7 +887,7 @@ class TestAgentManager:
         mock_task.exception.side_effect = asyncio.CancelledError()
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
             result = await mgr.inject_message("proj_1", "hello again")
@@ -793,7 +908,7 @@ class TestAgentManager:
         mock_loop = MagicMock(terminate=AsyncMock())
         handle = MagicMock(session=mock_session, task=mock_task,
                            loop=mock_loop)
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         await mgr.stop_agent("proj_1")
         # Task is still pending (one `await asyncio.sleep(0)` is not enough
@@ -824,7 +939,7 @@ class TestAgentManager:
             session=mock_session, task=mock_task, interceptor=mock_interceptor,
             registry=mock_registry, loop=MagicMock()
         )
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
             await mgr.approve("proj_1", "tc_1")
@@ -849,7 +964,7 @@ class TestAgentManager:
             session=mock_session, task=mock_task, interceptor=mock_interceptor,
             loop=MagicMock()
         )
-        mgr._handles["proj_1"] = handle
+        mgr._handles[("proj_1", "default")] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
             await mgr.deny("proj_1", "tc_1", "Not safe")
@@ -858,6 +973,235 @@ class TestAgentManager:
             assert "tc_1" in call_args[0]
             assert "DENIED" in call_args[0][1]
             mock_session.resume.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_inject_message_accepts_session_id_kwarg(self):
+        """session_id kwarg routes to the matching (project, session) handle."""
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # Register a running handle under an explicit session id.
+        mock_session = MagicMock()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mgr._handles[("proj_1", "sess_a")] = MagicMock(
+            session=mock_session, task=mock_task,
+        )
+
+        # Calling with the matching session_id reaches the queued-path
+        # for that exact handle (storage is now SessionKey-keyed).
+        result = await mgr.inject_message("proj_1", "hi", session_id="sess_a")
+        assert result == "queued"
+        mock_session.queue_message.assert_called_once_with("hi", nonce=None)
+
+    def test_synchronous_entry_points_accept_session_id_kwarg(self):
+        """Forward-compat: sync entry points all accept session_id kwarg.
+
+        Each entry point must accept the kwarg and behave identically to
+        the no-kwarg form at this commit (storage is still project_id-keyed).
+        """
+        from agent_os.agent.prompt_builder import Autonomy
+
+        mgr, _, _, _, _ = self._make_manager()
+
+        # No handle yet — read paths return the idle / no-handle answer.
+        assert mgr.is_running("proj_1") is False
+        assert mgr.is_running("proj_1", session_id="sess_a") is False
+        assert mgr.get_run_status("proj_1") == "idle"
+        assert mgr.get_run_status("proj_1", session_id="sess_a") == "idle"
+        assert mgr.get_pending_approval("proj_1") is None
+        assert mgr.get_pending_approval("proj_1", session_id="sess_a") is None
+        assert mgr.get_session("proj_1") is None
+        assert mgr.get_session("proj_1", session_id="sess_a") is None
+        # update_autonomy returns False when no agent is running.
+        assert mgr.update_autonomy("proj_1", Autonomy.HANDS_OFF) is False
+        assert mgr.update_autonomy(
+            "proj_1", Autonomy.HANDS_OFF, session_id="sess_a"
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_inject_message_mints_new_session_lazily(self):
+        """An unknown session_id in inject_message mints a fresh handle.
+
+        Phase 3c lazy-session-minting contract: when inject_message is
+        called with a session_id that has no handle in _handles but the
+        project itself exists, AgentManager falls through to start_agent
+        which registers a new handle under (project_id, session_id).
+        Existing handles in the same project are untouched.
+        """
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # An existing "default" session for proj_lazy.
+        existing_session = MagicMock(name="default_session")
+        existing_task = MagicMock()
+        existing_task.done.return_value = False
+        # config_snapshot must be a real dict — _write_state json-serializes it.
+        existing_handle = MagicMock(
+            session=existing_session, task=existing_task,
+            config_snapshot={"workspace": "/tmp/lazy_ws", "model": "gpt-4"},
+            started_at="2026-01-01T00:00:00+00:00",
+        )
+        mgr._handles[("proj_lazy", "default")] = existing_handle
+
+        # Make project_store.get_project return a minimal project dict so
+        # start_agent's auto-derive path has data to work with.
+        mgr._project_store.get_project.return_value = {
+            "workspace": "/tmp/lazy_ws",
+            "name": "Lazy",
+            "autonomy": "hands_off",
+            "model": "gpt-4",
+            "api_key": "sk-test",
+            "sdk": "openai",
+            "provider": "custom",
+            "enabled_sub_agents": [],
+        }
+
+        # Patch heavy dependencies of start_agent so the test runs in-process.
+        with patch("agent_os.daemon_v2.agent_manager.LLMProvider"), \
+             patch("agent_os.daemon_v2.agent_manager.ToolRegistry") as MockReg, \
+             patch("agent_os.daemon_v2.agent_manager.PromptBuilder"), \
+             patch("agent_os.daemon_v2.agent_manager.Session") as MockSession, \
+             patch("agent_os.daemon_v2.agent_manager.ContextManager"), \
+             patch("agent_os.daemon_v2.agent_manager.AgentLoop") as MockLoop, \
+             patch("agent_os.daemon_v2.agent_manager.AutonomyInterceptor"):
+
+            MockSession.new.return_value = MagicMock()
+            mock_reg = MagicMock()
+            mock_reg.tool_names.return_value = ["read"]
+            MockReg.return_value = mock_reg
+            mock_loop = MagicMock()
+            mock_loop.run = AsyncMock()
+            MockLoop.return_value = mock_loop
+
+            result = await mgr.inject_message(
+                "proj_lazy", "hello from new session",
+                session_id="sess_fresh",
+            )
+
+        # The auto-start branch returns "started".
+        assert result == "started"
+        # The new session handle was minted.
+        assert ("proj_lazy", "sess_fresh") in mgr._handles
+        # The existing default handle is untouched.
+        assert mgr._handles[("proj_lazy", "default")] is existing_handle
+        # The existing session must NOT have received the new message.
+        existing_session.queue_message.assert_not_called()
+        existing_session.append.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_message_broadcast_carries_session_id(self):
+        """cancel_message broadcasts the agent.status payload with session_id.
+
+        Multi-loop contract: every status broadcast originating in
+        AgentManager must carry a session_id discriminator so clients
+        can route by session. cancel_message is one of the simplest
+        broadcast paths to validate without standing up a full loop.
+        """
+        mgr, ws, _, _, _ = self._make_manager()
+
+        # Two handles, two sessions, both running.
+        for sid in ("sess_a", "sess_b"):
+            session = MagicMock()
+            session.is_stopped.return_value = False
+            session._paused_for_approval = False
+            task = MagicMock()
+            task.done.return_value = False
+            loop = MagicMock()
+            loop.cancel_turn = AsyncMock()
+            mgr._handles[("proj_ws", sid)] = MagicMock(
+                session=session, task=task, loop=loop,
+            )
+
+        # Cancel session A only — should produce one broadcast tagged sess_a.
+        result = await mgr.cancel_message("proj_ws", session_id="sess_a")
+        assert result == {"status": "cancelled"}
+
+        ws.broadcast.assert_called_once()
+        broadcast_pid, payload = ws.broadcast.call_args[0]
+        assert broadcast_pid == "proj_ws"
+        assert payload["type"] == "agent.status"
+        assert payload["status"] == "idle"
+        # Critical: session_id field is present and matches the cancelled session.
+        assert payload["session_id"] == "sess_a"
+
+        # Cancel session B — second broadcast tagged sess_b, A's handle is
+        # untouched.
+        ws.broadcast.reset_mock()
+        result = await mgr.cancel_message("proj_ws", session_id="sess_b")
+        assert result == {"status": "cancelled"}
+        ws.broadcast.assert_called_once()
+        _, payload_b = ws.broadcast.call_args[0]
+        assert payload_b["session_id"] == "sess_b"
+
+    @pytest.mark.asyncio
+    async def test_two_sessions_one_project_are_isolated(self):
+        """Two sessions in one project route to distinct handles.
+
+        Phase 3c-overnight isolation invariant: a message injected into
+        session A must reach only session A's session object, never
+        session B's. Likewise for read APIs (is_running, get_run_status,
+        get_session, get_pending_approval).
+        """
+        mgr, _, _, _, _ = self._make_manager()
+
+        # Set up two distinct handles for the same project under
+        # different session ids. Session A is running, session B is idle.
+        session_a = MagicMock(name="session_a")
+        task_a = MagicMock()
+        task_a.done.return_value = False  # A is running
+        handle_a = MagicMock(
+            session=session_a, task=task_a,
+            interceptor=MagicMock(_pending_approvals={}),
+        )
+        session_a.is_stopped.return_value = False
+        session_a._paused_for_approval = False
+
+        session_b = MagicMock(name="session_b")
+        task_b = MagicMock()
+        task_b.done.return_value = True  # B is idle
+        handle_b = MagicMock(
+            session=session_b, task=task_b,
+            interceptor=MagicMock(_pending_approvals={}),
+        )
+        session_b.is_stopped.return_value = False
+        session_b._paused_for_approval = False
+
+        mgr._handles[("proj_iso", "sess_a")] = handle_a
+        mgr._handles[("proj_iso", "sess_b")] = handle_b
+
+        # --- inject_message routes to correct session ---
+        # Injecting into A (running) queues into A only.
+        result_a = await mgr.inject_message(
+            "proj_iso", "msg-for-a", session_id="sess_a",
+        )
+        assert result_a == "queued"
+        session_a.queue_message.assert_called_once_with("msg-for-a", nonce=None)
+        session_b.queue_message.assert_not_called()
+
+        # Injecting into B (idle) hot-resumes B only — append on B's session.
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
+            result_b = await mgr.inject_message(
+                "proj_iso", "msg-for-b", session_id="sess_b",
+            )
+            assert result_b == "delivered"
+            session_b.append.assert_called_once()
+            appended = session_b.append.call_args[0][0]
+            assert appended["content"] == "msg-for-b"
+            # A's session must NOT have received the new append.
+            session_a.append.assert_not_called()
+            # _start_loop must be called with session_id="sess_b".
+            mock_start.assert_awaited_once_with("proj_iso", session_id="sess_b")
+
+        # --- read APIs respect session_id ---
+        assert mgr.is_running("proj_iso", session_id="sess_a") is True
+        assert mgr.is_running("proj_iso", session_id="sess_b") is False
+        assert mgr.get_run_status("proj_iso", session_id="sess_a") == "running"
+        assert mgr.get_run_status("proj_iso", session_id="sess_b") == "idle"
+        assert mgr.get_session("proj_iso", session_id="sess_a") is session_a
+        assert mgr.get_session("proj_iso", session_id="sess_b") is session_b
+        # Default-session lookup against this project returns None — neither
+        # handle was registered under the default sentinel.
+        assert mgr.get_session("proj_iso") is None
+        assert mgr.is_running("proj_iso") is False
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1365,84 @@ class TestRESTEndpoints:
     def test_chat_history_no_project(self, app_client):
         resp = app_client.get("/api/v2/agents/nonexistent/chat")
         assert resp.status_code == 404
+
+    def test_list_sessions_404_for_unknown_project(self, app_client):
+        """GET /projects/{pid}/sessions returns 404 for unknown project."""
+        resp = app_client.get("/api/v2/projects/nonexistent/sessions")
+        assert resp.status_code == 404
+
+    def test_list_sessions_empty_for_idle_project(self, app_client, tmp_path):
+        """A project with no active sessions returns an empty list."""
+        create_resp = app_client.post("/api/v2/projects", json={
+            "name": "EmptySessions",
+            "workspace": str(tmp_path),
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        pid = create_resp.json()["project_id"]
+
+        resp = app_client.get(f"/api/v2/projects/{pid}/sessions")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"project_id": pid, "sessions": []}
+
+    def test_list_sessions_returns_active_and_idle(self, app_client, tmp_path):
+        """Sessions endpoint returns running and idle entries with correct shape.
+
+        We inject handles directly into the agent_manager to simulate two
+        concurrent sessions in the same project — one running, one idle.
+        """
+        from agent_os.api.routes import agents_v2
+
+        # Create the project so 404 doesn't fire.
+        create_resp = app_client.post("/api/v2/projects", json={
+            "name": "MultiSessionList",
+            "workspace": str(tmp_path),
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        pid = create_resp.json()["project_id"]
+
+        # Inject two handles directly into the agent manager.
+        mgr = agents_v2._agent_manager
+
+        running_session = MagicMock(name="running_session")
+        running_session.is_stopped.return_value = False
+        running_session._paused_for_approval = False
+        running_session.session_id = "uuid-run"
+        running_task = MagicMock()
+        running_task.done.return_value = False
+        mgr._handles[(pid, "default")] = MagicMock(
+            session=running_session, task=running_task,
+        )
+
+        idle_session = MagicMock(name="idle_session")
+        idle_session.is_stopped.return_value = False
+        idle_session._paused_for_approval = False
+        idle_session.session_id = "uuid-idle"
+        idle_task = MagicMock()
+        idle_task.done.return_value = True
+        mgr._handles[(pid, "sess_b")] = MagicMock(
+            session=idle_session, task=idle_task,
+        )
+
+        try:
+            resp = app_client.get(f"/api/v2/projects/{pid}/sessions")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["project_id"] == pid
+            sessions = body["sessions"]
+            assert len(sessions) == 2
+            # Default session is sorted first.
+            assert sessions[0]["session_id"] == "default"
+            assert sessions[0]["status"] == "running"
+            assert sessions[0]["session_uuid"] == "uuid-run"
+            assert sessions[1]["session_id"] == "sess_b"
+            assert sessions[1]["status"] == "idle"
+            assert sessions[1]["session_uuid"] == "uuid-idle"
+        finally:
+            mgr._handles.pop((pid, "default"), None)
+            mgr._handles.pop((pid, "sess_b"), None)
 
     def test_chat_history_no_sessions_returns_empty(self, app_client, tmp_path):
         """Chat endpoint returns empty array when project exists but no sessions."""

@@ -98,7 +98,7 @@ class TestInjectAutoDeniesApproval:
         handle, session, interceptor = _build_paused_handle(
             tool_call_id="tc_99", tool_name="write_file",
         )
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
@@ -144,8 +144,8 @@ class TestInjectAutoDeniesApproval:
             "expected at least one system message about dismissal"
         )
 
-        # Loop restarted
-        manager._start_loop.assert_called_once_with("proj_test")
+        # Loop restarted (multi-loop refactor passes session_id explicitly)
+        manager._start_loop.assert_called_once_with("proj_test", session_id="default")
 
         # queue_message was NOT called (old behavior)
         session.queue_message.assert_not_called()
@@ -158,7 +158,7 @@ class TestInjectAutoDeniesApproval:
             tool_call_id="tc_99", tool_name="write_file",
             tool_args={"path": "secret.txt"},
         )
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
@@ -180,7 +180,7 @@ class TestInjectAutoDeniesApproval:
         """The nonce passed to inject_message must be attached to the
         appended user message so the WS echo can be deduplicated."""
         handle, session, interceptor = _build_paused_handle()
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
@@ -203,7 +203,7 @@ class TestInjectAutoDeniesApproval:
         handle, session, interceptor = _build_paused_handle(
             tool_call_id="tc_99",
         )
-        manager._handles["proj_test"] = handle
+        manager._handles[("proj_test", "default")] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
@@ -244,7 +244,7 @@ class TestInjectResponseShape:
         # Stub agent_manager.inject_message to return the dismissal dict
         agent_manager = MagicMock()
 
-        async def _inject(project_id, content, *, nonce=None):
+        async def _inject(project_id, content, *, nonce=None, session_id=None):
             return {
                 "status": "delivered",
                 "approval_dismissed": True,
@@ -286,7 +286,7 @@ class TestInjectResponseShape:
 
         agent_manager = MagicMock()
 
-        async def _inject(project_id, content, *, nonce=None):
+        async def _inject(project_id, content, *, nonce=None, session_id=None):
             return "delivered"
 
         agent_manager.inject_message = _inject

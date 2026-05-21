@@ -75,7 +75,7 @@ def _make_manager(sub_agent_status: str = "running") -> tuple[AgentManager, Magi
         process_manager=MagicMock(),
     )
     # Populate _handles so the watchdog doesn't short-circuit on "handle is None"
-    manager._handles[PROJECT_ID] = _make_handle(task_done=True)
+    manager._handles[(PROJECT_ID, "default")] = _make_handle(task_done=True)
 
     return manager, mock_ws, mock_sam
 
@@ -107,7 +107,7 @@ async def test_watchdog_calls_stop_all_on_timeout():
     # Track call order: stop_all before broadcast
     call_order: list[str] = []
 
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         call_order.append("stop_all")
 
     mock_sam.stop_all.side_effect = _recording_stop_all
@@ -116,7 +116,8 @@ async def test_watchdog_calls_stop_all_on_timeout():
     await _run_watchdog_fast(manager, PROJECT_ID)
 
     # stop_all must have been called exactly once with the right project_id
-    mock_sam.stop_all.assert_called_once_with(PROJECT_ID)
+    # (and the default session id under single-loop back-compat).
+    mock_sam.stop_all.assert_called_once_with(PROJECT_ID, session_id="default")
 
     # broadcast must have fired
     mock_ws.broadcast.assert_called_once()

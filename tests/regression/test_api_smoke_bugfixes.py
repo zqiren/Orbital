@@ -439,9 +439,10 @@ class TestBug005b_IdleRaceAPI:
         # Verify: adapter is not idle at construction
         assert adapter.is_idle() is False
 
-        # Register with sub_agent_manager
+        # Register with sub_agent_manager — keyed by (project_id, session_id)
+        # under the default session for back-compat.
         sam = deps["sub_agent_manager"]
-        sam._adapters.setdefault(project_id, {})["claude-code"] = adapter
+        sam._adapters.setdefault((project_id, "default"), {})["claude-code"] = adapter
 
         # Check list_active — should show "running", not "idle"
         active = sam.list_active(project_id)
@@ -454,7 +455,7 @@ class TestBug005b_IdleRaceAPI:
         assert len(busy) == 1, "Sub-agent should be in busy list, not idle"
 
         # Clean up
-        del sam._adapters[project_id]
+        del sam._adapters[(project_id, "default")]
 
     @pytest.mark.asyncio
     async def test_adapter_idle_after_transport_send(self):

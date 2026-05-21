@@ -97,7 +97,7 @@ async def test_new_session_calls_stop_all():
     session-end.
     """
     manager, _ws, mock_sam = _make_manager()
-    manager._handles[PROJECT_ID] = _make_handle()
+    manager._handles[(PROJECT_ID, "default")] = _make_handle()
 
     call_order: list[str] = []
 
@@ -105,7 +105,7 @@ async def test_new_session_calls_stop_all():
     # We intercept Session.new to track call order.
     original_stop_all = mock_sam.stop_all
 
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         call_order.append("stop_all")
 
     mock_sam.stop_all.side_effect = _recording_stop_all
@@ -146,8 +146,9 @@ async def test_new_session_calls_stop_all():
     assert result.get("status") == "ok", f"Expected ok, got {result}"
 
     # T06 contract: stop_all must be called EXACTLY ONCE, with the correct
-    # project_id, AFTER session-end and BEFORE the new session is built.
-    mock_sam.stop_all.assert_called_once_with(PROJECT_ID)
+    # project_id (and the default session id), AFTER session-end and BEFORE
+    # the new session is built.
+    mock_sam.stop_all.assert_called_once_with(PROJECT_ID, session_id="default")
 
     # Verify canonical ordering
     assert call_order == ["session_end", "stop_all", "session_new"], (
@@ -169,7 +170,7 @@ async def test_new_session_proceeds_on_stop_all_timeout(caplog):
     so the timeout path can never be exercised.
     """
     manager, _ws, mock_sam = _make_manager()
-    manager._handles[PROJECT_ID] = _make_handle()
+    manager._handles[(PROJECT_ID, "default")] = _make_handle()
 
     # Track whether a new session was built
     new_session_built: list[bool] = []
@@ -247,7 +248,7 @@ async def test_new_session_proceeds_on_stop_all_exception(caplog):
     Fails on pre-fix code: post-session-end stop_all never called.
     """
     manager, _ws, mock_sam = _make_manager()
-    manager._handles[PROJECT_ID] = _make_handle()
+    manager._handles[(PROJECT_ID, "default")] = _make_handle()
 
     new_session_built: list[bool] = []
 
@@ -298,7 +299,7 @@ async def test_new_session_no_subagents_skips_cleanly():
     Fails on pre-fix code: post-session-end stop_all never called.
     """
     manager, _ws, mock_sam = _make_manager()
-    manager._handles[PROJECT_ID] = _make_handle()
+    manager._handles[(PROJECT_ID, "default")] = _make_handle()
 
     # stop_all is a no-op for empty adapter dict (verified in implementation)
     mock_sam.stop_all = AsyncMock()  # clean no-op
@@ -370,7 +371,7 @@ async def test_new_session_ordering_terminate_before_stop_all():
         task=mock_task,
         config_snapshot={"workspace": "/tmp/ordering-test"},
     )
-    manager._handles[PROJECT_ID] = handle
+    manager._handles[(PROJECT_ID, "default")] = handle
 
     call_order: list[str] = []
 
@@ -424,7 +425,7 @@ async def test_new_session_ordering_terminate_before_stop_all():
             pass
 
     # (c) stop_all after session-end
-    async def _recording_stop_all(pid: str) -> None:
+    async def _recording_stop_all(pid: str, *, session_id=None) -> None:
         call_order.append("stop_all")
 
     mock_sam.stop_all.side_effect = _recording_stop_all
@@ -485,6 +486,6 @@ async def test_new_session_ordering_terminate_before_stop_all():
     )
 
     # (e) handle.session must be swapped to new session
-    assert manager._handles[PROJECT_ID].session.session_id == "new_ordering_session", (
+    assert manager._handles[(PROJECT_ID, "default")].session.session_id == "new_ordering_session", (
         "handle.session must be swapped to new session"
     )

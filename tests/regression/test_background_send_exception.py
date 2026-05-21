@@ -34,7 +34,7 @@ def _make_manager_with_adapter(tmp_path, adapter, handle: str = "test-agent",
     pm._ws = MagicMock()
     pm._ws.broadcast = MagicMock()
     sam = SubAgentManager(pm, lifecycle_observer=lifecycle_observer)
-    sam._adapters[project_id] = {handle: adapter}
+    sam._adapters[(project_id, "default")] = {handle: adapter}
     transcript = SubAgentTranscript(str(tmp_path), handle, "t001")
     sam._transcripts[(project_id, handle)] = transcript
     return sam

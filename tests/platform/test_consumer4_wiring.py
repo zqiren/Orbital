@@ -177,8 +177,8 @@ class TestStartInjectsProviderIsolation:
 
             await mgr.start("proj_1", "claudecode")
 
-            assert "proj_1" in mgr._adapters
-            assert "claudecode" in mgr._adapters["proj_1"]
+            assert ("proj_1", "default") in mgr._adapters
+            assert "claudecode" in mgr._adapters[("proj_1", "default")]
 
 
 # ---------------------------------------------------------------------------

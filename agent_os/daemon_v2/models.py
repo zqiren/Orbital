@@ -14,6 +14,31 @@ from enum import Enum
 from agent_os.agent.prompt_builder import Autonomy
 
 
+# Default chat session identifier used when callers do not supply one.
+# Existing single-loop call sites pass through ``DEFAULT_SESSION_ID`` so
+# the new ``(project_id, session_id)`` keying remains backward-compatible
+# with code that only knows about ``project_id``.
+DEFAULT_SESSION_ID: str = "default"
+
+
+# A ``SessionKey`` is the composite key used by the agent and sub-agent
+# managers to address a particular chat session within a project. Phase 3c
+# multi-loop work introduces per-session isolation; the alias lets us refactor
+# the dict keying from ``project_id`` to ``(project_id, session_id)`` without
+# spreading raw tuples through the call graph.
+SessionKey = tuple[str, str]
+
+
+def make_session_key(project_id: str, session_id: str | None = None) -> SessionKey:
+    """Build a ``SessionKey`` from a project id + optional session id.
+
+    Passing ``None`` (or omitting ``session_id``) yields the default-session
+    key, which is the back-compat target for every existing single-loop call
+    site that has not yet been multi-session aware.
+    """
+    return (project_id, session_id or DEFAULT_SESSION_ID)
+
+
 class AgentStatus(str, Enum):
     RUNNING = "running"
     IDLE = "idle"
