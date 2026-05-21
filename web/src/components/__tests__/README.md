@@ -1,13 +1,16 @@
-# Frontend Test Gap
+# Frontend Tests
 
-The `web/` package has no test framework configured (no vitest, jest, playwright, or
-testing-library in devDependencies). Adding one for a single test would be overengineering.
+Vitest + Testing Library are configured. Run:
 
-Frontend changes in T05 (cancelMessage rewiring in ChatView, App) are verified by:
+```
+cd web && npm run test:run    # one-shot
+cd web && npm test            # watch mode
+```
 
-(a) `cd web && npx tsc --noEmit` — TypeScript type check, must produce zero errors.
-(b) The live daemon smoke test the coordinator runs at end-of-batch.
-(c) Manual smoke testing in the DMG installer.
+Tests live alongside the modules they cover: `web/src/**/*.test.{ts,tsx}`.
 
-This gap is tracked. A proper frontend test suite should be added when the component
-count and change rate justify the investment.
+Setup file: `web/test-setup.ts` registers `@testing-library/jest-dom` matchers.
+
+The TypeScript check (`cd web && npx tsc --noEmit`) and production build (`npm
+run build`) still verify what tests can't. Manual smoke testing remains a
+release gate.
