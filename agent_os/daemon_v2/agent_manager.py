@@ -1824,11 +1824,40 @@ class AgentManager:
         return handle.session if handle else None
 
     # ── Queue helpers (Phase 1) ─────────────────────────────────────────
-    # F7 note: the queue is per-project, not per-session. Handle lookups in
-    # queue helpers use ``make_session_key(project_id, DEFAULT_SESSION_ID)``
-    # because the single-active-loop slot model (Track E foundation + #23)
-    # keys the active management loop by (project_id, session_id) and the
-    # queue dispatcher always operates against the default chat session.
+    # F7 note: the queue is per-project, not per-session. The single-active-
+    # loop slot model (Track E foundation + #23) guarantees at most one
+    # handle keyed under each project_id; queue helpers scan ``self._handles``
+    # for that project's handle without needing to know which session_id
+    # currently holds the slot. The dispatcher may swap the active session
+    # via ``switch_session`` (e.g. from default → ``chat_<uuid>`` on pause,
+    # or back to a parked attempt's session on resume), and these helpers
+    # transparently track the new key.
+
+    def _find_project_handle(self, project_id: str):
+        """Return the (single) ProjectHandle for ``project_id`` regardless of
+        which session_id it is currently keyed under, or None.
+
+        Used by per-project queue helpers that don't know (or care) what
+        session is currently active in the slot.
+        """
+        for (pid, _sid), handle in self._handles.items():
+            if pid == project_id:
+                return handle
+        return None
+
+    def get_active_session(self, project_id: str):
+        """Return the project's active session regardless of session_id, or None.
+
+        Distinct from ``get_session(project_id)`` which defaults to a strict
+        default-session lookup (and returns None when isolation tests use
+        non-default session ids). The queue dispatcher uses this because
+        after ``switch_session`` to ``chat_<uuid>`` (queue stop) or to a
+        parked attempt's id (queue resume), the dispatcher needs to find
+        whatever session currently holds the project's single slot — not
+        the default sentinel which may not exist.
+        """
+        handle = self._find_project_handle(project_id)
+        return handle.session if handle is not None else None
 
     def get_queue_store(self, project_id: str, workspace: str | None = None) -> QueueStore:
         """Return the QueueStore for a project, creating it on first access.
@@ -1840,7 +1869,7 @@ class AgentManager:
         if store is not None:
             return store
         if workspace is None:
-            handle = self._handles.get(make_session_key(project_id, DEFAULT_SESSION_ID))
+            handle = self._find_project_handle(project_id)
             if handle is None:
                 project = self._project_store.get_project(project_id)
                 if project is None:
@@ -1860,12 +1889,12 @@ class AgentManager:
 
     def get_loop_task(self, project_id: str) -> "asyncio.Task | None":
         """Used by the QueueDispatcher to await the inner loop task."""
-        handle = self._handles.get(make_session_key(project_id, DEFAULT_SESSION_ID))
+        handle = self._find_project_handle(project_id)
         return handle.task if handle else None
 
     def get_loop(self, project_id: str):
         """Return the AgentLoop object so the dispatcher can read exit_reason."""
-        handle = self._handles.get(make_session_key(project_id, DEFAULT_SESSION_ID))
+        handle = self._find_project_handle(project_id)
         return handle.loop if handle else None
 
     def get_sub_agent_manager(self):
@@ -1888,10 +1917,20 @@ class AgentManager:
         If the JSONL for session_id exists, it is loaded; otherwise a fresh
         session with that id is created. Loop, ContextManager and handle
         references are all kept consistent.
+
+        F7 note: ``self._handles`` is keyed by ``(project_id, session_id)``
+        (SessionKey tuple) after the multi-session foundation (#22). We scan
+        for any handle under ``project_id`` (single-slot discipline: at most
+        one) and re-key it to the new ``session_id`` after the swap so
+        downstream lookups (which use ``make_session_key``) find it.
         """
-        handle = self._handles.get(project_id)
-        if handle is None:
+        old_sk = next(
+            (sk for sk in self._handles.keys() if sk[0] == project_id),
+            None,
+        )
+        if old_sk is None:
             return None
+        handle = self._handles[old_sk]
 
         # Stop the loop if running, but skip pre-flush. The caller decides
         # whether to preserve the session (stop) or rotate (new_session).
@@ -1942,8 +1981,16 @@ class AgentManager:
         if hasattr(handle.loop, "_session"):
             handle.loop._session = new_session
 
+        # Re-key the handle under the new session_id (F7: tuple-keyed
+        # handles must move with the session swap so downstream
+        # ``make_session_key(project_id, session_id)`` lookups land here).
+        new_sk = make_session_key(project_id, session_id)
+        if new_sk != old_sk:
+            del self._handles[old_sk]
+            self._handles[new_sk] = handle
+
         if start_loop:
-            await self._start_loop(project_id)
+            await self._start_loop(project_id, session_id=session_id)
 
         return new_session
 

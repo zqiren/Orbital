@@ -63,7 +63,7 @@ class _ScriptedAgentManager:
     def get_loop_task(self, project_id):
         return self._task
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         # Set up the scripted exit and complete the "loop task" immediately.
         entry = self._script.pop(0) if self._script else {"reason": "text"}
         self._loop._exit_reason = entry["reason"]

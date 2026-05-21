@@ -262,7 +262,10 @@ class QueueDispatcher:
                 except Exception:
                     pass
             # Spawn a handler task: it starts the loop and waits for exit.
-            asyncio.create_task(self._resume_attempt(parked_item))
+            # Pass session_id so _start_loop locates the handle correctly
+            # under the F7 tuple-keyed handles map (switch_session above
+            # re-keyed it to the parked session_id).
+            asyncio.create_task(self._resume_attempt(parked_item, session_id))
         else:
             # No parked attempt — kick the main loop in case items are queued.
             self._idle_event.set()
@@ -273,12 +276,19 @@ class QueueDispatcher:
             "resumed_item_id": parked_item.id if parked_item else None,
         }
 
-    async def _resume_attempt(self, item: ItemRecord) -> None:
+    async def _resume_attempt(self, item: ItemRecord, session_id: str) -> None:
         """Re-start the agent loop on an already-parked attempt session,
         then route the eventual exit through the same handler used by
-        first-time dispatch."""
+        first-time dispatch.
+
+        ``session_id`` is the parked attempt's session_id; required so
+        ``_start_loop`` locates the handle under its current F7 tuple key
+        (``switch_session`` re-keyed it during the caller's swap).
+        """
         try:
-            await self._agent_manager._start_loop(self._project_id)
+            await self._agent_manager._start_loop(
+                self._project_id, session_id=session_id,
+            )
         except Exception:
             logger.exception(
                 "dispatcher(%s): _start_loop on resume failed for item %s",
@@ -373,8 +383,13 @@ class QueueDispatcher:
             injected = new_input
 
         try:
+            # F7: pass session_id so inject_message locates the handle re-
+            # keyed by switch_session above (not the default-session handle
+            # which doesn't exist) — otherwise it would auto-start a NEW
+            # agent and violate single-slot discipline.
             await self._agent_manager.inject_message(
                 self._project_id, injected,
+                session_id=prior_session_id,
             )
         except Exception:
             logger.exception(
@@ -487,6 +502,10 @@ class QueueDispatcher:
     # ------------------------------------------------------------------
 
     async def _dispatch_one(self, item: ItemRecord) -> None:
+        # First-time dispatch always runs against the default session. The
+        # queue is in RUNNING or IDLE state here; after a stop+resume cycle
+        # the dispatcher's resume() path handles session swaps explicitly
+        # via _resume_attempt rather than coming through _dispatch_one.
         session = self._agent_manager.get_session(self._project_id)
         if session is None:
             logger.warning(
@@ -525,8 +544,13 @@ class QueueDispatcher:
         wrapped_content = header + item.content
 
         try:
+            # F7: target the active session id (may be ``chat_<uuid>`` post-
+            # stop/resume, default after auto-start, or a parked attempt's
+            # id). ``session.session_id`` reflects whatever ``switch_session``
+            # most recently set on the handle, matching how it was re-keyed.
             await self._agent_manager.inject_message(
                 self._project_id, wrapped_content,
+                session_id=session.session_id,
             )
         except Exception:
             logger.exception(

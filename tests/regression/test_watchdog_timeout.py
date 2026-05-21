@@ -61,7 +61,7 @@ class _WedgedAgentManager:
     def get_loop_task(self, project_id):
         return self._task
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         # The loop "task" waits for terminate to fire, then completes.
         async def _hang():
             await self._loop._terminated.wait()

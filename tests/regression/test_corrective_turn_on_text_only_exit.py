@@ -93,7 +93,7 @@ class _MultiTurnAgentManager:
 
         self._task = asyncio.create_task(_instant())
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         self.inject_message_calls.append(content)
         self._consume_and_run()
         return "delivered"

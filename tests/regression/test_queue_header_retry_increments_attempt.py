@@ -38,9 +38,9 @@ class _CapturingAgentManager(_ScriptedAgentManager):
         super().__init__(script)
         self.injected: list[tuple[str, str]] = []
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         self.injected.append((project_id, content))
-        return await super().inject_message(project_id, content, nonce=nonce)
+        return await super().inject_message(project_id, content, nonce=nonce, session_id=session_id)
 
 
 async def _wait(predicate, timeout=10.0, interval=0.05):

@@ -89,7 +89,7 @@ class _StopResumeAgentManager:
         self._next_summary = summary
         self._next_block_reason = block_reason
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         # Record the message into the current session
         self._sessions[self._current_sid].append(
             {"role": "user", "content": content},
@@ -161,7 +161,7 @@ class _StopResumeAgentManager:
             self._task = asyncio.create_task(_loop_body())
         return self._sessions[session_id]
 
-    async def _start_loop(self, project_id):
+    async def _start_loop(self, project_id, *, session_id=None):
         # Used by dispatcher._resume_attempt after switch_session(start_loop=False)
         # In the real AgentManager, _start_loop runs handle.loop.run(). Here we
         # just spawn a loop body that mirrors the inject path.

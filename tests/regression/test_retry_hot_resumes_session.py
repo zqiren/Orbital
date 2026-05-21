@@ -98,7 +98,7 @@ class _RetryAgentManager:
 
     # ---- Lifecycle ----
 
-    async def inject_message(self, project_id, content, *, nonce=None):
+    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
         # Capture the injected text RAW for assertions.
         self.injected_messages.append(content)
         self._sessions[self._current_sid].append(
@@ -145,7 +145,7 @@ class _RetryAgentManager:
         self._loop._session = self._sessions[session_id]
         return self._sessions[session_id]
 
-    async def _start_loop(self, project_id):
+    async def _start_loop(self, project_id, *, session_id=None):
         # Not used by retry path; included for completeness.
         async def _noop():
             return None

@@ -340,7 +340,10 @@ def test_has_handle_returns_false_when_no_handle(tmp_path):
 
 def test_has_handle_returns_true_when_handle_present(tmp_path):
     mgr = _make_agent_manager_with_project(tmp_path)
-    mgr._handles["proj_x"] = MagicMock()
+    # F7: handles are keyed by SessionKey == (project_id, session_id)
+    # since #22's multi-session foundation.
+    from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+    mgr._handles[make_session_key("proj_x", DEFAULT_SESSION_ID)] = MagicMock()
     assert mgr.has_handle("proj_x") is True
 
 
@@ -365,7 +368,9 @@ async def test_ensure_agent_started_starts_without_initial_message(tmp_path):
 @pytest.mark.asyncio
 async def test_ensure_agent_started_is_no_op_when_handle_exists(tmp_path):
     mgr = _make_agent_manager_with_project(tmp_path)
-    mgr._handles["proj_x"] = MagicMock()
+    # F7: handles are keyed by SessionKey == (project_id, session_id).
+    from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+    mgr._handles[make_session_key("proj_x", DEFAULT_SESSION_ID)] = MagicMock()
 
     calls = []
 
