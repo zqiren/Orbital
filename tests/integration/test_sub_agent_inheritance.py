@@ -364,3 +364,244 @@ async def test_prompt_is_freshly_rendered_per_dispatch(seeded_workspace):
     assert codex_path not in captured_prompts[0]
     # Second dispatch MUST mention it
     assert codex_path in captured_prompts[1]
+
+
+# ---------------------------------------------------------------------------
+# 4. Transport-aware MEMORY.md creation (Track F3 / dispatch 2026-05-20 §4)
+#
+# PTY and ACP transports drop system_prompt entirely (Track D investigation
+# 2026-05-20). Creating MEMORY.md for those sub-agents produces orphan stub
+# files the sub-agent never learns about. The dispatch decision: skip the
+# create when the manifest's transport doesn't forward system_prompt.
+# ---------------------------------------------------------------------------
+
+
+def _make_manager_with_transport(workspace: str, transport: str, mode: str = "interactive"):
+    """Variant of _make_manager with a configurable transport for the
+    primary 'claude-code' manifest. Used to exercise PTY/ACP paths."""
+    from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+    from agent_os.agents.registry import AgentRegistry
+    from agent_os.agents.manifest import (
+        AgentManifest,
+        ManifestRuntime,
+        ManifestSetup,
+        ManifestCapabilities,
+        ManifestPermissions,
+    )
+
+    registry = AgentRegistry()
+    registry.register(AgentManifest(
+        manifest_version="1",
+        name="Claude Code",
+        slug="claude-code",
+        description="test",
+        author="test",
+        version="1.0.0",
+        runtime=ManifestRuntime(adapter="cli", mode=mode, transport=transport),
+        setup=ManifestSetup(),
+        capabilities=ManifestCapabilities(),
+        permissions=ManifestPermissions(),
+    ))
+
+    setup_engine = MagicMock()
+    setup_engine.get_adapter_config = MagicMock(return_value={
+        "command": "claude",
+        "workspace": workspace,
+        "approval_patterns": [],
+        "env": {},
+        "args": [],
+        "network_domains": [],
+    })
+    available_claude = MagicMock(slug="claude-code", installed=True)
+    setup_engine.check_all = MagicMock(return_value=[available_claude])
+
+    project_store = MagicMock()
+    project_store.get_project = MagicMock(return_value={
+        "workspace": workspace,
+        "autonomy": "check_in",
+        "enabled_sub_agents": ["claude-code"],
+    })
+
+    pm = MagicMock()
+    pm.start = AsyncMock()
+    pm.stop = AsyncMock()
+
+    return SubAgentManager(
+        process_manager=pm,
+        registry=registry,
+        setup_engine=setup_engine,
+        project_store=project_store,
+        ws_manager=MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_pty_transport_does_not_create_memory_md(seeded_workspace):
+    """PTY-transport sub-agents do NOT receive system_prompt (Track D), so
+    Orbital should NOT lazily create their MEMORY.md stub at dispatch time.
+    Regression target: orphan stub files left in the workspace."""
+    workspace = seeded_workspace
+    paths = ProjectPaths(workspace)
+    memory_path = os.path.join(paths.sub_agent_dir("claude-code"), "MEMORY.md")
+    assert not os.path.exists(memory_path), "precondition: memory stub absent"
+
+    class FakePTYTransport:
+        def __init__(self, approval_patterns=None):
+            pass
+
+        async def start(self, command, args, workspace, env=None):
+            pass
+
+        async def stop(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def is_idle(self):
+            return False
+
+    mgr = _make_manager_with_transport(workspace, transport="pty")
+
+    with patch(
+        "agent_os.agent.transports.pty_transport.PTYTransport",
+        FakePTYTransport,
+    ):
+        result = await mgr._start_from_registry("proj_1", "claude-code")
+
+    assert "Started" in result, result
+    # Critical assertion: no orphan MEMORY.md stub was created.
+    assert not os.path.exists(memory_path), (
+        f"PTY transport should NOT create MEMORY.md stub; "
+        f"file unexpectedly exists at {memory_path}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
+    """ACP-transport sub-agents also drop system_prompt today. Same rule
+    as PTY: skip the orphan stub creation. ACP cannot pair with a
+    claude-prefixed command (raises ValueError at resolve time), so the
+    test uses a manifest with command='gemini'."""
+    from agent_os.agents.manifest import AgentManifest, ManifestRuntime, ManifestSetup, ManifestCapabilities, ManifestPermissions
+    from agent_os.agents.registry import AgentRegistry
+    from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+
+    workspace = seeded_workspace
+    paths = ProjectPaths(workspace)
+    memory_path = os.path.join(paths.sub_agent_dir("gemini-cli"), "MEMORY.md")
+    assert not os.path.exists(memory_path), "precondition: memory stub absent"
+
+    registry = AgentRegistry()
+    registry.register(AgentManifest(
+        manifest_version="1",
+        name="Gemini CLI",
+        slug="gemini-cli",
+        description="test",
+        author="test",
+        version="1.0.0",
+        runtime=ManifestRuntime(adapter="cli", mode="interactive", transport="acp", command="gemini"),
+        setup=ManifestSetup(),
+        capabilities=ManifestCapabilities(),
+        permissions=ManifestPermissions(),
+    ))
+    setup_engine = MagicMock()
+    setup_engine.get_adapter_config = MagicMock(return_value={
+        "command": "gemini",
+        "workspace": workspace,
+        "approval_patterns": [],
+        "env": {},
+        "args": [],
+        "network_domains": [],
+    })
+    setup_engine.check_all = MagicMock(return_value=[MagicMock(slug="gemini-cli", installed=True)])
+    project_store = MagicMock()
+    project_store.get_project = MagicMock(return_value={
+        "workspace": workspace,
+        "autonomy": "check_in",
+        "enabled_sub_agents": ["gemini-cli"],
+    })
+    pm = MagicMock()
+    pm.start = AsyncMock()
+    pm.stop = AsyncMock()
+    mgr = SubAgentManager(
+        process_manager=pm,
+        registry=registry,
+        setup_engine=setup_engine,
+        project_store=project_store,
+        ws_manager=MagicMock(),
+    )
+
+    class FakeACPTransport:
+        def __init__(self):
+            pass
+
+        async def start(self, command, args, workspace, env=None):
+            pass
+
+        async def stop(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def is_idle(self):
+            return False
+
+    with patch(
+        "agent_os.agent.transports.acp_transport.ACPTransport",
+        FakeACPTransport,
+    ):
+        result = await mgr._start_from_registry("proj_1", "gemini-cli")
+
+    assert "Started" in result, result
+    assert not os.path.exists(memory_path), (
+        f"ACP transport should NOT create MEMORY.md stub; "
+        f"file unexpectedly exists at {memory_path}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_transport_still_creates_memory_md(seeded_workspace):
+    """Positive control: SDK-transport sub-agents (claude-code today) still
+    receive their MEMORY.md stub at dispatch. The F3 change must not
+    regress the existing behavior on the forwarding-transport path."""
+    workspace = seeded_workspace
+    paths = ProjectPaths(workspace)
+    memory_path = os.path.join(paths.sub_agent_dir("claude-code"), "MEMORY.md")
+    assert not os.path.exists(memory_path), "precondition: memory stub absent"
+
+    class FakeSDKTransport:
+        def __init__(self, autonomy=None, system_prompt=None):
+            self._system_prompt = system_prompt
+
+        async def start(self, command, args, workspace, env=None):
+            pass
+
+        async def stop(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def is_idle(self):
+            return False
+
+    mgr = _make_manager_with_transport(workspace, transport="sdk", mode="pipe")
+
+    with patch(
+        "agent_os.agent.transports.sdk_transport.SDKTransport",
+        FakeSDKTransport,
+    ), patch(
+        "agent_os.agent.transports.sdk_transport.HAS_SDK",
+        True,
+    ):
+        result = await mgr._start_from_registry("proj_1", "claude-code")
+
+    assert "Started" in result, result
+    assert os.path.isfile(memory_path), (
+        f"SDK transport should create MEMORY.md stub at dispatch; "
+        f"file missing at {memory_path}"
+    )
+    with open(memory_path, "r", encoding="utf-8") as f:
+        assert f.read() == MEMORY_MD_HEADER.format(agent_slug="claude-code")
