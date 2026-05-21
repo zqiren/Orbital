@@ -181,6 +181,24 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # Auto-create scratch project
     _ensure_scratch_project(project_store, settings_store, store_dir)
 
+    # One-time cleanup: sweep orphaned `*.jsonl.lock` sentinels left behind
+    # by the legacy SentinelFileLock strategy or by crashed processes. The
+    # cleanup probes each sentinel with a non-blocking flock — files held
+    # by a live process are skipped, never deleted.
+    try:
+        from agent_os.utils.file_lock import cleanup_orphaned_sentinels
+        workspaces = [
+            (p.get("workspace") or "") for p in project_store.list_projects()
+        ]
+        removed = cleanup_orphaned_sentinels(workspaces)
+        if removed:
+            logger.info(
+                "Startup cleanup removed %d orphaned session lock sentinel(s).",
+                removed,
+            )
+    except Exception:
+        logger.exception("Orphaned session sentinel cleanup failed (non-fatal)")
+
     # 2. WebSocket manager
     ws_manager = WebSocketManager()
 

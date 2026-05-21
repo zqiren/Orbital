@@ -18,7 +18,7 @@ import os
 import pytest
 
 from agent_os.agent.session import Session
-from agent_os.utils.file_lock import FileLock, FileLockError
+from agent_os.utils.file_lock import FileLock, FileLockError, session_lock
 from agent_os.utils.pid_file import acquire_pid_file, release_pid_file, DaemonAlreadyRunning
 
 
@@ -46,13 +46,18 @@ def _child_append(filepath, result_path):
 # ---------------------------------------------------------------------------
 
 def test_concurrent_append_blocked(tmp_path):
-    """A second process cannot append while the first holds the file lock."""
+    """A second process cannot append while the first holds the session lock.
+
+    After the JSONL-lock migration the lock target is the data file itself
+    (DirectFileLock) rather than a sibling `.jsonl.lock` sentinel. This test
+    uses ``session_lock`` so it picks up whichever strategy is active and
+    therefore stays correct across the migration window.
+    """
     session = Session.new("test-lock", str(tmp_path))
-    lock_path = session._filepath + ".lock"
     result_path = str(tmp_path / "child_result.txt")
 
-    # Parent acquires the file lock
-    lock = FileLock(lock_path)
+    # Parent acquires the same lock Session.append() would acquire.
+    lock = session_lock(session._filepath)
     lock.acquire()
     try:
         # Spawn child that tries to append (which also acquires the same lock)
