@@ -96,7 +96,7 @@ def base_prompt_context(workspace, registry):
 @pytest.fixture
 def session(workspace):
     """Fresh session in the temp workspace."""
-    return Session.new(session_id="wiring-test", workspace=workspace)
+    return Session.new(session_uuid="wiring-test", workspace=workspace)
 
 
 @pytest.fixture
@@ -172,7 +172,7 @@ async def test_tool_usage_round_trip(workspace, provider, prompt_builder):
     reg.register(WriteTool(workspace=workspace))
     reg.register(ShellTool(workspace=workspace, os_type="windows"))
 
-    sess = Session.new(session_id="wiring-tool-test", workspace=workspace)
+    sess = Session.new(session_uuid="wiring-tool-test", workspace=workspace)
     ctx = PromptContext(
         workspace=workspace,
         model=MODEL,

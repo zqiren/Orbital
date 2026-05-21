@@ -104,14 +104,16 @@ class ContextManager:
         if not os.path.isdir(sessions_dir):
             return
 
-        current_session_id = getattr(self._session, "session_id", None)
+        # Filename-stem comparison uses Format-2 (session_uuid); session_id
+        # is the user-facing F1 and is not what's on disk.
+        current_session_uuid = getattr(self._session, "session_uuid", None)
         session_files = []
         for fname in os.listdir(sessions_dir):
             if not fname.endswith(".jsonl"):
                 continue
             # Exclude current session's file
             stem = fname[:-6]  # strip .jsonl
-            if current_session_id and stem == current_session_id:
+            if current_session_uuid and stem == current_session_uuid:
                 continue
             fpath = os.path.join(sessions_dir, fname)
             session_files.append((os.path.getmtime(fpath), fpath))

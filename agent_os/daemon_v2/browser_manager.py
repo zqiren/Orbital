@@ -602,16 +602,21 @@ class BrowserManager:
     # ------------------------------------------------------------------
 
     async def capture_screenshot(
-        self, page, workspace: str, session_id: str,
+        self, page, workspace: str, screenshot_namespace: str,
         max_width: int = 1400, max_height: int = 900,
     ) -> str:
-        """Capture screenshot, save to workspace, return file path."""
+        """Capture screenshot, save to workspace, return file path.
+
+        ``screenshot_namespace`` is the subdirectory under
+        ``output/screenshots/`` for this caller (e.g. ``"default"``). Not a
+        session_id in the F1/F2 sense — see F7 audit.
+        """
         from agent_os.agent.project_paths import ProjectPaths
-        counter_key = session_id
+        counter_key = screenshot_namespace
         step = self._screenshot_counters.get(counter_key, 0) + 1
         self._screenshot_counters[counter_key] = step
 
-        screenshot_dir = Path(ProjectPaths(workspace).screenshots_dir) / session_id
+        screenshot_dir = Path(ProjectPaths(workspace).screenshots_dir) / screenshot_namespace
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Enforce retention (max 50)
@@ -625,14 +630,14 @@ class BrowserManager:
 
         return str(file_path)
 
-    def cleanup_screenshots(self, workspace: str, session_id: str = None):
+    def cleanup_screenshots(self, workspace: str, screenshot_namespace: str = None):
         """Remove screenshot files. Called on project deletion / daemon shutdown."""
         import shutil
         from agent_os.agent.project_paths import ProjectPaths
 
         base = Path(ProjectPaths(workspace).screenshots_dir)
-        if session_id:
-            target = base / session_id
+        if screenshot_namespace:
+            target = base / screenshot_namespace
             if target.exists():
                 shutil.rmtree(target)
         elif base.exists():

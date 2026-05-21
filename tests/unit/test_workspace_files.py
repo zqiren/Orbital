@@ -45,10 +45,17 @@ def ws_dir(tmp_path):
     return os.path.join(str(tmp_path), "orbital")
 
 
-def _mock_session(messages=None, session_id="sess_test123"):
-    """Build a mock session with get_messages() returning the given list."""
+def _mock_session(messages=None, session_id="sess_test123", session_uuid=None):
+    """Build a mock session with get_messages() returning the given list.
+
+    Both ``session_id`` (F1) and ``session_uuid`` (F2) are set; the
+    workspace-files routine now keys idempotency on ``session_uuid`` per the
+    F7 canonical rename. ``session_uuid`` defaults to ``session_id`` so old
+    tests that only care about a unique key keep working unchanged.
+    """
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_uuid if session_uuid is not None else session_id
     session.get_messages.return_value = messages or []
     return session
 
@@ -276,7 +283,7 @@ async def test_session_end_routine_writes_files(tmp_path):
     ], session_id="sess_writes_files")
     provider = _mock_provider(llm_response)
 
-    await run_session_end_routine(session, provider, ws, session_id=session.session_id)
+    await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state is written (overwritten)
     assert ws.read("state") == "# Project State\nEverything is great."
@@ -305,7 +312,7 @@ async def test_session_end_routine_bad_json(tmp_path, caplog):
     provider = _mock_provider("This is not JSON at all, sorry!")
 
     with caplog.at_level(logging.WARNING):
-        await run_session_end_routine(session, provider, ws, session_id=session.session_id)
+        await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state should be unchanged
     assert ws.read("state") == "original state"
@@ -336,7 +343,7 @@ async def test_session_end_routine_empty_optionals(tmp_path):
     session = _mock_session([{"role": "user", "content": "Go"}], session_id="sess_empty_opt")
     provider = _mock_provider(llm_response)
 
-    await run_session_end_routine(session, provider, ws, session_id=session.session_id)
+    await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state written
     assert ws.read("state") == "# State\nDoing well."
@@ -404,7 +411,7 @@ async def test_session_end_uses_utility_provider(tmp_path):
     await run_session_end_routine(
         session, main_provider, ws,
         utility_provider=utility_provider,
-        session_id=session.session_id,
+        session_uuid=session.session_uuid,
     )
 
     # utility_provider should have been called, not main_provider

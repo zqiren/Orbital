@@ -47,6 +47,7 @@ from agent_os.agent.workspace_files import (
 def _mock_session(session_id="sess_bound"):
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = [
         {"role": "user", "content": "Hi"},
         {"role": "assistant", "content": "Hello"},
@@ -104,7 +105,7 @@ async def test_session_log_capped_at_write_time(tmp_path):
         sid = f"s_{i:02d}"
         session = _mock_session(session_id=sid)
         provider = _mock_provider(_llm_response(sid))
-        await run_session_end_routine(session, provider, ws, session_id=sid)
+        await run_session_end_routine(session, provider, ws, session_uuid=sid)
 
     on_disk = ws.read("session_log") or ""
     header_count = on_disk.count("## Session ")
@@ -135,7 +136,7 @@ async def test_session_log_entries_are_newest_10(tmp_path):
     # Run a 16th via the routine.
     session = _mock_session(session_id="s_16")
     provider = _mock_provider(_llm_response("Session-16"))
-    await run_session_end_routine(session, provider, ws, session_id="s_16")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_16")
 
     on_disk = ws.read("session_log") or ""
 
@@ -178,7 +179,7 @@ async def test_session_log_malformed_file_preserved(tmp_path):
     session = _mock_session(session_id="s_malformed")
     provider = _mock_provider(_llm_response("malformed"))
     await run_session_end_routine(
-        session, provider, ws, session_id="s_malformed",
+        session, provider, ws, session_uuid="s_malformed",
     )
 
     on_disk = ws.read("session_log") or ""

@@ -104,7 +104,7 @@ def _make_tool(bm=None, page=None, autonomy_preset="hands_off", user_credential_
         project_id="test-project",
         workspace="/workspace",
         autonomy_preset=autonomy_preset,
-        session_id="default",
+        screenshot_namespace="default",
         user_credential_store=user_credential_store,
     )
 

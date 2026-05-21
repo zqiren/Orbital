@@ -36,7 +36,11 @@ from agent_os.agent.workspace_files import (
 
 def _mock_session(messages=None, session_id="sess_test"):
     session = MagicMock()
+    # Set both F1 and F2; idempotency keys on F2 (session_uuid) per the
+    # F7 canonical rename. Tests pre-rename used session_id as the key —
+    # we mirror that into session_uuid for compatibility.
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = messages or [
         {"role": "user", "content": "Hello"},
     ]
@@ -80,11 +84,11 @@ async def test_duplicate_session_id_short_circuits(tmp_path, caplog):
     session = _mock_session(session_id="s1")
     provider = _mock_provider(_valid_llm_response("s1"))
 
-    await run_session_end_routine(session, provider, ws, session_id="s1")
+    await run_session_end_routine(session, provider, ws, session_uuid="s1")
     assert provider.complete.call_count == 1
 
     with caplog.at_level(logging.INFO, logger="agent_os.agent.workspace_files"):
-        await run_session_end_routine(session, provider, ws, session_id="s1")
+        await run_session_end_routine(session, provider, ws, session_uuid="s1")
 
     # Second call must NOT have hit the LLM
     assert provider.complete.call_count == 1
@@ -106,11 +110,11 @@ async def test_different_session_ids_both_run(tmp_path):
 
     session1 = _mock_session(session_id="s1")
     provider1 = _mock_provider(_valid_llm_response("s1"))
-    await run_session_end_routine(session1, provider1, ws, session_id="s1")
+    await run_session_end_routine(session1, provider1, ws, session_uuid="s1")
 
     session2 = _mock_session(session_id="s2")
     provider2 = _mock_provider(_valid_llm_response("s2"))
-    await run_session_end_routine(session2, provider2, ws, session_id="s2")
+    await run_session_end_routine(session2, provider2, ws, session_uuid="s2")
 
     assert provider1.complete.call_count == 1
     assert provider2.complete.call_count == 1
@@ -134,8 +138,8 @@ async def test_concurrent_calls_same_session_id(tmp_path):
     provider = _mock_provider(_valid_llm_response("s_conc"))
 
     results = await asyncio.gather(
-        run_session_end_routine(session, provider, ws, session_id="s_conc"),
-        run_session_end_routine(session, provider, ws, session_id="s_conc"),
+        run_session_end_routine(session, provider, ws, session_uuid="s_conc"),
+        run_session_end_routine(session, provider, ws, session_uuid="s_conc"),
         return_exceptions=True,
     )
 
@@ -186,7 +190,7 @@ async def test_failed_run_allows_retry_with_same_session_id(tmp_path):
 
     with pytest.raises(RuntimeError, match="LLM exploded"):
         await run_session_end_routine(
-            session, failing_provider, ws, session_id="s_retry",
+            session, failing_provider, ws, session_uuid="s_retry",
         )
 
     # The session_id must NOT be in the completion set after a failure.
@@ -195,7 +199,7 @@ async def test_failed_run_allows_retry_with_same_session_id(tmp_path):
     # Second call with a working provider should run the routine fully.
     working_provider = _mock_provider(_valid_llm_response("retry_ok"))
     await run_session_end_routine(
-        session, working_provider, ws, session_id="s_retry",
+        session, working_provider, ws, session_uuid="s_retry",
     )
 
     assert failing_provider.complete.call_count == 1

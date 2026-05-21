@@ -26,6 +26,7 @@ from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end
 def _mock_session(session_id="sess_new"):
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = [{"role": "user", "content": "Hello"}]
     return session
 
@@ -59,13 +60,13 @@ async def test_default_bypass_false_short_circuits_on_duplicate(tmp_path):
     provider = _mock_provider("first")
 
     # First call — runs normally
-    await run_session_end_routine(session, provider, ws, session_id="s_new")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_new")
     assert provider.complete.call_count == 1
     assert "s_new" in wsf_module._completed_session_ends
 
     # Second call with same session_id — must short-circuit (bypass_idempotency defaults to False)
     provider2 = _mock_provider("second")
-    await run_session_end_routine(session, provider2, ws, session_id="s_new")
+    await run_session_end_routine(session, provider2, ws, session_uuid="s_new")
     assert provider2.complete.call_count == 0, (
         "Second call with same session_id must short-circuit when bypass_idempotency=False"
     )
@@ -80,7 +81,7 @@ async def test_bypass_true_does_not_add_to_completion_set(tmp_path):
 
     await run_session_end_routine(
         session, provider, ws,
-        session_id="s_bypass",
+        session_uuid="s_bypass",
         bypass_idempotency=True,
     )
 
@@ -100,14 +101,14 @@ async def test_bypass_true_runs_even_after_default_call(tmp_path):
 
     # First: /new runs with default (bypass=False)
     provider_new = _mock_provider("new")
-    await run_session_end_routine(session, provider_new, ws, session_id="s_both")
+    await run_session_end_routine(session, provider_new, ws, session_uuid="s_both")
     assert "s_both" in wsf_module._completed_session_ends
 
     # Now a periodic refresh tries to run (bypass=True) — must succeed despite guard
     provider_refresh = _mock_provider("refresh")
     await run_session_end_routine(
         session, provider_refresh, ws,
-        session_id="s_both",
+        session_uuid="s_both",
         bypass_idempotency=True,
     )
     assert provider_refresh.complete.call_count == 1, (
@@ -125,13 +126,13 @@ async def test_default_path_marks_complete_after_bypass(tmp_path):
     provider_refresh = _mock_provider("refresh")
     await run_session_end_routine(
         session, provider_refresh, ws,
-        session_id="s_order",
+        session_uuid="s_order",
         bypass_idempotency=True,
     )
     assert "s_order" not in wsf_module._completed_session_ends
 
     # /new runs second (bypass=False default) — should mark complete
     provider_new = _mock_provider("new")
-    await run_session_end_routine(session, provider_new, ws, session_id="s_order")
+    await run_session_end_routine(session, provider_new, ws, session_uuid="s_order")
     assert "s_order" in wsf_module._completed_session_ends
     assert provider_new.complete.call_count == 1

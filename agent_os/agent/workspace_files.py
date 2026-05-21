@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = sys.platform == "win32"
 
-# In-memory idempotency guard for run_session_end_routine. Keyed by session_id.
-# Not persisted across daemon restarts — a restart archives sessions anyway.
-# GIL makes set.add/contains effectively atomic for short operations; we do not
-# need an asyncio.Lock unless tests show flakiness under concurrent dispatch.
+# In-memory idempotency guard for run_session_end_routine. Keyed by session_uuid
+# (the JSONL filename stem, Format 2 — see Session docstring). Not persisted
+# across daemon restarts — a restart archives sessions anyway. GIL makes
+# set.add/contains effectively atomic for short operations; we do not need an
+# asyncio.Lock unless tests show flakiness under concurrent dispatch.
 _completed_session_ends: set[str] = set()
 
 # Per-(project_id, "session_log") asyncio.Lock cache. SESSION_LOG.md is the
@@ -604,7 +605,7 @@ async def run_session_end_routine(
     workspace_files: WorkspaceFileManager,
     utility_provider=None,
     *,
-    session_id: str,
+    session_uuid: str,
     bypass_idempotency: bool = False,
     project_id: str = "",
 ) -> None:
@@ -613,12 +614,15 @@ async def run_session_end_routine(
     Uses utility_provider (cheaper model) if available.
     This runs AFTER the agent loop exits but BEFORE session archival.
 
-    session_id is required (keyword-only). Used to short-circuit duplicate
-    invocations for the same session — both the loop.py fire-and-forget
-    path and agent_manager.new_session() pre-archival path can fire for
-    the same boundary, and we must not double-write SESSION_LOG / DECISIONS
-    / CONTEXT. The completion set is only updated AFTER all writes succeed,
-    so a failed run allows a second caller to retry.
+    ``session_uuid`` is the Format-2 JSONL stem (see ``Session`` docstring) and
+    is required (keyword-only). Used to short-circuit duplicate invocations
+    for the same session — both the loop.py fire-and-forget path and
+    ``agent_manager.new_session()`` pre-archival path can fire for the same
+    boundary, and we must not double-write SESSION_LOG / DECISIONS / CONTEXT.
+    The completion set is only updated AFTER all writes succeed, so a failed
+    run allows a second caller to retry. F2 is the right keying granularity:
+    F1 may rotate when ``/new-session`` is invoked, but the *file* is what we
+    need to guard against double-writing.
 
     bypass_idempotency: when True, skip the idempotency guard so periodic
     refresh triggers (turn-count, agent-decided, token-pressure) can call
@@ -645,8 +649,8 @@ async def run_session_end_routine(
     """
     # Idempotency guard: short-circuit if this session already completed.
     # Bypassed for periodic mid-session refresh triggers.
-    if not bypass_idempotency and session_id in _completed_session_ends:
-        logger.info("session_end skipped: already completed for %s", session_id)
+    if not bypass_idempotency and session_uuid in _completed_session_ends:
+        logger.info("session_end skipped: already completed for %s", session_uuid)
         return
 
     # OCC baseline: capture mtimes BEFORE the LLM runs. This is the
@@ -812,7 +816,7 @@ async def run_session_end_routine(
     # When bypass_idempotency=True (periodic refresh), skip recording so the
     # guard remains valid for future /new calls.
     if not bypass_idempotency:
-        _completed_session_ends.add(session_id)
+        _completed_session_ends.add(session_uuid)
 
 
 def _build_session_summary(session) -> dict:

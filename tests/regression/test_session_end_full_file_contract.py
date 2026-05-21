@@ -39,6 +39,7 @@ from agent_os.agent.workspace_files import (
 def _mock_session(session_id="sess_full_file"):
     session = MagicMock()
     session.session_id = session_id
+    session.session_uuid = session_id
     session.get_messages.return_value = [
         {"role": "user", "content": "Hi"},
         {"role": "assistant", "content": "Hello"},
@@ -122,7 +123,7 @@ async def test_decisions_full_file_write_carries_forward(tmp_path):
     session = _mock_session(session_id="s_dec_carry")
     provider = _mock_provider(_llm_response(decisions=full_updated))
 
-    await run_session_end_routine(session, provider, ws, session_id="s_dec_carry")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_dec_carry")
 
     on_disk = ws.read("decisions") or ""
     # Exactly 4 "## " entry headers (one per decision)
@@ -154,7 +155,7 @@ async def test_decisions_empty_response_preserves_existing(tmp_path):
     session = _mock_session(session_id="s_dec_empty")
     provider = _mock_provider(_llm_response(decisions=""))
 
-    await run_session_end_routine(session, provider, ws, session_id="s_dec_empty")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_dec_empty")
 
     after = ws.read("decisions")
     assert after == before, (
@@ -178,7 +179,7 @@ async def test_context_full_file_write_carries_forward(tmp_path):
     session = _mock_session(session_id="s_ctx_carry")
     provider = _mock_provider(_llm_response(context=full_updated))
 
-    await run_session_end_routine(session, provider, ws, session_id="s_ctx_carry")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_ctx_carry")
 
     on_disk = ws.read("context") or ""
     header_count = sum(1 for line in on_disk.splitlines() if line.startswith("## "))
@@ -206,7 +207,7 @@ async def test_context_empty_response_preserves_existing(tmp_path):
     session = _mock_session(session_id="s_ctx_empty")
     provider = _mock_provider(_llm_response(context=""))
 
-    await run_session_end_routine(session, provider, ws, session_id="s_ctx_empty")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_ctx_empty")
 
     after = ws.read("context")
     assert after == before, (
@@ -234,12 +235,12 @@ async def test_decisions_idempotent_on_same_input(tmp_path):
 
     session1 = _mock_session(session_id="s_idem_1")
     provider1 = _mock_provider(llm_body)
-    await run_session_end_routine(session1, provider1, ws, session_id="s_idem_1")
+    await run_session_end_routine(session1, provider1, ws, session_uuid="s_idem_1")
     first_run_bytes = ws.read("decisions")
 
     session2 = _mock_session(session_id="s_idem_2")
     provider2 = _mock_provider(llm_body)
-    await run_session_end_routine(session2, provider2, ws, session_id="s_idem_2")
+    await run_session_end_routine(session2, provider2, ws, session_uuid="s_idem_2")
     second_run_bytes = ws.read("decisions")
 
     assert second_run_bytes == first_run_bytes, (
@@ -292,7 +293,7 @@ async def test_lessons_empty_response_preserves_existing(tmp_path):
     session = _mock_session(session_id="s_les_empty")
     provider = _mock_provider(_llm_response(lessons=""))
 
-    await run_session_end_routine(session, provider, ws, session_id="s_les_empty")
+    await run_session_end_routine(session, provider, ws, session_uuid="s_les_empty")
 
     after = ws.read("lessons")
     assert after == before, (

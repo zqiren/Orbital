@@ -47,6 +47,15 @@ class AgentStatus(str, Enum):
     ERROR = "error"
 
 
+# Default Format-1 chat session id used when an API caller does not pass one
+# explicitly on /agents/start or /inject. See
+# ``TASK/ACTIVE-session-and-queue-model.md`` and the F7 audit for the F1/F2
+# split. Omitting ``session_id`` on the request means "the only session, use
+# the default" — which mirrors the historical single-session-per-project
+# behaviour and keeps existing API clients working unchanged.
+DEFAULT_SESSION_ID: str = "default"
+
+
 @dataclass
 class ActivityEvent:
     id: str

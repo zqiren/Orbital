@@ -28,7 +28,28 @@ def _now() -> str:
 
 
 class Session:
-    """Append-only conversation log backed by a JSONL file."""
+    """Append-only conversation log backed by a JSONL file.
+
+    Identity carries two values (see ``TASK/ACTIVE-session-and-queue-model.md``
+    and ``TASK/INVESTIGATION-session-id-canonical-audit.md``):
+
+    - ``session_uuid``: Format 2. The JSONL filename stem
+      (``{sanitized_project_name}_{uuid4().hex[:8]}``). Used for file paths,
+      ``tool-results/`` directories, and idempotency keys for the session-end
+      routine. Always distinct across sessions, never user-facing.
+
+    - ``session_id``: Format 1. The user-facing chat-thread identity (e.g.
+      ``"default"``, ``"sess_research_openhuman"``). Stamped onto every message
+      via ``append()``. Equality of this value is what the frontend uses to
+      group messages into a chat thread and to draw session-boundary
+      separators (``web/src/utils/chatTransform.ts``).
+
+    For legacy JSONLs loaded via ``Session.load()`` there is no F1 in the
+    file — the ``session_id`` field falls back to the filename stem (F2). This
+    is the Option B compat layer per the F7 audit's Q5. Old messages already
+    carry their F2 in their ``session_id`` field, and the frontend treats that
+    field as an opaque equality key regardless of format.
+    """
 
     def __init__(self, filepath: str):
         self._filepath = filepath
@@ -39,8 +60,14 @@ class Session:
         # artifact on disk). See agent_os/utils/file_lock.py.
         self._file_lock = session_lock(filepath)
 
-        # Session identity (set by new(); derived from filename for load())
-        self.session_id: str = os.path.splitext(os.path.basename(filepath))[0]
+        # Session identity. ``session_uuid`` is the JSONL filename stem (F2);
+        # ``session_id`` is the user-facing chat id (F1) and is set explicitly
+        # by ``Session.new``. For legacy sessions loaded via ``Session.load()``
+        # there is no F1 in the JSONL, so we default ``session_id`` to the F2
+        # stem as a compat fallback. The frontend treats it as an opaque
+        # equality key either way.
+        self.session_uuid: str = os.path.splitext(os.path.basename(filepath))[0]
+        self.session_id: str = self.session_uuid
 
         # Pending tool call tracking
         self.pending_tool_calls: set[str] = set()
@@ -67,10 +94,11 @@ class Session:
     @classmethod
     def new(
         cls,
-        session_id: str,
+        session_uuid: str,
         workspace: str,
         project_id: str = "",
         *,
+        session_id: str | None = None,
         provider: str = "unknown",
         model: str = "unknown",
         sdk: str = "unknown",
@@ -78,7 +106,12 @@ class Session:
     ) -> Session:
         """Create a fresh session.
 
-        File at {workspace}/orbital/sessions/{session_id}.jsonl.
+        File at ``{workspace}/orbital/sessions/{session_uuid}.jsonl``.
+
+        ``session_uuid`` is the Format-2 JSONL stem
+        (``{sanitized_project_name}_{uuid4().hex[:8]}``). ``session_id`` is the
+        Format-1 user-facing chat id; if omitted it defaults to ``session_uuid``
+        (mirrors legacy behaviour where the two values were one and the same).
 
         Records identity (provider/model/sdk/fallback_models) as a
         ``role: meta`` line written as the very first line of the JSONL so
@@ -88,12 +121,18 @@ class Session:
         from agent_os.agent.project_paths import ProjectPaths
         sessions_dir = ProjectPaths(workspace).sessions_dir
         os.makedirs(sessions_dir, exist_ok=True)
-        filepath = os.path.join(sessions_dir, f"{session_id}.jsonl")
+        filepath = os.path.join(sessions_dir, f"{session_uuid}.jsonl")
         session = cls(filepath)
-        session.session_id = session_id
+        session.session_uuid = session_uuid
+        # Honour explicit F1 from caller; otherwise default to the F2 stem so
+        # existing callers (and legacy tests) keep working unchanged. The
+        # frontend treats the field as an opaque equality key in either form.
+        session.session_id = session_id if session_id is not None else session_uuid
         meta_record = {
             "role": "meta",
             "event": "session_start",
+            "session_id": session.session_id,
+            "session_uuid": session.session_uuid,
             "provider": provider,
             "model": model,
             "sdk": sdk,
@@ -166,7 +205,13 @@ class Session:
             message["timestamp"] = _now()
 
         if "session_id" not in message:
+            # F1 user-facing chat id — read by the frontend at
+            # ``web/src/utils/chatTransform.ts`` as an opaque equality key.
             message["session_id"] = self.session_id
+        if "session_uuid" not in message:
+            # F2 storage stem — debug-only field, never read by the frontend
+            # for UI logic. Stamped for forensic clarity on the JSONL.
+            message["session_uuid"] = self.session_uuid
 
         self._messages.append(message)
 
@@ -452,7 +497,7 @@ class Session:
 
         logger.warning(
             "Session %s: healed %d orphaned tool calls from interrupted session",
-            self.session_id, healed_count,
+            self.session_uuid, healed_count,
         )
 
     # ------------------------------------------------------------------

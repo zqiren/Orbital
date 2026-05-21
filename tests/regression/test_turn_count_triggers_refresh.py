@@ -50,6 +50,7 @@ def _text_response(text="Done."):
 def _make_session():
     session = MagicMock()
     session.session_id = "sess-tc"
+    session.session_uuid = "sess-tc"
     session.is_paused.return_value = False
     session.is_stopped.return_value = False
     session._paused_for_approval = False

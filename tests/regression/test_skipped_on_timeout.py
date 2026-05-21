@@ -60,7 +60,7 @@ def _make_refresh_callback(ws, project_id, session, provider, workspace_files,
                 provider=provider,
                 workspace_files=workspace_files,
                 utility_provider=utility_provider,
-                session_id=session.session_id,
+                session_uuid=session.session_uuid,
                 bypass_idempotency=True,
             )
             ws.broadcast(project_id, {
