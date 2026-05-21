@@ -259,6 +259,7 @@ import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
+import SlotHeldNotice from './SlotHeldNotice';
 
 interface ChatViewProps {
   projectId: string;
@@ -310,6 +311,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [commandFilter, setCommandFilter] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [injectError, setInjectError] = useState<string | null>(null);
+  // Track J Phase 1: intermediate "slot held" notice. Set when /inject
+  // returns 202 with `slot_held` because the caller's session_id didn't
+  // hold the project's active-loop slot. See SlotHeldNotice.tsx.
+  const [slotHeldNotice, setSlotHeldNotice] = useState<
+    | {
+        holdingSessionId: string;
+        pendingContent: string;
+        pendingTarget?: string;
+        pendingNonce: string;
+        pendingAttachments?: Array<{ path: string; mime: string; size: number }>;
+      }
+    | null
+  >(null);
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
@@ -1334,6 +1348,41 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         nonce,
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
       );
+      // Track J Phase 1: backend returned 202 with `slot_held` because
+      // another session in this project holds the active-loop slot.
+      // Strip the optimistic user_message we just appended (it didn't
+      // land), restore the typed text to the composer, and surface the
+      // intermediate notice with [Wait] / [Cancel-and-send] affordances.
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'slot_held' &&
+        result.holding_session_id
+      ) {
+        setItems((prev) => {
+          // Remove only the latest user_message we just appended (by
+          // nonce-free identity: type + content + most recent timestamp).
+          // Walk from the end so concurrent state updates leave older
+          // user_messages intact.
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const it = prev[i];
+            if (it.type === 'user_message' && it.content === wireContent) {
+              return [...prev.slice(0, i), ...prev.slice(i + 1)];
+            }
+          }
+          return prev;
+        });
+        setInputText(text);
+        setSlotHeldNotice({
+          holdingSessionId: result.holding_session_id,
+          pendingContent: content,
+          pendingTarget: target,
+          pendingNonce: nonce,
+          pendingAttachments:
+            attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+        });
+        return;
+      }
       // If the backend auto-denied a pending approval because we sent this
       // message while paused, immediately mark the approval card as denied
       // so the user sees the transition without waiting for the WS echo.
@@ -1723,6 +1772,46 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       {injectError && (
         <div className="shrink-0 px-4 py-1">
           <p className="text-xs text-error">{injectError}</p>
+        </div>
+      )}
+
+      {slotHeldNotice && (
+        <div className="shrink-0 px-4">
+          <SlotHeldNotice
+            holdingSessionId={slotHeldNotice.holdingSessionId}
+            onWait={() => setSlotHeldNotice(null)}
+            onCancelAndSend={async () => {
+              // Cancel the running turn on the holding session's project,
+              // then re-inject the previously-typed message. Note that
+              // /cancel is project-scoped (per ACTIVE-session-and-queue-model
+              // §3 — one slot per project), so we cancel via projectId, not
+              // the holding session_id directly.
+              await cancelMessage(projectId);
+              const pending = slotHeldNotice;
+              // Replace the notice with the actual user message (per
+              // DISPATCH-2026-05-22 §5.4) by re-running the send path
+              // without session_id (the user's intent is to take the slot).
+              setSlotHeldNotice(null);
+              setInputText('');
+              const wireContent = pending.pendingContent;
+              setItems((prev) => [
+                ...prev,
+                {
+                  type: 'user_message' as const,
+                  content: wireContent,
+                  timestamp: new Date().toISOString(),
+                  ...(pending.pendingTarget && { target: pending.pendingTarget }),
+                },
+              ]);
+              await injectMessage(
+                projectId,
+                pending.pendingContent,
+                pending.pendingTarget,
+                pending.pendingNonce,
+                pending.pendingAttachments,
+              );
+            }}
+          />
         </div>
       )}
 

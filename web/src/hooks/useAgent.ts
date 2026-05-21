@@ -16,6 +16,15 @@ export interface InjectResult extends ActionResult {
   /** tool_call_id of the approval that was dismissed (present when
    *  approval_dismissed is true). */
   dismissed_tool_call_id?: string;
+  /**
+   * Slot-enforcement Phase 1 (Track J): present when the backend returned
+   * 202 with `status: "slot_held"` because the requested session_id does
+   * not currently hold the project's active-loop slot. The frontend should
+   * render SlotHeldNotice and offer cancel-and-resend.
+   */
+  holding_session_id?: string;
+  /** Human-readable description that accompanies `status: "slot_held"`. */
+  message?: string;
 }
 
 export function useAgent() {
@@ -61,6 +70,7 @@ export function useAgent() {
       target?: string,
       nonce?: string,
       attachments?: Array<{ path: string; mime: string; size: number }>,
+      sessionId?: string,
     ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
@@ -71,6 +81,7 @@ export function useAgent() {
             ...(target !== undefined && { target }),
             ...(nonce !== undefined && { nonce }),
             ...(attachments && attachments.length > 0 && { attachments }),
+            ...(sessionId !== undefined && { session_id: sessionId }),
           }),
         },
       );

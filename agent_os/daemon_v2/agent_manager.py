@@ -1259,6 +1259,33 @@ class AgentManager:
             return False
         return handle.task is not None and not handle.task.done()
 
+    def current_holder_session_id(self, project_id: str) -> str | None:
+        """Return the F1 ``session_id`` that currently holds the project's
+        active-loop slot, or None if no session in the project is running.
+
+        Per ACTIVE-session-and-queue-model.md §3, a project has exactly one
+        active-loop slot. This accessor surfaces "who holds it right now" so
+        the inject route can reject (with 202) when a different session tries
+        to start a turn while another session is still mid-turn.
+
+        Approval-paused turns still hold the slot (their task is alive but
+        blocked waiting for the user's decision) — we treat any live task
+        as a holder regardless of whether it's actively streaming or parked
+        at an approval gate.
+
+        After PR #22's multi-session foundation ``self._handles`` is keyed by
+        ``SessionKey == (project_id, session_id)``. We scan all keys for
+        this ``project_id`` and return the F1 of the first handle whose task
+        is alive. Single-loop discipline (§3) means at most one such handle
+        exists; in the steady state of multi-session this remains true.
+        """
+        for (pid, sid), handle in self._handles.items():
+            if pid != project_id:
+                continue
+            if handle.task is not None and not handle.task.done():
+                return sid
+        return None
+
     def get_run_status(self, project_id: str, *,
                        session_id: str | None = None) -> str:
         """Return the current runtime status for a session.
