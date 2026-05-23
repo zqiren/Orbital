@@ -329,6 +329,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [dragCounter, setDragCounter] = useState(0);
+  // Stop-button optimistic state. Set true synchronously on click so the
+  // input row immediately shows a loading affordance; cleared when
+  // agentStatus transitions to 'idle' (loop actually exited) or after a
+  // 10s timeout falls back to a retry notice. The backend
+  // agent.status:idle broadcast is authoritative — this just covers the
+  // in-flight gap between click and the WS event arriving.
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelTimeoutNotice, setCancelTimeoutNotice] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -538,6 +546,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         agentStatus === 'idle' ? 'completed' :
         agentStatus === 'error' ? 'error' : 'stopped';
       setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
+      // Loop has actually exited — clear the in-flight cancel affordance.
+      // Effect re-runs on agentStatus change, so this naturally coincides
+      // with the agent.status:idle WS broadcast from _on_loop_done.
+      setIsCancelling(false);
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)
       if (wasRunningRef.current) {
@@ -568,6 +580,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setLoadedOffset(0);
     }
   }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval]);
+
+  // Cancel timeout fallback: if the loop hasn't actually idled within 10s
+  // of the Stop click, clear the in-flight affordance and surface a
+  // retry-able notice. Covers degenerate cases (network drop after the
+  // POST returned, daemon stall, etc.) so the input row doesn't lock up.
+  useEffect(() => {
+    if (!isCancelling) return;
+    const timer = setTimeout(() => {
+      setIsCancelling(false);
+      setCancelTimeoutNotice('Cancel took longer than expected — try again if needed.');
+    }, 10_000);
+    return () => clearTimeout(timer);
+  }, [isCancelling]);
 
   // On mount, always check for pending approvals via REST.
   // Handles the case where ChatView was unmounted (tab switch to files)
@@ -1815,6 +1840,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
+      {cancelTimeoutNotice && (
+        <div className="shrink-0 px-4 py-1">
+          <p className="text-xs text-secondary" role="status">{cancelTimeoutNotice}</p>
+        </div>
+      )}
+
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-background max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
         <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
@@ -1904,26 +1935,51 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onPaste={handlePaste}
               placeholder="Send a message..."
               rows={1}
-              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed"
+              disabled={isCancelling}
+              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             {(agentStatus === 'running' || agentStatus === 'waiting') ? (
               <>
                 <button
                   type="button"
-                  onClick={() => cancelMessage(projectId)}
-                  onTouchEnd={(e) => { e.preventDefault(); cancelMessage(projectId); }}
-                  className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+                  onClick={() => {
+                    if (isCancelling) return;
+                    setCancelTimeoutNotice(null);
+                    setIsCancelling(true);
+                    cancelMessage(projectId).catch(() => {
+                      // POST failed (offline, daemon down, etc.) — drop the
+                      // optimistic state immediately so the user can retry
+                      // instead of waiting for the 10s timeout.
+                      setIsCancelling(false);
+                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                    });
+                  }}
+                  onTouchEnd={(e) => {
+                    e.preventDefault();
+                    if (isCancelling) return;
+                    setCancelTimeoutNotice(null);
+                    setIsCancelling(true);
+                    cancelMessage(projectId).catch(() => {
+                      setIsCancelling(false);
+                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                    });
+                  }}
+                  disabled={isCancelling}
+                  aria-label={isCancelling ? 'Cancelling' : 'Stop'}
+                  className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
-                  <Square size={18} />
+                  {isCancelling
+                    ? <Loader2 size={18} className="animate-spin" />
+                    : <Square size={18} />}
                 </button>
                 <button
                   type="button"
                   onClick={handleSend}
                   onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
-                  disabled={!canSend}
+                  disabled={!canSend || isCancelling}
                   title={disabledReason || undefined}
                   className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center ${
-                    canSend
+                    canSend && !isCancelling
                       ? 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
                       : 'bg-secondary/20 text-secondary/40 cursor-default'
                   }`}
@@ -1937,6 +1993,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 onClick={handleSend}
                 onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
                 aria-disabled={!canSend}
+                aria-label="Send"
                 disabled={!canSend}
                 title={disabledReason || undefined}
                 className={`shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${

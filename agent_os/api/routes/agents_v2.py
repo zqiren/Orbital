@@ -861,14 +861,26 @@ async def list_project_sessions(project_id: str):
 
 @router.post("/agents/{project_id}/cancel")
 async def cancel_message(project_id: str) -> dict:
-    """Cancel the current turn. Agent stays alive."""
+    """Cancel the current turn. Loop exits, agent stays alive.
+
+    Wired to the UI Stop button. The cancel breaks the loop at the next
+    iteration boundary (the CancelledError handlers in loop.py write a
+    [cancelled by user] marker to the session JSONL, then exit the
+    while body). Sub-agents, browser pages, and sandbox state are
+    preserved. _on_loop_done broadcasts the post-cancel status (idle,
+    waiting, or running for queued hot-resume) and frees the active-loop
+    slot mechanically when the loop task completes.
+    """
     return await _agent_manager.cancel_message(project_id)
 
 
 @router.post("/agents/{project_id}/stop")
 async def stop_agent(project_id: str):
     """Internal/admin: full teardown of agent, session, and sub-agents.
-    NOT WIRED TO UI as of T05 — the Stop button now calls /cancel.
+
+    NOT wired to the UI — the Stop button uses /cancel, which preserves
+    sub-agent and browser-page state. /stop is reserved for crash
+    recovery, debug tooling, and daemon shutdown coordination.
     """
     try:
         await _agent_manager.stop_agent(project_id)
