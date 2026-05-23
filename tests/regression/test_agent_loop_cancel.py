@@ -192,7 +192,8 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
     - persists a cancellation marker in the JSONL
     - debits the partial output_tokens via the cost callback
     - clears _inflight_stream
-    - the loop continues (does not exit)
+    - the loop EXITS (break-on-cancel design). _on_loop_done is the
+      authoritative re-entry point for queued messages / hot resume.
     """
     session = _make_session(tmp_path, session_id="s_partial")
     provider = _StreamingProvider(
@@ -222,17 +223,12 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
     run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
     try:
         await provider.wait_for_partial_chunks(n=3, timeout=2.0)
-        # Capture the inflight task before cancel for a deterministic
-        # post-cancel assertion (the loop may have started a new turn by
-        # the time we read self._inflight_stream).
         original_inflight = loop_obj._inflight_stream
         # Streaming has produced 3 chunks then is hanging → cancel it.
         await loop_obj.cancel_turn()
 
         # The originally-inflight stream task has been released (cancelled
-        # or done). The current self._inflight_stream may already be a NEW
-        # task from the loop's next iteration — that's fine; what matters
-        # is that the cancelled one is no longer running.
+        # or done).
         assert original_inflight is not None
         assert original_inflight.done(), (
             "Cancelled inflight stream task must be done"
@@ -246,27 +242,45 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
             f"{[m.get('content') for m in msgs]}"
         )
 
-        # Cost was debited for the 3 partial output tokens
+        # Cost was debited for the partial output tokens
         assert len(cost_calls) >= 1, (
             f"Expected cost callback to fire on cancel, got {cost_calls}"
         )
-        # The total debit should be > 0 (full output token cost)
         delta, total = cost_calls[-1]
         assert delta > 0, (
             f"Expected positive cost debit on cancel, got delta={delta}"
         )
 
-        # The loop should not have exited (session not stopped, no terminate)
-        assert not run_task.done(), (
-            "Loop must continue running after bare cancel_turn"
-        )
-    finally:
-        # Clean up: terminate the loop so the test exits.
-        await loop_obj.terminate()
+        # Break-on-cancel: run() must exit (does NOT re-enter the while
+        # body for another LLM call). _on_loop_done handles any queued
+        # messages and hot-resume.
         try:
             await asyncio.wait_for(run_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
+        except asyncio.TimeoutError:
+            raise AssertionError(
+                "Loop must exit after bare cancel_turn (break-on-cancel)"
+            )
+        assert run_task.done(), (
+            "Loop must exit cleanly after cancel_turn (break-on-cancel)"
+        )
+        # The fake provider tracks how many times stream() was invoked.
+        # Under break-on-cancel: exactly 1 call (the cancelled turn).
+        # Under continue-on-cancel: 2 calls (iteration N+1 re-streams).
+        assert provider._call_count == 1, (
+            f"Loop must not start a second LLM call after bare cancel "
+            f"(break-on-cancel). provider._call_count={provider._call_count}"
+        )
+        # Session is NOT stopped — cancel is non-terminal.
+        assert not session.is_stopped(), (
+            "Session must remain alive after bare cancel_turn"
+        )
+    finally:
+        if not run_task.done():
+            await loop_obj.terminate()
+            try:
+                await asyncio.wait_for(run_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -413,15 +427,20 @@ async def test_cancel_during_tool_loop_skips_remaining(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: cancel then send completes normally
+# Test 4: cancel then fresh run() completes normally (hot-resume contract)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cancel_then_send_completes_normally(tmp_path):
-    """After cancel_turn during stream, queueing a new user message must
-    cause the next iteration to drain and produce a normal response with no
-    leaked state."""
+async def test_cancel_then_fresh_run_completes_normally(tmp_path):
+    """Hot-resume contract under break-on-cancel.
+
+    After cancel_turn during stream, run() exits via break. A subsequent
+    call to run() (as _on_loop_done's hot-resume does, with no initial
+    message) must drain queued user input and produce a normal reply with
+    no leaked state — specifically, the marker-appended flag must NOT
+    have been inherited from the prior cancelled run().
+    """
     session = _make_session(tmp_path, session_id="s_followup")
     provider = _StreamingProvider(
         chunks=[StreamChunk(text="partial...")],
@@ -434,21 +453,27 @@ async def test_cancel_then_send_completes_normally(tmp_path):
     try:
         await provider.wait_for_partial_chunks(n=1, timeout=2.0)
         await loop_obj.cancel_turn()
-        # Queue a new user message
-        session.queue_message("second message after cancel")
-        # Wait for loop to complete (its 2nd iteration drains the queue,
-        # gets the normal response, and exits).
-        await asyncio.wait_for(run_task, timeout=5.0)
+        # Loop exits via break — wait for the first run() to complete.
+        await asyncio.wait_for(run_task, timeout=2.0)
     except asyncio.TimeoutError:
         run_task.cancel()
         raise
 
-    # The session must contain (in order): first user msg, cancellation
-    # marker, second user msg, assistant final reply.
+    assert run_task.done(), "First run() must exit after cancel_turn"
+
+    # Hot-resume: queue a new message and call run() again with no initial
+    # message — exactly what _on_loop_done → _start_loop does.
+    session.queue_message("second message after cancel")
+    run_task2 = asyncio.create_task(loop_obj.run())
+    try:
+        await asyncio.wait_for(run_task2, timeout=5.0)
+    except asyncio.TimeoutError:
+        run_task2.cancel()
+        raise
+
+    # The session must contain the second user msg + assistant final reply.
     msgs = _read_session_messages(session)
     contents = [(m.get("role"), m.get("content")) for m in msgs]
-
-    # The assistant's final reply must be present
     final_replies = [m for m in msgs
                      if m.get("role") == "assistant"
                      and m.get("content") == "hello again"]
@@ -458,6 +483,113 @@ async def test_cancel_then_send_completes_normally(tmp_path):
     # No leaked _turn_cancelled
     assert loop_obj._turn_cancelled is False, (
         "_turn_cancelled must be reset after cancel + new turn"
+    )
+    # The marker-appended flag must have been reset at run() entry so the
+    # next cancel_turn() (if any) would not silently no-op.
+    assert loop_obj._cancellation_marker_appended_this_turn is False, (
+        "Marker flag must be reset at run() entry — hot-resume must not "
+        "inherit the prior cancelled turn's True flag"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4b: two-turn hot-resume (load-bearing for the marker-flag reset)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_breaks_loop_two_turn_hot_resume(tmp_path):
+    """Cancel turn 1, run normally on turn 2, then cancel turn 3.
+
+    The third cancel must take effect — i.e. the marker-flag must be
+    reset at run() entry for each fresh run, otherwise the second
+    cancel_turn() silently no-ops because it still sees the prior turn's
+    True flag.
+
+    Without the unconditional reset at run() entry, this test fails
+    with "second cancel produced no new marker" on the third cancel.
+    """
+    session = _make_session(tmp_path, session_id="s_two_turn")
+
+    class _ThreeCallProvider:
+        def __init__(self):
+            self.call_count = 0
+            self.first_done = asyncio.Event()
+            self.second_done = asyncio.Event()
+            self.third_done = asyncio.Event()
+
+        @property
+        def model(self):
+            return "fake-model"
+
+        async def stream(self, context, tools=None):
+            self.call_count += 1
+            if self.call_count == 1:
+                yield StreamChunk(text="turn1 partial")
+                self.first_done.set()
+                await asyncio.Event().wait()  # hang
+            elif self.call_count == 2:
+                # Turn 2: normal completion
+                yield StreamChunk(text="turn2 reply")
+                yield StreamChunk(
+                    text="",
+                    is_final=True,
+                    usage=TokenUsage(input_tokens=10, output_tokens=5),
+                )
+                self.second_done.set()
+            else:
+                # Turn 3: hang again so the third cancel has something to bite
+                yield StreamChunk(text="turn3 partial")
+                self.third_done.set()
+                await asyncio.Event().wait()  # hang
+
+    provider = _ThreeCallProvider()
+    loop_obj = _make_loop(session, provider)
+
+    # ---- Turn 1: run + cancel ----
+    run_task1 = asyncio.create_task(loop_obj.run(initial_message="msg1"))
+    try:
+        await asyncio.wait_for(provider.first_done.wait(), timeout=2.0)
+        await loop_obj.cancel_turn()
+        await asyncio.wait_for(run_task1, timeout=2.0)
+    except asyncio.TimeoutError:
+        run_task1.cancel()
+        raise
+
+    msgs_after_t1 = _read_session_messages(session)
+    markers_after_t1 = [m for m in msgs_after_t1
+                        if m.get("cancelled_by_user") is True]
+    assert len(markers_after_t1) == 1, (
+        f"After turn-1 cancel, expected 1 marker, got "
+        f"{len(markers_after_t1)}"
+    )
+
+    # ---- Turn 2: hot-resume via run() with no initial_message ----
+    session.queue_message("msg2")
+    run_task2 = asyncio.create_task(loop_obj.run())
+    try:
+        await asyncio.wait_for(run_task2, timeout=5.0)
+    except asyncio.TimeoutError:
+        run_task2.cancel()
+        raise
+
+    # ---- Turn 3: another run + cancel; this MUST write a second marker ----
+    run_task3 = asyncio.create_task(loop_obj.run(initial_message="msg3"))
+    try:
+        await asyncio.wait_for(provider.third_done.wait(), timeout=2.0)
+        await loop_obj.cancel_turn()
+        await asyncio.wait_for(run_task3, timeout=2.0)
+    except asyncio.TimeoutError:
+        run_task3.cancel()
+        raise
+
+    msgs_after_t3 = _read_session_messages(session)
+    markers_after_t3 = [m for m in msgs_after_t3
+                        if m.get("cancelled_by_user") is True]
+    assert len(markers_after_t3) == 2, (
+        f"Third cancel must write a fresh marker (would no-op silently if "
+        f"the marker-appended flag carried over from turn 1). Got "
+        f"{len(markers_after_t3)} markers total."
     )
 
 
@@ -749,13 +881,24 @@ async def test_no_fire_and_forget_session_end(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 10 (race): cancel_turn must capture accumulator + persist marker
-# BEFORE iteration N+1 starts overwriting state. This exercises the C1 (stale
-# accumulator → no debit) and C2 (marker lands after N+1's assistant message)
-# races identified by code review.
+# Tombstone: the C1/C2-race regression
+# (test_cancel_then_iteration_continues_preserves_marker_ordering)
+#
+# Removed: that test required iteration N+1 to run inside the same run()
+# after a mid-stream cancel. Under the break-on-cancel design (fix/stop-
+# button-break-loop), the CancelledError handlers exit the while body so
+# iteration N+1 is impossible within the cancelled run() — the next
+# iteration only happens via _on_loop_done → _start_loop → run(). The
+# accumulator/ordering invariants the test asserted no longer have a
+# matching code path; the defensive local-capture in cancel_turn remains
+# as a no-cost safety net (see loop.py:cancel_turn comments).
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="Removed under break-on-cancel — iteration N+1 inside a "
+           "cancelled run() is impossible by design. See tombstone above."
+)
 @pytest.mark.asyncio
 async def test_cancel_then_iteration_continues_preserves_marker_ordering(tmp_path):
     """C1/C2 race regression.

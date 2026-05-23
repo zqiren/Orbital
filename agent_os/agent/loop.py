@@ -218,6 +218,13 @@ class AgentLoop:
         self._exit_block_reason = None
         # Capture our own task handle so terminate() can cancel us.
         self._task = asyncio.current_task()
+        # Every run() invocation begins a fresh turn boundary: clear the
+        # sticky cancel-marker flag so a Stop click on this run writes a
+        # new marker rather than no-opping on the previous run's flag.
+        # Hot-resume paths (_on_loop_done → _start_loop) call run() with
+        # no initial_message, so this reset must fire unconditionally —
+        # not just when initial_message is provided.
+        self._cancellation_marker_appended_this_turn = False
         try:
             # Resolve pending if not resuming from approval pause
             if self._session._paused_for_approval:
@@ -235,8 +242,6 @@ class AgentLoop:
                 if initial_nonce:
                     msg["nonce"] = initial_nonce
                 self._session.append(msg)
-                # Fresh user input on this run ⇒ clear sticky cancel flag.
-                self._cancellation_marker_appended_this_turn = False
 
             # Reset per-run state on all tools (e.g. send counters)
             self._tool_registry.reset_run_state()
@@ -372,8 +377,11 @@ class AgentLoop:
                     if self._session.is_stopped():
                         # terminate() also fired — let outer cleanup run.
                         raise
-                    # Bare cancel_turn: continue the outer while loop.
-                    continue
+                    # Bare cancel_turn: exit the while loop. The finally
+                    # block + _on_loop_done drain any queued messages and
+                    # hot-resume a fresh loop task if needed, preserving
+                    # sub-agents / browser pages / sandbox state.
+                    break
                 except ContextOverflowError:
                     self._inflight_stream = None
                     consecutive_overflows += 1
@@ -767,16 +775,18 @@ class AgentLoop:
                 # Cancellation landed mid-tool-loop (cancel_turn fired between
                 # tool calls or during a tool's execution). Append marker if
                 # not already done, resolve any unstarted tool calls, then
-                # continue to the top of the while loop. terminate() also
-                # sets is_stopped(), so we let the next iteration of the
-                # outer loop handle the stop check.
+                # exit the loop. The finally block + _on_loop_done drain any
+                # queued messages and hot-resume a fresh loop task if needed.
+                # terminate() also sets is_stopped(); the cancel-only path
+                # exits via break here without needing the is_stopped check
+                # below.
                 if self._turn_cancelled:
                     if not self._cancellation_marker_appended_this_turn:
                         self._persist_cancellation_marker()
                     # Resolve any tool calls that never got a result — these
                     # are the ones we skipped via the per-tool break above.
                     self._session.resolve_pending_tool_calls()
-                    continue
+                    break
 
                 # Resolve unprocessed tool calls from this batch on intercept-break
                 if exit_outer and intercepted_tc_id is not None:
@@ -963,20 +973,31 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     async def cancel_turn(self) -> None:
-        """Interrupt the current turn. Loop returns to idle, agent stays alive.
+        """Interrupt the current turn. Loop exits, agent stays alive.
+
+        Backs the POST /api/v2/agents/{pid}/cancel HTTP verb (the UI
+        Stop button). Writes a single cancellation marker to the session
+        JSONL, cancels any in-flight LLM stream, and breaks the loop's
+        while body so the task completes; _on_loop_done then drains any
+        queued messages and either broadcasts idle or hot-resumes for
+        queued input.
 
         Idempotent: safe to call when no turn is in flight, or twice in
         rapid succession. Exactly one cancellation marker is written per
         cancellation event regardless of when the cancel landed (during
         stream, between stream and tools, or mid-tool-loop).
 
-        Reserved for the future /cancel HTTP verb. terminate() should be
-        used by stop_agent / new_session callers — not cancel_turn().
+        terminate() — used by stop_agent / new_session — sets the stop
+        flag in addition to calling cancel_turn(), which causes the
+        loop's CancelledError handler to re-raise instead of break (the
+        terminate path also tears down sub-agents, browser pages, etc.).
+        cancel_turn() alone preserves all of that ancillary state.
         """
         # Idempotency: if we have already initiated a cancel for the
         # current turn (marker pending or appended), do nothing. The flag
-        # is reset at the top of each loop iteration once a new turn
-        # actually starts running.
+        # is reset unconditionally at run() entry so the hot-resume path
+        # (run() with no initial_message after a cancelled turn) does
+        # not inherit the prior turn's True flag.
         if self._cancellation_marker_appended_this_turn:
             return
 
@@ -989,12 +1010,14 @@ class AgentLoop:
             return
 
         # Claim the inflight task and capture the accumulator BEFORE any
-        # await. After we yield to the event loop in `wait_for` below, the
-        # loop's CancelledError handler may `continue` into iteration N+1
-        # which reassigns self._stream_accumulator. We must hold a local
-        # reference to the cancelled-turn's accumulator so the post-await
-        # cost debit reflects the cancelled turn — not iteration N+1's
-        # fresh empty accumulator (C1 race).
+        # await. Defensive: under the current break-on-cancel design the
+        # loop exits its while body once the CancelledError handler runs,
+        # so _stream_accumulator is no longer reassigned during the
+        # wait_for below. The historical T04 C1 race (continue-based
+        # design → iteration N+1 reassigned the accumulator mid-await) is
+        # closed by the loop semantics; we keep the local ref as a
+        # no-cost safety net in case a future change reintroduces
+        # concurrent accumulator writes.
         inflight = self._inflight_stream
         self._inflight_stream = None
         accumulator = self._stream_accumulator
@@ -1006,9 +1029,10 @@ class AgentLoop:
         self._cancellation_marker_appended_this_turn = True
 
         # Persist the marker SYNCHRONOUSLY before the await so its JSONL
-        # position is adjacent to the cancelled turn — even if iteration
-        # N+1 races ahead and appends its own assistant message during
-        # our wait_for (C2 race).
+        # position is adjacent to the cancelled turn. The loop's break-
+        # on-cancel exit means nothing else writes to the session after
+        # this synchronous append before the task completes, so marker
+        # position is trivially correct under the current design.
         self._persist_cancellation_marker_inner()
 
         inflight.cancel()
@@ -1019,8 +1043,8 @@ class AgentLoop:
         except Exception:
             logger.exception("inflight stream raised during cancel_turn")
 
-        # Debit cost using the captured accumulator (immune to iteration
-        # N+1's reassignment of self._stream_accumulator during the await).
+        # Debit cost using the captured accumulator (see the defensive-
+        # capture rationale above).
         self._debit_cancelled_turn_cost(accumulator)
 
     async def terminate(self) -> None:
@@ -1091,10 +1115,13 @@ class AgentLoop:
         policy: tokens generated are billed even if undelivered.
 
         Takes the accumulator as an explicit parameter so callers can pass
-        in a reference captured BEFORE any awaits — protecting against
-        the C1 race where iteration N+1 reassigns self._stream_accumulator
-        during cancel_turn's await wait_for. If no accumulator is supplied
-        (legacy call sites) we fall back to self._stream_accumulator.
+        in a reference captured BEFORE any awaits. Under the current
+        break-on-cancel loop design no in-loop code reassigns
+        _stream_accumulator after the CancelledError handler fires, so
+        the historical T04 C1 race is closed by semantics; the explicit
+        parameter is retained as a no-cost safety net. If no accumulator
+        is supplied (legacy call sites) we fall back to
+        self._stream_accumulator.
         """
         if accumulator is None:
             accumulator = self._stream_accumulator

@@ -51,11 +51,15 @@ vi.mock('../hooks/useWebSocket', () => ({
   }),
 }));
 
+// Per-test override slot for cancelMessage. The default resolves; tests
+// that need rejection or controlled timing replace this between renders.
+let cancelMessageMock: (projectId: string) => Promise<unknown> = async () => undefined;
+
 vi.mock('../hooks/useAgent', () => ({
   useAgent: () => ({
     injectMessage: vi.fn(async () => undefined),
     startAgent: vi.fn(async () => undefined),
-    cancelMessage: vi.fn(async () => undefined),
+    cancelMessage: vi.fn((projectId: string) => cancelMessageMock(projectId)),
     newSession: vi.fn(async () => undefined),
   }),
 }));
@@ -197,5 +201,136 @@ describe('ChatView @-mention dropdown reads from mentionAgents prop', () => {
     const text = container.textContent ?? '';
     expect(text).not.toContain('reviewer');
     expect(text).not.toContain('planner');
+  });
+});
+
+describe('ChatView Stop button: isCancelling optimistic state', () => {
+  beforeEach(() => {
+    // Reset to the default happy-path resolver between tests.
+    cancelMessageMock = async () => undefined;
+    vi.useRealTimers();
+  });
+
+  function renderRunning() {
+    return act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="running"
+          mentionAgents={[]}
+        />,
+      );
+    });
+  }
+
+  it('sets aria-label="Cancelling" synchronously on Stop click and shows a spinner', async () => {
+    // Make cancelMessage hang so isCancelling stays true long enough to observe.
+    cancelMessageMock = () => new Promise(() => {});
+    await renderRunning();
+    await flushEffects();
+
+    const stop = container.querySelector('button[aria-label="Stop"]') as HTMLButtonElement;
+    expect(stop).toBeTruthy();
+
+    await act(async () => {
+      stop.click();
+    });
+
+    // The same button now has aria-label="Cancelling" and is disabled.
+    const cancelling = container.querySelector('button[aria-label="Cancelling"]') as HTMLButtonElement;
+    expect(cancelling).toBeTruthy();
+    expect(cancelling.disabled).toBe(true);
+
+    // Spinner is rendered (lucide-react Loader2 carries class `lucide-loader-2`
+    // or `lucide-loader-circle`; we assert presence via the animate-spin class
+    // we explicitly set on the icon).
+    const spinner = cancelling.querySelector('.animate-spin');
+    expect(spinner).toBeTruthy();
+
+    // Textarea is disabled while cancelling.
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+  });
+
+  it('clears isCancelling when agentStatus transitions to idle (WS-driven)', async () => {
+    cancelMessageMock = () => new Promise(() => {});
+    await renderRunning();
+    await flushEffects();
+
+    const stop = container.querySelector('button[aria-label="Stop"]') as HTMLButtonElement;
+    await act(async () => {
+      stop.click();
+    });
+    expect(container.querySelector('button[aria-label="Cancelling"]')).toBeTruthy();
+
+    // Simulate the agent.status:idle WS broadcast by re-rendering with idle.
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="idle"
+          mentionAgents={[]}
+        />,
+      );
+    });
+    await flushEffects();
+
+    // The Stop button area is gone (running/waiting branch no longer renders);
+    // the textarea is back to enabled and no spinner is visible.
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(false);
+    expect(container.querySelector('button[aria-label="Cancelling"]')).toBeNull();
+  });
+
+  it('clears isCancelling after a 10s timeout and shows a retry notice', async () => {
+    vi.useFakeTimers();
+    cancelMessageMock = () => new Promise(() => {});
+    await renderRunning();
+    // Effects ran with real timers up to render time; let pending effects flush
+    // before swapping in fake timers' clock for the 10s wait.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const stop = container.querySelector('button[aria-label="Stop"]') as HTMLButtonElement;
+    await act(async () => {
+      stop.click();
+    });
+    expect(container.querySelector('button[aria-label="Cancelling"]')).toBeTruthy();
+
+    // Advance fake timers past the 10s fallback.
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    // Optimistic state cleared; notice visible.
+    expect(container.querySelector('button[aria-label="Cancelling"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop"]')).toBeTruthy();
+    const notice = container.querySelector('[role="status"]');
+    expect(notice?.textContent ?? '').toContain('Cancel took longer than expected');
+    vi.useRealTimers();
+  });
+
+  it('clears isCancelling immediately on POST failure and surfaces an error notice', async () => {
+    // Reject the cancel POST.
+    cancelMessageMock = () => Promise.reject(new Error('network down'));
+    await renderRunning();
+    await flushEffects();
+
+    const stop = container.querySelector('button[aria-label="Stop"]') as HTMLButtonElement;
+    await act(async () => {
+      stop.click();
+      // Let the rejection settle.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Optimistic state is dropped; failure notice is visible.
+    expect(container.querySelector('button[aria-label="Cancelling"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop"]')).toBeTruthy();
+    const notice = container.querySelector('[role="status"]');
+    expect(notice?.textContent ?? '').toContain('Cancel request failed');
   });
 });
