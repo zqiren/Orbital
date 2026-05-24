@@ -18,6 +18,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Route } from './route';
+
+// Sidebar renders <BlockedBadge> which calls useBlockedCount → useWebSocket.
+// These tests render Sidebar without a WebSocketProvider, so mock the hook to
+// avoid the "must be used within a WebSocketProvider" throw.
+vi.mock('./hooks/useBlockedCount', () => ({
+  useBlockedCount: () => ({ blockedCount: 0, blockedSessions: [], loading: false }),
+}));
+
 import Sidebar from './components/Sidebar';
 import ProjectDetail from './components/ProjectDetail';
 import type { Project, AgentRunStatus } from './types';

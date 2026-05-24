@@ -4,6 +4,7 @@
 
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
+import BlockedBadge from './BlockedBadge';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -68,6 +69,11 @@ export default function Sidebar({
         <span className="font-mono text-sm font-semibold text-primary tracking-tight">
           Orbital
         </span>
+      </div>
+
+      {/* Global routes — Blocked badge */}
+      <div className="px-2 pb-1">
+        <BlockedBadge />
       </div>
 
       {/* Project list */}
