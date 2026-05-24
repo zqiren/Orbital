@@ -50,9 +50,13 @@ export function useSessions(projectId: string | null) {
     setLoading(true);
     setError(null);
     try {
-      const data = await api<SessionListEntry[]>(
+      const resp = await api<{ sessions?: SessionListEntry[] } | SessionListEntry[]>(
         `/api/v2/projects/${encodeURIComponent(projectId)}/sessions`,
       );
+      // The endpoint returns { project_id, sessions: [...] }. Unwrap it; also
+      // tolerate a bare array defensively so a shape change can't crash the
+      // SessionSidebar (sessions.filter) and blank the whole project view.
+      const data = Array.isArray(resp) ? resp : (resp?.sessions ?? []);
       sessionsCache.set(projectId, data);
       setSessions(data);
       return data;
