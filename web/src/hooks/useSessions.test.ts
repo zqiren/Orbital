@@ -84,6 +84,30 @@ describe('useSessions', () => {
     expect(apiFn).toHaveBeenCalledWith('/api/v2/projects/proj-1/sessions');
   });
 
+  it('unwraps the REAL wrapped response shape { project_id, sessions: [...] } (regression for c89a6bc)', async () => {
+    // The actual endpoint returns the array WRAPPED in an object, not a bare
+    // array. If the hook stops unwrapping resp.sessions, `sessions` becomes a
+    // plain object and SessionSidebar's `sessions.filter()` throws — the
+    // Phase-1B blocker that blanked the whole app. Every other test here mocks
+    // a bare array (which the defensive guard also accepts), so THIS is the
+    // test that actually pins the real contract.
+    const sessions: SessionListEntry[] = [
+      makeSession({ session_id: 's1', status: 'running' }),
+      makeSession({ session_id: 's2' }),
+    ];
+    apiFn.mockResolvedValueOnce({ project_id: 'proj-wrapped', sessions });
+
+    const { result } = renderHook(() => useSessions('proj-wrapped'));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Must be the INNER array, not the wrapper object.
+    expect(Array.isArray(result.current.sessions)).toBe(true);
+    expect(result.current.sessions).toEqual(sessions);
+    expect(result.current.sessions[0].session_id).toBe('s1');
+    expect(result.current.error).toBeNull();
+  });
+
   it('surfaces last_activity_at on returned session entries', async () => {
     const sessions: SessionListEntry[] = [
       makeSession({ session_id: 's1', last_activity_at: '2026-01-01T00:00:00Z' }),
