@@ -2,18 +2,18 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import type { Dispatch, SetStateAction } from 'react';
 import type { AgentRunStatus, Project, Trigger } from '../types';
+import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
-
-export type DetailTab = 'queue' | 'chat' | 'files' | 'settings';
 
 interface ProjectDetailProps {
   project: Project;
   agentStatus: AgentRunStatus;
   statusSummary?: string;
-  tab: DetailTab;
-  onTabChange: (tab: DetailTab) => void;
+  route: Extract<Route, { name: 'project' }>;
+  setRoute: Dispatch<SetStateAction<Route>>;
   onStopAgent: () => void;
   triggers?: Trigger[];
   onTriggerToggle?: (triggerId: string, enabled: boolean) => void;
@@ -21,19 +21,18 @@ interface ProjectDetailProps {
   children?: React.ReactNode;
 }
 
-const TABS: { key: DetailTab; label: string }[] = [
+const TABS: { key: 'queue' | 'chat' | 'files'; label: string }[] = [
   { key: 'queue', label: 'Queue' },
   { key: 'chat', label: 'Chat' },
   { key: 'files', label: 'Files' },
-  { key: 'settings', label: 'Settings' },
 ];
 
 export default function ProjectDetail({
   project,
   agentStatus,
   statusSummary,
-  tab,
-  onTabChange,
+  route,
+  setRoute,
   onStopAgent,
   triggers = [],
   onTriggerToggle,
@@ -41,6 +40,17 @@ export default function ProjectDetail({
   children,
 }: ProjectDetailProps) {
   const isRunning = agentStatus === 'running' || agentStatus === 'waiting';
+
+  // The active tab indicator: when settings overlay is showing, no tab is highlighted
+  const activeTab = route.settings ? null : route.tab;
+
+  function handleTabChange(tab: 'queue' | 'chat' | 'files') {
+    setRoute({ ...route, tab, settings: false });
+  }
+
+  function handleSettingsClick() {
+    setRoute({ ...route, settings: true });
+  }
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -77,9 +87,9 @@ export default function ProjectDetail({
         {TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => onTabChange(t.key)}
+            onClick={() => handleTabChange(t.key)}
             className={`text-sm font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
-              tab === t.key
+              activeTab === t.key
                 ? 'text-primary border-b-2 border-accent'
                 : 'text-secondary hover:text-primary'
             }`}
@@ -87,6 +97,16 @@ export default function ProjectDetail({
             {t.label}
           </button>
         ))}
+        <button
+          onClick={handleSettingsClick}
+          className={`text-sm font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
+            route.settings
+              ? 'text-primary border-b-2 border-accent'
+              : 'text-secondary hover:text-primary'
+          }`}
+        >
+          Settings
+        </button>
       </div>
 
       {/* Tab content */}

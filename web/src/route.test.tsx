@@ -1,0 +1,314 @@
+// Orbital — An operating system for AI agents
+// Copyright (C) 2026 Orbital Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+/**
+ * Tests for the Route type and Sidebar + ProjectDetail routing integration.
+ *
+ * Requirements verified:
+ *   1. Selecting a project produces a project route with tab 'chat' and the right projectId.
+ *   2. Switching tabs updates route.tab and preserves projectId (and sessionId if set).
+ *   3. Setting route.sessionId and then switching tabs preserves sessionId.
+ *   4. The settings flag (route.settings) toggles the settings surface without losing
+ *      the project/tab context, and "back" (re-clicking a tab) returns to the project route.
+ *   5. Sidebar produces the correct project route when a project is clicked.
+ */
+
+import { render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import type { Route } from './route';
+import Sidebar from './components/Sidebar';
+import ProjectDetail from './components/ProjectDetail';
+import type { Project, AgentRunStatus } from './types';
+
+// Minimal Project fixture
+function makeProject(id: string): Project {
+  return {
+    project_id: id,
+    name: `Project ${id}`,
+    workspace: `/tmp/${id}`,
+    model: 'claude-sonnet-4-5',
+    api_key: '',
+    base_url: null,
+    autonomy: 'supervised',
+    instructions: '',
+    is_scratch: false,
+  } as Project;
+}
+
+// ─── Sidebar tests ───────────────────────────────────────────────────────────
+
+describe('Sidebar routing', () => {
+  it('clicking a project invokes onSelectProject with the project id', () => {
+    const projects = [makeProject('proj-1'), makeProject('proj-2')];
+    const onSelectProject = vi.fn<[string], void>();
+
+    render(
+      <Sidebar
+        projects={projects}
+        agentStatuses={{}}
+        statusSummaries={{}}
+        pendingApprovals={{}}
+        route={{ name: 'list' }}
+        connectionState="connected"
+        onSelectProject={onSelectProject}
+        onNewProject={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Project proj-1'));
+
+    expect(onSelectProject).toHaveBeenCalledOnce();
+    expect(onSelectProject).toHaveBeenCalledWith('proj-1');
+  });
+
+  it('clicking a different project invokes onSelectProject with that id', () => {
+    const projects = [makeProject('alpha'), makeProject('beta')];
+    const onSelectProject = vi.fn<[string], void>();
+
+    render(
+      <Sidebar
+        projects={projects}
+        agentStatuses={{}}
+        statusSummaries={{}}
+        pendingApprovals={{}}
+        route={{ name: 'project', projectId: 'alpha', tab: 'chat' }}
+        connectionState="connected"
+        onSelectProject={onSelectProject}
+        onNewProject={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Project beta'));
+
+    expect(onSelectProject).toHaveBeenCalledWith('beta');
+  });
+
+  it('highlights the active project from route.projectId', () => {
+    const projects = [makeProject('active'), makeProject('inactive')];
+
+    const { container } = render(
+      <Sidebar
+        projects={projects}
+        agentStatuses={{}}
+        statusSummaries={{}}
+        pendingApprovals={{}}
+        route={{ name: 'project', projectId: 'active', tab: 'chat' }}
+        connectionState="connected"
+        onSelectProject={vi.fn()}
+        onNewProject={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    // The active button should have bg-card-hover; inactive should not
+    const buttons = container.querySelectorAll('nav button');
+    expect(buttons[0].className).toContain('bg-card-hover');
+    expect(buttons[1].className).not.toMatch(/\bbg-card-hover\b(?!\/)/);
+  });
+});
+
+// ─── Mobile select-project regression ─────────────────────────────────────────
+//
+// Regression guard: on mobile, selecting a project from the Sidebar must drive
+// mobileView to 'content', otherwise the content pane stays hidden and the user
+// sees a blank screen. The mobile transition lives in App's onSelectProject
+// handler (alongside setRoute). This harness replicates that wiring — a small
+// host owns both `route` and `mobileView`, threads a select handler that mutates
+// both into the Sidebar, and asserts the click flips mobileView to 'content'.
+
+describe('Sidebar mobile select-project regression', () => {
+  function Harness({ onMobileView }: { onMobileView: (v: string) => void }) {
+    const [route, setRoute] = useState<Route>({ name: 'list' });
+    const [, setMobileView] = useState<'sidebar' | 'content'>('sidebar');
+
+    // Mirrors App.handleSelectProject: set the route AND transition mobile view.
+    function handleSelectProject(id: string) {
+      setRoute({ name: 'project', projectId: id, tab: 'chat', sessionId: undefined });
+      setMobileView('content');
+      onMobileView('content');
+    }
+
+    return (
+      <Sidebar
+        projects={[makeProject('p-mob')]}
+        agentStatuses={{}}
+        statusSummaries={{}}
+        pendingApprovals={{}}
+        route={route}
+        connectionState="connected"
+        onSelectProject={handleSelectProject}
+        onNewProject={vi.fn()}
+        onSettings={vi.fn()}
+      />
+    );
+  }
+
+  it('selecting a project transitions mobileView to "content"', () => {
+    const onMobileView = vi.fn<[string], void>();
+    render(<Harness onMobileView={onMobileView} />);
+
+    fireEvent.click(screen.getByText('Project p-mob'));
+
+    expect(onMobileView).toHaveBeenCalledWith('content');
+  });
+});
+
+// ─── ProjectDetail routing tests ─────────────────────────────────────────────
+
+describe('ProjectDetail routing', () => {
+  const project = makeProject('proj-42');
+  const baseRoute: Extract<Route, { name: 'project' }> = {
+    name: 'project',
+    projectId: 'proj-42',
+    tab: 'chat',
+  };
+
+  it('switching tabs updates route.tab and preserves projectId', () => {
+    const setRoute = vi.fn<[Route], void>();
+
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={baseRoute}
+        setRoute={setRoute}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Queue'));
+    expect(setRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'project', projectId: 'proj-42', tab: 'queue' }),
+    );
+  });
+
+  it('switching tabs preserves sessionId when set', () => {
+    const setRoute = vi.fn<[Route], void>();
+    const routeWithSession: Extract<Route, { name: 'project' }> = {
+      ...baseRoute,
+      tab: 'chat',
+      sessionId: 'sess-abc',
+    };
+
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={routeWithSession}
+        setRoute={setRoute}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Files'));
+    const produced = setRoute.mock.calls[0][0];
+    expect(produced).toMatchObject({
+      name: 'project',
+      projectId: 'proj-42',
+      tab: 'files',
+      sessionId: 'sess-abc',
+    });
+  });
+
+  it('clicking Settings sets route.settings=true, preserving project/tab', () => {
+    const setRoute = vi.fn<[Route], void>();
+
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={baseRoute}
+        setRoute={setRoute}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Settings'));
+    const produced = setRoute.mock.calls[0][0];
+    expect(produced).toMatchObject({
+      name: 'project',
+      projectId: 'proj-42',
+      tab: 'chat',
+      settings: true,
+    });
+  });
+
+  it('clicking a tab from settings clears route.settings (back to project)', () => {
+    const setRoute = vi.fn<[Route], void>();
+    const settingsRoute: Extract<Route, { name: 'project' }> = {
+      ...baseRoute,
+      tab: 'queue',
+      settings: true,
+    };
+
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={settingsRoute}
+        setRoute={setRoute}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Chat'));
+    const produced = setRoute.mock.calls[0][0];
+    expect(produced).toMatchObject({
+      name: 'project',
+      projectId: 'proj-42',
+      tab: 'chat',
+      settings: false,
+    });
+  });
+
+  it('settings tab is highlighted when route.settings is true', () => {
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={{ ...baseRoute, settings: true }}
+        setRoute={vi.fn()}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    const settingsBtn = screen.getByText('Settings');
+    expect(settingsBtn.className).toContain('border-b-2');
+  });
+
+  it('no tab is highlighted when settings is active', () => {
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus={'idle' as AgentRunStatus}
+        route={{ ...baseRoute, tab: 'chat', settings: true }}
+        setRoute={vi.fn()}
+        onStopAgent={vi.fn()}
+      />,
+    );
+
+    // Chat tab should NOT be highlighted
+    const chatBtn = screen.getByText('Chat');
+    expect(chatBtn.className).not.toContain('border-b-2');
+  });
+});
+
+// ─── Route type shape tests ───────────────────────────────────────────────────
+
+describe('Route type', () => {
+  it('project route carries sessionId that survives tab changes when spread', () => {
+    const route: Route = { name: 'project', projectId: 'p1', tab: 'chat', sessionId: 'sess-99' };
+    // Simulate what ProjectDetail.handleTabChange does
+    const after: Route = { ...(route as Extract<Route, { name: 'project' }>), tab: 'files', settings: false };
+    expect(after).toMatchObject({ name: 'project', projectId: 'p1', tab: 'files', sessionId: 'sess-99' });
+  });
+
+  it('project route sessionId defaults to undefined when not provided', () => {
+    const route: Route = { name: 'project', projectId: 'p1', tab: 'queue' };
+    expect((route as Extract<Route, { name: 'project' }>).sessionId).toBeUndefined();
+  });
+});

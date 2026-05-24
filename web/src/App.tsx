@@ -20,19 +20,18 @@ import type {
   ProjectUpdateRequest,
   WebSocketEvent,
 } from './types';
+import type { Route } from './route';
 import SetupGate from './components/SetupGate';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import CreateProject from './components/CreateProject';
-import ProjectDetail, { type DetailTab } from './components/ProjectDetail';
+import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsView from './components/SettingsView';
 import ChatView from './components/ChatView';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
 import { api, isRelayMode } from './config';
-
-type View = 'list' | 'create' | 'detail' | 'settings';
 
 function mapConnectionState(
   state: ConnectionState,
@@ -60,9 +59,9 @@ export default function App() {
 
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [view, setView] = useState<View>('list');
-  const [tab, setTab] = useState<DetailTab>('queue');
+  const [route, setRoute] = useState<Route>({ name: 'list' });
+  // Global settings overlay — separate from per-project route.settings
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -73,6 +72,9 @@ export default function App() {
   // tab switch doesn't block on the daemon's /agents/available cache miss
   // (cold call can take up to 8s). null = not yet loaded.
   const [agentsAvailable, setAgentsAvailable] = useState<Array<{ slug: string; name: string }> | null>(null);
+
+  // Derive selected project ID from route for convenience
+  const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
   const { triggers, fetchTriggers, toggleTrigger, deleteTrigger } = useTriggers(selectedProjectId ?? '');
 
@@ -334,7 +336,8 @@ export default function App() {
 
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === 'navigate' && event.data.projectId) {
-        handleSelectProject(event.data.projectId);
+        setRoute({ name: 'project', projectId: event.data.projectId, tab: 'chat', sessionId: undefined });
+        setMobileView('content');
       }
     }
 
@@ -350,23 +353,18 @@ export default function App() {
   }
 
   function handleSelectProject(id: string) {
-    setSelectedProjectId(id);
-    setView('detail');
-    setTab('queue');
+    setRoute({ name: 'project', projectId: id, tab: 'chat', sessionId: undefined });
     setMobileView('content');
   }
 
   function handleNewProject() {
-    setView('create');
-    setSelectedProjectId(null);
+    setRoute({ name: 'create' });
     setMobileView('content');
   }
 
   async function handleCreateProject(data: ProjectCreateRequest) {
     const created = await createProject(data);
-    setSelectedProjectId(created.project_id);
-    setView('detail');
-    setTab('queue');
+    setRoute({ name: 'project', projectId: created.project_id, tab: 'chat', sessionId: undefined });
   }
 
   async function handleUpdateProject(data: ProjectUpdateRequest) {
@@ -377,8 +375,7 @@ export default function App() {
   async function handleDeleteProject() {
     if (!selectedProjectId) return;
     await deleteProject(selectedProjectId);
-    setSelectedProjectId(null);
-    setView('list');
+    setRoute({ name: 'list' });
     setMobileView('sidebar');
   }
 
@@ -420,9 +417,9 @@ export default function App() {
     );
   }
 
-  const selectedProject = projects.find(
-    (p) => p.project_id === selectedProjectId,
-  );
+  const selectedProject = route.name === 'project'
+    ? projects.find((p) => p.project_id === route.projectId)
+    : undefined;
 
   function handleMobileBack() {
     setMobileView('sidebar');
@@ -439,11 +436,14 @@ export default function App() {
           agentStatuses={agentStatuses}
           statusSummaries={statusSummaries}
           pendingApprovals={pendingApprovals}
-          selectedProjectId={selectedProjectId}
+          route={route}
           connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
           onSelectProject={handleSelectProject}
           onNewProject={handleNewProject}
-          onSettings={() => { setView('settings'); setSelectedProjectId(null); setMobileView('content'); }}
+          onSettings={() => {
+            setShowGlobalSettings(true);
+            setMobileView('content');
+          }}
         />
       </div>
 
@@ -469,45 +469,48 @@ export default function App() {
           </div>
         )}
 
-        {view === 'settings' && (
+        {showGlobalSettings && (
           <GlobalSettings
-            onBack={() => { setView(selectedProjectId ? 'detail' : 'list'); setMobileView('sidebar'); }}
+            onBack={() => { setShowGlobalSettings(false); setMobileView('sidebar'); }}
           />
         )}
 
-        {view === 'create' && (
+        {!showGlobalSettings && route.name === 'create' && (
           <CreateProject
             onSubmit={handleCreateProject}
-            onCancel={() => { setView(selectedProjectId ? 'detail' : 'list'); setMobileView('sidebar'); }}
+            onCancel={() => {
+              setRoute({ name: 'list' });
+              setMobileView('sidebar');
+            }}
           />
         )}
 
-        {view === 'detail' && selectedProject && (
+        {!showGlobalSettings && route.name === 'project' && selectedProject && (
           <ProjectDetail
             project={selectedProject}
             agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
             statusSummary={statusSummaries[selectedProject.project_id]}
-            tab={tab}
-            onTabChange={setTab}
+            route={route}
+            setRoute={setRoute}
             onStopAgent={handleCancelMessage}
             triggers={triggers}
             onTriggerToggle={toggleTrigger}
             onTriggerDelete={deleteTrigger}
           >
-            {tab === 'settings' && (
+            {route.settings && (
               <SettingsView
                 project={selectedProject}
                 onSave={handleUpdateProject}
                 onDelete={handleDeleteProject}
               />
             )}
-            {tab === 'queue' && (
+            {!route.settings && route.tab === 'queue' && (
               <QueueTab
                 key={`queue-${selectedProject.project_id}`}
                 projectId={selectedProject.project_id}
               />
             )}
-            {tab === 'chat' && (
+            {!route.settings && route.tab === 'chat' && (
               <ChatView
                 key={selectedProject.project_id}
                 projectId={selectedProject.project_id}
@@ -517,13 +520,13 @@ export default function App() {
                 mentionAgents={agentsAvailable ?? []}
               />
             )}
-            {tab === 'files' && (
+            {!route.settings && route.tab === 'files' && (
               <FileExplorer projectId={selectedProject.project_id} />
             )}
           </ProjectDetail>
         )}
 
-        {view === 'list' && !selectedProjectId && (
+        {!showGlobalSettings && route.name === 'list' && (
           <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
             <p className="text-secondary text-sm">
               {projects.length === 0
@@ -539,6 +542,11 @@ export default function App() {
               </button>
             )}
           </div>
+        )}
+
+        {/* 'blocked' route UI (BlockedBadge view) is a later task — minimal stub for now. */}
+        {!showGlobalSettings && route.name === 'blocked' && (
+          <div data-testid="blocked-route-stub" />
         )}
       </main>
     </div>

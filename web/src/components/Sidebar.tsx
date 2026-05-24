@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { Project, AgentRunStatus } from '../types';
+import type { Route } from '../route';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -11,7 +12,7 @@ interface SidebarProps {
   agentStatuses: Record<string, AgentRunStatus>;
   statusSummaries: Record<string, string>;
   pendingApprovals: Record<string, number>;
-  selectedProjectId: string | null;
+  route: Route;
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
   onNewProject: () => void;
@@ -40,7 +41,7 @@ function getProjectDotColor(
 
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
-  return str.slice(0, max) + '\u2026';
+  return str.slice(0, max) + '…';
 }
 
 export default function Sidebar({
@@ -48,12 +49,18 @@ export default function Sidebar({
   agentStatuses,
   statusSummaries,
   pendingApprovals,
-  selectedProjectId,
+  route,
   connectionState,
   onSelectProject,
   onNewProject,
   onSettings,
 }: SidebarProps) {
+  const selectedProjectId = route.name === 'project' ? route.projectId : null;
+
+  function handleSelectProject(id: string) {
+    onSelectProject(id);
+  }
+
   return (
     <aside className="w-[260px] shrink-0 bg-sidebar border-r border-border flex flex-col h-full max-md:w-full">
       {/* Wordmark */}
@@ -83,7 +90,7 @@ export default function Sidebar({
                 return (
                   <button
                     key={project.project_id}
-                    onClick={() => onSelectProject(project.project_id)}
+                    onClick={() => handleSelectProject(project.project_id)}
                     className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
@@ -121,7 +128,7 @@ export default function Sidebar({
                 return (
                   <button
                     key={project.project_id}
-                    onClick={() => onSelectProject(project.project_id)}
+                    onClick={() => handleSelectProject(project.project_id)}
                     className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
@@ -184,7 +191,7 @@ export default function Sidebar({
             {connectionState === 'connected'
               ? 'Connected'
               : connectionState === 'reconnecting'
-                ? 'Reconnecting\u2026'
+                ? 'Reconnecting…'
                 : connectionState === 'daemon_offline'
                   ? 'Desktop offline'
                   : 'Disconnected'}
