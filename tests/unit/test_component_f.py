@@ -1406,10 +1406,16 @@ class TestRESTEndpoints:
         # Inject two handles directly into the agent manager.
         mgr = agents_v2._agent_manager
 
+        # A real Session carries TWO distinct identity values:
+        #   .session_id   = F1, user-facing chat id (e.g. "default")
+        #   .session_uuid = F2, JSONL filename stem (e.g. "proj_run_abc123")
+        # The endpoint's "session_uuid" field MUST surface F2 (the stem), since
+        # consumers build ``{session_uuid}.jsonl`` from it.
         running_session = MagicMock(name="running_session")
         running_session.is_stopped.return_value = False
         running_session._paused_for_approval = False
-        running_session.session_id = "uuid-run"
+        running_session.session_id = "default"          # F1
+        running_session.session_uuid = "proj_run_abc123"  # F2 (JSONL stem)
         running_task = MagicMock()
         running_task.done.return_value = False
         mgr._handles[(pid, "default")] = MagicMock(
@@ -1419,7 +1425,8 @@ class TestRESTEndpoints:
         idle_session = MagicMock(name="idle_session")
         idle_session.is_stopped.return_value = False
         idle_session._paused_for_approval = False
-        idle_session.session_id = "uuid-idle"
+        idle_session.session_id = "sess_b"               # F1
+        idle_session.session_uuid = "proj_idle_def456"   # F2 (JSONL stem)
         idle_task = MagicMock()
         idle_task.done.return_value = True
         mgr._handles[(pid, "sess_b")] = MagicMock(
@@ -1436,10 +1443,11 @@ class TestRESTEndpoints:
             # Default session is sorted first.
             assert sessions[0]["session_id"] == "default"
             assert sessions[0]["status"] == "running"
-            assert sessions[0]["session_uuid"] == "uuid-run"
+            # session_uuid is F2 (the JSONL stem), not F1.
+            assert sessions[0]["session_uuid"] == "proj_run_abc123"
             assert sessions[1]["session_id"] == "sess_b"
             assert sessions[1]["status"] == "idle"
-            assert sessions[1]["session_uuid"] == "uuid-idle"
+            assert sessions[1]["session_uuid"] == "proj_idle_def456"
         finally:
             mgr._handles.pop((pid, "default"), None)
             mgr._handles.pop((pid, "sess_b"), None)

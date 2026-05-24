@@ -1558,7 +1558,12 @@ class AgentManager:
                 "source": "user",
             })
 
+        # Approval is resolved — clear the pause flag so the blocked-count
+        # broadcast sees zero pending for this session. loop.run() also clears
+        # it on entry, but we clear early so the count is accurate immediately.
+        handle.session._paused_for_approval = False
         handle.session.resume()
+        self._broadcast_blocked_count()
         await self._start_loop(project_id, session_id=session_id)
 
     async def deny(self, project_id: str, tool_call_id: str, reason: str, *,
@@ -1597,7 +1602,11 @@ class AgentManager:
             )
 
         handle.interceptor.remove_pending(tool_call_id)
+        # Denial resolves the approval — clear the pause flag early so the
+        # blocked-count broadcast sees the correct count immediately.
+        handle.session._paused_for_approval = False
         handle.session.resume()
+        self._broadcast_blocked_count()
         await self._start_loop(project_id, session_id=session_id)
 
     async def new_session(self, project_id: str, *,
@@ -1819,6 +1828,8 @@ class AgentManager:
                     "project_id": project_id,
                     "status": "idle",
                 }, session_id=session_id)
+                # Notify all clients that blocked count dropped.
+                self._broadcast_blocked_count()
                 return {"status": "cancelled"}
             return {"status": "idle"}
 
@@ -1939,17 +1950,53 @@ class AgentManager:
                     status = "waiting"
                 else:
                     status = "idle"
+            # last_activity_at: timestamp of the most recent message in-memory.
+            # Falls back to None if the session has no messages yet.
+            msgs = getattr(handle.session, "_messages", None) or []
+            last_activity_at = msgs[-1].get("timestamp") if msgs else None
+
             sessions.append({
                 "session_id": sid,
                 "status": status,
-                "session_uuid": getattr(handle.session, "session_id", None),
+                # F2 JSONL filename stem (session_uuid), NOT the F1 user-facing
+                # session_id. Consumers (e.g. the /chat session_id filter) build
+                # ``{session_uuid}.jsonl`` from this value, so it MUST be F2.
+                "session_uuid": getattr(handle.session, "session_uuid", None),
                 "last_terminal_event": self._last_terminal_events.get(
                     (pid, sid),
                 ),
+                "last_activity_at": last_activity_at,
             })
         # Stable ordering — default session first, then alphabetical for others.
         sessions.sort(key=lambda s: (s["session_id"] != DEFAULT_SESSION_ID, s["session_id"]))
         return sessions
+
+    def list_blocked_sessions(self) -> list[dict]:
+        """Return all sessions currently in ``pending_approval`` state, across
+        all projects.
+
+        Each entry is ``{"project_id": str, "session_id": str}``.
+        Used by ``GET /api/v2/blocked`` and the WS ``blocked-count-changed`` event.
+        """
+        blocked = []
+        for (pid, sid), handle in self._handles.items():
+            if handle.session._paused_for_approval:
+                blocked.append({"project_id": pid, "session_id": sid})
+        return blocked
+
+    def _broadcast_blocked_count(self) -> None:
+        """Emit a global ``blocked-count-changed`` WS event with the current
+        aggregate blocked-session list.
+
+        Called after every transition into or out of ``pending_approval`` so
+        all connected clients stay in sync without polling.
+        """
+        blocked = self.list_blocked_sessions()
+        self._ws.broadcast_global({
+            "type": "blocked-count-changed",
+            "blocked_count": len(blocked),
+            "blocked_sessions": blocked,
+        })
 
     def get_session(self, project_id: str, *,
                     session_id: str | None = None):
@@ -2293,6 +2340,9 @@ class AgentManager:
                     "status": "pending_approval",
                     "source": "management",
                 }, session_id=session_id)
+                # Notify all clients that the global blocked count changed
+                # (this session just entered pending_approval).
+                self._broadcast_blocked_count()
                 self._write_state()
                 return
 

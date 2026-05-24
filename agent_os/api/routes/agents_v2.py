@@ -816,9 +816,14 @@ async def inject_message(project_id: str, req: InjectRequest):
 
 @router.get("/agents/{project_id}/run-status")
 async def agent_run_status(project_id: str):
-    """Return the current runtime status for a project agent."""
+    """Return the current runtime status for a project agent.
+
+    Also returns ``current_holder_session_id``: the F1 session_id that
+    currently holds the project's active-loop slot, or None.
+    """
     status = _agent_manager.get_run_status(project_id)
-    return {"project_id": project_id, "status": status}
+    holder = _agent_manager.current_holder_session_id(project_id)
+    return {"project_id": project_id, "status": status, "current_holder_session_id": holder}
 
 
 @router.get("/agents/{project_id}/pending-approval")
@@ -857,6 +862,25 @@ async def list_project_sessions(project_id: str):
             raise HTTPException(status_code=404, detail="Project not found")
     sessions = _agent_manager.list_sessions(project_id)
     return {"project_id": project_id, "sessions": sessions}
+
+
+@router.get("/blocked")
+async def list_blocked_globally():
+    """Global blocked-session summary across ALL projects.
+
+    Returns the count and list of sessions currently in ``pending_approval``
+    state daemon-wide.  Useful for a global badge / notification badge
+    that shows how many sessions are awaiting user approval.
+
+    Response shape::
+
+        {
+            "blocked_count": int,
+            "blocked_sessions": [{"project_id": str, "session_id": str}, ...]
+        }
+    """
+    blocked = _agent_manager.list_blocked_sessions()
+    return {"blocked_count": len(blocked), "blocked_sessions": blocked}
 
 
 @router.post("/agents/{project_id}/cancel")
@@ -1331,11 +1355,82 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
     return result, total
 
 
+def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tuple[list[dict], int]:
+    """Read chat messages from a single JSONL file with pagination. Runs in a thread.
+
+    Returns (messages, total_count). Mirrors ``_read_chat_messages`` pagination
+    semantics but operates on one file instead of a directory.
+    """
+    if not os.path.isfile(jsonl_path):
+        return [], 0
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        lines = [l for l in f if l.strip()]
+
+    total = len(lines)
+
+    if limit <= 0:
+        messages = []
+        for line in lines:
+            try:
+                messages.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return messages, total
+
+    end = total - offset
+    start = max(0, end - limit)
+    if end <= 0:
+        return [], total
+
+    result = []
+    for line in lines[start:end]:
+        try:
+            result.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return result, total
+
+
+def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None:
+    """Resolve an F1 ``session_id`` to its F2 JSONL stem by scanning disk.
+
+    Fallback for the chat ``session_id`` filter when no live handle exists
+    (e.g. a stopped/popped session). Scans each ``*.jsonl`` for a record whose
+    ``session_id`` field matches, returning the filename stem (F2). Runs in a
+    thread — does blocking disk I/O, must not be called on the event loop.
+
+    Returns the F2 stem, or None if no session JSONL carries that ``session_id``.
+    """
+    if not os.path.isdir(sessions_dir):
+        return None
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("session_id") == session_id:
+                        return fname[:-6]  # strip .jsonl
+        except OSError:
+            pass
+    return None
+
+
 @router.get("/agents/{project_id}/chat")
 async def chat_history(
     project_id: str,
     limit: int = Query(default=0, ge=0, description="Max messages to return (0 = all)"),
     offset: int = Query(default=0, ge=0, description="Skip first N messages from the end"),
+    session_id: str | None = Query(default=None, description="Filter to a specific F1 session_id"),
 ):
     """Return chat history, newest messages last.
 
@@ -1343,6 +1438,11 @@ async def chat_history(
     - limit=20, offset=0 → last 20 messages
     - limit=20, offset=20 → messages 21-40 from the end
     - limit=0 (default) → all messages (backward-compatible)
+
+    When ``session_id`` is provided (F1 user-facing id), only messages from
+    that session are returned.  The F1→F2 mapping is resolved via
+    ``list_sessions()`` which already carries both ids.  Sub-agent transcript
+    entries are included only in the unfiltered (no ``session_id``) path.
 
     Response includes X-Total-Count header for pagination UI.
     """
@@ -1353,6 +1453,42 @@ async def chat_history(
     workspace = project["workspace"]
     from agent_os.agent.project_paths import ProjectPaths
     sessions_dir = ProjectPaths(workspace).sessions_dir
+
+    # ── session_id filter path ────────────────────────────────────────────
+    if session_id is not None:
+        # Map F1 session_id → F2 session_uuid so we know which JSONL to read.
+        # list_sessions returns both fields for active/idle sessions; for
+        # stopped/popped sessions the handle is gone but the JSONL still
+        # exists on disk — fall back to scanning the JSONL content for a
+        # matching session_id field (offloaded to a thread; it does blocking
+        # disk I/O and must not run on the event loop).
+        session_uuid: str | None = None
+        for entry in _agent_manager.list_sessions(project_id):
+            if entry["session_id"] == session_id:
+                session_uuid = entry["session_uuid"]
+                break
+
+        if session_uuid is None:
+            session_uuid = await asyncio.to_thread(
+                _find_session_uuid_on_disk, sessions_dir, session_id
+            )
+
+        if session_uuid is None:
+            # Unknown session — return empty rather than 404 (may not be active yet).
+            resp = JSONResponse(content=[])
+            resp.headers["X-Total-Count"] = "0"
+            return resp
+
+        # Read only that session's JSONL.
+        session_jsonl = os.path.join(sessions_dir, f"{session_uuid}.jsonl")
+        messages, total = await asyncio.to_thread(
+            _read_chat_messages_single, session_jsonl, limit, offset
+        )
+        resp = JSONResponse(content=messages)
+        resp.headers["X-Total-Count"] = str(total)
+        return resp
+
+    # ── unfiltered path (existing behaviour) ─────────────────────────────
 
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []
@@ -1386,7 +1522,6 @@ async def chat_history(
         else:
             messages = all_messages
 
-    from starlette.responses import JSONResponse
     resp = JSONResponse(content=messages)
     resp.headers["X-Total-Count"] = str(total)
     return resp
