@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { CheckCircle2, Circle, Loader2, X, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Circle, Loader2, X, AlertCircle, Zap } from 'lucide-react';
 import type { QueueItem } from '../types';
 
 interface QueueItemCardProps {
@@ -31,11 +31,19 @@ function StateIcon({ state }: { state: QueueItem['state'] }) {
   }
 }
 
+/** Returns true when the item was spawned by an automation trigger. */
+function isTriggerItem(item: QueueItem): boolean {
+  return item.source === 'trigger' || item.trigger_name !== undefined;
+}
+
 export default function QueueItemCard({ item, onRemove }: QueueItemCardProps) {
   const latest = item.attempts.length > 0 ? item.attempts[item.attempts.length - 1] : null;
   const showDetail =
     (item.state === 'done' && latest?.summary) ||
     (item.state === 'blocked' && latest?.block_reason);
+
+  const fromTrigger = isTriggerItem(item);
+  const triggerLabel = item.trigger_name ?? 'automation';
 
   return (
     <div
@@ -58,6 +66,17 @@ export default function QueueItemCard({ item, onRemove }: QueueItemCardProps) {
           </button>
         )}
       </div>
+      {fromTrigger && (
+        <div
+          className="flex items-center gap-1 pl-6"
+          data-testid="queue-item-trigger-origin"
+        >
+          <Zap className="w-3 h-3 shrink-0 text-accent" aria-hidden="true" />
+          <span className="text-xs text-accent">
+            from: {triggerLabel}
+          </span>
+        </div>
+      )}
       {showDetail && (
         <p className="text-xs text-secondary pl-6">
           {item.state === 'done' ? latest?.summary : latest?.block_reason}

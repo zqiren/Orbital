@@ -368,7 +368,24 @@ export interface QueueItem {
   priority: number;
   review_before_advance: boolean;
   state: QueueItemState;
-  source: 'user' | 'upload';
+  /**
+   * Origin of the queue item. Backend currently emits only 'user' | 'upload'.
+   * 'trigger' is a Phase 1B visual-only extension — the backend does NOT
+   * populate this value yet; real wiring ships in a later batch.
+   */
+  source: 'user' | 'upload' | 'trigger';
+  /**
+   * Human-readable name of the trigger that spawned this item.
+   * Only present when source === 'trigger'. Backend does not emit this yet
+   * (Phase 1B visual-only; real wiring is a later batch).
+   */
+  trigger_name?: string;
+  /**
+   * Stable ID of the trigger that spawned this item.
+   * Only present when source === 'trigger'. Backend does not emit this yet
+   * (Phase 1B visual-only; real wiring is a later batch).
+   */
+  trigger_id?: string;
   attempts: QueueAttempt[];
   idempotency_key: string | null;
   interrupted_count: number;
