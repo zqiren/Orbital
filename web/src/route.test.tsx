@@ -214,7 +214,7 @@ describe('ProjectDetail routing', () => {
     });
   });
 
-  it('clicking Settings sets route.settings=true, preserving project/tab', () => {
+  it('clicking the gear icon sets route.settings=true, preserving project/tab', () => {
     const setRoute = vi.fn<[Route], void>();
 
     render(
@@ -227,7 +227,7 @@ describe('ProjectDetail routing', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Settings'));
+    fireEvent.click(screen.getByRole('button', { name: /project settings/i }));
     const produced = setRoute.mock.calls[0][0];
     expect(produced).toMatchObject({
       name: 'project',
@@ -265,7 +265,7 @@ describe('ProjectDetail routing', () => {
     });
   });
 
-  it('settings tab is highlighted when route.settings is true', () => {
+  it('gear icon is present in the header regardless of route.settings value', () => {
     render(
       <ProjectDetail
         project={project}
@@ -276,8 +276,8 @@ describe('ProjectDetail routing', () => {
       />,
     );
 
-    const settingsBtn = screen.getByText('Settings');
-    expect(settingsBtn.className).toContain('border-b-2');
+    // The gear button lives in the header — it must always be accessible
+    expect(screen.getByRole('button', { name: /project settings/i })).toBeInTheDocument();
   });
 
   it('no tab is highlighted when settings is active', () => {

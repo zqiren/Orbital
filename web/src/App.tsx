@@ -27,7 +27,7 @@ import Sidebar from './components/Sidebar';
 import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
-import SettingsView from './components/SettingsView';
+import SettingsModalPage from './components/SettingsModalPage';
 import ChatView from './components/ChatView';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
@@ -485,7 +485,17 @@ export default function App() {
           />
         )}
 
-        {!showGlobalSettings && route.name === 'project' && selectedProject && (
+        {!showGlobalSettings && route.name === 'project' && selectedProject && route.settings && (
+          <SettingsModalPage
+            project={selectedProject}
+            route={route}
+            setRoute={setRoute}
+            onSave={handleUpdateProject}
+            onDelete={handleDeleteProject}
+          />
+        )}
+
+        {!showGlobalSettings && route.name === 'project' && selectedProject && !route.settings && (
           <ProjectDetail
             project={selectedProject}
             agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
@@ -497,20 +507,13 @@ export default function App() {
             onTriggerToggle={toggleTrigger}
             onTriggerDelete={deleteTrigger}
           >
-            {route.settings && (
-              <SettingsView
-                project={selectedProject}
-                onSave={handleUpdateProject}
-                onDelete={handleDeleteProject}
-              />
-            )}
-            {!route.settings && route.tab === 'queue' && (
+            {route.tab === 'queue' && (
               <QueueTab
                 key={`queue-${selectedProject.project_id}`}
                 projectId={selectedProject.project_id}
               />
             )}
-            {!route.settings && route.tab === 'chat' && (
+            {route.tab === 'chat' && (
               <ChatView
                 key={selectedProject.project_id}
                 projectId={selectedProject.project_id}
@@ -520,7 +523,7 @@ export default function App() {
                 mentionAgents={agentsAvailable ?? []}
               />
             )}
-            {!route.settings && route.tab === 'files' && (
+            {route.tab === 'files' && (
               <FileExplorer projectId={selectedProject.project_id} />
             )}
           </ProjectDetail>

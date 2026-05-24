@@ -7,6 +7,7 @@ import type { AgentRunStatus, Project, Trigger } from '../types';
 import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
+import SettingsIcon from './SettingsIcon';
 
 interface ProjectDetailProps {
   project: Project;
@@ -59,6 +60,7 @@ export default function ProjectDetail({
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-xl font-semibold text-primary truncate">{project.name}</h1>
           <StatusBadge status={agentStatus} />
+          <SettingsIcon onClick={handleSettingsClick} />
         </div>
         {isRunning && (
           <button
@@ -97,16 +99,6 @@ export default function ProjectDetail({
             {t.label}
           </button>
         ))}
-        <button
-          onClick={handleSettingsClick}
-          className={`text-sm font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
-            route.settings
-              ? 'text-primary border-b-2 border-accent'
-              : 'text-secondary hover:text-primary'
-          }`}
-        >
-          Settings
-        </button>
       </div>
 
       {/* Tab content */}
