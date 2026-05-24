@@ -5,6 +5,7 @@
 import { useMemo } from 'react';
 import { useQueue } from '../hooks/useQueue';
 import type { QueueItem } from '../types';
+import AutomationsList from './AutomationsList';
 import QueueComposer from './QueueComposer';
 import QueueHeader from './QueueHeader';
 import QueueItemCard from './QueueItemCard';
@@ -88,6 +89,12 @@ export default function QueueTab({ projectId }: QueueTabProps) {
         <Section title="Needs Attention" items={grouped.blocked} onRemove={removeItem} />
         <Section title="Queued" items={grouped.queued} onRemove={removeItem} />
         <Section title="Completed" items={grouped.done} onRemove={removeItem} />
+        <section className="flex flex-col gap-2" data-testid="queue-section-automations">
+          <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
+            Automations
+          </h2>
+          <AutomationsList projectId={projectId} />
+        </section>
       </div>
       <QueueComposer
         onSubmit={(content, opts) =>
