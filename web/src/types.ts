@@ -140,6 +140,14 @@ export interface SessionListEntry {
   last_terminal_event: LastTerminalEvent | null;
   /** ISO timestamp of the last activity in this session, or null. Added in Phase 1B. */
   last_activity_at?: string | null;
+  /**
+   * Origin of the session. Backend does NOT populate this field yet (Phase 1B
+   * visual-only capability — real wiring ships in a later batch). When absent
+   * (undefined) the UI renders the session as 'manual'. When origin === 'queue',
+   * a subtle hue variation is applied to the status dot to signal the session
+   * was dispatched by the queue rather than typed manually.
+   */
+  origin?: 'manual' | 'queue';
 }
 
 export interface AgentStatusEvent {
