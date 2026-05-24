@@ -7,11 +7,13 @@ import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-r
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
+import { useQueue } from '../hooks/useQueue';
 import { transformChatHistory, truncateResult } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock } from '../lib/attachment-parsing';
+import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -368,6 +370,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
   const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
+  // Queue-active gating: when the queue is draining (active), the chat composer
+  // is replaced by ComposerDisabledPrompt — the user must pause the queue first.
+  const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
+  const queueActive = queueSnapshot?.state === 'draining';
   // Auto-start guard, keyed per session. A given session auto-starts at most
   // once (only when truly empty AND it is the slot holder). Switching to a
   // different session must NOT trigger an auto-start for it. See the
@@ -2061,6 +2067,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       )}
 
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-background max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
+        {queueActive ? (
+          <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+        ) : (
         <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
@@ -2221,6 +2230,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

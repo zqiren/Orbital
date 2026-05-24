@@ -112,6 +112,25 @@ vi.mock('../hooks/useAgent', () => ({
   }),
 }));
 
+// Per-test queue state. 'draining' = active (composer disabled); 'stopped' =
+// paused (normal composer visible). Tests override queueState as needed.
+let queueState: 'draining' | 'stopped' = 'stopped';
+const stopQueueMock = vi.fn(async () => undefined);
+
+vi.mock('../hooks/useQueue', () => ({
+  useQueue: () => ({
+    snapshot: { state: queueState, version: 1, items: [], chat_session_id: null },
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    addItem: vi.fn(),
+    removeItem: vi.fn(),
+    editItem: vi.fn(),
+    stopQueue: stopQueueMock,
+    resumeQueue: vi.fn(),
+  }),
+}));
+
 import ChatView from './ChatView';
 import type { Project } from '../types';
 
@@ -136,6 +155,8 @@ beforeEach(() => {
   startAgentCalls.length = 0;
   injectMessageMock = async () => undefined;
   runStatusHolder = null;
+  queueState = 'stopped';
+  stopQueueMock.mockClear();
   resetWs();
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -682,5 +703,86 @@ describe('T5 ChatView: session switching does not auto-start', () => {
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });
     await flushEffects();
     expect(startAgentCalls.length).toBe(afterInitial);
+  });
+});
+
+// ─── T6: queue-active composer gating ─────────────────────────────────────
+
+describe('T6 ChatView: queue-active composer gating', () => {
+  it('renders ComposerDisabledPrompt instead of the textarea when the queue is active', async () => {
+    queueState = 'draining';
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // The composer-disabled prompt must be present.
+    const prompt = container.querySelector('[data-testid="composer-disabled-prompt"]');
+    expect(prompt).toBeTruthy();
+    expect(prompt?.textContent ?? '').toContain('Pause queue to start chatting.');
+
+    // The normal textarea must NOT be present.
+    const textarea = container.querySelector('textarea');
+    expect(textarea).toBeNull();
+  });
+
+  it('renders the normal composer textarea when the queue is stopped (paused)', async () => {
+    queueState = 'stopped';
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // Normal textarea should be present.
+    const textarea = container.querySelector('textarea');
+    expect(textarea).toBeTruthy();
+
+    // The disabled prompt should NOT be present.
+    const prompt = container.querySelector('[data-testid="composer-disabled-prompt"]');
+    expect(prompt).toBeNull();
+  });
+
+  it('gating applies regardless of which session is viewed (project-level)', async () => {
+    queueState = 'draining';
+    // Session A
+    await renderChat({ agentStatus: 'idle', sessionId: 'A' });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeTruthy();
+    expect(container.querySelector('textarea')).toBeNull();
+
+    // Session B — queue is still draining, same behaviour
+    await renderChat({ agentStatus: 'idle', sessionId: 'B' });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeTruthy();
+    expect(container.querySelector('textarea')).toBeNull();
+  });
+
+  it('clicking the pause button in ComposerDisabledPrompt calls stopQueue', async () => {
+    queueState = 'draining';
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    const btn = container.querySelector(
+      '[data-testid="composer-pause-queue-btn"]',
+    ) as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+    });
+
+    expect(stopQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows normal composer when queue transitions from draining to stopped', async () => {
+    // Start with queue active
+    queueState = 'draining';
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeTruthy();
+
+    // Queue stops — re-render with updated state
+    queueState = 'stopped';
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    expect(container.querySelector('textarea')).toBeTruthy();
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeNull();
   });
 });
