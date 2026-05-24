@@ -194,6 +194,8 @@ def _inject_mock_handle(mgr, project_id):
     session = MagicMock()
     session.is_stopped = MagicMock(return_value=False)
     session.stop = MagicMock()
+    # Explicitly not in approval pause (MagicMock auto-attr defaults to truthy).
+    session._paused_for_approval = False
 
     async def _never_done():
         await asyncio.sleep(9999)

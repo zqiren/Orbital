@@ -121,6 +121,25 @@ export interface ChatMessage {
 
 export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'stopped' | 'error' | 'new_session' | 'pending_approval';
 
+// Per-session record of the most recent terminal event. Returned by
+// GET /api/v2/projects/{pid}/sessions on each session entry. Lets the UI
+// render a persistent indicator (e.g., warning glyph for type='error')
+// across WS reconnects and page reloads. Cleared by the backend when the
+// session transitions out of the terminal state via a fresh /inject.
+// See TASK/TASK-state-model-alignment-fixes.md §2.4.
+export interface LastTerminalEvent {
+  type: 'error' | 'stopped' | 'new_session';
+  timestamp: string;
+  details: string | null;
+}
+
+export interface SessionListEntry {
+  session_id: string;
+  status: AgentRunStatus;
+  session_uuid: string | null;
+  last_terminal_event: LastTerminalEvent | null;
+}
+
 export interface AgentStatusEvent {
   type: 'agent.status';
   project_id: string;

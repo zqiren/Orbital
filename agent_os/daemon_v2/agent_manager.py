@@ -93,6 +93,14 @@ class AgentManager:
         # ``_resolve_session_id`` + ``make_session_key``.
         self._handles: dict[SessionKey, ProjectHandle] = {}
         self._idle_poll_tasks: dict[str, asyncio.Task] = {}  # project_id -> poll task
+        # Per-session record of the most recent terminal event (error /
+        # stopped / new_session). Lives outside `_handles` so it survives
+        # handle pop on /stop. Cleared by `_clear_last_terminal_event`
+        # whenever a session transitions out of a terminal state (next
+        # successful inject). Exposed via `list_sessions` so the frontend
+        # can render a persistent warning glyph across WS disconnects and
+        # page reloads. See TASK-state-model-alignment-fixes.md §2.4.
+        self._last_terminal_events: dict[SessionKey, dict] = {}
         self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
         self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
@@ -1109,6 +1117,12 @@ class AgentManager:
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+        # A user-initiated message clears any recorded terminal event for
+        # this session — the user is taking action, so the error/stopped
+        # indicator should no longer light up in the sidebar. Performed
+        # before any case branch so it applies uniformly to Case 1 (queue),
+        # Case 1b (approval-dismiss), Case 2 (hot-resume), Case 3 (start).
+        self._clear_last_terminal_event(project_id, session_id)
         handle = self._handles.get(sk)
         if handle is None:
             # Case 3: no handle — auto-start from project store
@@ -1291,23 +1305,94 @@ class AgentManager:
         the inject route can reject (with 202) when a different session tries
         to start a turn while another session is still mid-turn.
 
-        Approval-paused turns still hold the slot (their task is alive but
-        blocked waiting for the user's decision) — we treat any live task
-        as a holder regardless of whether it's actively streaming or parked
-        at an approval gate.
+        A session holds the slot when ANY of these is true:
 
-        After PR #22's multi-session foundation ``self._handles`` is keyed by
-        ``SessionKey == (project_id, session_id)``. We scan all keys for
-        this ``project_id`` and return the F1 of the first handle whose task
-        is alive. Single-loop discipline (§3) means at most one such handle
-        exists; in the steady state of multi-session this remains true.
+        1. ``handle.task`` is alive and not done — the main loop is
+           streaming, running tools, or between iterations.
+        2. ``session._paused_for_approval`` is True — the loop has exited
+           at an approval boundary but the session is logically still
+           "in" the turn. A new turn from another session would clash
+           with the pending approval decision.
+        3. ``_idle_poll_tasks[project_id]`` is alive — the main loop has
+           exited but sub-agents spawned during the turn are still working
+           (the ``waiting`` state). A concurrent turn from another session
+           would interleave workspace writes with the still-running
+           sub-agents.
+
+        Condition 1 covers ``running``. Condition 2 covers
+        ``pending_approval``. Condition 3 covers ``waiting``. Together
+        they enforce the single-loop-per-project safety claim of §3
+        even past the bare ``task.done()`` boundary.
+
+        After PR #22's multi-session foundation ``self._handles`` is keyed
+        by ``SessionKey == (project_id, session_id)``. We scan all keys
+        for this ``project_id``; single-loop discipline means at most one
+        handle satisfies any of the conditions at a time.
         """
         for (pid, sid), handle in self._handles.items():
             if pid != project_id:
                 continue
+            # Condition 1: main loop active.
             if handle.task is not None and not handle.task.done():
                 return sid
+            # Condition 2: paused for approval (loop exited at approval gate).
+            if handle.session._paused_for_approval:
+                return sid
+            # Condition 3: sub-agents still working (waiting state).
+            poll_task = self._idle_poll_tasks.get(project_id)
+            if poll_task is not None and not poll_task.done():
+                return sid
         return None
+
+    # ── last_terminal_event ────────────────────────────────────────────
+    #
+    # Per-session record of the most recent terminal event (error /
+    # stopped / new_session). Frontend reads via `list_sessions` so an
+    # errored session shows a warning glyph across WS-reconnect and
+    # page-reload boundaries.
+    #
+    # Lifecycle: written by `_set_last_terminal_event` at every
+    # terminal-event broadcast site; cleared by
+    # `_clear_last_terminal_event` on the next non-terminal transition
+    # (a successful inject).
+
+    def _set_last_terminal_event(self, project_id: str, session_id: str,
+                                 event_type: str,
+                                 details: str | None = None) -> None:
+        """Record a terminal event for a session. Idempotent (overwrites)."""
+        from datetime import datetime, timezone
+        self._last_terminal_events[make_session_key(project_id, session_id)] = {
+            "type": event_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": details,
+        }
+
+    def _clear_last_terminal_event(self, project_id: str,
+                                   session_id: str) -> None:
+        """Remove the last_terminal_event for a session (no-op if absent)."""
+        self._last_terminal_events.pop(
+            make_session_key(project_id, session_id), None,
+        )
+
+    def get_last_terminal_event(self, project_id: str, *,
+                                 session_id: str | None = None) -> dict | None:
+        """Return the recorded terminal event, or None if none recorded."""
+        session_id = self._resolve_session_id(session_id)
+        return self._last_terminal_events.get(
+            make_session_key(project_id, session_id),
+        )
+
+    def _broadcast_new_session_terminal_event(self, project_id: str, *,
+                                                session_id: str | None = None) -> None:
+        """Test helper: record a `new_session` terminal event without
+        invoking the full `new_session()` rotation path. Production code
+        records this inside `new_session()` directly; this accessor exists
+        so unit tests can target the recording behavior in isolation.
+        """
+        session_id = self._resolve_session_id(session_id)
+        self._set_last_terminal_event(
+            project_id, session_id, "new_session",
+        )
 
     def get_run_status(self, project_id: str, *,
                        session_id: str | None = None) -> str:
@@ -1642,6 +1727,7 @@ class AgentManager:
 
         # 10. Broadcast new_session event, then idle so frontend status
         #     doesn't stay stuck (enables repeat /new invocations).
+        self._set_last_terminal_event(project_id, session_id, "new_session")
         self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
@@ -1679,12 +1765,61 @@ class AgentManager:
 
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
+
+        Three cases:
+        - No handle → ``no_agent``.
+        - Handle present, paused for approval (task done but
+          ``_paused_for_approval`` True) → dismiss any pending approval,
+          clear the flag, broadcast idle, return ``cancelled``.
+          Mirrors inject Case 1b's approval-dismissal pattern.
+        - Handle present, task running → call ``cancel_turn()``, broadcast
+          idle, return ``cancelled``.
+        - Handle present, task done and not paused → ``idle`` (legitimate
+          no-op — there was nothing to cancel).
         """
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return {"status": "no_agent"}
         if handle.task is None or handle.task.done():
+            # Approval-pause path: the loop exited at the approval boundary
+            # but the session's _paused_for_approval flag keeps it stuck
+            # in pending_approval state. /cancel must clear it.
+            if handle.session._paused_for_approval:
+                # Dismiss any pending approvals (mirrors inject Case 1b at
+                # _on_inject_paused). Single approval is the common case.
+                if handle.interceptor is not None:
+                    for tc_id, data in list(
+                        handle.interceptor._pending_approvals.items()
+                    ):
+                        tool_name = data.get("tool_name", "unknown")
+                        tool_args = data.get("tool_args", {})
+                        if not handle.session.has_result_for(tc_id):
+                            handle.session.append_tool_result(
+                                tc_id,
+                                "DISMISSED: User cancelled the session "
+                                "while this approval was pending.",
+                            )
+                        self._record_approval_decision(
+                            project_id,
+                            tool_name,
+                            tool_args,
+                            "denied",
+                            deny_reason=(
+                                "User cancelled while approval was pending"
+                            ),
+                            session_id=session_id,
+                        )
+                        handle.interceptor.remove_pending(tc_id)
+                # Clear the approval-pause flag and the legacy paused flag.
+                handle.session._paused_for_approval = False
+                handle.session.resume()
+                self._broadcast(project_id, {
+                    "type": "agent.status",
+                    "project_id": project_id,
+                    "status": "idle",
+                }, session_id=session_id)
+                return {"status": "cancelled"}
             return {"status": "idle"}
 
         # cancel_turn exceptions intentionally bubble: cancel_turn has its own
@@ -1761,6 +1896,7 @@ class AgentManager:
             # downstream code that observes it.
             handle.session.stop()
 
+        self._set_last_terminal_event(project_id, session_id, "stopped")
         self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
@@ -1807,6 +1943,9 @@ class AgentManager:
                 "session_id": sid,
                 "status": status,
                 "session_uuid": getattr(handle.session, "session_id", None),
+                "last_terminal_event": self._last_terminal_events.get(
+                    (pid, sid),
+                ),
             })
         # Stable ordering — default session first, then alphabetical for others.
         sessions.sort(key=lambda s: (s["session_id"] != DEFAULT_SESSION_ID, s["session_id"]))
@@ -2102,6 +2241,9 @@ class AgentManager:
             try:
                 exc = task.exception()
             except asyncio.CancelledError:
+                self._set_last_terminal_event(
+                    project_id, session_id, "stopped",
+                )
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -2110,6 +2252,9 @@ class AgentManager:
                 }, session_id=session_id)
                 return
             if exc:
+                self._set_last_terminal_event(
+                    project_id, session_id, "error", details=str(exc),
+                )
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -2124,6 +2269,9 @@ class AgentManager:
                 return
             if handle.session.is_stopped():
                 self._handles.pop(sk, None)
+                self._set_last_terminal_event(
+                    project_id, session_id, "stopped",
+                )
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,

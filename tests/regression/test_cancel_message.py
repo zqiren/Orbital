@@ -60,6 +60,9 @@ def _make_active_handle(mgr, project_id: str):
     session = MagicMock()
     session.is_stopped = MagicMock(return_value=False)
     session.stop = MagicMock()
+    # Explicitly not in approval pause — otherwise MagicMock's auto-attribute
+    # makes `session._paused_for_approval` a truthy stub.
+    session._paused_for_approval = False
 
     # Create a real asyncio.Task that's not done yet.
     async def _never_done():
