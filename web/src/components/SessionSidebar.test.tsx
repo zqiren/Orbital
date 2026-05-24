@@ -15,9 +15,7 @@ afterEach(() => cleanup());
 // Mock useSessions and useSession before importing the component
 // ---------------------------------------------------------------------------
 
-const mockSetActiveSessionId = vi.fn();
 let mockSessions: SessionListEntry[] = [];
-let mockActiveSessionId: string | null = null;
 
 vi.mock('../hooks/useSessions', () => ({
   useSessions: (_projectId: string | null) => ({
@@ -28,12 +26,9 @@ vi.mock('../hooks/useSessions', () => ({
   }),
 }));
 
-vi.mock('../hooks/useSession', () => ({
-  useSession: (_projectId: string | null) => ({
-    activeSessionId: mockActiveSessionId,
-    setActiveSessionId: mockSetActiveSessionId,
-  }),
-}));
+// SessionSidebar is CONTROLLED — it no longer uses useSession internally
+// (selection is driven by the selectedSessionId prop, owned by ChatTab). No
+// useSession mock is needed.
 
 // useSessions internally uses useWebSocket — mock to prevent import errors.
 vi.mock('../hooks/useWebSocket', () => ({
@@ -64,8 +59,6 @@ function makeSession(overrides: Partial<SessionListEntry> = {}): SessionListEntr
 
 function resetMocks() {
   mockSessions = [];
-  mockActiveSessionId = null;
-  mockSetActiveSessionId.mockReset();
 }
 
 // ---------------------------------------------------------------------------
@@ -259,19 +252,8 @@ describe('SessionSidebar — ALL sessions included regardless of origin', () => 
 // Row selection
 // ---------------------------------------------------------------------------
 
-describe('SessionSidebar — session selection', () => {
-  it('clicking a row calls setActiveSessionId with the session_id', async () => {
-    resetMocks();
-    mockSessions = [
-      makeSession({ session_id: 'sess-pick', status: 'idle', session_uuid: 'up' }),
-    ];
-
-    render(<SessionSidebar projectId="proj-1" />);
-    await userEvent.click(screen.getByTestId('session-list-item-sess-pick'));
-    expect(mockSetActiveSessionId).toHaveBeenCalledWith('sess-pick');
-  });
-
-  it('onSessionSelect callback fires when a row is clicked', async () => {
+describe('SessionSidebar — session selection (controlled)', () => {
+  it('onSessionSelect callback fires with the session_id when a row is clicked', async () => {
     resetMocks();
     const onSessionSelect = vi.fn();
     mockSessions = [
@@ -281,5 +263,70 @@ describe('SessionSidebar — session selection', () => {
     render(<SessionSidebar projectId="proj-1" onSessionSelect={onSessionSelect} />);
     await userEvent.click(screen.getByTestId('session-list-item-sess-cb'));
     expect(onSessionSelect).toHaveBeenCalledWith('sess-cb');
+  });
+
+  it('highlights the row named by the selectedSessionId prop (controlled)', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess-a', status: 'idle', session_uuid: 'ua' }),
+      makeSession({ session_id: 'sess-b', status: 'running', session_uuid: 'ub' }),
+    ];
+
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="sess-b" />);
+
+    // SessionListItem sets aria-selected from its `selected` prop.
+    expect(screen.getByTestId('session-list-item-sess-a')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.getByTestId('session-list-item-sess-b')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('highlights no row when selectedSessionId is undefined', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess-a', status: 'idle', session_uuid: 'ua' }),
+      makeSession({ session_id: 'sess-b', status: 'running', session_uuid: 'ub' }),
+    ];
+
+    render(<SessionSidebar projectId="proj-1" />);
+
+    expect(screen.getByTestId('session-list-item-sess-a')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.getByTestId('session-list-item-sess-b')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('updates the highlight when selectedSessionId changes (rerender)', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess-a', status: 'idle', session_uuid: 'ua' }),
+      makeSession({ session_id: 'sess-b', status: 'running', session_uuid: 'ub' }),
+    ];
+
+    const { rerender } = render(
+      <SessionSidebar projectId="proj-1" selectedSessionId="sess-a" />,
+    );
+    expect(screen.getByTestId('session-list-item-sess-a')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    rerender(<SessionSidebar projectId="proj-1" selectedSessionId="sess-b" />);
+    expect(screen.getByTestId('session-list-item-sess-a')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.getByTestId('session-list-item-sess-b')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
   });
 });

@@ -27,9 +27,28 @@ import { createRoot, type Root } from 'react-dom/client';
 const apiCalls: string[] = [];
 const apiWithTotalCalls: string[] = [];
 
+// Configurable run-status holder. fetchHolder() and the run-status poll read
+// /run-status; tests set this to drive the slot-holder comparison that gates
+// live-event rendering. null = no holder.
+let runStatusHolder: string | null = null;
+
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string) => {
     apiCalls.push(path);
+    // run-status returns the configured slot holder so ChatView can decide
+    // whether the viewed session is the holder.
+    if (path.includes('/run-status')) {
+      return {
+        project_id: 'p1',
+        status: 'running',
+        current_holder_session_id: runStatusHolder,
+      };
+    }
+    // pending-approval: never pending in these tests.
+    if (path.includes('/pending-approval')) {
+      return { pending: false };
+    }
+    // /chat?limit=1 (REST fallback) and anything else → empty list.
     return [];
   }),
   apiWithTotal: vi.fn(async (path: string) => {
@@ -42,10 +61,26 @@ vi.mock('../config', () => ({
   WS_URL: 'ws://localhost:8000/ws',
 }));
 
+// Minimal WS event bus so tests can dispatch live events into ChatView's
+// registered handlers. ChatView calls on(type, fn)/off(type, fn).
+type WsHandler = (event: unknown) => void;
+const wsHandlers = new Map<string, Set<WsHandler>>();
+function emitWs(type: string, event: unknown) {
+  for (const fn of wsHandlers.get(type) ?? []) fn(event);
+}
+function resetWs() {
+  wsHandlers.clear();
+}
+
 vi.mock('../hooks/useWebSocket', () => ({
   useWebSocket: () => ({
-    on: () => {},
-    off: () => {},
+    on: (type: string, fn: WsHandler) => {
+      if (!wsHandlers.has(type)) wsHandlers.set(type, new Set());
+      wsHandlers.get(type)!.add(fn);
+    },
+    off: (type: string, fn: WsHandler) => {
+      wsHandlers.get(type)?.delete(fn);
+    },
     connectionState: 'connected',
     subscribe: () => {},
   }),
@@ -54,11 +89,24 @@ vi.mock('../hooks/useWebSocket', () => ({
 // Per-test override slot for cancelMessage. The default resolves; tests
 // that need rejection or controlled timing replace this between renders.
 let cancelMessageMock: (projectId: string) => Promise<unknown> = async () => undefined;
+// Records the args of the most recent injectMessage call so tests can assert
+// the viewed sessionId is threaded through. Replaceable per-test for slot_held.
+let injectMessageMock: (...args: unknown[]) => Promise<unknown> = async () => undefined;
+const injectCalls: unknown[][] = [];
+// Records startAgent calls so the auto-start test can assert it does NOT fire
+// on a session switch.
+const startAgentCalls: string[] = [];
 
 vi.mock('../hooks/useAgent', () => ({
   useAgent: () => ({
-    injectMessage: vi.fn(async () => undefined),
-    startAgent: vi.fn(async () => undefined),
+    injectMessage: vi.fn((...args: unknown[]) => {
+      injectCalls.push(args);
+      return injectMessageMock(...args);
+    }),
+    startAgent: vi.fn(async (projectId: string) => {
+      startAgentCalls.push(projectId);
+      return undefined;
+    }),
     cancelMessage: vi.fn((projectId: string) => cancelMessageMock(projectId)),
     newSession: vi.fn(async () => undefined),
   }),
@@ -84,6 +132,11 @@ let root: Root;
 beforeEach(() => {
   apiCalls.length = 0;
   apiWithTotalCalls.length = 0;
+  injectCalls.length = 0;
+  startAgentCalls.length = 0;
+  injectMessageMock = async () => undefined;
+  runStatusHolder = null;
+  resetWs();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -107,6 +160,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
           project={project}
           agentStatus="idle"
           mentionAgents={[]}
+          sessionId="s1"
         />,
       );
     });
@@ -118,7 +172,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
     expect(agentsAvailableCalls).toEqual([]);
   });
 
-  it('issues exactly one /chat?limit= fetch on mount (no piggybacked /agents/available)', async () => {
+  it('issues exactly one /chat?limit= fetch on mount, scoped to the active session', async () => {
     await act(async () => {
       root.render(
         <ChatView
@@ -126,6 +180,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
           project={project}
           agentStatus="idle"
           mentionAgents={[]}
+          sessionId="s1"
         />,
       );
     });
@@ -134,6 +189,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
     const chatCalls = apiWithTotalCalls.filter((p) => p.includes('/chat?limit='));
     expect(chatCalls.length).toBe(1);
     expect(chatCalls[0]).toContain('/api/v2/agents/p1/chat?limit=50');
+    expect(chatCalls[0]).toContain('session_id=s1');
   });
 });
 
@@ -149,6 +205,7 @@ describe('ChatView @-mention dropdown reads from mentionAgents prop', () => {
             { slug: 'reviewer', name: 'Code Reviewer' },
             { slug: 'planner', name: 'Planner' },
           ]}
+          sessionId="s1"
         />,
       );
     });
@@ -183,6 +240,7 @@ describe('ChatView @-mention dropdown reads from mentionAgents prop', () => {
           project={project}
           agentStatus="idle"
           mentionAgents={[]}
+          sessionId="s1"
         />,
       );
     });
@@ -219,6 +277,7 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
           project={project}
           agentStatus="running"
           mentionAgents={[]}
+          sessionId="s1"
         />,
       );
     });
@@ -272,6 +331,7 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
           project={project}
           agentStatus="idle"
           mentionAgents={[]}
+          sessionId="s1"
         />,
       );
     });
@@ -332,5 +392,295 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
     expect(container.querySelector('button[aria-label="Stop"]')).toBeTruthy();
     const notice = container.querySelector('[role="status"]');
     expect(notice?.textContent ?? '').toContain('Cancel request failed');
+  });
+});
+
+// ─── T5: session-aware ChatView ────────────────────────────────────────────
+
+/** Set a textarea's value through the native setter so React's onChange fires. */
+function typeInComposer(text: string) {
+  const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value',
+  )!.set!;
+  setter.call(textarea, text);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function renderChat(props: { agentStatus?: string; sessionId?: string }) {
+  return act(async () => {
+    root.render(
+      <ChatView
+        projectId="p1"
+        project={project}
+        agentStatus={(props.agentStatus ?? 'idle') as never}
+        mentionAgents={[]}
+        sessionId={props.sessionId}
+      />,
+    );
+  });
+}
+
+describe('T5 ChatView: per-session history load', () => {
+  it('loads /chat scoped to the active session and reloads when sessionId changes', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    let chatCalls = apiWithTotalCalls.filter((p) => p.includes('/chat?limit='));
+    expect(chatCalls.length).toBe(1);
+    expect(chatCalls[0]).toContain('session_id=s1');
+
+    // Switch to a different session — history reloads with the new id.
+    await renderChat({ sessionId: 's2' });
+    await flushEffects();
+
+    chatCalls = apiWithTotalCalls.filter((p) => p.includes('/chat?limit='));
+    expect(chatCalls.length).toBe(2);
+    expect(chatCalls[1]).toContain('session_id=s2');
+  });
+
+  it('does NOT fetch /chat history when no session is resolved (sessionId undefined)', async () => {
+    await renderChat({ sessionId: undefined });
+    await flushEffects();
+
+    const chatCalls = apiWithTotalCalls.filter((p) => p.includes('/chat?limit='));
+    expect(chatCalls.length).toBe(0);
+    // Empty state is shown, not a perpetual loading skeleton.
+    expect(container.textContent ?? '').toContain('No messages yet');
+  });
+});
+
+describe('T5 ChatView: per-session composer draft', () => {
+  it('preserves the draft per session across a switch (type in A, switch to B, back to A)', async () => {
+    await renderChat({ sessionId: 'A' });
+    await flushEffects();
+
+    // Type a draft into session A.
+    await act(async () => {
+      typeInComposer('hello from A');
+    });
+    let textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('hello from A');
+
+    // Switch to session B — composer is empty (no draft for B yet).
+    await renderChat({ sessionId: 'B' });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('');
+
+    // Type a draft into B.
+    await act(async () => {
+      typeInComposer('hello from B');
+    });
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('hello from B');
+
+    // Switch back to A — A's draft is restored.
+    await renderChat({ sessionId: 'A' });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('hello from A');
+
+    // And back to B — B's draft is restored.
+    await renderChat({ sessionId: 'B' });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('hello from B');
+  });
+});
+
+describe('T5 ChatView: holder-based live-event filtering', () => {
+  it('renders a live stream delta when viewing the holder session', async () => {
+    // The viewed session s1 IS the slot holder.
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        text: 'streamed-token-XYZ',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    expect(container.textContent ?? '').toContain('streamed-token-XYZ');
+  });
+
+  it('renders live deltas during the null-holder window when the agent is active (lenient gate)', async () => {
+    // Holder not yet resolved (run-status returns null) but the agent is
+    // RUNNING — deltas arriving before fetchHolder converges must still render
+    // (otherwise the user sees a mid-stream stall). Mirrors the lenient
+    // null-holder policy of fetchPendingApproval.
+    runStatusHolder = null;
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        text: 'window-token-ABC',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    expect(container.textContent ?? '').toContain('window-token-ABC');
+  });
+
+  it('does NOT render live deltas when holder is null AND the agent is idle', async () => {
+    // Null holder + idle agent means nothing is running → the lenient branch
+    // does not apply, so stray deltas are dropped.
+    runStatusHolder = null;
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        text: 'idle-token-NOPE',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    expect(container.textContent ?? '').not.toContain('idle-token-NOPE');
+  });
+
+  it('does NOT render a live stream delta when viewing a NON-holder session', async () => {
+    // The slot holder is s2 but the user is viewing s1.
+    runStatusHolder = 's2';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        text: 'streamed-token-XYZ',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    expect(container.textContent ?? '').not.toContain('streamed-token-XYZ');
+  });
+
+  it('does NOT render a live activity capsule when viewing a NON-holder session', async () => {
+    runStatusHolder = 's2';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('agent.activity', {
+        type: 'agent.activity',
+        project_id: 'p1',
+        category: 'file_read',
+        tool_name: 'Read',
+        description: 'reading secret-file.txt',
+        id: 'act-1',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    // No agent_run capsule rendered for the non-holder session.
+    expect(container.querySelector('[data-testid="agent_run"]')).toBeNull();
+    expect(container.textContent ?? '').not.toContain('secret-file.txt');
+  });
+
+  it('renders a live activity capsule when viewing the holder session', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('agent.activity', {
+        type: 'agent.activity',
+        project_id: 'p1',
+        category: 'file_read',
+        tool_name: 'Read',
+        description: 'reading visible-file.txt',
+        id: 'act-2',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    expect(container.querySelector('[data-testid="agent_run"]')).toBeTruthy();
+    expect(container.textContent ?? '').toContain('visible-file.txt');
+  });
+});
+
+describe('T5 ChatView: inject targets the viewed session', () => {
+  it('passes the viewed sessionId as the 6th injectMessage argument', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'idle', sessionId: 's7' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('do the thing');
+    });
+    // Click the Send button (idle branch).
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId)
+    const args = injectCalls[0];
+    expect(args[0]).toBe('p1');
+    expect(args[1]).toBe('do the thing');
+    expect(args[5]).toBe('s7');
+  });
+
+  it('renders SlotHeldNotice when inject returns 202 slot_held', async () => {
+    // Inject resolves with a slot_held payload (another session holds the slot).
+    injectMessageMock = async () => ({
+      status: 'slot_held',
+      holding_session_id: 'other-session',
+    });
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('queued message');
+    });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const notice = container.querySelector('[data-testid="slot-held-notice"]');
+    expect(notice).toBeTruthy();
+    const holder = container.querySelector('[data-testid="slot-held-notice-holder"]');
+    expect(holder?.textContent ?? '').toContain('other-session');
+  });
+});
+
+describe('T5 ChatView: session switching does not auto-start', () => {
+  it('does not call startAgent when switching to a different (empty) session', async () => {
+    // Initial session s1 is empty → it auto-starts once (legacy first-open).
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const afterInitial = startAgentCalls.length;
+    expect(afterInitial).toBe(1);
+
+    // Switch to a different empty session — must NOT trigger another start.
+    await renderChat({ agentStatus: 'idle', sessionId: 's2' });
+    await flushEffects();
+    expect(startAgentCalls.length).toBe(afterInitial);
+
+    // Switch back to s1 — still no extra start (already started once).
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    expect(startAgentCalls.length).toBe(afterInitial);
   });
 });

@@ -274,6 +274,21 @@ interface ChatViewProps {
    * keystrokes that follow re-evaluate against the populated list.
    */
   mentionAgents: Array<{ slug: string; name: string }>;
+  /**
+   * The F1 session_id currently being viewed (the active session for this
+   * project). The conversation, history fetch, draft, and inject target are
+   * all scoped to this session. `undefined` while the active session is
+   * still being resolved by the parent (ChatTab) — ChatView renders an empty
+   * state and skips history load until a sessionId arrives.
+   *
+   * Single active-loop slot model: only ONE session in a project executes at
+   * a time. Live WS events (stream/activity/approvals) carry only project_id,
+   * not session_id, so they always belong to the slot holder. ChatView
+   * appends those live events to the viewed conversation ONLY when the viewed
+   * `sessionId` matches the holder (resolved via run-status
+   * `current_holder_session_id`). See §5 of the T5 task brief.
+   */
+  sessionId?: string;
 }
 
 interface StreamState {
@@ -292,7 +307,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId }: ChatViewProps) {
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -302,6 +317,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
   const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
   const [inputText, setInputText] = useState('');
+  // Slot holder: the F1 session_id currently holding the project's
+  // active-loop slot (from run-status `current_holder_session_id`), or null
+  // if no session is running. Single-slot model — only ONE session runs at a
+  // time. Live WS events carry only project_id, so they belong to this
+  // holder. ChatView appends them to the viewed conversation ONLY when the
+  // viewed session IS the holder (viewing a non-holder session shows its
+  // static history; live events for the holder are dropped here).
+  const [holderSessionId, setHolderSessionId] = useState<string | null>(null);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
@@ -345,17 +368,63 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
   const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
-  const autoStarted = useRef(false);
+  // Auto-start guard, keyed per session. A given session auto-starts at most
+  // once (only when truly empty AND it is the slot holder). Switching to a
+  // different session must NOT trigger an auto-start for it. See the
+  // auto-start effect below.
+  const autoStartedRef = useRef<Set<string>>(new Set());
+  // Per-session composer drafts. Keyed by F1 sessionId so switching to
+  // another session and back restores the original session's unsent text.
+  // In-memory only (drafts don't survive a full reload — acceptable).
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  // Live mirror of inputText, read synchronously when persisting a draft on
+  // session switch (the effect closes over a stale inputText otherwise).
+  const inputTextRef = useRef('');
+  // Latest sessionId, readable synchronously inside WS handlers (which close
+  // over the value at registration time otherwise). The holder-comparison
+  // and inject-target paths read this ref to stay current.
+  const sessionIdRef = useRef<string | undefined>(sessionId);
+  sessionIdRef.current = sessionId;
+  // Latest holder, readable synchronously inside WS handlers.
+  const holderSessionIdRef = useRef<string | null>(holderSessionId);
+  holderSessionIdRef.current = holderSessionId;
+  // True when the viewed session is the one holding the active-loop slot.
+  // Live WS events (stream/activity/approvals) are appended to the viewed
+  // conversation only when this is true.
+  //
+  // Lenient null-holder window: between mount (or a status flip) and the first
+  // fetchHolder resolving, holderSessionId is still null. If we gated strictly
+  // on a non-null holder, live deltas arriving in that window for a RUNNING
+  // session would be silently dropped — the user would see a mid-stream stall.
+  // So when the holder is not yet known (null) AND the agent is in an active
+  // state, treat the viewed session as the presumptive holder. This matches
+  // fetchPendingApproval's null-holder policy so the two gates never drift.
+  // Once fetchHolder resolves a concrete id, the strict equality check takes
+  // over (a null-holder + idle agent means nothing is running → no events).
+  const agentIsActive =
+    agentStatus === 'running' ||
+    agentStatus === 'waiting' ||
+    agentStatus === 'pending_approval' ||
+    agentStatus === 'new_session';
+  const viewingHolder =
+    sessionId !== undefined &&
+    (holderSessionId === null ? agentIsActive : sessionId === holderSessionId);
+  const viewingHolderRef = useRef(viewingHolder);
+  viewingHolderRef.current = viewingHolder;
 
   /**
    * REST fallback: fetch the latest assistant message from the REST API.
    * Used when streaming deltas are missed (tunnel drop, late subscribe, etc.)
-   * to recover the agent's response.
+   * to recover the agent's response. Scoped to the viewed session so a
+   * recovered message lands in the right conversation.
    */
   const fetchLatestMessage = useCallback(() => {
+    const sid = sessionIdRef.current;
+    if (sid === undefined) return;
+    const sessionParam = `&session_id=${encodeURIComponent(sid)}`;
     setTimeout(() => {
       api<Array<{ role: string; content: string; timestamp?: string }>>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1`,
+        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`,
       )
         .then((messages) => {
           if (!messages || messages.length === 0) return;
@@ -438,6 +507,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`)
       .then((result) => {
         if (!result.pending || !result.tool_call_id) return;
+        // The pending approval belongs to the (single) holder session. Only
+        // surface it in the viewed conversation when the viewed session IS
+        // the holder. If the holder is not yet resolved (null), allow it —
+        // the running session must be the holder and the next holder fetch
+        // reconciles. Drop it only when we KNOW the viewed session is a
+        // non-holder.
+        const holder = holderSessionIdRef.current;
+        const viewed = sessionIdRef.current;
+        if (holder !== null && viewed !== undefined && viewed !== holder) return;
         setApprovals((prev) => {
           // Dedup: skip if a card already exists for this tool_call_id
           if (prev.has(result.tool_call_id!)) return prev;
@@ -459,14 +537,62 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId, scrollToBottom]);
 
+  /**
+   * Resolve the project's current active-loop slot holder (the F1 session_id
+   * running right now, or null). run-status returns `current_holder_session_id`.
+   * Live WS events belong to this holder; the holder gates whether they are
+   * appended to the viewed conversation (see viewingHolder above). Fetched on
+   * mount, on agentStatus/sessionId change, and via the existing 5s poll.
+   */
+  const fetchHolder = useCallback(() => {
+    api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
+    )
+      .then((result) => {
+        setHolderSessionId(result.current_holder_session_id ?? null);
+      })
+      .catch(() => {
+        // best effort — leave the prior holder value in place
+      });
+  }, [projectId]);
+
+  // Keep the holder fresh: on mount/project change, on every agentStatus
+  // transition (a status change always implies the slot may have been
+  // acquired/released), and whenever the viewed session changes (so the
+  // viewingHolder comparison is correct for the newly-viewed session).
+  useEffect(() => {
+    fetchHolder();
+  }, [fetchHolder, agentStatus, statusTick, sessionId]);
+
+  // Per-session history load. Re-runs when the viewed sessionId changes so
+  // switching sessions shows that session's own history (and its own loading
+  // state). Skips while sessionId is undefined (active session not yet
+  // resolved) — the empty state renders until one arrives.
   useEffect(() => {
     let cancelled = false;
 
+    if (sessionId === undefined) {
+      // No active session resolved yet — clear and show the (non-loading)
+      // empty state. Reset pagination so a later session load starts fresh.
+      setItems([]);
+      setStream(null);
+      setApprovals(new Map());
+      setTotalMessages(0);
+      setLoadedOffset(0);
+      setLoading(false);
+      return;
+    }
+
+    const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
+
     async function loadData() {
       setLoading(true);
+      // Clear prior session's live state so it never bleeds into the new one.
+      setStream(null);
+      setApprovals(new Map());
       try {
         const chatResult = await apiWithTotal<ChatMessageType[]>(
-          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
+          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}${sessionParam}`,
         ).catch((err) => {
           console.error('[ChatView] Failed to load chat history:', err);
           return null;
@@ -493,7 +619,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, sessionId, project.workspace]);
 
   const hasMore = totalMessages > loadedOffset;
 
@@ -506,13 +632,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const pendingPrependPrevHeightRef = useRef<number | null>(null);
 
   async function loadOlderMessages() {
-    if (loadingMore || !hasMore) return;
+    if (loadingMore || !hasMore || sessionId === undefined) return;
     setLoadingMore(true);
     const el = scrollRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
+    const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
     try {
       const { data: messages } = await apiWithTotal<ChatMessageType[]>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}&offset=${loadedOffset}`,
+        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}&offset=${loadedOffset}${sessionParam}`,
       );
       if (messages.length === 0) return;
       const transformed = transformChatHistory(messages, project.workspace);
@@ -528,28 +655,82 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }
 
-  // Auto-start agent on first open when no messages exist
+  // Track which sessionId was the FIRST one resolved for this ChatView
+  // instance (the default active session on open). Auto-start is gated to
+  // this initial session only — switching to any OTHER session must never
+  // trigger an agent start, even if that session is empty/idle. See §7.
+  const initialSessionIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!autoStarted.current && !loading && items.length === 0) {
-      autoStarted.current = true;
-      startAgent(projectId).catch(console.error);
+    if (initialSessionIdRef.current === undefined && sessionId !== undefined) {
+      initialSessionIdRef.current = sessionId;
     }
-  }, [loading, items.length, projectId, startAgent]);
+  }, [sessionId]);
+
+  // Per-session composer draft (§4). Live mirror of inputText for synchronous
+  // reads in the swap effect. Set during render (not in an effect) so the swap
+  // effect — which runs in the same commit when sessionId changes — always
+  // sees the OUTGOING session's text, never a stale value. The draft MAP is
+  // written only by the swap effect (on switch), keeping ownership simple: the
+  // live `inputText` is the source of truth for the active session, and we
+  // persist-on-switch from this mirror.
+  inputTextRef.current = inputText;
+
+  const prevSessionForDraftRef = useRef<string | undefined>(sessionId);
+  useEffect(() => {
+    const prev = prevSessionForDraftRef.current;
+    if (prev === sessionId) return;
+    // Save the outgoing session's draft from the live mirror.
+    if (prev !== undefined) {
+      draftsRef.current.set(prev, inputTextRef.current);
+    }
+    // Load the incoming session's draft (default to empty).
+    const incoming = sessionId !== undefined ? (draftsRef.current.get(sessionId) ?? '') : '';
+    prevSessionForDraftRef.current = sessionId;
+    setInputText(incoming);
+    // Reset the textarea height to fit the loaded draft on the next frame.
+    // Cancel on unmount / re-run so a pending frame can't fire after teardown.
+    const raf = requestAnimationFrame(() => adjustTextareaHeight());
+    return () => cancelAnimationFrame(raf);
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-start agent on first open of the INITIAL session when it has no
+  // messages. Per-session guard (autoStartedRef) ensures a session starts at
+  // most once. Gated to the initial session so session switching is inert,
+  // AND gated to an idle agent so we never (re)start a project whose slot is
+  // already busy (running/waiting/pending_approval) — that would be spurious.
+  useEffect(() => {
+    if (sessionId === undefined) return;
+    if (sessionId !== initialSessionIdRef.current) return;
+    if (agentStatus !== 'idle') return;
+    if (loading || items.length > 0) return;
+    if (autoStartedRef.current.has(sessionId)) return;
+    autoStartedRef.current.add(sessionId);
+    startAgent(projectId).catch(console.error);
+  }, [loading, items.length, projectId, startAgent, sessionId, agentStatus]);
 
   // Fix 3C: Show "Thinking..." indicator when agent starts running.
   // Live machinery rows accumulate inside an open agent_run capsule; on
   // terminal status the capsule is finalized so it collapses.
+  //
+  // agentStatus is PROJECT-wide (it reflects the slot holder). Conversation
+  // mutations here (finalize capsule, thinking indicator, catch-up fetch,
+  // new_session reset) therefore only apply when the VIEWED session is the
+  // holder. The Stop-button affordance (isCancelling) is project-wide and is
+  // always cleared on a terminal status regardless of which session is viewed.
   useEffect(() => {
+    const viewing = viewingHolderRef.current;
     if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
+      // Loop has actually exited — clear the in-flight cancel affordance.
+      // Effect re-runs on agentStatus change, so this naturally coincides
+      // with the agent.status:idle WS broadcast from _on_loop_done. This is
+      // composer-global and must run even when viewing a non-holder session.
+      setIsCancelling(false);
+      if (!viewing) return;
       setShowThinking(false);
       const finalStatus =
         agentStatus === 'idle' ? 'completed' :
         agentStatus === 'error' ? 'error' : 'stopped';
       setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
-      // Loop has actually exited — clear the in-flight cancel affordance.
-      // Effect re-runs on agentStatus change, so this naturally coincides
-      // with the agent.status:idle WS broadcast from _on_loop_done.
-      setIsCancelling(false);
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)
       if (wasRunningRef.current) {
@@ -557,13 +738,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         fetchLatestMessage();
       }
     } else if (agentStatus === 'running') {
+      if (!viewing) return;
       wasRunningRef.current = true;
       setShowThinking(true);
     } else if (agentStatus === 'pending_approval') {
+      if (!viewing) return;
       // Fetch pending approval via REST in case the WS event was missed.
       // Covers status poll discovering a stale approval after reconnect.
       fetchPendingApproval();
     } else if (agentStatus === 'new_session') {
+      if (!viewing) return;
       // WS event is the single source of truth for session swap
       wasRunningRef.current = false;
       setItems([{
@@ -637,10 +821,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   useEffect(() => {
     if (!agentStatus) return;
     const timer = setInterval(() => {
-      api<{ project_id: string; status: string }>(
+      api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
       )
         .then((result) => {
+          // Keep the slot holder current from the same poll response.
+          setHolderSessionId(result.current_holder_session_id ?? null);
           if (result.status !== agentStatus) {
             window.dispatchEvent(
               new CustomEvent('agent-status-override', {
@@ -672,9 +858,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [agentStatus, fetchPendingApproval]);
 
   useEffect(() => {
+    // Single active-loop slot model: WS events carry only project_id, never
+    // session_id, so any live agent event belongs to the project's slot
+    // holder. We append it to the VIEWED conversation only when the viewed
+    // session IS the holder. When viewing a non-holder session, these live
+    // events pertain to the holder and must not bleed into the static
+    // history being shown (see §5 of the T5 brief). The user's own typed
+    // message (handleUserMessage nonce path) is the one exception — it always
+    // renders optimistically for the session it was sent into.
     function handleStreamDelta(event: WebSocketEvent) {
       const e = event as StreamDeltaEvent;
       if (e.project_id !== projectId) return;
+      if (!viewingHolderRef.current) return;
 
       if (e.is_final) {
         setStream((prev) => {
@@ -720,6 +915,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
+      if (!viewingHolderRef.current) return;
 
       // agent_output activities duplicate sub-agent messages already
       // delivered via chat.sub_agent_message — drop them.
@@ -763,6 +959,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalRequest(event: WebSocketEvent) {
       const e = event as ApprovalRequestEvent;
       if (e.project_id !== projectId) return;
+      // Approvals pertain to the slot holder. Only surface the card when the
+      // viewed session is the holder.
+      if (!viewingHolderRef.current) return;
 
       setApprovals((prev) => {
         const next = new Map(prev);
@@ -809,6 +1008,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleSubAgentMessage(event: WebSocketEvent) {
       const e = event as SubAgentMessageEvent;
       if (e.project_id !== projectId) return;
+      if (!viewingHolderRef.current) return;
 
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -836,13 +1036,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         if (ts > 0 && now - ts > 30_000) localNoncesRef.current.delete(n);
       }
 
-      // Skip if this is our own message (nonce matches a local send)
+      // Skip if this is our own message (nonce matches a local send). The
+      // optimistic append in handleSend already rendered it into the viewed
+      // session, regardless of holder — so this dedup path is the one place
+      // a user's own message survives even when not viewing the holder.
       if (e.nonce && localNoncesRef.current.has(e.nonce)) {
         // Mark as received with timestamp instead of deleting, so relay
         // retries of the same event are still deduped within the TTL window.
         localNoncesRef.current.set(e.nonce, Date.now());
         return;
       }
+
+      // A non-own user_message echo (no matching nonce) belongs to the slot
+      // holder (e.g. injected from another client). Only render it when the
+      // viewed session is the holder.
+      if (!viewingHolderRef.current) return;
 
       setItems((prev) => {
         const afterCapsule = finalizeLiveCapsule(prev, 'completed');
@@ -861,6 +1069,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleAgentNotify(event: WebSocketEvent) {
       const e = event as AgentNotifyEvent;
       if (e.project_id !== projectId) return;
+      if (!viewingHolderRef.current) return;
 
       setItems((prev) => [
         ...prev,
@@ -884,6 +1093,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleStateRefresh(event: WebSocketEvent) {
       const e = event as StateRefreshLifecycleEvent;
       if (e.project_id !== projectId) return;
+      if (!viewingHolderRef.current) return;
 
       setItems((prev) => {
         // Find the last refresh_status item to update in-place (in_progress → done/failed)
@@ -1372,6 +1582,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         target,
         nonce,
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+        sessionId,
       );
       // Track J Phase 1: backend returned 202 with `slot_held` because
       // another session in this project holds the active-loop slot.
@@ -1538,7 +1749,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
         {!loading && items.length === 0 && !stream && (
           <div className="text-secondary text-sm text-center mt-12">
-            {autoStarted.current
+            {sessionId !== undefined && autoStartedRef.current.has(sessionId)
               ? 'Agent is starting...'
               : 'No messages yet. Send a message to get started.'}
           </div>
@@ -1814,8 +2025,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               await cancelMessage(projectId);
               const pending = slotHeldNotice;
               // Replace the notice with the actual user message (per
-              // DISPATCH-2026-05-22 §5.4) by re-running the send path
-              // without session_id (the user's intent is to take the slot).
+              // DISPATCH-2026-05-22 §5.4). After /cancel the slot is freed, so
+              // re-inject targeting the VIEWED session — it now takes the slot
+              // and the message lands in the conversation the user is looking
+              // at (single active-loop slot model).
               setSlotHeldNotice(null);
               setInputText('');
               const wireContent = pending.pendingContent;
@@ -1834,6 +2047,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 pending.pendingTarget,
                 pending.pendingNonce,
                 pending.pendingAttachments,
+                sessionId,
               );
             }}
           />

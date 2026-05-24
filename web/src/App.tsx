@@ -28,7 +28,7 @@ import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
-import ChatView from './components/ChatView';
+import ChatTab from './components/ChatTab';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
 import { api, isRelayMode } from './config';
@@ -514,13 +514,14 @@ export default function App() {
               />
             )}
             {route.tab === 'chat' && (
-              <ChatView
+              <ChatTab
                 key={selectedProject.project_id}
-                projectId={selectedProject.project_id}
                 project={selectedProject}
                 agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
                 statusTick={statusTicks[selectedProject.project_id] ?? 0}
                 mentionAgents={agentsAvailable ?? []}
+                route={route}
+                setRoute={setRoute}
               />
             )}
             {route.tab === 'files' && (

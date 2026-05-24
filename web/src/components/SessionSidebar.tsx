@@ -14,36 +14,49 @@
  * Queue-dispatched sessions get a subtle hue variation on their status dot,
  * handled by SessionListItem.
  *
+ * Selection is CONTROLLED: the highlighted (active) session is driven by the
+ * `selectedSessionId` prop, NOT an internal hook. ChatTab owns the single
+ * source of truth (route.sessionId, resolved from route → persisted →
+ * most-recent) and passes it down, so the sidebar highlight can never disagree
+ * with the conversation being shown. Persistence (useSession.setActiveSessionId)
+ * is owned by ChatTab too — the sidebar only reports selections via
+ * onSessionSelect.
+ *
  * Props:
- *   projectId       — passed to useSessions / useSession hooks.
- *   onNewSession    — called when the user clicks "+ new session".
- *   onSessionSelect — optional callback when active session changes;
- *                     the sidebar also persists via useSession internally.
+ *   projectId         — passed to useSessions for the session list.
+ *   selectedSessionId — the active session_id to highlight (from ChatTab's
+ *                       route resolution). null/undefined → no row highlighted.
+ *   onNewSession      — called when the user clicks "+ new session".
+ *   onSessionSelect   — called with the clicked session_id; ChatTab updates the
+ *                       route and persists.
  */
 
 import { useState } from 'react';
 import { useSessions } from '../hooks/useSessions';
-import { useSession } from '../hooks/useSession';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
 import { isActiveStatus, isArchivedStatus } from './sessionStatus';
 
 export interface SessionSidebarProps {
   projectId: string | null;
+  selectedSessionId?: string | null;
   onNewSession?: () => void;
   onSessionSelect?: (sessionId: string) => void;
 }
 
-export function SessionSidebar({ projectId, onNewSession, onSessionSelect }: SessionSidebarProps) {
+export function SessionSidebar({
+  projectId,
+  selectedSessionId,
+  onNewSession,
+  onSessionSelect,
+}: SessionSidebarProps) {
   const { sessions, loading } = useSessions(projectId);
-  const { activeSessionId, setActiveSessionId } = useSession(projectId);
   const [archivedOpen, setArchivedOpen] = useState(false);
 
   const activeSessions: SessionListEntry[] = sessions.filter((s) => isActiveStatus(s.status));
   const archivedSessions: SessionListEntry[] = sessions.filter((s) => isArchivedStatus(s.status));
 
   function handleSelect(session: SessionListEntry) {
-    setActiveSessionId(session.session_id);
     onSessionSelect?.(session.session_id);
   }
 
@@ -97,7 +110,7 @@ export function SessionSidebar({ projectId, onNewSession, onSessionSelect }: Ses
           <SessionListItem
             key={session.session_uuid ?? session.session_id}
             session={session}
-            selected={activeSessionId === session.session_id}
+            selected={selectedSessionId === session.session_id}
             onSelect={() => handleSelect(session)}
           />
         ))}
@@ -134,7 +147,7 @@ export function SessionSidebar({ projectId, onNewSession, onSessionSelect }: Ses
                 <SessionListItem
                   key={session.session_uuid ?? session.session_id}
                   session={session}
-                  selected={activeSessionId === session.session_id}
+                  selected={selectedSessionId === session.session_id}
                   onSelect={() => handleSelect(session)}
                 />
               ))}
