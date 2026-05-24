@@ -325,7 +325,7 @@ export interface QueueItemAdvancedEvent {
 export interface QueueStateChangedEvent {
   type: 'queue.state_changed';
   project_id: string;
-  state: 'draining' | 'stopped';
+  state: QueueRunState;
 }
 
 export interface QueueReorderedEvent {
@@ -377,7 +377,11 @@ export type WebSocketEvent =
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';
 export type QueueAttemptOutcome = 'completed' | 'blocked' | 'interrupted' | 'cancelled';
-export type QueueRunState = 'draining' | 'stopped';
+// Mirrors the backend QueueRunState enum (agent_os/queue/models.py):
+// running = actively dispatching/working, paused = user-stopped, idle = nothing
+// to dispatch. (Earlier frontend used 'draining'|'stopped', which never matched
+// the backend and silently broke composer-gating + pause detection.)
+export type QueueRunState = 'running' | 'paused' | 'idle';
 
 export interface QueueAttempt {
   session_id: string;

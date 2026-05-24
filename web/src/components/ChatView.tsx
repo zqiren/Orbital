@@ -370,10 +370,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
   const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
-  // Queue-active gating: when the queue is draining (active), the chat composer
-  // is replaced by ComposerDisabledPrompt — the user must pause the queue first.
+  // Queue-active gating: when the queue is running (actively dispatching a
+  // task), the chat composer is replaced by ComposerDisabledPrompt — the user
+  // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
   const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
-  const queueActive = queueSnapshot?.state === 'draining';
+  const queueActive = queueSnapshot?.state === 'running';
   // Auto-start guard, keyed per session. A given session auto-starts at most
   // once (only when truly empty AND it is the slot holder). Switching to a
   // different session must NOT trigger an auto-start for it. See the

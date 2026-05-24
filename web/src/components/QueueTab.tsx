@@ -59,7 +59,7 @@ export default function QueueTab({ projectId }: QueueTabProps) {
     };
   }, [snapshot]);
 
-  const isStopped = snapshot?.state === 'stopped';
+  const isPaused = snapshot?.state === 'paused';
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -79,8 +79,8 @@ export default function QueueTab({ projectId }: QueueTabProps) {
           title="Now Running"
           items={grouped.running}
           emptyHint={
-            isStopped
-              ? 'Queue is stopped. Resume to continue draining.'
+            isPaused
+              ? 'Queue is paused. Resume to continue.'
               : grouped.queued.length === 0
                 ? 'Idle — add a task below.'
                 : undefined
@@ -101,8 +101,8 @@ export default function QueueTab({ projectId }: QueueTabProps) {
           addItem(content, { priority: opts.priority, review: opts.review })
         }
         hint={
-          isStopped
-            ? 'Chat freely — queue is stopped'
+          isPaused
+            ? 'Chat freely — queue is paused'
             : 'Steer the agent or queue a new task'
         }
       />

@@ -10,7 +10,7 @@ interface ComposerDisabledPromptProps {
 }
 
 /**
- * Replaces the composer textarea when the queue is active (state === 'draining').
+ * Replaces the composer textarea when the queue is active (state === 'running').
  * Renders an inline notice with a "Pause queue" button that stops the queue and
  * hands control back to the chat composer.
  */

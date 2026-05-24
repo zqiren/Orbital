@@ -15,7 +15,7 @@ afterEach(() => cleanup());
 // ---------------------------------------------------------------------------
 const mockSnapshot: QueueSnapshot = {
   version: 1,
-  state: 'draining',
+  state: 'idle',
   items: [],
   chat_session_id: null,
 };
