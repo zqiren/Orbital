@@ -31,7 +31,9 @@ export default function ComposerDisabledPrompt({
 
   return (
     <div
-      className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-lg"
+      role="region"
+      aria-label="Composer unavailable — queue is active"
+      className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-lg shadow-lg"
       data-testid="composer-disabled-prompt"
     >
       <span className="text-sm text-secondary">
@@ -44,7 +46,7 @@ export default function ComposerDisabledPrompt({
         data-testid="composer-pause-queue-btn"
         className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold tracking-wide transition-colors duration-150 ${
           pausing
-            ? 'bg-secondary/20 text-secondary/40 cursor-default'
+            ? 'bg-secondary/20 text-secondary/40 cursor-not-allowed'
             : 'bg-accent text-white hover:bg-accent/85 cursor-pointer'
         }`}
       >

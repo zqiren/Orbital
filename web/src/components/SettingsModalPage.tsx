@@ -34,9 +34,9 @@ export default function SettingsModalPage({
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-[#FAFAFA]">
+    <div className="flex flex-col flex-1 min-h-0 bg-background">
       {/* Header band */}
-      <div className="flex flex-col gap-1 px-6 pt-5 pb-4 border-b border-[#E4E4E7] max-md:px-4">
+      <div className="flex flex-col gap-1 px-6 pt-5 pb-4 border-b border-border max-md:px-4">
         <button
           onClick={handleBack}
           data-testid="settings-back-button"

@@ -46,7 +46,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         <div className="max-w-[75%] max-md:max-w-[85%]">
           {message.target && (
             <div className="text-right mb-0.5">
-              <span className="text-xs text-blue-500 font-medium">@{message.target}</span>
+              <span className="text-xs text-accent font-medium">@{message.target}</span>
             </div>
           )}
           <div
@@ -86,7 +86,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           <span className="text-sm font-medium text-secondary">{senderLabel}</span>
         </div>
         <div
-          className={`bg-background border border-border rounded-lg px-4 py-2 break-words overflow-x-auto${isSubAgent ? ' border-l-2 border-l-blue-400' : ''}`}
+          className={`bg-background border border-border rounded-lg px-4 py-2 break-words overflow-x-auto${isSubAgent ? ' border-l-2 border-l-accent' : ''}`}
           title={message.timestamp}
         >
           <MarkdownContent content={message.content} />

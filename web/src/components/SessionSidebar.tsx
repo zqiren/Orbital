@@ -72,20 +72,19 @@ export function SessionSidebar({
         data-testid="session-sidebar-header"
       >
         <span
-          className="text-secondary font-semibold"
+          className="font-mono text-secondary font-semibold"
           style={{
             fontSize: '9.5px',
             letterSpacing: '0.8px',
             textTransform: 'uppercase',
-            fontFamily: 'var(--font-mono)',
           }}
         >
           Sessions
         </span>
         <span
-          className="text-secondary text-xs"
+          className="font-mono text-secondary text-xs"
           data-testid="session-active-count"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '9.5px' }}
+          style={{ fontSize: '9.5px' }}
         >
           {activeSessions.length}
         </span>
@@ -130,13 +129,12 @@ export function SessionSidebar({
               {archivedOpen ? '▾' : '▸'}
             </span>
             <span
+              className="font-mono font-semibold"
               style={{
                 fontSize: '9.5px',
                 letterSpacing: '0.8px',
                 textTransform: 'uppercase',
-                fontFamily: 'var(--font-mono)',
               }}
-              className="font-semibold"
             >
               archived ({archivedSessions.length})
             </span>
@@ -162,8 +160,8 @@ export function SessionSidebar({
           type="button"
           data-testid="session-new-button"
           onClick={onNewSession}
-          className="w-full rounded-md border border-border text-secondary hover:text-primary hover:border-secondary/60 hover:bg-card-hover transition-colors text-sm py-1.5"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+          className="w-full font-mono rounded-md border border-border text-secondary hover:text-primary hover:border-secondary/60 hover:bg-card-hover transition-colors text-sm py-1.5"
+          style={{ fontSize: '12px' }}
         >
           + new session
         </button>
