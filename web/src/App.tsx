@@ -29,6 +29,7 @@ import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
 import ChatTab from './components/ChatTab';
+import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
 import { api, isRelayMode } from './config';
@@ -485,49 +486,56 @@ export default function App() {
           />
         )}
 
-        {!showGlobalSettings && route.name === 'project' && selectedProject && route.settings && (
-          <SettingsModalPage
-            project={selectedProject}
-            route={route}
-            setRoute={setRoute}
-            onSave={handleUpdateProject}
-            onDelete={handleDeleteProject}
-          />
-        )}
-
-        {!showGlobalSettings && route.name === 'project' && selectedProject && !route.settings && (
-          <ProjectDetail
-            project={selectedProject}
-            agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
-            statusSummary={statusSummaries[selectedProject.project_id]}
-            route={route}
-            setRoute={setRoute}
-            onStopAgent={handleCancelMessage}
-            triggers={triggers}
-            onTriggerToggle={toggleTrigger}
-            onTriggerDelete={deleteTrigger}
+        {!showGlobalSettings && route.name === 'project' && selectedProject && (
+          // Scoped to the project view: a render crash here shows a recoverable
+          // fallback instead of unmounting the whole app (the app shell/sidebar
+          // stays alive). resetKey clears a prior crash when the user navigates.
+          <ErrorBoundary
+            resetKey={`${selectedProject.project_id}:${route.tab}:${route.sessionId ?? ''}:${route.settings ? 'settings' : ''}`}
           >
-            {route.tab === 'queue' && (
-              <QueueTab
-                key={`queue-${selectedProject.project_id}`}
-                projectId={selectedProject.project_id}
-              />
-            )}
-            {route.tab === 'chat' && (
-              <ChatTab
-                key={selectedProject.project_id}
+            {route.settings ? (
+              <SettingsModalPage
                 project={selectedProject}
-                agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
-                statusTick={statusTicks[selectedProject.project_id] ?? 0}
-                mentionAgents={agentsAvailable ?? []}
                 route={route}
                 setRoute={setRoute}
+                onSave={handleUpdateProject}
+                onDelete={handleDeleteProject}
               />
+            ) : (
+              <ProjectDetail
+                project={selectedProject}
+                agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
+                statusSummary={statusSummaries[selectedProject.project_id]}
+                route={route}
+                setRoute={setRoute}
+                onStopAgent={handleCancelMessage}
+                triggers={triggers}
+                onTriggerToggle={toggleTrigger}
+                onTriggerDelete={deleteTrigger}
+              >
+                {route.tab === 'queue' && (
+                  <QueueTab
+                    key={`queue-${selectedProject.project_id}`}
+                    projectId={selectedProject.project_id}
+                  />
+                )}
+                {route.tab === 'chat' && (
+                  <ChatTab
+                    key={selectedProject.project_id}
+                    project={selectedProject}
+                    agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
+                    statusTick={statusTicks[selectedProject.project_id] ?? 0}
+                    mentionAgents={agentsAvailable ?? []}
+                    route={route}
+                    setRoute={setRoute}
+                  />
+                )}
+                {route.tab === 'files' && (
+                  <FileExplorer projectId={selectedProject.project_id} />
+                )}
+              </ProjectDetail>
             )}
-            {route.tab === 'files' && (
-              <FileExplorer projectId={selectedProject.project_id} />
-            )}
-          </ProjectDetail>
+          </ErrorBoundary>
         )}
 
         {!showGlobalSettings && route.name === 'list' && (
