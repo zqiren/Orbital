@@ -14,16 +14,28 @@ import type {
   WebSocketEvent,
 } from '../types';
 
-export function useChatHistory() {
+export interface UseChatHistoryOptions {
+  /**
+   * When provided, history is filtered to messages belonging to this session
+   * (appends `?session_id=<sessionId>` to the fetch URL). When omitted, the
+   * full merged history across all sessions is returned — unchanged behaviour.
+   */
+  sessionId?: string | null;
+}
+
+export function useChatHistory(options: UseChatHistoryOptions = {}) {
+  const { sessionId } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
 
   const loadHistory = useCallback(async (projectId: string) => {
     setLoading(true);
     try {
-      const data = await api<ChatMessage[]>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat`,
-      );
+      let url = `/api/v2/agents/${encodeURIComponent(projectId)}/chat`;
+      if (sessionId) {
+        url += `?session_id=${encodeURIComponent(sessionId)}`;
+      }
+      const data = await api<ChatMessage[]>(url);
       setMessages(data);
       return data;
     } catch {
@@ -32,7 +44,7 @@ export function useChatHistory() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   const mergeRealtimeEvent = useCallback((event: WebSocketEvent) => {
     switch (event.type) {

@@ -138,6 +138,8 @@ export interface SessionListEntry {
   status: AgentRunStatus;
   session_uuid: string | null;
   last_terminal_event: LastTerminalEvent | null;
+  /** ISO timestamp of the last activity in this session, or null. Added in Phase 1B. */
+  last_activity_at?: string | null;
 }
 
 export interface AgentStatusEvent {
@@ -323,6 +325,22 @@ export interface QueueReorderedEvent {
   project_id: string;
 }
 
+/** One entry in a blocked-count snapshot: which project+session is blocked. */
+export interface BlockedSessionEntry {
+  project_id: string;
+  session_id: string;
+}
+
+/**
+ * Global WS event fired whenever any session enters or leaves `pending_approval`.
+ * Not scoped to a project — broadcast to all subscribers.
+ */
+export interface BlockedCountChangedEvent {
+  type: 'blocked-count-changed';
+  blocked_count: number;
+  blocked_sessions: BlockedSessionEntry[];
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
   | StreamDeltaEvent
@@ -345,7 +363,8 @@ export type WebSocketEvent =
   | QueueItemRemovedEvent
   | QueueItemAdvancedEvent
   | QueueStateChangedEvent
-  | QueueReorderedEvent;
+  | QueueReorderedEvent
+  | BlockedCountChangedEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';
