@@ -305,6 +305,83 @@ describe('ProjectDetail routing', () => {
   });
 });
 
+// ─── Global-settings nav regression (settings folded into Route union) ────────
+//
+// Bug being guarded: with global settings open, clicking a project in the
+// sidebar must navigate to the project view — the settings surface must not
+// linger. Previously App kept a `showGlobalSettings` boolean overlay separate
+// from `route`, and the project-select handler only updated `route`, so the
+// overlay "won". Folding settings into the Route union ({ name: 'settings' })
+// makes `route` the single source of truth: selecting a project replaces the
+// settings route, so the project view renders.
+//
+// This harness mirrors App's panel wiring: a host owns `route`, threads the
+// real Sidebar's onSelectProject / onNewProject / onSettings into a route-only
+// content switch, and asserts the settings surface yields to navigation.
+
+describe('Global settings nav (settings in Route union)', () => {
+  function AppLikeHarness() {
+    const [route, setRoute] = useState<Route>({ name: 'settings' });
+
+    // Mirrors App.handleSelectProject / handleNewProject / onSettings / onBack —
+    // all of which drive `route` alone (no separate overlay boolean).
+    function handleSelectProject(id: string) {
+      setRoute({ name: 'project', projectId: id, tab: 'chat', sessionId: undefined });
+    }
+    function handleNewProject() {
+      setRoute({ name: 'create' });
+    }
+
+    return (
+      <div>
+        <Sidebar
+          projects={[makeProject('proj-1')]}
+          agentStatuses={{}}
+          statusSummaries={{}}
+          pendingApprovals={{}}
+          route={route}
+          connectionState="connected"
+          onSelectProject={handleSelectProject}
+          onNewProject={handleNewProject}
+          onSettings={() => setRoute({ name: 'settings' })}
+        />
+        {/* Content panel driven SOLELY by route — same gating App now uses. */}
+        {route.name === 'settings' && <div data-testid="settings-view">Settings</div>}
+        {route.name === 'project' && (
+          <div data-testid="project-view">Project {route.projectId}</div>
+        )}
+        {route.name === 'create' && <div data-testid="create-view">New Project</div>}
+      </div>
+    );
+  }
+
+  it('selecting a project from settings navigates to the project view', () => {
+    render(<AppLikeHarness />);
+
+    // Settings is showing initially.
+    expect(screen.getByTestId('settings-view')).toBeInTheDocument();
+
+    // Click the project in the sidebar (there are two "Project proj-1"-ish
+    // labels? no — only the sidebar entry. Use the nav button text).
+    fireEvent.click(screen.getByText('Project proj-1'));
+
+    // Settings surface must be gone; project view must render.
+    expect(screen.queryByTestId('settings-view')).toBeNull();
+    expect(screen.getByTestId('project-view')).toHaveTextContent('Project proj-1');
+  });
+
+  it('starting a new project from settings navigates to the create view', () => {
+    render(<AppLikeHarness />);
+
+    expect(screen.getByTestId('settings-view')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('+ New Project'));
+
+    expect(screen.queryByTestId('settings-view')).toBeNull();
+    expect(screen.getByTestId('create-view')).toBeInTheDocument();
+  });
+});
+
 // ─── Route type shape tests ───────────────────────────────────────────────────
 
 describe('Route type', () => {

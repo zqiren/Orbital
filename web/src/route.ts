@@ -13,4 +13,5 @@ export type Route =
   | { name: 'list' }
   | { name: 'create' }
   | { name: 'blocked' }
+  | { name: 'settings' }
   | { name: 'project'; projectId: string; tab: 'queue' | 'chat' | 'files'; sessionId?: string; settings?: boolean };

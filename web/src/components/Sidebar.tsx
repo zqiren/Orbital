@@ -171,7 +171,12 @@ export default function Sidebar({
 
         <button
           onClick={onSettings}
-          className="w-full text-sm text-secondary hover:text-primary px-3 py-1.5 text-left transition-all duration-150 max-md:min-h-[44px]"
+          aria-current={route.name === 'settings' ? 'page' : undefined}
+          className={`w-full text-sm px-3 py-1.5 text-left rounded-lg transition-all duration-150 max-md:min-h-[44px] ${
+            route.name === 'settings'
+              ? 'bg-card-hover text-primary'
+              : 'text-secondary hover:text-primary'
+          }`}
         >
           Settings
         </button>

@@ -61,8 +61,6 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'list' });
-  // Global settings overlay — separate from per-project route.settings
-  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -442,7 +440,7 @@ export default function App() {
           onSelectProject={handleSelectProject}
           onNewProject={handleNewProject}
           onSettings={() => {
-            setShowGlobalSettings(true);
+            setRoute({ name: 'settings' });
             setMobileView('content');
           }}
         />
@@ -470,13 +468,13 @@ export default function App() {
           </div>
         )}
 
-        {showGlobalSettings && (
+        {route.name === 'settings' && (
           <GlobalSettings
-            onBack={() => { setShowGlobalSettings(false); setMobileView('sidebar'); }}
+            onBack={() => { setRoute({ name: 'list' }); setMobileView('sidebar'); }}
           />
         )}
 
-        {!showGlobalSettings && route.name === 'create' && (
+        {route.name === 'create' && (
           <CreateProject
             onSubmit={handleCreateProject}
             onCancel={() => {
@@ -486,7 +484,7 @@ export default function App() {
           />
         )}
 
-        {!showGlobalSettings && route.name === 'project' && selectedProject && (
+        {route.name === 'project' && selectedProject && (
           // Scoped to the project view: a render crash here shows a recoverable
           // fallback instead of unmounting the whole app (the app shell/sidebar
           // stays alive). resetKey clears a prior crash when the user navigates.
@@ -538,7 +536,7 @@ export default function App() {
           </ErrorBoundary>
         )}
 
-        {!showGlobalSettings && route.name === 'list' && (
+        {route.name === 'list' && (
           <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
             <p className="text-secondary text-sm">
               {projects.length === 0
@@ -557,7 +555,7 @@ export default function App() {
         )}
 
         {/* 'blocked' route UI (BlockedBadge view) is a later task — minimal stub for now. */}
-        {!showGlobalSettings && route.name === 'blocked' && (
+        {route.name === 'blocked' && (
           <div data-testid="blocked-route-stub" />
         )}
       </main>
