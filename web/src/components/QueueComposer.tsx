@@ -57,7 +57,7 @@ export default function QueueComposer({
           placeholder="Queue a new task..."
           rows={2}
           disabled={disabled}
-          className="flex-1 resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
+          className="flex-1 resize-none rounded-lg border border-border bg-surface px-3 py-2 text-[13px] text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
           data-testid="queue-composer-input"
         />
         <button

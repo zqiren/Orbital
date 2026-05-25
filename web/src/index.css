@@ -86,8 +86,8 @@ body {
 
 /* Markdown content styles for agent messages */
 .markdown-content {
-  font-size: 0.875rem;
-  line-height: 1.625;
+  font-size: 0.8125rem;
+  line-height: 1.55;
   color: var(--color-primary);
 }
 

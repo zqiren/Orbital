@@ -105,11 +105,11 @@ export default function Sidebar({
                       className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
                     />
                     <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-primary block truncate">
+                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
                         {truncate(project.name, 20)}
                       </span>
                       {summary && (
-                        <span className="text-xs text-secondary block truncate mt-0.5">
+                        <span className="text-[10px] text-secondary block truncate mt-0.5">
                           {summary}
                         </span>
                       )}
@@ -143,11 +143,11 @@ export default function Sidebar({
                       className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
                     />
                     <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-primary block truncate">
+                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
                         {truncate(project.name, 20)}
                       </span>
                       {summary && (
-                        <span className="text-xs text-secondary block truncate mt-0.5">
+                        <span className="text-[10px] text-secondary block truncate mt-0.5">
                           {summary}
                         </span>
                       )}

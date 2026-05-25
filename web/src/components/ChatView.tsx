@@ -2163,7 +2163,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               placeholder="Send a message..."
               rows={1}
               disabled={isCancelling}
-              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
+              className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             {(agentStatus === 'running' || agentStatus === 'waiting') ? (
               <>

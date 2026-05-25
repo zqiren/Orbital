@@ -53,7 +53,7 @@ export default function QueueItemCard({ item, onRemove }: QueueItemCardProps) {
     >
       <div className="flex items-start gap-2">
         <StateIcon state={item.state} />
-        <p className="flex-1 text-sm text-primary whitespace-pre-wrap break-words">
+        <p className="flex-1 text-[12.5px] text-primary whitespace-pre-wrap break-words">
           {item.content}
         </p>
         {onRemove && item.state !== 'running' && (

@@ -90,7 +90,7 @@ export default function ProjectDetail({
           <button
             key={t.key}
             onClick={() => handleTabChange(t.key)}
-            className={`text-sm font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
+            className={`text-[12.5px] font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
               activeTab === t.key
                 ? 'text-primary border-b-2 border-accent'
                 : 'text-secondary hover:text-primary'
