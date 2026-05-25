@@ -446,6 +446,7 @@ export default function App() {
             setRoute({ name: 'settings' });
             setMobileView('content');
           }}
+          onShowAllProjects={() => setRoute({ name: 'list' })}
         />
       </div>
 
