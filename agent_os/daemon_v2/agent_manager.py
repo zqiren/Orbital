@@ -2264,6 +2264,7 @@ class AgentManager:
             agent_manager=self,
             ws_manager=self._ws,
             max_runtime_seconds=max_runtime,
+            workspace=workspace,
         )
         # D6: reclaim before starting the dispatch task. Doing it pre-start
         # ensures the first tick of _run sees a coherent queue.

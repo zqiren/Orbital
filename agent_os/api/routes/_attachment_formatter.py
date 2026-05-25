@@ -15,7 +15,9 @@ That keeps the feature uniform across all four sub-agent transports.
 
 from __future__ import annotations
 
+import mimetypes
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:  # avoid runtime circular import with agents_v2
@@ -84,3 +86,34 @@ def format_prefix(attachments: "Sequence[InjectAttachment]") -> str:
         lines.append(f"- {a.path} ({a.mime}, {_human_size(a.size)})")
     lines.append("</attached_files>")
     return "\n".join(lines) + "\n\n"
+
+
+@dataclass(frozen=True)
+class _RefAttachment:
+    """Lightweight stand-in for InjectAttachment built from a bare path ref."""
+    path: str
+    mime: str
+    size: int
+
+
+def format_prefix_from_refs(workspace: str, file_refs: "Sequence[str]") -> str:
+    """Build the ``<attached_files>`` block from bare path references.
+
+    Queue items persist only file paths (``file_refs``), not the rich
+    InjectAttachment the chat composer sends. Derive mime/size by stat-ing each
+    path under the workspace, then reuse ``format_prefix`` so a dispatched queue
+    item carries the SAME block format a user's Send produces (attachment
+    symmetry). Missing files degrade to size 0 rather than failing dispatch.
+    """
+    if not file_refs:
+        return ""
+    atts: list[_RefAttachment] = []
+    for ref in file_refs:
+        resolved = os.path.join(workspace, ref) if workspace else ref
+        try:
+            size = os.path.getsize(resolved)
+        except OSError:
+            size = 0
+        mime = mimetypes.guess_type(ref)[0] or "application/octet-stream"
+        atts.append(_RefAttachment(path=ref, mime=mime, size=size))
+    return format_prefix(atts)

@@ -65,12 +65,16 @@ class QueueDispatcher:
         agent_manager,
         ws_manager=None,
         max_runtime_seconds: int = 1800,
+        workspace: str = "",
     ):
         self._project_id = project_id
         self._store = store
         self._agent_manager = agent_manager
         self._ws = ws_manager
         self._max_runtime_seconds = max_runtime_seconds
+        # Project workspace — used to resolve queue-item file_refs into the
+        # <attached_files> prefix (attachment symmetry with the chat composer).
+        self._workspace = workspace
         self._task: Optional[asyncio.Task] = None
         self._shutting_down = False
         self._idle_event = asyncio.Event()
@@ -598,11 +602,28 @@ class QueueDispatcher:
             except Exception:
                 pass
 
+        # Prepend the <attached_files> block for any staged file_refs, so a
+        # dispatched item carries attachments the same way a user's Send does.
+        attach_prefix = ""
+        if getattr(item, "file_refs", None):
+            try:
+                from agent_os.api.routes._attachment_formatter import (
+                    format_prefix_from_refs,
+                )
+                attach_prefix = format_prefix_from_refs(
+                    self._workspace, item.file_refs,
+                )
+            except Exception:
+                logger.warning(
+                    "dispatcher(%s): attachment prefix failed for item %s",
+                    self._project_id, item.id, exc_info=True,
+                )
+
         header = (
             f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
             + self.HEADER_CONTRACT
         )
-        wrapped_content = header + item.content
+        wrapped_content = attach_prefix + header + item.content
 
         try:
             # F7: target the active session id (may be ``chat_<uuid>`` post-
