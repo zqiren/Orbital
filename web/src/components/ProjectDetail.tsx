@@ -17,7 +17,6 @@ interface ProjectDetailProps {
   statusSummary?: string;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
-  onStopAgent: () => void;
   triggers?: Trigger[];
   onTriggerToggle?: (triggerId: string, enabled: boolean) => void;
   onTriggerDelete?: (triggerId: string) => void;
@@ -36,14 +35,11 @@ export default function ProjectDetail({
   statusSummary,
   route,
   setRoute,
-  onStopAgent,
   triggers = [],
   onTriggerToggle,
   onTriggerDelete,
   children,
 }: ProjectDetailProps) {
-  const isRunning = agentStatus === 'running' || agentStatus === 'waiting';
-
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
 
@@ -68,18 +64,20 @@ export default function ProjectDetail({
       {/* Header */}
       <div className="flex items-center justify-between px-6 pt-5 pb-4 max-md:px-4">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-xl font-semibold text-primary truncate">{project.name}</h1>
+          <h1 className="font-mono text-[18px] font-semibold text-primary truncate">{project.name}</h1>
           <StatusBadge status={agentStatus} />
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {(() => {
+            const modelName = project.model || project.agent_name || '';
+            const cost = `$${(project.budget_spent_usd ?? 0).toFixed(2)}`;
+            const label = modelName ? `${modelName} · ${cost}` : cost;
+            return (
+              <span className="font-mono text-[11px] text-secondary">{label}</span>
+            );
+          })()}
           <SettingsIcon onClick={handleSettingsClick} />
         </div>
-        {isRunning && (
-          <button
-            onClick={onStopAgent}
-            className="text-sm font-medium rounded-lg px-4 py-2 transition-all duration-150 border border-border text-secondary hover:text-error hover:border-error/40 shrink-0 max-md:min-h-[44px]"
-          >
-            Stop Agent
-          </button>
-        )}
       </div>
 
       {/* Status summary line */}

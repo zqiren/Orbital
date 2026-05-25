@@ -203,7 +203,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={baseRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -227,7 +227,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={routeWithSession}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -250,7 +250,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={baseRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -278,7 +278,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={settingsRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -299,7 +299,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={{ ...baseRoute, settings: true }}
         setRoute={vi.fn()}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -314,7 +314,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={{ ...baseRoute, tab: 'chat', settings: true }}
         setRoute={vi.fn()}
-        onStopAgent={vi.fn()}
+
       />,
     );
 

@@ -57,7 +57,6 @@ function renderProjectDetail(
       agentStatus="idle"
       route={route}
       setRoute={setRoute}
-      onStopAgent={vi.fn()}
     />,
   );
 }

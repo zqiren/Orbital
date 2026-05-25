@@ -509,7 +509,6 @@ export default function App() {
                 statusSummary={statusSummaries[selectedProject.project_id]}
                 route={route}
                 setRoute={setRoute}
-                onStopAgent={handleCancelMessage}
                 triggers={triggers}
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
