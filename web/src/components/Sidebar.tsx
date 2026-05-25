@@ -97,7 +97,7 @@ export default function Sidebar({
                   <button
                     key={project.project_id}
                     onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
                   >
@@ -135,7 +135,7 @@ export default function Sidebar({
                   <button
                     key={project.project_id}
                     onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
                   >
@@ -164,7 +164,7 @@ export default function Sidebar({
       <div className="px-3 pb-3 pt-2 border-t border-border space-y-2">
         <button
           onClick={onNewProject}
-          className="w-full text-sm font-medium text-primary border border-border rounded-lg px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
+          className="w-full text-sm font-medium text-primary border border-border rounded-[6px] px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
         >
           + New Project
         </button>

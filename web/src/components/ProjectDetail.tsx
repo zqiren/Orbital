@@ -8,6 +8,8 @@ import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
+import { useSessions } from '../hooks/useSessions';
+import { useQueue } from '../hooks/useQueue';
 
 interface ProjectDetailProps {
   project: Project;
@@ -44,6 +46,14 @@ export default function ProjectDetail({
 
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
+
+  // Tab count badges
+  const { sessions } = useSessions(project.project_id);
+  const { snapshot } = useQueue(project.project_id);
+  const chatCount = sessions.length;
+  const queueCount = snapshot?.items.filter(
+    (item) => item.state === 'queued' || item.state === 'running',
+  ).length ?? 0;
 
   function handleTabChange(tab: 'queue' | 'chat' | 'files') {
     setRoute({ ...route, tab, settings: false });
@@ -86,19 +96,28 @@ export default function ProjectDetail({
 
       {/* Tab bar */}
       <div className="flex gap-1 px-6 border-b border-border max-md:px-4">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => handleTabChange(t.key)}
-            className={`text-[12.5px] font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center ${
-              activeTab === t.key
-                ? 'text-primary border-b-2 border-accent'
-                : 'text-secondary hover:text-primary'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const count =
+            t.key === 'chat' ? chatCount : t.key === 'queue' ? queueCount : 0;
+          return (
+            <button
+              key={t.key}
+              onClick={() => handleTabChange(t.key)}
+              className={`text-[12.5px] font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center gap-1.5 ${
+                activeTab === t.key
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-secondary hover:text-primary'
+              }`}
+            >
+              {t.label}
+              {count > 0 && (
+                <span className="text-[10.5px] font-mono text-secondary">
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Tab content */}

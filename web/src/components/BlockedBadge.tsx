@@ -29,7 +29,7 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
       role="region"
       aria-label={`${blockedCount} session${blockedCount === 1 ? '' : 's'} blocked across all projects`}
       onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all duration-150 ${
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] transition-all duration-150 ${
         onClick ? 'cursor-pointer hover:bg-card-hover/50' : ''
       } ${hasBlocked ? '' : 'opacity-40'}`}
     >
