@@ -1981,9 +1981,69 @@ class AgentManager:
                 ),
                 "last_activity_at": last_activity_at,
             })
+        # Merge in archived (on-disk) sessions not currently hydrated in memory,
+        # so the sidebar shows every persisted session log. In-memory entries
+        # above carry live status; disk-only entries are idle (archived) and get
+        # hydrated from JSONL only when the user acts on them.
+        seen_uuids = {s["session_uuid"] for s in sessions if s.get("session_uuid")}
+        sessions.extend(self._disk_session_entries(project_id, seen_uuids))
         # Stable ordering — default session first, then alphabetical for others.
         sessions.sort(key=lambda s: (s["session_id"] != DEFAULT_SESSION_ID, s["session_id"]))
         return sessions
+
+    def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
+        """Enumerate the project's on-disk session JSONLs not currently hydrated
+        in memory. Each becomes an idle (archived) sidebar entry. Skips
+        empty/meta-only logs and the lock sentinels."""
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if project else ""
+        if not workspace:
+            return []
+        sessions_dir = ProjectPaths(workspace).sessions_dir
+        try:
+            fnames = os.listdir(sessions_dir)
+        except OSError:
+            return []
+        entries: list[dict] = []
+        for fname in fnames:
+            if not fname.endswith(".jsonl"):
+                continue
+            uuid = fname[:-6]
+            if uuid in seen_uuids:
+                continue  # already represented by a live in-memory handle
+            session_id = None
+            last_activity_at = None
+            try:
+                with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
+                    first = None
+                    last = None
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            rec = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if first is None:
+                            first = rec
+                        last = rec
+            except OSError:
+                continue
+            if first is not None:
+                session_id = first.get("session_id")
+                if last is not None:
+                    last_activity_at = last.get("timestamp")
+            if not session_id:
+                continue  # empty / meta-only log
+            entries.append({
+                "session_id": session_id,
+                "status": "idle",
+                "session_uuid": uuid,
+                "last_terminal_event": None,
+                "last_activity_at": last_activity_at,
+            })
+        return entries
 
     def list_blocked_sessions(self) -> list[dict]:
         """Return all sessions currently in ``pending_approval`` state, across
