@@ -53,21 +53,79 @@ describe('ChatMessage — user_message with <attached_files> block', () => {
     expect(container.textContent ?? '').not.toContain('</attached_files>');
   });
 
-  it('renders chips only (no empty text node) when there is no user text after the block', () => {
+  it('renders chips only (no loose text) when there is no user text after the block', () => {
     const content =
       '<attached_files>\n- uploads/x.txt (text/plain, 11 B)\n</attached_files>\n\n';
     const { container } = render(<ChatMessage message={userMsg(content)} />);
 
     expect(container.querySelectorAll('[data-testid="attachment-chip"]').length).toBe(1);
-    // The bubble has no "loose text" outside of the chips.
-    const bubble = container.querySelector('.bg-card-hover');
-    expect(bubble).not.toBeNull();
+    // The content block holds the chips and no loose text.
+    const chip = container.querySelector('[data-testid="attachment-chip"]');
+    const contentBlock = chip?.parentElement?.parentElement;
+    expect(contentBlock).not.toBeNull();
     // Filter to direct text nodes (chips wrap their own text).
     let directText = '';
-    bubble?.childNodes.forEach((n) => {
+    contentBlock?.childNodes.forEach((n) => {
       if (n.nodeType === Node.TEXT_NODE) directText += n.textContent ?? '';
     });
     expect(directText.trim()).toBe('');
+  });
+});
+
+describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
+  it('user message renders a user avatar (initials), sender·time, and content with NO bubble', () => {
+    const { container } = render(<ChatMessage message={userMsg('hello world')} />);
+
+    // Avatar: user variant, shows the "ME" placeholder initials.
+    const avatar = container.querySelector('[data-testid="message-avatar"]');
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute('data-variant')).toBe('user');
+    expect(avatar?.textContent).toBe('ME');
+    expect(avatar?.className).toContain('bg-primary');
+
+    // Sender label + 24h time (timestamp is 10:23:00Z → local HH:MM).
+    expect(screen.getByText('you')).toBeInTheDocument();
+    expect(screen.getByText(/^· \d{2}:\d{2}$/)).toBeInTheDocument();
+
+    // Content present.
+    expect(screen.getByText('hello world')).toBeInTheDocument();
+
+    // No bubble bg / border / rounded box from the old layout.
+    expect(container.querySelector('.bg-card-hover')).toBeNull();
+    expect(container.querySelector('.justify-end')).toBeNull();
+    expect(container.querySelector('.rounded-lg')).toBeNull();
+  });
+
+  it('user message targeting a sub-agent shows "you → @target" in the label', () => {
+    render(<ChatMessage message={userMsg('do the thing', 'researcher')} />);
+    expect(screen.getByText('you → @researcher')).toBeInTheDocument();
+  });
+
+  it('agent message renders the ◐ avatar glyph, "agent" sender·time, and content with NO bubble', () => {
+    const { container } = render(<ChatMessage message={agentMsg('agent reply here')} />);
+
+    const avatar = container.querySelector('[data-testid="message-avatar"]');
+    expect(avatar?.getAttribute('data-variant')).toBe('agent');
+    expect(avatar?.textContent).toBe('◐');
+    expect(avatar?.className).toContain('border');
+    expect(avatar?.className).not.toContain('bg-primary');
+
+    expect(screen.getByText('agent')).toBeInTheDocument();
+    expect(screen.getByText('agent reply here')).toBeInTheDocument();
+
+    // No bubble background/border box wrapping the content.
+    expect(container.querySelector('.bg-background.border.rounded-lg')).toBeNull();
+  });
+
+  it('sub-agent message uses the source as the sender label', () => {
+    const subMsg: DisplayItem = {
+      type: 'sub_agent_message',
+      content: 'sub agent output',
+      source: 'researcher',
+      timestamp: '2026-04-30T10:23:00Z',
+    };
+    render(<ChatMessage message={subMsg as Extract<DisplayItem, { type: 'sub_agent_message' }>} />);
+    expect(screen.getByText('researcher')).toBeInTheDocument();
   });
 });
 
