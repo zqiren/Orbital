@@ -35,10 +35,24 @@ class _FakeSession:
         self.session_id = session_id
 
 
+class _TextOnlyLoop:
+    """Loop double whose run always exits text-only (no completion tool).
+
+    A plain object (not MagicMock) so it has no fabricated
+    get_completion_state — the dispatcher reads its real _exit_* attrs via the
+    fallback path.
+    """
+    _exit_reason = "text"
+    _exit_summary = None
+    _exit_block_reason = None
+    _queue_state = "chat"
+
+
 def _make_mock_manager(session_id: str = "sess_phase1"):
     """Build a mocked AgentManager that simulates a text-only loop run."""
     mgr = MagicMock()
     mgr.get_session = MagicMock(return_value=_FakeSession(session_id))
+    mgr.get_loop = MagicMock(return_value=_TextOnlyLoop())
     mgr.inject_message = AsyncMock(return_value="delivered")
     # Concern 4: dispatcher rotates the session on every terminal exit
     # (including the text-only contract-violation path). MagicMock would

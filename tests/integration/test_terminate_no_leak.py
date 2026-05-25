@@ -284,20 +284,21 @@ async def test_new_session_terminates_in_under_3s_without_leak():
 
 
 @pytest.mark.asyncio
-async def test_stop_agent_drains_dispatcher_task():
-    """The variant-a feature (_ensure_dispatcher -> _dispatchers[pid] task)
-    must be fully drained by stop_agent.
+async def test_dispatcher_survives_stop_agent_and_is_drained_by_shutdown():
+    """The per-project queue dispatcher is the session-lifecycle manager: it
+    outlives any individual agent, so stop_agent must NOT tear it down. It is
+    drained at the correct boundary instead — shutdown_dispatcher() (project
+    deletion) and AgentManager.shutdown() (daemon shutdown).
 
-    PR #26 added a long-lived per-project queue dispatcher task on
-    start_agent. stop_agent owns the cleanup: it must pop the dispatcher
-    from _dispatchers and await its shutdown(). If that cleanup is ever
-    refactored away, the dispatcher task lingers in the event loop after
-    stop_agent returns, and pytest-loop teardown will see the leak.
+    Updated from the prior contract (stop_agent owned dispatcher teardown),
+    which made an agentless queue impossible. The no-leak intent is preserved:
+    after stop_agent + shutdown_dispatcher no dispatcher task lingers.
 
     This test directly verifies:
-      - mgr._dispatchers contains the project after we wire one in
-      - stop_agent removes the entry from _dispatchers
-      - the dispatcher's internal task is done after stop_agent returns
+      - the dispatcher is registered after _ensure_dispatcher
+      - stop_agent PRESERVES the dispatcher (entry + live task)
+      - shutdown_dispatcher removes the entry and drains the task
+      - no orphan tasks survive stop_agent + shutdown_dispatcher
     """
     with tempfile.TemporaryDirectory() as workspace:
         project_id = "proj_dispatcher_cleanup"
@@ -337,27 +338,39 @@ async def test_stop_agent_drains_dispatcher_task():
             tasks_before = set(asyncio.all_tasks())
             await asyncio.wait_for(mgr.stop_agent(project_id), timeout=5.0)
 
-            # ---- A1: dispatcher entry removed ----
+            # ---- A1: dispatcher SURVIVES agent stop ----
+            # The dispatcher is the project's session-lifecycle manager; it
+            # outlives any individual agent and must NOT be torn down by
+            # stop_agent (that is what makes an agentless queue possible).
+            assert project_id in mgr._dispatchers, (
+                "stop_agent must NOT tear down the project-scoped dispatcher; "
+                f"entries: {list(mgr._dispatchers.keys())}"
+            )
+
+            # ---- A2: its background task is still alive after stop_agent ----
+            assert not dispatch_task.done(), (
+                "Dispatcher task must outlive agent stop"
+            )
+
+            # ---- A3: shutdown_dispatcher drains it (no leak at the right
+            #          boundary — daemon shutdown / project deletion) ----
+            await asyncio.wait_for(
+                mgr.shutdown_dispatcher(project_id), timeout=5.0
+            )
             assert project_id not in mgr._dispatchers, (
-                "stop_agent must pop the dispatcher entry from "
-                "_dispatchers; got entries: "
-                f"{list(mgr._dispatchers.keys())}"
+                "shutdown_dispatcher must pop the dispatcher entry"
             )
-
-            # ---- A2: dispatcher's internal task is done ----
             assert dispatch_task.done(), (
-                "Dispatcher background task must be drained by "
-                "dispatcher.shutdown() inside stop_agent"
+                "Dispatcher task must be drained by shutdown_dispatcher"
             )
 
-            # ---- A3: no orphan tasks survive stop_agent ----
             await asyncio.sleep(0.05)
             tasks_after = set(asyncio.all_tasks())
             new_tasks = tasks_after - tasks_before
             new_tasks.discard(asyncio.current_task())
             still_running = {t for t in new_tasks if not t.done()}
             assert len(still_running) == 0, (
-                f"Orphan asyncio tasks still running after stop_agent: "
+                f"Orphan asyncio tasks after stop_agent + shutdown_dispatcher: "
                 f"{[t.get_name() for t in still_running]}"
             )
         finally:
