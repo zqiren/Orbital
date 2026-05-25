@@ -45,7 +45,7 @@ export default function SettingsModalPage({
           <ArrowLeft size={14} />
           Back to {project.name}
         </button>
-        <p className="text-xs font-mono uppercase tracking-widest text-secondary mt-1">
+        <p className="text-xs font-mono uppercase tracking-[0.6px] text-secondary mt-1">
           Project · this project only
         </p>
         <h1 className="text-lg font-semibold text-primary" data-testid="settings-modal-title">

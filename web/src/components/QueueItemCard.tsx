@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { CheckCircle2, Circle, Loader2, X, AlertCircle, Zap } from 'lucide-react';
+import { CheckCircle2, Circle, X, AlertCircle, Zap } from 'lucide-react';
 import type { QueueItem } from '../types';
 
 interface QueueItemCardProps {
@@ -12,7 +12,7 @@ interface QueueItemCardProps {
 
 const STATE_ACCENT: Record<QueueItem['state'], string> = {
   queued: 'border-border',
-  running: 'border-info/40 bg-info/5',
+  running: 'border-accent/40 bg-accent/5 border-l-[3px] border-l-accent',
   done: 'border-success/30 bg-success/5',
   blocked: 'border-warning/40 bg-warning/5',
 };
@@ -23,7 +23,8 @@ function StateIcon({ state }: { state: QueueItem['state'] }) {
     case 'queued':
       return <Circle className={`${cls} text-secondary`} />;
     case 'running':
-      return <Loader2 className={`${cls} text-info animate-spin`} />;
+      return <span className={`${cls} rounded-full bg-success animate-pulse`} aria-hidden />;
+
     case 'done':
       return <CheckCircle2 className={`${cls} text-success`} />;
     case 'blocked':
@@ -47,7 +48,7 @@ export default function QueueItemCard({ item, onRemove }: QueueItemCardProps) {
 
   return (
     <div
-      className={`rounded-lg border ${STATE_ACCENT[item.state]} p-3 flex flex-col gap-2 max-md:p-2`}
+      className={`${item.state === 'running' ? 'rounded-[10px]' : 'rounded-lg'} border ${STATE_ACCENT[item.state]} p-3 flex flex-col gap-2 max-md:p-2`}
       data-testid={`queue-item-${item.id}`}
       data-state={item.state}
     >

@@ -2079,7 +2079,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {queueActive ? (
           <ComposerDisabledPrompt onPauseQueue={stopQueue} />
         ) : (
-        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
+        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-[10px] shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredCommands.map((cmd, i) => (
@@ -2159,6 +2159,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             >
               <Plus size={18} />
             </button>
+            <span className="shrink-0 font-mono text-secondary select-none" aria-hidden>›</span>
             <textarea
               ref={textareaRef}
               value={inputText}
@@ -2239,6 +2240,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <Send size={18} />
               </button>
             )}
+            <kbd className="shrink-0 px-1 py-0.5 border border-border rounded-[3px] text-[9.5px] font-mono bg-sidebar text-secondary select-none max-md:hidden" aria-hidden>⌘↩</kbd>
           </div>
         </div>
         )}
