@@ -235,11 +235,23 @@ class ApproveRequest(BaseModel):
     reply_text: str | None = None
     approve_all: bool = False
     response_payload: str | None = None  # User text input for MFA codes etc.
+    session_id: str | None = None  # which session's approval (defaults to holder)
 
 
 class DenyRequest(BaseModel):
     tool_call_id: str
     reason: str
+    session_id: str | None = None  # which session's approval (defaults to holder)
+
+
+class SessionScopedRequest(BaseModel):
+    """Body for lifecycle verbs that act on a specific chat session.
+
+    ``session_id`` identifies which session in the project to act on, so the
+    UI can target the session it has open (not just the default sentinel).
+    Optional for backward compatibility; the frontend passes the active id.
+    """
+    session_id: str | None = None
 
 
 class TriggerToggleRequest(BaseModel):
@@ -896,38 +908,45 @@ async def list_blocked_globally():
 
 
 @router.post("/agents/{project_id}/cancel")
-async def cancel_message(project_id: str) -> dict:
+async def cancel_message(project_id: str, req: SessionScopedRequest | None = None) -> dict:
     """Cancel the current turn. Loop exits, agent stays alive.
 
-    Wired to the UI Stop button. The cancel breaks the loop at the next
-    iteration boundary (the CancelledError handlers in loop.py write a
-    [cancelled by user] marker to the session JSONL, then exit the
-    while body). Sub-agents, browser pages, and sandbox state are
-    preserved. _on_loop_done broadcasts the post-cancel status (idle,
-    waiting, or running for queued hot-resume) and frees the active-loop
-    slot mechanically when the loop task completes.
+    Wired to the UI Stop button. ``session_id`` (body) targets the session the
+    UI has open. The cancel breaks the loop at the next iteration boundary (the
+    CancelledError handlers in loop.py write a [cancelled by user] marker to the
+    session JSONL, then exit the while body). Sub-agents, browser pages, and
+    sandbox state are preserved.
     """
-    return await _agent_manager.cancel_message(project_id)
+    return await _agent_manager.cancel_message(
+        project_id, session_id=(req.session_id if req else None),
+    )
 
 
 @router.post("/agents/{project_id}/stop")
-async def stop_agent(project_id: str):
+async def stop_agent(project_id: str, req: SessionScopedRequest | None = None):
     """Internal/admin: full teardown of agent, session, and sub-agents.
 
     NOT wired to the UI — the Stop button uses /cancel, which preserves
     sub-agent and browser-page state. /stop is reserved for crash
-    recovery, debug tooling, and daemon shutdown coordination.
+    recovery, debug tooling, and daemon shutdown coordination. ``session_id``
+    (body) targets a specific session.
     """
     try:
-        await _agent_manager.stop_agent(project_id)
+        await _agent_manager.stop_agent(
+            project_id, session_id=(req.session_id if req else None),
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="No active session for project")
     return {"status": "stopping"}
 
 
 @router.post("/agents/{project_id}/new-session")
-async def new_session(project_id: str):
-    result = await _agent_manager.new_session(project_id)
+async def new_session(project_id: str, req: SessionScopedRequest | None = None):
+    """Rotate the project's active-loop slot to a fresh session. ``session_id``
+    (body) selects which session to rotate away from (the one the UI has open)."""
+    result = await _agent_manager.new_session(
+        project_id, session_id=(req.session_id if req else None),
+    )
     return result
 
 
@@ -1223,7 +1242,7 @@ async def approve(project_id: str, req: ApproveRequest):
     try:
         await _agent_manager.approve(
             project_id, req.tool_call_id, reply_text=req.reply_text,
-            approve_all=req.approve_all,
+            approve_all=req.approve_all, session_id=req.session_id,
         )
     except KeyError:
         # Try sub-agent approval path
@@ -1247,7 +1266,9 @@ async def approve(project_id: str, req: ApproveRequest):
 @router.post("/agents/{project_id}/deny")
 async def deny(project_id: str, req: DenyRequest):
     try:
-        await _agent_manager.deny(project_id, req.tool_call_id, req.reason)
+        await _agent_manager.deny(
+            project_id, req.tool_call_id, req.reason, session_id=req.session_id,
+        )
     except KeyError:
         # Try sub-agent approval path
         if _sub_agent_manager is not None:

@@ -220,6 +220,15 @@ class AgentLoop:
     async def run(self, initial_message: str | None = None,
                   initial_nonce: str | None = None) -> None:
         """Main loop entry point."""
+        if self._running:
+            # Re-entrancy guard: a second concurrent run() on the same loop would
+            # write two interleaved turns into one session. Reject rather than
+            # silently start a duplicate loop. (Defense-in-depth alongside the
+            # single-active-slot discipline.)
+            raise RuntimeError(
+                f"AgentLoop.run() re-entered while already running "
+                f"(session {getattr(self._session, 'session_id', '?')})"
+            )
         self._running = True
         # Reset queue exit-reason at the start of every run so the dispatcher
         # always reads a fresh value scoped to this run.
