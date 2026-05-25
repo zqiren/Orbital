@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
-import { useAgent } from './hooks/useAgent';
 import { useTriggers } from './hooks/useTriggers';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
 import type {
@@ -55,7 +54,6 @@ export default function App() {
     updateProject,
     deleteProject,
   } = useProjects();
-  const { cancelMessage } = useAgent();
   const ws = useWebSocket();
 
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -376,14 +374,6 @@ export default function App() {
     await deleteProject(selectedProjectId);
     setRoute({ name: 'list' });
     setMobileView('sidebar');
-  }
-
-  async function handleCancelMessage() {
-    if (!selectedProjectId) return;
-    // Thread the active session_id so /cancel stops the SPECIFIC session the
-    // UI is acting on (route.sessionId), not just the project's default one.
-    const activeSessionId = route.name === 'project' ? route.sessionId : undefined;
-    await cancelMessage(selectedProjectId, activeSessionId);
   }
 
   // First-run wizard (before setup gate)
