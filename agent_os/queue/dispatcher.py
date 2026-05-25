@@ -683,6 +683,25 @@ class QueueDispatcher:
         "contract violation and the queue will advance past this item.]"
     )
 
+    @staticmethod
+    def _read_completion(loop_obj) -> "tuple[str, str | None, str | None]":
+        """Read (exit_reason, summary, block_reason) from the loop.
+
+        Prefers the formal AgentLoop.get_completion_state() accessor; falls back
+        to the raw _exit_* attributes for lightweight test doubles. Returns a
+        text-only exit when there is no loop.
+        """
+        if loop_obj is None:
+            return ("text", None, None)
+        getter = getattr(loop_obj, "get_completion_state", None)
+        if callable(getter):
+            return getter()
+        return (
+            getattr(loop_obj, "_exit_reason", "text"),
+            getattr(loop_obj, "_exit_summary", None),
+            getattr(loop_obj, "_exit_block_reason", None),
+        )
+
     async def _await_and_handle(self, item: ItemRecord) -> None:
         """Wait for the in-flight loop task to finish then route the outcome
         based on AgentLoop._exit_reason. Honors watchdog, stop, and (CHANGE
@@ -753,11 +772,7 @@ class QueueDispatcher:
                 return
 
             loop_obj = self._agent_manager.get_loop(self._project_id)
-            exit_reason = getattr(loop_obj, "_exit_reason", "text") if loop_obj else "text"
-            exit_summary = getattr(loop_obj, "_exit_summary", None) if loop_obj else None
-            exit_block_reason = (
-                getattr(loop_obj, "_exit_block_reason", None) if loop_obj else None
-            )
+            exit_reason, exit_summary, exit_block_reason = self._read_completion(loop_obj)
 
             # Cancelled out-of-band (e.g. via the /cancel HTTP endpoint while
             # a queue item is dispatching) — distinct from pause(), which

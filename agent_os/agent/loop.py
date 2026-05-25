@@ -146,6 +146,16 @@ class AgentLoop:
     def is_running(self) -> bool:
         return self._running
 
+    def get_completion_state(self) -> "tuple[str, str | None, str | None]":
+        """Return how the last run ended: (exit_reason, summary, block_reason).
+
+        ``exit_reason`` is one of ``complete`` | ``blocked`` | ``cancelled`` |
+        ``text`` (text-only — no completion tool called). The queue dispatcher
+        reads this after each run to route the item; this accessor formalizes
+        what was previously a raw read of the private ``_exit_*`` attributes.
+        """
+        return (self._exit_reason, self._exit_summary, self._exit_block_reason)
+
     @property
     def budget_spent_usd(self) -> float:
         return self._budget_spent_usd
