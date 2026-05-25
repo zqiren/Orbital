@@ -2231,6 +2231,21 @@ class AgentManager:
                     "dispatcher shutdown failed for %s", project_id, exc_info=True,
                 )
 
+    def is_onboarding_complete(self, project_id: str) -> bool:
+        """True if the project has captured state (PROJECT_STATE.md exists).
+
+        Mirrors the queue-start onboarding gate: the dispatcher must not
+        auto-start an agent for a project that has never completed a chat
+        session, because there is no captured context to operate against.
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        if not project:
+            return False
+        workspace = project.get("workspace", "")
+        if not workspace:
+            return False
+        return os.path.exists(ProjectPaths(workspace).project_state)
+
     async def _ensure_dispatcher(self, project_id: str, workspace: str) -> None:
         """Create + start the dispatcher for this project if not already running."""
         existing = self._dispatchers.get(project_id)

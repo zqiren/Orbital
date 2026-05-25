@@ -51,6 +51,12 @@ class QueueDispatcher:
     IDLE_WAIT_TIMEOUT_SEC = 5.0
     LOOP_WAIT_POLL_SEC = 2.0
     SUB_AGENT_STOP_TIMEOUT_SEC = 10.0
+    # After auto-starting an agent, poll run-status this often until it settles
+    # to 'idle' (so the queue item hot-resumes a dedicated run instead of being
+    # folded into the freshly-launched loop's in-flight turn). Bounded by the
+    # timeout, after which we inject anyway rather than hang.
+    AGENT_READY_POLL_SEC = 0.1
+    AGENT_READY_TIMEOUT_SEC = 30.0
 
     def __init__(
         self,
@@ -485,6 +491,30 @@ class QueueDispatcher:
         except asyncio.CancelledError:
             return
 
+    async def _wait_for_agent_idle(self) -> bool:
+        """Block until the project's run-status settles to 'idle'.
+
+        Called right after auto-starting an agent: the launched loop.run(None)
+        is briefly 'running', and injecting during that window would fold the
+        queue item into the in-flight turn's message queue (Case 1) rather than
+        starting a dedicated run for it (Case 2). Returns True on idle, False on
+        timeout (caller injects anyway — better to attempt than hang).
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.AGENT_READY_TIMEOUT_SEC
+        while loop.time() < deadline:
+            if self._shutting_down:
+                return False
+            if self._agent_manager.get_run_status(self._project_id) == "idle":
+                return True
+            await asyncio.sleep(self.AGENT_READY_POLL_SEC)
+        logger.warning(
+            "dispatcher(%s): agent did not reach idle within %.0fs after "
+            "auto-start; injecting anyway",
+            self._project_id, self.AGENT_READY_TIMEOUT_SEC,
+        )
+        return False
+
     async def _wait_idle(self) -> None:
         self._idle_event.clear()
         try:
@@ -508,12 +538,43 @@ class QueueDispatcher:
         # via _resume_attempt rather than coming through _dispatch_one.
         session = self._agent_manager.get_session(self._project_id)
         if session is None:
-            logger.warning(
-                "dispatcher(%s): no agent session, waiting for one",
+            # No live agent. The dispatcher is the project's session-lifecycle
+            # manager, so it starts one — gated by onboarding (a project with no
+            # captured state must not be auto-started; same gate /queue/start
+            # applied before).
+            if not self._agent_manager.is_onboarding_complete(self._project_id):
+                logger.info(
+                    "dispatcher(%s): onboarding incomplete; not auto-starting agent",
+                    self._project_id,
+                )
+                await self._wait_idle()
+                return
+            logger.info(
+                "dispatcher(%s): no agent — auto-starting for queue work",
                 self._project_id,
             )
-            await self._wait_idle()
-            return
+            try:
+                await self._agent_manager.ensure_agent_started(self._project_id)
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): auto-start failed", self._project_id,
+                )
+                await self._wait_idle()
+                return
+            # Wait for the freshly-launched loop.run(None) to settle to idle
+            # before injecting. Otherwise inject_message sees a running loop
+            # and folds the item into session._queue (Case 1) instead of
+            # hot-resuming a dedicated run for it (Case 2) — the auto-start
+            # race the explicit /queue/start endpoint used to sidestep.
+            await self._wait_for_agent_idle()
+            session = self._agent_manager.get_session(self._project_id)
+            if session is None:
+                logger.warning(
+                    "dispatcher(%s): no session after auto-start; waiting",
+                    self._project_id,
+                )
+                await self._wait_idle()
+                return
 
         # Compute attempt_number BEFORE append_attempt so the header reflects
         # the new attempt's 1-based index. First dispatch: len(attempts)==0

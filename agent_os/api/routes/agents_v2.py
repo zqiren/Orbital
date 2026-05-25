@@ -427,6 +427,14 @@ async def create_project(req: CreateProjectRequest):
         )
 
     project = _project_store.get_project(pid)
+    # Create the project's dispatcher now (project-scoped lifecycle manager) so
+    # queue work can be picked up without waiting for a daemon restart.
+    try:
+        await _agent_manager._ensure_dispatcher(pid, project.get("workspace", ""))
+    except Exception:
+        logger.warning(
+            "failed to create dispatcher for new project %s", pid, exc_info=True,
+        )
     return _redact_project(project)
 
 
@@ -967,6 +975,26 @@ def _resolve_queue_store(project_id: str):
     return _agent_manager.get_queue_store(project_id, workspace=workspace)
 
 
+async def _ensure_dispatcher_for(project_id: str):
+    """Return the project's dispatcher, creating it on demand.
+
+    The dispatcher is project-scoped (created at daemon startup / project
+    creation), but create it lazily here too so the queue endpoints work for a
+    project created before this code path existed. The dispatcher always
+    existing is what lets stop/resume/start be thin and never 409.
+    """
+    if _agent_manager is None:
+        return None
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        project = _project_store.get_project(project_id) if _project_store else None
+        workspace = (project or {}).get("workspace", "")
+        if workspace:
+            await _agent_manager._ensure_dispatcher(project_id, workspace)
+            dispatcher = _agent_manager.get_dispatcher(project_id)
+    return dispatcher
+
+
 @router.get("/projects/{project_id}/queue")
 async def get_queue(project_id: str) -> dict:
     store = _resolve_queue_store(project_id)
@@ -1059,15 +1087,17 @@ async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
 
 @router.post("/projects/{project_id}/queue/stop")
 async def stop_queue(project_id: str) -> dict:
-    """Pause the queue and switch the active session to chat mode."""
+    """Pause the queue and bring the active session to rest.
+
+    Thin: the dispatcher is project-scoped and always exists, so this no longer
+    409s on "no dispatcher" — pausing an agentless/empty queue just records the
+    pause intent and returns.
+    """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
-    dispatcher = _agent_manager.get_dispatcher(project_id)
+    dispatcher = await _ensure_dispatcher_for(project_id)
     if dispatcher is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No active dispatcher; start the agent first",
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
     return await dispatcher.stop()
 
 
@@ -1114,77 +1144,42 @@ async def start_queue(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
-    if not _project_has_completed_onboarding(project):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Complete onboarding in Chat first — the project has no "
-                "captured state yet (PROJECT_STATE.md missing). Send a "
-                "message in the Chat tab, let the agent respond, and try "
-                "starting the queue again."
-            ),
-        )
+    # Thin: the dispatcher is project-scoped and always exists. It auto-starts
+    # the agent (onboarding-gated, inside the dispatcher) when it sees work, so
+    # the endpoint no longer owns the onboarding gate or the auto-start.
+    dispatcher = await _ensure_dispatcher_for(project_id)
+    if dispatcher is None:
+        raise HTTPException(status_code=500, detail="Dispatcher unavailable")
 
     store = _resolve_queue_store(project_id)
     current_state = store.load().state
-    has_handle = _agent_manager.has_handle(project_id)
 
-    # True no-op only when the queue says RUNNING AND an agent is actually
-    # up to back that claim. State-without-handle (e.g. fresh project whose
-    # queue defaulted to RUNNING but no agent has started, or daemon restart
-    # that didn't auto-resume) needs to fall through to the auto-start path.
-    if current_state == QueueRunState.RUNNING and has_handle:
+    # No-op when the queue is already RUNNING and backed by a live agent —
+    # calling resume() here would mis-read the in-flight item's RUNNING head as
+    # a parked attempt and double-dispatch it.
+    if current_state == QueueRunState.RUNNING and _agent_manager.has_handle(project_id):
         return {"status": "already_running"}
 
-    if current_state == QueueRunState.PAUSED:
-        # Existing resume behavior — hot-resumes any parked attempt.
-        dispatcher = _agent_manager.get_dispatcher(project_id)
-        if dispatcher is None:
-            # No dispatcher (agent was torn down) — auto-start, then resume.
-            await _agent_manager.ensure_agent_started(project_id)
-            dispatcher = _agent_manager.get_dispatcher(project_id)
-        if dispatcher is None:
-            raise HTTPException(status_code=500, detail="Dispatcher unavailable after start")
-        return await dispatcher.resume()
-
-    # IDLE, or RUNNING-without-handle: auto-start the agent if needed and
-    # ensure queue state is RUNNING so the dispatcher will drain.
-    if not has_handle:
-        try:
-            await _agent_manager.ensure_agent_started(project_id)
-        except Exception as e:
-            logger.exception("queue start: agent auto-start failed for %s", project_id)
-            raise HTTPException(status_code=500, detail=f"Agent auto-start failed: {e}")
-    if current_state != QueueRunState.RUNNING:
-        store.set_queue_state(QueueRunState.RUNNING)
-        if _ws_manager is not None:
-            _ws_manager.broadcast(project_id, {
-                "type": "queue.state_changed",
-                "project_id": project_id,
-                "state": QueueRunState.RUNNING.value,
-            })
-    dispatcher = _agent_manager.get_dispatcher(project_id)
-    if dispatcher is not None:
+    # PAUSED → hot-resume any parked attempt. IDLE / RUNNING-without-handle →
+    # un-pause and wake; the dispatcher drains and auto-starts the agent.
+    result = await dispatcher.resume()
+    if current_state != QueueRunState.PAUSED:
         dispatcher.notify_new_item()
-    return {"status": "running"}
+    return result
 
 
 @router.post("/projects/{project_id}/queue/resume")
 async def resume_queue(project_id: str) -> dict:
     """Resume the queue. If an attempt was parked, hot-resume it.
 
-    Kept as an alias for /queue/start so existing frontends that emit
-    /queue/resume keep working. New code should call /queue/start, which
-    handles both idle→running and paused→running.
+    Kept as an alias for /queue/start. Thin: the project-scoped dispatcher
+    always exists, so this no longer 409s.
     """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
-    dispatcher = _agent_manager.get_dispatcher(project_id)
+    dispatcher = await _ensure_dispatcher_for(project_id)
     if dispatcher is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No active dispatcher; start the agent first",
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
     return await dispatcher.resume()
 
 
