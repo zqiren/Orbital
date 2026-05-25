@@ -18,12 +18,17 @@ export interface PendingCredential {
 interface CredentialCardProps {
   credential: PendingCredential;
   projectId: string;
+  /** F1 session_id this credential request belongs to (the viewed/holder
+   *  session). Threaded into approve/deny so the backend resolves the
+   *  SPECIFIC session's pending tool call, not just the project's default. */
+  sessionId?: string;
   onResolve?: (toolCallId: string) => void;
 }
 
 export default function CredentialCard({
   credential,
   projectId,
+  sessionId,
   onResolve,
 }: CredentialCardProps) {
   const [values, setValues] = useState<Record<string, string>>({});
@@ -58,7 +63,7 @@ export default function CredentialCard({
         }),
       });
       // Resolve the intercepted request_credential tool call
-      await approveToolCall(projectId, credential.tool_call_id);
+      await approveToolCall(projectId, credential.tool_call_id, undefined, undefined, sessionId);
       setResolved(true);
       onResolve?.(credential.tool_call_id);
     } finally {
@@ -69,7 +74,7 @@ export default function CredentialCard({
   async function handleDeny() {
     setSubmitting(true);
     try {
-      await denyToolCall(projectId, credential.tool_call_id, 'User declined to provide credentials');
+      await denyToolCall(projectId, credential.tool_call_id, 'User declined to provide credentials', sessionId);
       setResolved(true);
       onResolve?.(credential.tool_call_id);
     } finally {

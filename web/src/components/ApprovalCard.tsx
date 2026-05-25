@@ -15,6 +15,10 @@ interface ApprovalCardProps {
     reasoning?: string;
   };
   projectId: string;
+  /** F1 session_id this approval belongs to (the viewed/holder session).
+   *  Threaded into approve/deny so the backend resolves the SPECIFIC
+   *  session's pending tool call, not just the project's default one. */
+  sessionId?: string;
   resolved?: 'approved' | 'denied';
   onResolve?: (toolCallId: string, resolution: 'approved' | 'denied') => void;
 }
@@ -73,6 +77,7 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>) {
 export default function ApprovalCard({
   approval,
   projectId,
+  sessionId,
   resolved,
   onResolve,
 }: ApprovalCardProps) {
@@ -112,7 +117,7 @@ export default function ApprovalCard({
     setSubmitting(true);
     setError(null);
     try {
-      await approveToolCall(projectId, approval.tool_call_id, replyText || undefined, approveAll || undefined);
+      await approveToolCall(projectId, approval.tool_call_id, replyText || undefined, approveAll || undefined, sessionId);
       setLocalResolution('approved');
       onResolve?.(approval.tool_call_id, 'approved');
     } catch {
@@ -129,7 +134,7 @@ export default function ApprovalCard({
     setSubmitting(true);
     setError(null);
     try {
-      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || 'Denied by user');
+      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || 'Denied by user', sessionId);
       setLocalResolution('denied');
       onResolve?.(approval.tool_call_id, 'denied');
     } catch {

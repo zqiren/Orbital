@@ -1306,7 +1306,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     setShowCommandDropdown(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
-      const result = await newSession(projectId);
+      const result = await newSession(projectId, sessionId);
       if (result.status === 'no_active_session') {
         setItems((prev) => [...prev, {
           type: 'agent_notify' as const,
@@ -1885,6 +1885,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     resolved: !!resolved,
                   }}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -1901,6 +1902,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`apr-${item.tool_call_id}`}
                   approval={item}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   resolved={resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -1948,6 +1950,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     reason: a.tool_args?.reason as string ?? '',
                   }}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -1964,6 +1967,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`rt-apr-${a.tool_call_id}`}
                   approval={a}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   resolved={a.resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -2024,12 +2028,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             holdingSessionId={slotHeldNotice.holdingSessionId}
             onWait={() => setSlotHeldNotice(null)}
             onCancelAndSend={async () => {
-              // Cancel the running turn on the holding session's project,
-              // then re-inject the previously-typed message. Note that
-              // /cancel is project-scoped (per ACTIVE-session-and-queue-model
-              // §3 — one slot per project), so we cancel via projectId, not
-              // the holding session_id directly.
-              await cancelMessage(projectId);
+              // Cancel the running turn on the holding session, then re-inject
+              // the previously-typed message. The backend /cancel now accepts a
+              // session_id so it stops the SPECIFIC session holding the slot
+              // (slotHeldNotice.holdingSessionId), not just the default one.
+              await cancelMessage(projectId, slotHeldNotice.holdingSessionId);
               const pending = slotHeldNotice;
               // Replace the notice with the actual user message (per
               // DISPATCH-2026-05-22 §5.4). After /cancel the slot is freed, so
@@ -2170,7 +2173,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    cancelMessage(projectId).catch(() => {
+                    // Cancel the SPECIFIC running session: prefer the resolved
+                    // slot holder, falling back to the viewed session.
+                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
                       // POST failed (offline, daemon down, etc.) — drop the
                       // optimistic state immediately so the user can retry
                       // instead of waiting for the 10s timeout.
@@ -2183,7 +2188,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    cancelMessage(projectId).catch(() => {
+                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
                       setIsCancelling(false);
                       setCancelTimeoutNotice('Cancel request failed — try again if needed.');
                     });

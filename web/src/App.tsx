@@ -380,7 +380,10 @@ export default function App() {
 
   async function handleCancelMessage() {
     if (!selectedProjectId) return;
-    await cancelMessage(selectedProjectId);
+    // Thread the active session_id so /cancel stops the SPECIFIC session the
+    // UI is acting on (route.sessionId), not just the project's default one.
+    const activeSessionId = route.name === 'project' ? route.sessionId : undefined;
+    await cancelMessage(selectedProjectId, activeSessionId);
   }
 
   // First-run wizard (before setup gate)

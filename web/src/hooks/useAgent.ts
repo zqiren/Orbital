@@ -42,24 +42,39 @@ export function useAgent() {
   );
 
   // kept for admin/debug use; UI Stop button uses cancelMessage (T05)
-  const stopAgent = useCallback(async (projectId: string) => {
+  const stopAgent = useCallback(async (projectId: string, sessionId?: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(sessionId !== undefined && { session_id: sessionId }),
+        }),
+      },
     );
   }, []);
 
-  const cancelMessage = useCallback(async (projectId: string) => {
+  const cancelMessage = useCallback(async (projectId: string, sessionId?: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/cancel`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(sessionId !== undefined && { session_id: sessionId }),
+        }),
+      },
     );
   }, []);
 
-  const newSession = useCallback(async (projectId: string) => {
+  const newSession = useCallback(async (projectId: string, sessionId?: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/new-session`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(sessionId !== undefined && { session_id: sessionId }),
+        }),
+      },
     );
   }, []);
 
@@ -90,7 +105,13 @@ export function useAgent() {
   );
 
   const approveToolCall = useCallback(
-    async (projectId: string, toolCallId: string, replyText?: string, approveAll?: boolean) => {
+    async (
+      projectId: string,
+      toolCallId: string,
+      replyText?: string,
+      approveAll?: boolean,
+      sessionId?: string,
+    ) => {
       return api<ActionResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/approve`,
         {
@@ -99,6 +120,7 @@ export function useAgent() {
             tool_call_id: toolCallId,
             ...(replyText !== undefined && { reply_text: replyText }),
             ...(approveAll && { approve_all: true }),
+            ...(sessionId !== undefined && { session_id: sessionId }),
           }),
         },
       );
@@ -107,7 +129,7 @@ export function useAgent() {
   );
 
   const denyToolCall = useCallback(
-    async (projectId: string, toolCallId: string, reason: string) => {
+    async (projectId: string, toolCallId: string, reason: string, sessionId?: string) => {
       return api<ActionResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/deny`,
         {
@@ -115,6 +137,7 @@ export function useAgent() {
           body: JSON.stringify({
             tool_call_id: toolCallId,
             reason,
+            ...(sessionId !== undefined && { session_id: sessionId }),
           }),
         },
       );
