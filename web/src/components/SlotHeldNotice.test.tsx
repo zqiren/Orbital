@@ -81,10 +81,10 @@ describe('SlotHeldNotice', () => {
     // we verify here that the prop fires once, and the harness records
     // the order of the underlying cancel and inject calls.
     const calls: string[] = [];
-    const cancelEndpoint = vi.fn(async () => {
+    const cancelEndpoint = vi.fn(async (_projectId: string) => {
       calls.push('cancel');
     });
-    const reinjectEndpoint = vi.fn(async () => {
+    const reinjectEndpoint = vi.fn(async (_projectId: string, _content: string) => {
       calls.push('inject');
     });
     const onCancelAndSend = vi.fn(async () => {

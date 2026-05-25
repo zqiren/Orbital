@@ -12,7 +12,7 @@ afterEach(() => cleanup());
 
 // Mock useTriggers so we control what triggers are returned without any
 // network or WebSocket work. The mock factory is reset per-test via vi.fn().
-const mockFetchTriggers = vi.fn(async () => []);
+const mockFetchTriggers = vi.fn(async (): Promise<Trigger[]> => []);
 let mockTriggers: Trigger[] = [];
 let mockLoading = false;
 

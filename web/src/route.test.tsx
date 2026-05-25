@@ -15,7 +15,7 @@
  */
 
 import { render, screen, fireEvent } from '@testing-library/react';
-import { useState } from 'react';
+import { useState, type SetStateAction } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Route } from './route';
 
@@ -50,7 +50,7 @@ function makeProject(id: string): Project {
 describe('Sidebar routing', () => {
   it('clicking a project invokes onSelectProject with the project id', () => {
     const projects = [makeProject('proj-1'), makeProject('proj-2')];
-    const onSelectProject = vi.fn<[string], void>();
+    const onSelectProject = vi.fn<(value: string) => void>();
 
     render(
       <Sidebar
@@ -74,7 +74,7 @@ describe('Sidebar routing', () => {
 
   it('clicking a different project invokes onSelectProject with that id', () => {
     const projects = [makeProject('alpha'), makeProject('beta')];
-    const onSelectProject = vi.fn<[string], void>();
+    const onSelectProject = vi.fn<(value: string) => void>();
 
     render(
       <Sidebar
@@ -156,7 +156,7 @@ describe('Sidebar mobile select-project regression', () => {
   }
 
   it('selecting a project transitions mobileView to "content"', () => {
-    const onMobileView = vi.fn<[string], void>();
+    const onMobileView = vi.fn<(value: string) => void>();
     render(<Harness onMobileView={onMobileView} />);
 
     fireEvent.click(screen.getByText('Project p-mob'));
@@ -176,7 +176,7 @@ describe('ProjectDetail routing', () => {
   };
 
   it('switching tabs updates route.tab and preserves projectId', () => {
-    const setRoute = vi.fn<[Route], void>();
+    const setRoute = vi.fn<(value: SetStateAction<Route>) => void>();
 
     render(
       <ProjectDetail
@@ -195,7 +195,7 @@ describe('ProjectDetail routing', () => {
   });
 
   it('switching tabs preserves sessionId when set', () => {
-    const setRoute = vi.fn<[Route], void>();
+    const setRoute = vi.fn<(value: SetStateAction<Route>) => void>();
     const routeWithSession: Extract<Route, { name: 'project' }> = {
       ...baseRoute,
       tab: 'chat',
@@ -223,7 +223,7 @@ describe('ProjectDetail routing', () => {
   });
 
   it('clicking the gear icon sets route.settings=true, preserving project/tab', () => {
-    const setRoute = vi.fn<[Route], void>();
+    const setRoute = vi.fn<(value: SetStateAction<Route>) => void>();
 
     render(
       <ProjectDetail
@@ -246,7 +246,7 @@ describe('ProjectDetail routing', () => {
   });
 
   it('clicking a tab from settings clears route.settings (back to project)', () => {
-    const setRoute = vi.fn<[Route], void>();
+    const setRoute = vi.fn<(value: SetStateAction<Route>) => void>();
     const settingsRoute: Extract<Route, { name: 'project' }> = {
       ...baseRoute,
       tab: 'queue',

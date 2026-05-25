@@ -38,7 +38,7 @@ const defaultProps = {
   agentStatuses: {},
   statusSummaries: {},
   pendingApprovals: {},
-  route: { name: 'projects' } as const,
+  route: { name: 'list' } as const,
   connectionState: 'connected' as const,
   onSelectProject: vi.fn(),
   onNewProject: vi.fn(),
