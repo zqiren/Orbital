@@ -87,6 +87,12 @@ class Session:
         self.on_append = None
         self.on_stream = None
 
+        # Deferred session_start meta record. A session is a file on disk; the
+        # file is not created until the first message. ``Session.new`` stashes
+        # the session_start meta here, and the first physical write flushes it
+        # as the first line (see ``_write_line``). None for loaded sessions.
+        self._pending_meta: dict | None = None
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -139,13 +145,14 @@ class Session:
             "fallback_models": list(fallback_models) if fallback_models else [],
             "timestamp": _now(),
         }
-        # Create file and write the session_start meta record under file lock.
-        # The meta record is intentionally NOT appended to self._messages —
-        # it is identity metadata, not conversation, and must never reach
-        # the LLM via get_messages()/get_recent().
-        with session._file_lock:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
+        # Deferred creation: do NOT write the file here. A session is a file on
+        # disk only once it has a first message — minting a Session object that
+        # is never messaged must leave no on-disk trace. The session_start meta
+        # is stashed and flushed as the first physical line by the first write
+        # (see ``_write_line``). The meta record is identity metadata, not
+        # conversation, so it is never added to self._messages and never
+        # reaches the LLM via get_messages()/get_recent().
+        session._pending_meta = meta_record
         return session
 
     @classmethod
@@ -231,10 +238,26 @@ class Session:
 
         # Thread-safe + cross-process JSONL write (now includes any fields added by observer)
         line_bytes = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+        self._write_line(line_bytes)
+
+    def _write_line(self, line_bytes: bytes) -> None:
+        """Append one physical JSONL line under both locks.
+
+        Deferred creation: if a session_start meta record is still pending
+        (set by ``Session.new`` and not yet flushed), write it as the very
+        first line of the file before this line. The file is created here by
+        ``O_CREAT`` — it does not exist until the first write.
+        """
         with self._lock:
             with self._file_lock:
                 fd = os.open(self._filepath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
                 try:
+                    if self._pending_meta is not None:
+                        meta_bytes = (
+                            json.dumps(self._pending_meta, ensure_ascii=False) + "\n"
+                        ).encode("utf-8")
+                        os.write(fd, meta_bytes)
+                        self._pending_meta = None
                     os.write(fd, line_bytes)
                 finally:
                     os.close(fd)
@@ -321,13 +344,7 @@ class Session:
             **fields,
         }
         line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-        with self._lock:
-            with self._file_lock:
-                fd = os.open(self._filepath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-                try:
-                    os.write(fd, line_bytes)
-                finally:
-                    os.close(fd)
+        self._write_line(line_bytes)
 
     def get_messages(self) -> list[dict]:
         """Return full in-memory message list."""

@@ -136,9 +136,11 @@ class TestOnLoopDoneWaiting:
         # Sub-agents should not be checked on error path
         sub_agent_mgr.list_active.assert_not_called()
 
-    def test_broadcast_stopped_on_cancelled_task(self):
-        """Fix 3B: CancelledError should broadcast 'stopped' so the frontend
-        doesn't get stuck showing a running indicator."""
+    def test_broadcast_idle_on_cancelled_task(self):
+        """Fix 3B: CancelledError should broadcast 'idle' so the frontend
+        doesn't get stuck showing a running indicator. A cancelled loop is
+        idle, not a distinct 'stopped' state; the breadcrumb is recorded in
+        last_terminal_event."""
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
@@ -153,9 +155,9 @@ class TestOnLoopDoneWaiting:
         ws.broadcast.assert_called_once()
         payload = ws.broadcast.call_args[0][1]
         assert payload["type"] == "agent.status"
-        assert payload["status"] == "stopped"
+        assert payload["status"] == "idle"
 
-    def test_broadcasts_stopped_when_session_stopped(self):
+    def test_broadcasts_idle_when_session_stopped(self):
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
@@ -169,7 +171,7 @@ class TestOnLoopDoneWaiting:
 
         ws.broadcast.assert_called_once()
         event = ws.broadcast.call_args[0][1]
-        assert event["status"] == "stopped"
+        assert event["status"] == "idle"
         # Handle should be cleaned up
         assert ("proj", "default") not in mgr._handles
 

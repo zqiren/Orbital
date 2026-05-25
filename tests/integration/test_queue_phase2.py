@@ -53,18 +53,28 @@ class _ScriptedAgentManager:
         self._session = _FakeSession(f"sess_{self._session_counter}")
         self._task = None
         self.new_session_calls = 0
+        # Records the session_id passed to each inject, so tests can verify
+        # the dispatcher runs each item in its own freshly-minted session.
+        self.injected_session_ids: list[str | None] = []
+
+    def is_onboarding_complete(self, project_id):
+        # The dispatcher gates auto-start on onboarding; tests model a ready
+        # project.
+        return True
 
     def get_session(self, project_id):
         return self._session
 
-    def get_loop(self, project_id):
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
         # Set up the scripted exit and complete the "loop task" immediately.
+        self.injected_session_ids.append(session_id)
         entry = self._script.pop(0) if self._script else {"reason": "text"}
         self._loop._exit_reason = entry["reason"]
         self._loop._exit_summary = entry.get("summary")
@@ -76,16 +86,24 @@ class _ScriptedAgentManager:
         self._task = asyncio.create_task(_instant())
         return "delivered"
 
-    async def new_session(self, project_id):
-        # Mint a fresh session id, mimicking AgentManager.new_session.
+    async def new_session(self, project_id, *, session_id=None):
+        # Pure-create: mint a fresh session id, mimicking
+        # AgentManager.new_session. The dispatcher now calls this once per
+        # item (in _dispatch_one) before injecting, rather than rotating
+        # after each terminal exit — the call count per item is unchanged.
         self.new_session_calls += 1
         self._session_counter += 1
-        self._session = _FakeSession(f"sess_{self._session_counter}")
-        # Reset the loop's exit_reason like the real loop.run() does
+        sid = f"sess_{self._session_counter}"
+        self._session = _FakeSession(sid)
+        # Reset the loop's exit_reason like a fresh loop.run() would.
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
         self._loop._exit_block_reason = None
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self._session_counter:08d}",
+        }
 
 
 async def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.05):

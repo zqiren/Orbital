@@ -495,7 +495,8 @@ class AgentManager:
                           trigger_source: str | None = None,
                           trigger_name: str | None = None,
                           initial_nonce: str | None = None,
-                          session_id: str | None = None) -> None:
+                          session_id: str | None = None,
+                          queue_state: str = "chat") -> None:
         """Wire all components and start the loop.
 
         ``session_id`` is the optional Format-1 user-facing chat id (see
@@ -785,6 +786,15 @@ class AgentManager:
             on_session_end=session_end_callback,
             on_session_end_refresh=session_end_refresh_callback,
         )
+
+        # 12-queue. When the dispatcher starts a session to run a queue item it
+        # passes queue_state="running" so the loop enforces the queue
+        # completion contract (an approval-required tool call becomes a block
+        # signal) from its very first turn. Set before the task is created so
+        # there is no race with the first iteration. Default "chat" leaves
+        # interactive (user) sessions unchanged — they reach this via inject.
+        if hasattr(loop, "_queue_state"):
+            loop._queue_state = queue_state
 
         # 12a. Register checkpoint_state tool now that the loop exists.
         # The tool calls loop.trigger_checkpoint() (agent-decided trigger).
@@ -1110,7 +1120,8 @@ class AgentManager:
 
     async def inject_message(self, project_id: str, content: str, *,
                              nonce: str | None = None,
-                             session_id: str | None = None) -> "str | dict":
+                             session_id: str | None = None,
+                             queue_state: str = "chat") -> "str | dict":
         """Inject a message. Four cases:
         1. Loop running -> queue (returns "queued")
         1b. Loop paused for approval -> auto-deny pending, deliver, resume
@@ -1145,7 +1156,8 @@ class AgentManager:
             logger.info("inject_message(%s): no handle, auto-starting agent", project_id)
             config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce, session_id=session_id)
+                                  initial_nonce=nonce, session_id=session_id,
+                                  queue_state=queue_state)
             return "started"
 
         # New user message resets approve-all bypass (new task context)
@@ -1267,7 +1279,8 @@ class AgentManager:
             # session was stopped, so we need a fresh AgentConfig.
             config = self._build_agent_config_from_project(project_id)
             await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce, session_id=session_id)
+                                  initial_nonce=nonce, session_id=session_id,
+                                  queue_state=queue_state)
             return "started"
 
         if handle.task is not None and handle.task.done():
@@ -1415,7 +1428,9 @@ class AgentManager:
         """Return the current runtime status for a session.
 
         Returns one of: 'running', 'pending_approval', 'waiting', 'idle',
-        'stopped', 'error'.
+        'error'. A session that was stopped reads as 'idle' — being stopped
+        is not a distinct runtime state, just "not running right now". The
+        historical fact that it was stopped lives in last_terminal_event.
 
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
@@ -1425,7 +1440,7 @@ class AgentManager:
         if handle is None:
             return "idle"
         if handle.session.is_stopped():
-            return "stopped"
+            return "idle"
         # Check approval pause BEFORE task.done() — during approval the
         # task is still alive (blocked inside the interceptor's wait).
         if handle.session._paused_for_approval:
@@ -1627,161 +1642,38 @@ class AgentManager:
 
     async def new_session(self, project_id: str, *,
                           session_id: str | None = None) -> dict:
-        """Archive the current session and create a fresh one.
+        """Pure-create: mint a fresh session id + uuid for this project.
 
-        Preserves the project handle (loop, provider, registry, context_manager,
-        interceptor) but swaps the session object.  Layer 1 workspace files
-        (PROJECT_STATE.md, DECISIONS.md, …) are untouched.
+        A session is a file on disk. ``new_session`` only brings a new session
+        *into existence as an identity* — it writes no JSONL (creation is
+        deferred to the first message), registers no handle, and takes NO
+        action on any other session. It does not terminate a running loop,
+        flush workspace state, stop sub-agents, or transfer the active-loop
+        slot. The new session becomes real — handle, loop, JSONL — on the
+        first inject under the returned ``session_id`` (``inject_message``
+        Case 3 auto-starts it).
 
-        ``session_id`` selects the chat session whose Session object is
-        rotated; defaults to the single-loop default session. The
-        underlying handle keeping the project loop alive is preserved
-        either way.
+        The ``session_id`` kwarg is accepted for backward-compatible call
+        sites but ignored: a new session always gets a fresh minted id.
+
+        Returns ``{"status": "ok", "session_id", "session_uuid"}``. The
+        ``session_id`` is the user-facing F1 chat id the frontend navigates
+        to; ``session_uuid`` is the F2 JSONL stem the session will use once
+        materialized.
         """
-        session_id = self._resolve_session_id(session_id)
-        handle = self._handles.get(make_session_key(project_id, session_id))
-        if handle is None:
-            return {"status": "no_active_session"}
-
-        # 1. Stop loop if running. terminate() interrupts any in-flight LLM
-        # stream, sets the stop flag, and cancels the loop task. The shield
-        # wait below is the final reaper for the loop's finally block.
-        if handle.task is not None and not handle.task.done():
-            await handle.loop.terminate()
-            try:
-                await asyncio.wait_for(asyncio.shield(handle.task), timeout=10.0)
-            except (asyncio.TimeoutError, Exception):
-                logger.warning("new_session(%s): loop did not stop gracefully", project_id)
-
-        # 2. Cancel idle poll. Sub-agent stop_all is deferred to step 3b
-        # (after session-end) so summarization can read sub-agent transcripts.
-        poll_task = self._idle_poll_tasks.pop(project_id, None)
-        if poll_task and not poll_task.done():
-            poll_task.cancel()
-
-        # 3. Pre-flush: run session-end routine so workspace files are updated
-        workspace = handle.config_snapshot.get("workspace", "")
-        try:
-            workspace_files = WorkspaceFileManager(workspace)
-            await asyncio.wait_for(
-                run_session_end_routine(
-                    session=handle.session,
-                    provider=handle.provider,
-                    workspace_files=workspace_files,
-                    session_uuid=handle.session.session_uuid,
-                    project_id=project_id,
-                ),
-                timeout=200.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "new_session(%s): pre-flush LLM call timed out after retries, proceeding without summary",
-                project_id,
-            )
-        except Exception:
-            logger.warning("new_session(%s): pre-flush failed, proceeding", project_id, exc_info=True)
-
-        # 3b. Stop sub-agents AFTER session-end so transcripts are readable
-        # during summarization. Wrapped in a 10s budget to avoid blocking
-        # rotation indefinitely on a wedged adapter. (T06)
-        try:
-            await asyncio.wait_for(
-                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
-                timeout=10.0,
-            )
-        except asyncio.TimeoutError:
-            logger.error(
-                "new_session(%s): stop_all timed out; sub-agents may leak",
-                project_id,
-            )
-        except Exception:
-            logger.exception(
-                "new_session(%s): stop_all raised; continuing with rotation",
-                project_id,
-            )
-
-        # 4. Save old session identity (both formats).
-        # Per dispatch §4.2.1, ``/new-session`` rotates the F1 chat id (new
-        # thread) AND mints a fresh F2 storage stem (new file). The old thread
-        # is archived; the new thread is fresh.
-        old_session_id = handle.session.session_id
-        old_session_uuid = handle.session.session_uuid
-
-        # 5. Create new session — fresh F1 and F2 both.
         project = self._project_store.get_project(project_id)
         project_name = (project or {}).get("name", "")
         sanitized = _sanitize_project_name(project_name)
         new_session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
         new_session_id = f"sess_{uuid4().hex[:8]}"
-        snap = handle.config_snapshot
-        new_session = Session.new(
-            new_session_uuid, workspace,
-            session_id=new_session_id,
-            provider=snap.get("provider", "unknown"),
-            model=snap.get("model", "unknown"),
-            sdk=snap.get("sdk", "unknown"),
-            fallback_models=snap.get("fallback_models", []),
-        )
-
-        # 6. Wire observers
-        new_session.on_append = self._on_message(project_id)
-        new_session.on_stream = self._on_stream(project_id)
-
-        # 7. Reset context_manager so it reads from the new empty session
-        cm = handle.context_manager
-        if hasattr(cm, '_session'):
-            cm._session = new_session
-        if hasattr(cm, '_cold_resume_injected'):
-            cm._cold_resume_injected = False
-        if hasattr(cm, '_recovery_injected'):
-            cm._recovery_injected = False
-        if hasattr(cm, '_window_factor'):
-            cm._window_factor = 1.0
-        if hasattr(cm, '_last_usage_pct'):
-            cm._last_usage_pct = 0.0
-
-        # 8. Swap session in handle (and on the loop instance — loop._session
-        # is set in __init__ and never updated; if we leave it stale, the
-        # loop's own session.append calls in subsequent runs go to the OLD
-        # JSONL while cm.prepare reads from the NEW one. Sync to avoid that
-        # divergence.)
-        handle.session = new_session
-        handle.task = None
-        if hasattr(handle.loop, "_session"):
-            handle.loop._session = new_session
-
-        # 10. Broadcast new_session event, then idle so frontend status
-        #     doesn't stay stuck (enables repeat /new invocations).
-        self._set_last_terminal_event(project_id, session_id, "new_session")
-        self._broadcast(project_id, {
-            "type": "agent.status",
-            "project_id": project_id,
-            "status": "new_session",
-            "source": "management",
-        }, session_id=session_id)
-        self._broadcast(project_id, {
-            "type": "agent.status",
-            "project_id": project_id,
-            "status": "idle",
-            "source": "management",
-        }, session_id=session_id)
-
         logger.info(
-            "new_session(%s): archived %s (uuid %s), created %s (uuid %s)",
-            project_id, old_session_id, old_session_uuid,
-            new_session_id, new_session_uuid,
+            "new_session(%s): minted %s (uuid %s)",
+            project_id, new_session_id, new_session_uuid,
         )
-        # Response carries both formats: ``old_session_id`` / ``new_session_id``
-        # are the user-facing F1 chat ids (what the frontend cares about for
-        # session-boundary semantics); ``old_session_uuid`` / ``new_session_uuid``
-        # are the F2 JSONL stems for callers that need to address files
-        # directly. See ``TASK/INVESTIGATION-session-id-canonical-audit.md``.
         return {
             "status": "ok",
-            "old_session_id": old_session_id,
-            "new_session_id": new_session_id,
-            "old_session_uuid": old_session_uuid,
-            "new_session_uuid": new_session_uuid,
+            "session_id": new_session_id,
+            "session_uuid": new_session_uuid,
         }
 
     async def cancel_message(self, project_id: str, *,
@@ -1925,7 +1817,7 @@ class AgentManager:
         self._broadcast(project_id, {
             "type": "agent.status",
             "project_id": project_id,
-            "status": "stopped",
+            "status": "idle",
             "source": "management",
         }, session_id=session_id)
 
@@ -1940,7 +1832,7 @@ class AgentManager:
         """Return a list of active/idle sessions for a project.
 
         Each entry has ``session_id``, ``status`` (running | pending_approval |
-        waiting | idle | stopped), and ``session_uuid`` (the per-loop
+        waiting | idle), and ``session_uuid`` (the per-loop
         Session.session_id, useful for jsonl path correlation).
 
         Multi-loop callers use this to render a session list. Single-loop
@@ -1951,9 +1843,10 @@ class AgentManager:
         for (pid, sid), handle in self._handles.items():
             if pid != project_id:
                 continue
-            # Inline get_run_status to avoid double dict lookup.
+            # Inline get_run_status to avoid double dict lookup. A stopped
+            # session reads as idle (not a distinct runtime state).
             if handle.session.is_stopped():
-                status = "stopped"
+                status = "idle"
             elif handle.session._paused_for_approval:
                 status = "pending_approval"
             elif handle.task is not None and not handle.task.done():
@@ -1981,10 +1874,10 @@ class AgentManager:
                 ),
                 "last_activity_at": last_activity_at,
             })
-        # Merge in archived (on-disk) sessions not currently hydrated in memory,
-        # so the sidebar shows every persisted session log. In-memory entries
-        # above carry live status; disk-only entries are idle (archived) and get
-        # hydrated from JSONL only when the user acts on them.
+        # Merge in disk-only sessions not currently hydrated in memory, so the
+        # sidebar shows every persisted session log. In-memory entries above
+        # carry live status; disk-only entries are idle and get hydrated from
+        # JSONL only when the user acts on them.
         seen_uuids = {s["session_uuid"] for s in sessions if s.get("session_uuid")}
         sessions.extend(self._disk_session_entries(project_id, seen_uuids))
         # Stable ordering — default session first, then alphabetical for others.
@@ -1993,8 +1886,8 @@ class AgentManager:
 
     def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
         """Enumerate the project's on-disk session JSONLs not currently hydrated
-        in memory. Each becomes an idle (archived) sidebar entry. Skips
-        empty/meta-only logs and the lock sentinels."""
+        in memory. Each becomes an idle sidebar entry. Skips empty/meta-only
+        logs and the lock sentinels."""
         project = self._project_store.get_project(project_id) if self._project_store else None
         workspace = (project or {}).get("workspace", "") if project else ""
         if not workspace:
@@ -2011,12 +1904,11 @@ class AgentManager:
             uuid = fname[:-6]
             if uuid in seen_uuids:
                 continue  # already represented by a live in-memory handle
-            session_id = None
             last_activity_at = None
             try:
                 with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
-                    first = None
-                    last = None
+                    first_real = None  # first non-meta (conversation) record
+                    last_real = None
                     for raw in fh:
                         raw = raw.strip()
                         if not raw:
@@ -2025,21 +1917,24 @@ class AgentManager:
                             rec = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
-                        if first is None:
-                            first = rec
-                        last = rec
+                        # Skip identity metadata (session_start, model_swap, …)
+                        # — a log with only meta records is not a real session.
+                        if rec.get("role") == "meta":
+                            continue
+                        if first_real is None:
+                            first_real = rec
+                        last_real = rec
             except OSError:
                 continue
-            has_real_id = first.get("session_id") if first is not None else None
-            if last is not None:
-                last_activity_at = last.get("timestamp")
-            if not has_real_id:
-                continue  # empty / meta-only log
-            # Address an archived session by its unique session_uuid: the F1
+            if first_real is None:
+                continue  # empty / meta-only log — not a materialized session
+            if last_real is not None:
+                last_activity_at = last_real.get("timestamp")
+            # Address a disk-only session by its unique session_uuid: the F1
             # session_id on disk is often "default" and not unique across many
-            # archived logs, which would shadow the active session and break the
+            # prior logs, which would shadow the active session and break the
             # chat endpoint's F1→F2 fast-path mapping. The uuid is unique and is
-            # what callers use to load/act on (hydrate) the archived session.
+            # what callers use to load/act on (hydrate) the disk-only session.
             entries.append({
                 "session_id": uuid,
                 "status": "idle",
@@ -2151,14 +2046,28 @@ class AgentManager:
     def get_dispatcher(self, project_id: str) -> "QueueDispatcher | None":
         return self._dispatchers.get(project_id)
 
-    def get_loop_task(self, project_id: str) -> "asyncio.Task | None":
-        """Used by the QueueDispatcher to await the inner loop task."""
-        handle = self._find_project_handle(project_id)
+    def get_loop_task(self, project_id: str, *,
+                      session_id: str | None = None) -> "asyncio.Task | None":
+        """Used by the QueueDispatcher to await the inner loop task. When
+        ``session_id`` is given, target that specific session's handle —
+        required now the dispatcher runs each queue item in its own session,
+        so ``_find_project_handle`` (first handle by order) is no longer
+        unambiguous. Without it, fall back to the single project handle."""
+        handle = (
+            self._handles.get(make_session_key(project_id, session_id))
+            if session_id is not None
+            else self._find_project_handle(project_id)
+        )
         return handle.task if handle else None
 
-    def get_loop(self, project_id: str):
-        """Return the AgentLoop object so the dispatcher can read exit_reason."""
-        handle = self._find_project_handle(project_id)
+    def get_loop(self, project_id: str, *, session_id: str | None = None):
+        """Return the AgentLoop object so the dispatcher can read exit_reason.
+        When ``session_id`` is given, target that specific session's handle."""
+        handle = (
+            self._handles.get(make_session_key(project_id, session_id))
+            if session_id is not None
+            else self._find_project_handle(project_id)
+        )
         return handle.loop if handle else None
 
     def get_sub_agent_manager(self):
@@ -2428,7 +2337,7 @@ class AgentManager:
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
-                    "status": "stopped",
+                    "status": "idle",
                     "source": "management",
                 }, session_id=session_id)
                 return
@@ -2456,7 +2365,7 @@ class AgentManager:
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
-                    "status": "stopped",
+                    "status": "idle",
                 }, session_id=session_id)
                 return
 

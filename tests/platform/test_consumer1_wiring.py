@@ -240,7 +240,7 @@ class TestStopAgentCallsStopProcess:
         # Should still broadcast stopped status
         ws.broadcast.assert_called()
         last_call = ws.broadcast.call_args[0][1]
-        assert last_call["status"] == "stopped"
+        assert last_call["status"] == "idle"
 
 
 # ---------------------------------------------------------------------------

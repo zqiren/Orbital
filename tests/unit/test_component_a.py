@@ -205,11 +205,15 @@ class MockInterceptor:
 
 class TestSessionNewAndLoad:
 
-    def test_new_creates_jsonl_file(self, tmp_path):
-        """Session.new() should create a JSONL file at the expected path."""
+    def test_first_append_creates_jsonl_file(self, tmp_path):
+        """The JSONL is created on the first message, not at Session.new().
+        Deferred creation: a minted-but-never-messaged session leaves no file
+        on disk; the first append materializes it at the expected path."""
         session = Session.new("test-sess", str(tmp_path))
         expected_dir = tmp_path / "orbital" / "sessions"
         expected_file = expected_dir / "test-sess.jsonl"
+        assert not expected_file.exists(), "Session.new must not write the file"
+        session.append({"role": "user", "content": "hi"})
         assert expected_file.exists()
 
     def test_messages_round_trip(self, tmp_path):

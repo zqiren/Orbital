@@ -100,6 +100,9 @@ def test_filename_derives_from_session_uuid(tmp_path):
         str(tmp_path),
         session_id="sess_user_thread",
     )
+    # Materialize the file — deferred creation means nothing is on disk until
+    # the first message; the path it lands at is what this test pins down.
+    session.append({"role": "user", "content": "x"})
 
     pp = ProjectPaths(str(tmp_path))
     expected = pp.session_file("proj_aabbccdd")
@@ -166,11 +169,10 @@ def test_legacy_jsonl_loads_with_session_id_falling_back_to_uuid(tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_new_session_rotates_f1_and_mints_new_f2(tmp_path, monkeypatch):
-    """Per dispatch §4.2.1, ``/new-session`` rotates the F1 chat id (new
-    user-facing thread) AND mints a fresh F2 storage stem (new file).
-    Both old values stay accessible on the response so callers can address
-    archived files; the response carries F1 and F2 explicitly.
+async def test_new_session_mints_fresh_f1_and_f2(tmp_path, monkeypatch):
+    """new_session is pure-create: it mints a fresh F1 chat id (``sess_…``) AND
+    a fresh F2 storage stem, returns both, and takes NO action on any existing
+    session — no rotation, no handle swap, no termination.
     """
     from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
@@ -229,29 +231,20 @@ async def test_new_session_rotates_f1_and_mints_new_f2(tmp_path, monkeypatch):
     # default F1 session ("default"), so we key it accordingly.
     mgr._handles[("p1", "default")] = handle
 
-    # Patch the session-end LLM call so the test does not require a real provider.
-    with patch(
-        "agent_os.daemon_v2.agent_manager.run_session_end_routine",
-        new_callable=AsyncMock,
-    ):
-        result = await mgr.new_session("p1")
+    result = await mgr.new_session("p1")
 
     assert result["status"] == "ok"
-    # The response carries BOTH formats explicitly.
-    assert result["old_session_id"] == "default"
-    assert result["old_session_uuid"] == "demo_oldstem1"
+    # A fresh F1 (user-facing chat id) and F2 (storage stem) are minted and
+    # returned — distinct from the seeded session's identities.
+    assert result["session_id"].startswith("sess_")
+    assert result["session_uuid"]
+    assert result["session_id"] != "default"
+    assert result["session_uuid"] != "demo_oldstem1"
 
-    # F1 rotated to a fresh value distinct from the old F1.
-    assert result["new_session_id"] != result["old_session_id"], (
-        "/new-session must rotate the F1 chat id (dispatch §4.2.1)"
-    )
-    # F2 also rotated (new file).
-    assert result["new_session_uuid"] != result["old_session_uuid"]
-
-    # The handle's session now carries the new F1 and F2.
-    new_session = mgr._handles[("p1", "default")].session
-    assert new_session.session_id == result["new_session_id"]
-    assert new_session.session_uuid == result["new_session_uuid"]
+    # Pure-create takes no action on the existing default session — its handle
+    # and Session object are untouched (no rotation, no swap).
+    assert mgr._handles[("p1", "default")].session is old_session
+    assert old_session.session_id == "default"
 
 
 # ---------------------------------------------------------------------------

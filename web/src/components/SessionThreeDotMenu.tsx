@@ -5,8 +5,8 @@
 /**
  * SessionThreeDotMenu — hover three-dot (⋯) button with placeholder actions.
  *
- * All actions (Rename / Archive / Delete) are DISABLED with a "Coming in
- * Batch 4" tooltip. No real handlers — lifecycle actions are deferred per
+ * All actions (Rename / Delete) are DISABLED with a "Coming in Batch 4"
+ * tooltip. No real handlers — lifecycle actions are deferred per
  * Phase 1B DO-NOT #2.
  */
 
@@ -77,7 +77,7 @@ export function SessionThreeDotMenu({ ariaLabel = 'Session options' }: SessionTh
           data-testid="session-three-dot-dropdown"
           className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-white shadow-md py-1"
         >
-          {(['Rename', 'Archive', 'Delete'] as const).map((action) => (
+          {(['Rename', 'Delete'] as const).map((action) => (
             <button
               key={action}
               type="button"

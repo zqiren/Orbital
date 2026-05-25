@@ -52,65 +52,60 @@ class _FakeLoop:
 
 
 class _AutoStartManager:
-    """Fake AgentManager modelling start → (briefly running) → idle.
+    """Fake AgentManager modelling the new per-item session lifecycle.
 
-    The load-bearing assertion lives in inject_message: if the dispatcher ever
-    injects while the freshly-started loop is still 'in flight', that is the
-    folding race — recorded in ``injected_in_flight``.
+    Each queue item now mints its OWN fresh session via new_session and then
+    injects into it (inject_message Case 3 auto-starts a dedicated loop for
+    that session). There is no separate launch run to fold into, so the
+    old Case-1 folding race is structurally impossible: an inject can only
+    target the fresh session it was just minted for.
+
+    The load-bearing assertion lives in inject_message: ``injected_in_flight``
+    flips True if the dispatcher ever injects without first minting a fresh
+    session for that item (the modern equivalent of the folding race —
+    reusing an in-flight session instead of a dedicated one).
     """
 
     def __init__(self, *, onboarding: bool = True):
         self._onboarding = onboarding
-        self._started = False
-        self._run_in_flight = False
         self._loop = _FakeLoop()
         self._session: _FakeSession | None = None
         self._sid = 0
         self._task: asyncio.Task | None = None
         # observability
-        self.ensure_calls = 0
+        self.new_session_calls = 0
         self.inject_count = 0
+        # True if an inject lands on a session that wasn't freshly minted for
+        # it (would indicate folding into a shared/in-flight session).
         self.injected_in_flight = False
+        # Tracks the most recently minted (but not-yet-injected) session.
+        self._pending_fresh_sid: str | None = None
 
     # --- observation accessors the dispatcher uses ---
     def is_onboarding_complete(self, project_id):
         return self._onboarding
 
-    def has_handle(self, project_id):
-        return self._started
-
     def get_session(self, project_id):
         return self._session
 
-    def get_loop(self, project_id):
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
     def get_run_status(self, project_id, *, session_id=None):
-        # The launched loop.run(None) reports 'running' on the first poll after
-        # start, then 'idle' once it settles. The dispatcher's idle-wait must
-        # poll past the 'running' window before it injects.
-        if self._run_in_flight:
-            self._run_in_flight = False
-            return "running"
         return "idle"
 
     # --- lifecycle actions (same methods the user endpoints call) ---
-    async def ensure_agent_started(self, project_id):
-        self.ensure_calls += 1
-        self._started = True
-        self._run_in_flight = True
-        self._sid += 1
-        self._session = _FakeSession(f"sess_{self._sid}")
-        return True
-
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
-        if self._run_in_flight:
-            # Injected while the freshly-started run is still in flight → the
-            # Case-1 folding race the idle-wait is meant to prevent.
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
+        # Folding guard: the inject must target the session just minted for
+        # this item. If it targets anything else (or no fresh mint preceded
+        # it), that is the modern folding race.
+        if session_id is None or session_id != self._pending_fresh_sid:
             self.injected_in_flight = True
+        self._pending_fresh_sid = None
         self.inject_count += 1
         self._loop._exit_reason = "complete"
         self._loop._exit_summary = "ok"
@@ -121,14 +116,22 @@ class _AutoStartManager:
         self._task = asyncio.create_task(_instant())
         return "delivered"
 
-    async def new_session(self, project_id):
-        # Per-item rotation; the handle persists so the next item finds a
-        # session and dispatches without re-starting.
+    async def new_session(self, project_id, *, session_id=None):
+        # Pure-create: mint a fresh, unique session id. The dispatcher calls
+        # this once per item before injecting, giving every item a dedicated
+        # session (no folding into a shared launch run).
+        self.new_session_calls += 1
         self._sid += 1
-        self._session = _FakeSession(f"sess_{self._sid}")
+        sid = f"sess_{self._sid}"
+        self._session = _FakeSession(sid)
+        self._pending_fresh_sid = sid
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self._sid:08d}",
+        }
 
     def get_sub_agent_manager(self):
         return None
@@ -166,10 +169,16 @@ async def test_rapid_fire_items_each_get_dedicated_run_no_folding(tmp_path):
         "all five items should reach DONE; final: "
         + ", ".join(f"{it.id}={it.state.value}" for it in store.load().items)
     )
-    assert mgr.ensure_calls >= 1, "dispatcher must auto-start the agent"
+    # New contract: the dispatcher mints one fresh session per item (the same
+    # path the user takes), then injects into it — five items → five
+    # new_session calls and five dedicated injects.
+    assert mgr.new_session_calls == 5, (
+        "dispatcher must mint a fresh session for each of the five items"
+    )
     assert mgr.inject_count == 5, "each item must get its own dedicated inject"
     assert not mgr.injected_in_flight, (
-        "no item may be injected while the launch run is in flight (folding race)"
+        "every inject must target the fresh session minted for that item "
+        "(no folding into a shared/in-flight session)"
     )
 
 
@@ -191,6 +200,12 @@ async def test_onboarding_gate_blocks_auto_start(tmp_path):
     await asyncio.sleep(0.3)
     await dispatcher.shutdown()
 
-    assert mgr.ensure_calls == 0, "must not auto-start a pre-onboarding project"
+    # The gate is now is_onboarding_complete; when it's False the dispatcher
+    # must NOT mint a session or inject — the equivalent of the old
+    # "no auto-start" assertion under the per-item-session model.
+    assert mgr.new_session_calls == 0, (
+        "must not mint a session for a pre-onboarding project"
+    )
+    assert mgr.inject_count == 0, "must not inject into a pre-onboarding project"
     assert store.load().items[0].id == item.id
     assert store.load().items[0].state == ItemState.QUEUED, "item stays queued"

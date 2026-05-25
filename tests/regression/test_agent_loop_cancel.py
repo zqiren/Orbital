@@ -157,8 +157,13 @@ def _make_session(tmp_path, session_id="sess_cancel_test"):
 
 
 def _read_session_messages(session) -> list[dict]:
-    """Read all messages from the session's JSONL file."""
-    import json
+    """Read all messages from the session's JSONL file. Returns [] if the file
+    was never materialized — creation is deferred to the first write, so a
+    session that never appended anything (e.g. cancel-on-idle) has no file,
+    which is itself proof that no marker was written."""
+    import json, os
+    if not os.path.exists(session._filepath):
+        return []
     msgs = []
     with open(session._filepath, "r", encoding="utf-8") as f:
         for line in f:

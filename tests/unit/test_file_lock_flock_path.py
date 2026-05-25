@@ -182,19 +182,21 @@ def test_concurrent_appends_produce_valid_jsonl(tmp_path):
     with open(filepath, "r", encoding="utf-8") as f:
         raw_lines = [ln for ln in f.read().splitlines() if ln.strip()]
 
-    # 1 meta header + 2 * n_per_child user messages
-    assert len(raw_lines) == 1 + 2 * n_per_child, (
-        f"Expected {1 + 2*n_per_child} lines, got {len(raw_lines)}"
+    # Deferred creation: the session_start meta is flushed by the Session
+    # object that holds it, on its first write. These child processes re-open
+    # the file by path (they carry no pending meta of their own), so the file
+    # contains exactly the 2 * n_per_child user messages. The point of the
+    # test is that cross-process locking serializes them without corruption.
+    assert len(raw_lines) == 2 * n_per_child, (
+        f"Expected {2 * n_per_child} lines, got {len(raw_lines)}"
     )
 
-    # Every line is valid JSON
+    # Every line is valid JSON and a user message.
     parsed = [json.loads(ln) for ln in raw_lines]
-    assert parsed[0]["role"] == "meta"
-    user_msgs = parsed[1:]
-    assert all(m["role"] == "user" for m in user_msgs)
+    assert all(m["role"] == "user" for m in parsed)
 
-    a_count = sum(1 for m in user_msgs if m["content"].startswith("A-"))
-    b_count = sum(1 for m in user_msgs if m["content"].startswith("B-"))
+    a_count = sum(1 for m in parsed if m["content"].startswith("A-"))
+    b_count = sum(1 for m in parsed if m["content"].startswith("B-"))
     assert a_count == n_per_child
     assert b_count == n_per_child
 

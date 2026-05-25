@@ -119,7 +119,7 @@ export interface ChatMessage {
   chunk_type?: string;
 }
 
-export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'stopped' | 'error' | 'new_session' | 'pending_approval';
+export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'error' | 'new_session' | 'pending_approval';
 
 // Per-session record of the most recent terminal event. Returned by
 // GET /api/v2/projects/{pid}/sessions on each session entry. Lets the UI

@@ -30,6 +30,7 @@ import type { AgentRunStatus, Project, SessionListEntry } from '../types';
 import type { Route } from '../route';
 import { useSessions } from '../hooks/useSessions';
 import { useSession } from '../hooks/useSession';
+import { useAgent } from '../hooks/useAgent';
 import { SessionSidebar } from './SessionSidebar';
 import ChatView from './ChatView';
 
@@ -81,6 +82,7 @@ export default function ChatTab({
   const projectId = project.project_id;
   const { sessions } = useSessions(projectId);
   const { activeSessionId, setActiveSessionId } = useSession(projectId);
+  const { newSession } = useAgent();
 
   const routeSessionId = route.sessionId;
 
@@ -114,18 +116,38 @@ export default function ChatTab({
     setActiveSessionId(sessionId);
   }
 
-  // "+ new session": deferred no-op for Phase 1B. The backend DOES expose
-  // POST /new-session (it returns a new session id), but the session-creation
-  // UX semantics are deferred — the rotate-vs-spawn decision (reset the active
-  // session in place vs. spawn a parallel one) isn't settled yet. Until then
-  // this clears route.sessionId so the next render re-resolves to a default,
-  // keeping the affordance honest (no dead click handler).
+  // "+ new session": mint a genuinely BLANK session on the backend and
+  // navigate to it. We must NOT clear route.sessionId to undefined — that
+  // would let the resolution effect re-open the most-recent existing session
+  // (the bug). Instead we POST /new-session with NO session_id (fresh-create),
+  // read the minted `session_id` from the response, and set it on the route.
+  //
+  // Because the minted id is DEFINED, the resolution effect above early-returns
+  // (`if (routeSessionId !== undefined) return;`) and cannot clobber it. The
+  // fresh session has no messages and is not yet in the `sessions` list (it
+  // materializes server-side only on first inject); ChatView tolerates an
+  // unknown id and renders a blank composer.
+  //
+  // This is a click handler — fire-and-forget the async mint; do not block the
+  // UI. Log on failure (minimal error handling).
   function handleNewSession() {
-    setRoute((prev) =>
-      prev.name === 'project' && prev.projectId === projectId
-        ? { ...prev, sessionId: undefined }
-        : prev,
-    );
+    void newSession(projectId)
+      .then((result) => {
+        const newId = result.session_id;
+        if (!newId) {
+          console.error('newSession returned no session_id', result);
+          return;
+        }
+        setRoute((prev) =>
+          prev.name === 'project' && prev.projectId === projectId
+            ? { ...prev, sessionId: newId }
+            : prev,
+        );
+        setActiveSessionId(newId);
+      })
+      .catch((err) => {
+        console.error('Failed to create a new session', err);
+      });
   }
 
   return (

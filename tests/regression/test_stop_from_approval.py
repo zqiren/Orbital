@@ -124,15 +124,16 @@ async def test_stop_from_pending_approval_pops_handle_and_broadcasts():
     # Sub-agent cleanup happened.
     sub_agent_mgr.stop_all.assert_awaited_once()
 
-    # WS broadcast: agent.status stopped.
-    stopped_broadcasts = [
+    # WS broadcast: agent.status idle (stop folds into idle; the 'stopped'
+    # fact is recorded separately in last_terminal_event).
+    idle_broadcasts = [
         c for c in ws.broadcast.call_args_list
         if len(c.args) >= 2
         and isinstance(c.args[1], dict)
         and c.args[1].get("type") == "agent.status"
-        and c.args[1].get("status") == "stopped"
+        and c.args[1].get("status") == "idle"
     ]
-    assert len(stopped_broadcasts) >= 1, (
-        f"expected agent.status:stopped broadcast, got: "
+    assert len(idle_broadcasts) >= 1, (
+        f"expected agent.status:idle broadcast, got: "
         f"{ws.broadcast.call_args_list}"
     )

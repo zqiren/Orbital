@@ -83,7 +83,7 @@ class ContextManager:
         self._window_factor *= factor
 
     def _inject_recovery_context(self) -> None:
-        """Inject context from the most recent archived session if Layer 1 files are incomplete."""
+        """Inject context from the most recent prior session log if Layer 1 files are incomplete."""
         self._recovery_injected = True
 
         # Only inject into fresh sessions (no messages yet)
@@ -99,7 +99,7 @@ class ContextManager:
         if os.path.isfile(goals_path) and os.path.isfile(state_path):
             return
 
-        # Find archived session files
+        # Find prior session files
         sessions_dir = pp.sessions_dir
         if not os.path.isdir(sessions_dir):
             return
@@ -125,7 +125,7 @@ class ContextManager:
         session_files.sort(key=lambda x: x[0], reverse=True)
         most_recent_path = session_files[0][1]
 
-        # Read all messages from the most recent archived session
+        # Read all messages from the most recent prior session
         messages = []
         with open(most_recent_path, "r", encoding="utf-8") as f:
             for line in f:

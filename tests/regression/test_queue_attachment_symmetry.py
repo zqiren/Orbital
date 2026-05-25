@@ -41,6 +41,7 @@ class _RecordingManager:
 
     def __init__(self):
         self._loop = _FakeLoop()
+        self._session_counter = 0
         self._session = _FakeSession("s")
         self._task = None
         self.injected_content: list[str] = []
@@ -54,10 +55,10 @@ class _RecordingManager:
     def get_session(self, pid):
         return self._session
 
-    def get_loop(self, pid):
+    def get_loop(self, pid, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, pid):
+    def get_loop_task(self, pid, *, session_id=None):
         return self._task
 
     def get_run_status(self, pid, *, session_id=None):
@@ -66,7 +67,8 @@ class _RecordingManager:
     async def ensure_agent_started(self, pid):
         return False
 
-    async def inject_message(self, pid, content, *, nonce=None, session_id=None):
+    async def inject_message(self, pid, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
         self.injected_content.append(content)
         self._loop._exit_reason = "complete"
 
@@ -76,9 +78,16 @@ class _RecordingManager:
         self._task = asyncio.create_task(_instant())
         return "delivered"
 
-    async def new_session(self, pid):
+    async def new_session(self, pid, *, session_id=None):
+        self._session_counter += 1
+        sid = f"sess_{self._session_counter}"
+        self._session = _FakeSession(sid)
         self._loop._exit_reason = "text"
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self._session_counter:08d}",
+        }
 
     def get_sub_agent_manager(self):
         return None

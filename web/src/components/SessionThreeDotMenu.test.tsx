@@ -36,13 +36,13 @@ describe('SessionThreeDotMenu', () => {
     expect(screen.getByTestId('session-three-dot-dropdown')).toBeInTheDocument();
   });
 
-  it('renders Rename, Archive, Delete actions when open', async () => {
+  it('renders Rename, Delete actions when open (no Archive)', async () => {
     render(<SessionThreeDotMenu />);
     await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
 
     expect(screen.getByTestId('session-action-rename')).toBeInTheDocument();
-    expect(screen.getByTestId('session-action-archive')).toBeInTheDocument();
     expect(screen.getByTestId('session-action-delete')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-action-archive')).toBeNull();
   });
 
   it('all actions are disabled', async () => {
@@ -50,7 +50,6 @@ describe('SessionThreeDotMenu', () => {
     await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
 
     expect(screen.getByTestId('session-action-rename')).toBeDisabled();
-    expect(screen.getByTestId('session-action-archive')).toBeDisabled();
     expect(screen.getByTestId('session-action-delete')).toBeDisabled();
   });
 
@@ -59,7 +58,6 @@ describe('SessionThreeDotMenu', () => {
     await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
 
     expect(screen.getByTestId('session-action-rename')).toHaveAttribute('title', BATCH4_TOOLTIP);
-    expect(screen.getByTestId('session-action-archive')).toHaveAttribute('title', BATCH4_TOOLTIP);
     expect(screen.getByTestId('session-action-delete')).toHaveAttribute('title', BATCH4_TOOLTIP);
   });
 

@@ -52,16 +52,20 @@ class _WedgedAgentManager:
         self.new_session_calls = 0
         self._task = None
 
+    def is_onboarding_complete(self, project_id):
+        return True
+
     def get_session(self, project_id):
         return self._sessions[-1]
 
-    def get_loop(self, project_id):
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
         # The loop "task" waits for terminate to fire, then completes.
         async def _hang():
             await self._loop._terminated.wait()
@@ -69,14 +73,19 @@ class _WedgedAgentManager:
         self._task = asyncio.create_task(_hang())
         return "delivered"
 
-    async def new_session(self, project_id):
+    async def new_session(self, project_id, *, session_id=None):
         self.new_session_calls += 1
-        self._sessions.append(_FakeSession(f"sess_w_{len(self._sessions)}"))
+        sid = f"sess_w_{len(self._sessions)}"
+        self._sessions.append(_FakeSession(sid))
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
         self._loop._exit_block_reason = None
         self._loop._terminated = asyncio.Event()
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self.new_session_calls:08d}",
+        }
 
 
 @pytest.mark.asyncio
@@ -111,7 +120,10 @@ async def test_watchdog_fires_when_loop_exceeds_cap(tmp_path):
     # The dispatcher should have invoked terminate on the loop
     assert mgr._loop.terminate_called
 
-    # And rotated the session for the next attempt
+    # Under the per-item-session model the dispatcher mints one fresh session
+    # in _dispatch_one before injecting; the watchdog path itself does NOT
+    # rotate (the timed-out session stays idle on disk). So exactly one
+    # new_session call for this single dispatched item.
     assert mgr.new_session_calls == 1
 
     await dispatcher.shutdown()

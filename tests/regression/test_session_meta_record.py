@@ -22,12 +22,15 @@ from agent_os.agent.session import Session
 
 
 def test_session_start_writes_meta_record(tmp_path):
-    """First line of every new session JSONL is a session_start meta record."""
+    """First line of every session JSONL is a session_start meta record.
+    Creation is deferred to the first message, so the meta is flushed as the
+    first physical line when the first append lands."""
     session = Session.new(
         "test-session", str(tmp_path),
         provider="moonshot", model="kimi-k2-turbo",
         sdk="openai", fallback_models=["claude-sonnet-4-5"],
     )
+    session.append({"role": "user", "content": "hi"})
     with open(session._filepath) as f:
         first_line = f.readline()
     assert first_line.strip(), "session JSONL is empty — meta record not written"
@@ -44,6 +47,7 @@ def test_session_start_writes_meta_record(tmp_path):
 def test_session_start_meta_defaults_to_unknown(tmp_path):
     """Legacy callers that pass only (session_id, workspace) still work; values are 'unknown'."""
     session = Session.new("legacy", str(tmp_path))
+    session.append({"role": "user", "content": "hi"})
     with open(session._filepath) as f:
         first_line = f.readline()
     record = json.loads(first_line)
@@ -193,7 +197,10 @@ def test_session_start_meta_is_first_line_with_other_appends(tmp_path):
     assert lines[2]["role"] == "assistant"
 
 
-def test_session_filepath_exists_after_new(tmp_path):
-    """Sanity: Session.new still creates the file at the expected path."""
+def test_session_filepath_created_on_first_message(tmp_path):
+    """Deferred creation: Session.new does NOT create the file; the first
+    append materializes it at the expected path."""
     session = Session.new("path_check", str(tmp_path))
+    assert not os.path.exists(session._filepath), "Session.new must not write the file"
+    session.append({"role": "user", "content": "hi"})
     assert os.path.exists(session._filepath)

@@ -726,17 +726,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // always cleared on a terminal status regardless of which session is viewed.
   useEffect(() => {
     const viewing = viewingHolderRef.current;
-    if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
+    if (agentStatus === 'idle' || agentStatus === 'error') {
       // Loop has actually exited — clear the in-flight cancel affordance.
       // Effect re-runs on agentStatus change, so this naturally coincides
       // with the agent.status:idle WS broadcast from _on_loop_done. This is
       // composer-global and must run even when viewing a non-holder session.
+      // (A stopped/cancelled agent reports as `idle` — there is no separate
+      // `stopped` run status.)
       setIsCancelling(false);
       if (!viewing) return;
       setShowThinking(false);
-      const finalStatus =
-        agentStatus === 'idle' ? 'completed' :
-        agentStatus === 'error' ? 'error' : 'stopped';
+      const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
       setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
       // Catch-up fetch: if the agent was running, fetch the latest message
       // in case streaming deltas were entirely missed (tunnel down, etc.)

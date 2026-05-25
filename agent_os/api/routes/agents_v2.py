@@ -942,8 +942,11 @@ async def stop_agent(project_id: str, req: SessionScopedRequest | None = None):
 
 @router.post("/agents/{project_id}/new-session")
 async def new_session(project_id: str, req: SessionScopedRequest | None = None):
-    """Rotate the project's active-loop slot to a fresh session. ``session_id``
-    (body) selects which session to rotate away from (the one the UI has open)."""
+    """Create a fresh session for the project (pure-create). Mints a new
+    ``session_id`` + ``session_uuid`` and returns them; writes no file and
+    touches no running session. The UI navigates to the new ``session_id`` and
+    the session materializes on the first message. The body ``session_id`` is
+    accepted for compatibility but ignored — a new session is always fresh."""
     result = await _agent_manager.new_session(
         project_id, session_id=(req.session_id if req else None),
     )

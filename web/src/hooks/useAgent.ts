@@ -9,6 +9,15 @@ interface ActionResult {
   status: string;
 }
 
+export interface NewSessionResult extends ActionResult {
+  /** The id of the session. For a fresh-create (no session_id supplied) this
+   *  is a brand-new id like `sess_xxxxxxxx`; the session materializes on the
+   *  server only when the first message is injected into it. */
+  session_id?: string;
+  /** Opaque uuid for the minted session (debug / forward-compat). */
+  session_uuid?: string;
+}
+
 export interface InjectResult extends ActionResult {
   /** True when inject_message auto-denied a pending approval because the
    *  user sent a new message while the agent was paused. */
@@ -67,7 +76,7 @@ export function useAgent() {
   }, []);
 
   const newSession = useCallback(async (projectId: string, sessionId?: string) => {
-    return api<ActionResult>(
+    return api<NewSessionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/new-session`,
       {
         method: 'POST',

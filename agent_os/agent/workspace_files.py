@@ -28,7 +28,7 @@ _IS_WINDOWS = sys.platform == "win32"
 
 # In-memory idempotency guard for run_session_end_routine. Keyed by session_uuid
 # (the JSONL filename stem, Format 2 — see Session docstring). Not persisted
-# across daemon restarts — a restart archives sessions anyway. GIL makes
+# across daemon restarts — each prior session persists as its own log anyway. GIL makes
 # set.add/contains effectively atomic for short operations; we do not need an
 # asyncio.Lock unless tests show flakiness under concurrent dispatch.
 _completed_session_ends: set[str] = set()

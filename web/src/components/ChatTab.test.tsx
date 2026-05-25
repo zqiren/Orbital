@@ -54,6 +54,20 @@ vi.mock('../hooks/useSession', () => ({
   }),
 }));
 
+// useAgent.newSession is called by "+ new session" to mint a fresh session id
+// on the backend. Mock it to return a known minted id so we can assert that
+// ChatTab navigates to that id rather than re-resolving to an old session.
+const mockNewSession = vi.fn(async (_projectId: string, _sessionId?: string) => ({
+  status: 'ok',
+  session_id: 'sess_minted_new',
+}));
+
+vi.mock('../hooks/useAgent', () => ({
+  useAgent: () => ({
+    newSession: mockNewSession,
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Stub children — capture props so we can assert on them without rendering
 // the real heavy components (which need API / WS / etc.)
@@ -125,6 +139,8 @@ function resetMocks() {
   mockSessions = [];
   mockActiveSessionId = null;
   mockSetActiveSessionId.mockClear();
+  mockNewSession.mockClear();
+  mockNewSession.mockResolvedValue({ status: 'ok', session_id: 'sess_minted_new' });
   lastSessionSidebarProps = {};
   lastChatViewProps = {};
 }
@@ -372,5 +388,96 @@ describe('ChatTab — empty project (no sessions)', () => {
     // Children receive undefined sessionId
     expect(lastSessionSidebarProps.selectedSessionId).toBeUndefined();
     expect(lastChatViewProps.sessionId).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task C — "+ new session" mints a FRESH blank session (not re-resolve old)
+// ---------------------------------------------------------------------------
+
+describe('ChatTab — "+ new session" creates a genuinely blank session', () => {
+  beforeEach(() => resetMocks());
+
+  it('mints a fresh session id via newSession and navigates to it (not the most-recent existing)', async () => {
+    // There is an existing, most-recently-active session. The OLD buggy
+    // behaviour cleared route.sessionId to undefined, which re-resolved to
+    // this existing session. The fix must navigate to the minted id instead.
+    mockSessions = [
+      makeSession({ session_id: 'sess-old', last_activity_at: '2026-06-01T00:00:00Z' }),
+    ];
+    mockActiveSessionId = 'sess-old';
+
+    const setRoute = vi.fn();
+    const route = makeRoute({ sessionId: 'sess-old' });
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={setRoute}
+        />,
+      );
+    });
+
+    // The resolution effect must NOT have fired (route.sessionId already set).
+    setRoute.mockClear();
+
+    // User clicks "+ new session".
+    const onNewSession = lastSessionSidebarProps.onNewSession as () => void;
+    await act(async () => {
+      onNewSession();
+      // allow the awaited newSession() promise + state update to flush
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // newSession was called with NO explicit session id (fresh-create).
+    expect(mockNewSession).toHaveBeenCalledTimes(1);
+    expect(mockNewSession).toHaveBeenCalledWith('proj-1');
+
+    // setRoute navigates to the MINTED id, not the old/most-recent one.
+    expect(setRoute).toHaveBeenCalled();
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    const updated = updater(route);
+    expect(updated).toMatchObject({
+      name: 'project',
+      projectId: 'proj-1',
+      sessionId: 'sess_minted_new',
+    });
+    expect(updated.name === 'project' && updated.sessionId).not.toBe('sess-old');
+  });
+
+  it('tolerates a route.sessionId that is not in the sessions list (blank session, no re-resolve)', async () => {
+    // After minting, the new id is DEFINED but not yet in `sessions` (it
+    // materializes server-side only on first inject). The resolution effect
+    // must early-return and leave the new id in place — children get it.
+    mockSessions = [
+      makeSession({ session_id: 'sess-old', last_activity_at: '2026-06-01T00:00:00Z' }),
+    ];
+    mockActiveSessionId = 'sess-old';
+
+    const setRoute = vi.fn();
+    const route = makeRoute({ sessionId: 'sess_minted_new' }); // not in list
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={setRoute}
+        />,
+      );
+    });
+
+    // No clobbering back to an existing session.
+    expect(setRoute).not.toHaveBeenCalled();
+    // Children receive the fresh id even though it isn't in `sessions`.
+    expect(lastSessionSidebarProps.selectedSessionId).toBe('sess_minted_new');
+    expect(lastChatViewProps.sessionId).toBe('sess_minted_new');
   });
 });

@@ -15,7 +15,6 @@ const STATUS_CONFIG: Record<BadgeStatus, { color: string; label: string }> = {
   running: { color: 'bg-success', label: 'Active' },
   waiting: { color: 'bg-success', label: 'Waiting for sub-agents...' },
   idle: { color: 'bg-idle', label: 'Idle' },
-  stopped: { color: 'bg-idle', label: 'Idle' },
   error: { color: 'bg-error', label: 'Error' },
   needs_input: { color: 'bg-warning', label: 'Needs Input' },
   new_session: { color: 'bg-idle', label: 'Idle' },

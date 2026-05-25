@@ -62,11 +62,11 @@ function resetMocks() {
 }
 
 // ---------------------------------------------------------------------------
-// Grouping: active vs archived
+// Unified session list (no archived bucket — every session in one list)
 // ---------------------------------------------------------------------------
 
-describe('SessionSidebar — active vs archived grouping', () => {
-  it('active sessions (running/waiting/pending_approval/idle) appear in the main list', () => {
+describe('SessionSidebar — unified session list', () => {
+  it('all sessions (running/waiting/pending_approval/idle) appear in the single list', () => {
     resetMocks();
     mockSessions = [
       makeSession({ session_id: 'sess-run', status: 'running', session_uuid: 'u1' }),
@@ -80,122 +80,74 @@ describe('SessionSidebar — active vs archived grouping', () => {
     const list = screen.getByTestId('session-list');
     expect(list).toBeInTheDocument();
 
-    // All four active sessions are in the main list
     expect(screen.getByTestId('session-list-item-sess-run')).toBeInTheDocument();
     expect(screen.getByTestId('session-list-item-sess-wait')).toBeInTheDocument();
     expect(screen.getByTestId('session-list-item-sess-blocked')).toBeInTheDocument();
     expect(screen.getByTestId('session-list-item-sess-idle')).toBeInTheDocument();
   });
 
-  it('stopped sessions appear in the archived section, not the main list', () => {
-    resetMocks();
-    mockSessions = [
-      makeSession({ session_id: 'sess-active', status: 'idle', session_uuid: 'ua' }),
-      makeSession({ session_id: 'sess-stopped', status: 'stopped', session_uuid: 'us' }),
-    ];
-
-    render(<SessionSidebar projectId="proj-1" />);
-
-    // Active in main list
-    expect(screen.getByTestId('session-list-item-sess-active')).toBeInTheDocument();
-    // Stopped not in main list initially (archived section collapsed)
-    expect(screen.queryByTestId('session-list-item-sess-stopped')).toBeNull();
-    // Archived section toggle present
-    expect(screen.getByTestId('session-archived-toggle')).toBeInTheDocument();
-    expect(screen.getByText(/archived \(1\)/i)).toBeInTheDocument();
-  });
-
-  it('error and new_session statuses APPEAR in the active list (not filtered out)', () => {
-    // Regression: error and new_session must not fall through both
-    // isActiveStatus and isArchivedStatus and vanish from the sidebar.
-    // DO-NOT #12: ALL sessions must appear.
+  it('error and new_session statuses appear in the unified list (none filtered out)', () => {
+    // DO-NOT #12: ALL sessions must appear. There is no archived bucket and no
+    // active/archived split — every status renders in the one list.
     resetMocks();
     mockSessions = [
       makeSession({ session_id: 'sess-error', status: 'error', session_uuid: 'ue' }),
       makeSession({ session_id: 'sess-new', status: 'new_session', session_uuid: 'un' }),
+      makeSession({ session_id: 'sess-idle', status: 'idle', session_uuid: 'ui' }),
     ];
 
     render(<SessionSidebar projectId="proj-1" />);
 
-    // Both appear in the active list (not dropped)
     expect(screen.getByTestId('session-list-item-sess-error')).toBeInTheDocument();
     expect(screen.getByTestId('session-list-item-sess-new')).toBeInTheDocument();
-    // No archived section since neither is `stopped`
-    expect(screen.queryByTestId('session-archived-section')).toBeNull();
-    // Both count as active
-    expect(screen.getByTestId('session-active-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('session-list-item-sess-idle')).toBeInTheDocument();
+    // Count reflects ALL sessions.
+    expect(screen.getByTestId('session-active-count')).toHaveTextContent('3');
   });
 
-  it('archived section is absent when there are no stopped sessions', () => {
+  it('never renders an archived section or any "archived" affordance', () => {
     resetMocks();
-    mockSessions = [makeSession({ session_id: 'sess-idle', status: 'idle' })];
+    mockSessions = [
+      makeSession({ session_id: 'sess-a', status: 'idle', session_uuid: 'u1' }),
+      makeSession({ session_id: 'sess-b', status: 'error', session_uuid: 'u2' }),
+    ];
 
     render(<SessionSidebar projectId="proj-1" />);
 
     expect(screen.queryByTestId('session-archived-section')).toBeNull();
+    expect(screen.queryByTestId('session-archived-toggle')).toBeNull();
+    expect(screen.queryByTestId('session-archived-list')).toBeNull();
+    expect(screen.queryByText(/archived/i)).toBeNull();
   });
 
-  it('active count in header reflects number of active sessions', () => {
+  it('header count reflects the total number of sessions', () => {
     resetMocks();
     mockSessions = [
       makeSession({ session_id: 's1', status: 'running', session_uuid: 'u1' }),
       makeSession({ session_id: 's2', status: 'idle', session_uuid: 'u2' }),
-      makeSession({ session_id: 's3', status: 'stopped', session_uuid: 'u3' }),
+      makeSession({ session_id: 's3', status: 'error', session_uuid: 'u3' }),
     ];
 
     render(<SessionSidebar projectId="proj-1" />);
-    expect(screen.getByTestId('session-active-count')).toHaveTextContent('2');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Archived section collapse / expand
-// ---------------------------------------------------------------------------
-
-describe('SessionSidebar — archived section collapse/expand', () => {
-  it('archived section is collapsed by default', () => {
-    resetMocks();
-    mockSessions = [
-      makeSession({ session_id: 'sess-stopped', status: 'stopped', session_uuid: 'u1' }),
-    ];
-
-    render(<SessionSidebar projectId="proj-1" />);
-    expect(screen.queryByTestId('session-archived-list')).toBeNull();
-    expect(screen.getByTestId('session-archived-toggle')).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
+    expect(screen.getByTestId('session-active-count')).toHaveTextContent('3');
   });
 
-  it('clicking the archived toggle expands the archived list', async () => {
+  it('sorts sessions by last-activity descending (most recent first)', () => {
     resetMocks();
     mockSessions = [
-      makeSession({ session_id: 'sess-stopped', status: 'stopped', session_uuid: 'u1' }),
+      makeSession({ session_id: 'sess-old', session_uuid: 'u1', last_activity_at: '2026-01-01T00:00:00Z' }),
+      makeSession({ session_id: 'sess-newest', session_uuid: 'u2', last_activity_at: '2026-06-01T00:00:00Z' }),
+      makeSession({ session_id: 'sess-mid', session_uuid: 'u3', last_activity_at: '2026-03-15T00:00:00Z' }),
     ];
 
     render(<SessionSidebar projectId="proj-1" />);
-    await userEvent.click(screen.getByTestId('session-archived-toggle'));
 
-    expect(screen.getByTestId('session-archived-list')).toBeInTheDocument();
-    expect(screen.getByTestId('session-list-item-sess-stopped')).toBeInTheDocument();
-    expect(screen.getByTestId('session-archived-toggle')).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
-  });
-
-  it('clicking the toggle again collapses the archived list', async () => {
-    resetMocks();
-    mockSessions = [
-      makeSession({ session_id: 'sess-stopped', status: 'stopped', session_uuid: 'u1' }),
-    ];
-
-    render(<SessionSidebar projectId="proj-1" />);
-    await userEvent.click(screen.getByTestId('session-archived-toggle'));
-    expect(screen.getByTestId('session-archived-list')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId('session-archived-toggle'));
-    expect(screen.queryByTestId('session-archived-list')).toBeNull();
+    const items = screen.getAllByTestId(/^session-list-item-/);
+    expect(items.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'session-list-item-sess-newest',
+      'session-list-item-sess-mid',
+      'session-list-item-sess-old',
+    ]);
   });
 });
 
