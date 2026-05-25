@@ -389,6 +389,20 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                 "Failed to auto-resume agents on startup"
             )
 
+    # 7i. Create one queue dispatcher per project. The dispatcher is the
+    # project's session-lifecycle manager — it exists for the life of the
+    # project, independent of agent lifecycle, so it is created at boot
+    # rather than inside start_agent.
+    @app.on_event("startup")
+    async def _start_dispatchers():
+        try:
+            await agent_manager.start_all_dispatchers()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to start project dispatchers on startup"
+            )
+
     # 7f. Pairing routes
     pairing_routes.configure(getattr(app.state, "relay_client", None))
     app.include_router(pairing_routes.router)

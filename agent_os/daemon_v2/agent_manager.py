@@ -270,6 +270,19 @@ class AgentManager:
             except asyncio.TimeoutError:
                 logger.warning("AgentManager shutdown timed out after %.1fs", timeout)
 
+        # Shut down all project dispatchers. They are project-scoped and outlive
+        # individual agents, so the handle-based teardown above does not reach
+        # them — sweep _dispatchers directly.
+        for pid, dispatcher in list(self._dispatchers.items()):
+            try:
+                await dispatcher.shutdown()
+            except Exception:
+                logger.warning(
+                    "dispatcher shutdown failed for %s during daemon shutdown",
+                    pid, exc_info=True,
+                )
+        self._dispatchers.clear()
+
         # Cancel heartbeat
         if self._heartbeat_task is not None and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
@@ -1864,15 +1877,13 @@ class AgentManager:
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
 
-        # Shut down the queue dispatcher first so it doesn't try to drain
-        # mid-stop. shutdown() is the full-teardown variant — distinct from
-        # the Phase 4 stop() which only pauses draining.
-        dispatcher = self._dispatchers.pop(project_id, None)
-        if dispatcher is not None:
-            try:
-                await dispatcher.shutdown()
-            except Exception:
-                logger.warning("dispatcher shutdown failed for %s", project_id, exc_info=True)
+        # The queue dispatcher is project-scoped: created at daemon startup,
+        # torn down only at daemon shutdown or project deletion. It deliberately
+        # SURVIVES agent stop — it is the entity responsible for (re)starting
+        # agents, so it must outlive any individual agent. (Previously this
+        # popped + shut down the dispatcher here, which made an agentless queue
+        # impossible and produced the "queue stuck RUNNING / 409 on stop" bugs.)
+        # Teardown lives in shutdown() (daemon) and shutdown_dispatcher() (delete).
 
         # Cancel idle poll task if running
         poll_task = self._idle_poll_tasks.pop(project_id, None)
@@ -2179,6 +2190,46 @@ class AgentManager:
             await self._start_loop(project_id, session_id=session_id)
 
         return new_session
+
+    async def start_all_dispatchers(self) -> None:
+        """Create one queue dispatcher per project at daemon startup.
+
+        The dispatcher is the project's session-lifecycle manager: it exists
+        for the life of the project, independent of whether an agent is
+        currently running. Creating them all at boot is what reconciles an
+        agentless queue to IDLE and lets queue work resume without a prior
+        manual agent start. Idempotent via _ensure_dispatcher.
+        """
+        if self._project_store is None:
+            return
+        try:
+            projects = self._project_store.list_projects()
+        except Exception:
+            logger.exception("start_all_dispatchers: failed to list projects")
+            return
+        for project in projects:
+            project_id = project.get("project_id")
+            workspace = project.get("workspace") or ""
+            if not project_id or not workspace:
+                continue
+            try:
+                await self._ensure_dispatcher(project_id, workspace)
+            except Exception:
+                logger.exception(
+                    "start_all_dispatchers: failed to start dispatcher for %s",
+                    project_id,
+                )
+
+    async def shutdown_dispatcher(self, project_id: str) -> None:
+        """Tear down a single project's dispatcher (project-deletion path)."""
+        dispatcher = self._dispatchers.pop(project_id, None)
+        if dispatcher is not None:
+            try:
+                await dispatcher.shutdown()
+            except Exception:
+                logger.warning(
+                    "dispatcher shutdown failed for %s", project_id, exc_info=True,
+                )
 
     async def _ensure_dispatcher(self, project_id: str, workspace: str) -> None:
         """Create + start the dispatcher for this project if not already running."""

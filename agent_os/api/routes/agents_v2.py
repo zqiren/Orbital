@@ -599,6 +599,10 @@ async def delete_project(project_id: str):
     if _agent_manager.is_running(project_id):
         await _agent_manager.stop_agent(project_id)
 
+    # Tear down the project's dispatcher. It is project-scoped and survives
+    # agent stop, so deletion must shut it down explicitly.
+    await _agent_manager.shutdown_dispatcher(project_id)
+
     # Clean up project files on disk
     workspace = project.get("workspace", "")
     if workspace:
