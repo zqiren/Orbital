@@ -2030,14 +2030,18 @@ class AgentManager:
                         last = rec
             except OSError:
                 continue
-            if first is not None:
-                session_id = first.get("session_id")
-                if last is not None:
-                    last_activity_at = last.get("timestamp")
-            if not session_id:
+            has_real_id = first.get("session_id") if first is not None else None
+            if last is not None:
+                last_activity_at = last.get("timestamp")
+            if not has_real_id:
                 continue  # empty / meta-only log
+            # Address an archived session by its unique session_uuid: the F1
+            # session_id on disk is often "default" and not unique across many
+            # archived logs, which would shadow the active session and break the
+            # chat endpoint's F1→F2 fast-path mapping. The uuid is unique and is
+            # what callers use to load/act on (hydrate) the archived session.
             entries.append({
-                "session_id": session_id,
+                "session_id": uuid,
                 "status": "idle",
                 "session_uuid": uuid,
                 "last_terminal_event": None,

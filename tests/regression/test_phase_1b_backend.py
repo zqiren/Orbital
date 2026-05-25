@@ -331,24 +331,25 @@ class TestChatSessionIdFilter:
         _plant(sess_b_f1, sess_b_f2)
 
         # Guard: ensure the disk-scan fallback is NOT used. If the fast path
-        # F1→F2 mapping fails to resolve, the route would fall through to the
-        # disk scan; patch it to raise so any such fall-through fails loudly.
+        # F1→F2 mapping fails to resolve, the route would fall through to
+        # _find_session_uuid_on_disk; patch THAT to raise so any such
+        # fall-through fails loudly. (We target the fallback function itself
+        # rather than os.listdir, because list_sessions is now disk-backed and
+        # legitimately calls os.listdir on the fast path.)
         import agent_os.api.routes.agents_v2 as av2
 
-        def _no_fallback_listdir(path):
+        def _no_fallback(sessions_dir, session_id):
             raise AssertionError(
                 "disk-scan fallback was reached; fast path F1→F2 mapping failed"
             )
 
         # Filtered: session_a only — must resolve via the live handle (fast path).
-        # We temporarily forbid os.listdir inside the route module so a
-        # fallback would crash the request.
-        orig_listdir = av2.os.listdir
-        av2.os.listdir = _no_fallback_listdir
+        orig_fallback = av2._find_session_uuid_on_disk
+        av2._find_session_uuid_on_disk = _no_fallback
         try:
             resp = client.get("/api/v2/agents/proj_filter/chat?session_id=session_a")
         finally:
-            av2.os.listdir = orig_listdir
+            av2._find_session_uuid_on_disk = orig_fallback
         assert resp.status_code == 200, resp.text
         msgs = resp.json()
         assert len(msgs) == 2, f"Expected 2 messages from session_a, got {len(msgs)}"
