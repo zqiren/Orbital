@@ -846,7 +846,10 @@ class AgentManager:
         self._prevent_sleep_if_needed()
         self._write_state()
 
-        # 16. Queue dispatcher (Phase 1 — passive; Phase 2+ wires advancement)
+        # 16. Ensure the project's queue dispatcher exists (idempotent). The
+        # dispatcher is project-scoped and normally created at daemon startup /
+        # project creation; this call is a harmless no-op when it already
+        # exists, and a safety net for agents started before it was created.
         await self._ensure_dispatcher(project_id, config.workspace)
 
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
