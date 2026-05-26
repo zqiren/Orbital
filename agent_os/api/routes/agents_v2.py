@@ -1423,10 +1423,16 @@ def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None
     ``session_id`` field matches, returning the filename stem (F2). Runs in a
     thread — does blocking disk I/O, must not be called on the event loop.
 
-    Returns the F2 stem, or None if no session JSONL carries that ``session_id``.
+    Accepts either identifier: if ``session_id`` is itself an F2 stem (the
+    sidebar addresses disk-only sessions by uuid), the matching
+    ``{session_id}.jsonl`` is returned directly. Otherwise it is treated as an
+    F1 chat id and the records are scanned. Returns the F2 stem, or None.
     """
     if not os.path.isdir(sessions_dir):
         return None
+    # Direct F2 match: the identifier names a file (uuid addressing).
+    if os.path.isfile(os.path.join(sessions_dir, f"{session_id}.jsonl")):
+        return session_id
     for fname in os.listdir(sessions_dir):
         if not fname.endswith(".jsonl"):
             continue

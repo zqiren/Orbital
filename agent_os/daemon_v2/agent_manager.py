@@ -496,7 +496,8 @@ class AgentManager:
                           trigger_name: str | None = None,
                           initial_nonce: str | None = None,
                           session_id: str | None = None,
-                          queue_state: str = "chat") -> None:
+                          queue_state: str = "chat",
+                          session: "Session | None" = None) -> None:
         """Wire all components and start the loop.
 
         ``session_id`` is the optional Format-1 user-facing chat id (see
@@ -640,16 +641,20 @@ class AgentManager:
         # chat id (defaulted to DEFAULT_SESSION_ID above when the caller did
         # not provide one). Downstream WS broadcasts and callbacks must use
         # the F1 chat id; only filename derivation and idempotency keys use F2.
-        sanitized = _sanitize_project_name(config.project_name)
-        session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
-        session = Session.new(
-            session_uuid, config.workspace,
-            session_id=session_id,
-            provider=config.provider,
-            model=config.model,
-            sdk=config.sdk,
-            fallback_models=[fb.model for fb in config.llm_fallback_models],
-        )
+        # Pure-create unless a hydrated session was handed in (continue an
+        # existing on-disk conversation — hydrate-on-inject). When hydrated,
+        # the session already carries its original F1/F2 and full history.
+        if session is None:
+            sanitized = _sanitize_project_name(config.project_name)
+            session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
+            session = Session.new(
+                session_uuid, config.workspace,
+                session_id=session_id,
+                provider=config.provider,
+                model=config.model,
+                sdk=config.sdk,
+                fallback_models=[fb.model for fb in config.llm_fallback_models],
+            )
 
         # 6-7. Observers
         session.on_append = self._on_message(project_id)
@@ -1118,6 +1123,71 @@ class AgentManager:
         handle.session.defer_message(content, role="system", source="daemon")
         return "deferred"
 
+    def _read_session_f1(self, filepath: str) -> str | None:
+        """Read a session JSONL's original F1 ``session_id`` from its first
+        record. The ``session_start`` meta carries it; non-meta records stamp
+        it too — so the first record with a ``session_id`` field is the F1."""
+        try:
+            with open(filepath, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    sid = rec.get("session_id")
+                    if sid:
+                        return sid
+        except OSError:
+            return None
+        return None
+
+    def _load_session_from_disk(self, project_id: str, identifier: str):
+        """Resolve an F1 or F2 identifier to an on-disk session and load it.
+
+        Returns a hydrated ``Session`` (history intact, original F1 preserved
+        on ``session_id``, F2 on ``session_uuid``) or ``None`` if no JSONL
+        matches. Single resolver used by hydrate-on-inject so a disk-only
+        session is *continued* rather than forked into a fresh empty one (the
+        gap the cold-resume experiment surfaced).
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if project else ""
+        if not workspace:
+            return None
+        sessions_dir = ProjectPaths(workspace).sessions_dir
+        if not os.path.isdir(sessions_dir):
+            return None
+        # Fast path: identifier is the F2 stem (the sidebar's address for a
+        # disk-only session) → the file is ``{identifier}.jsonl``.
+        target = os.path.join(sessions_dir, f"{identifier}.jsonl")
+        if not os.path.isfile(target):
+            # Slow path: identifier is an F1 chat id → scan for the JSONL whose
+            # records carry that F1. F1 is not unique across rotated logs
+            # (legacy "default"), so prefer the most recently modified match.
+            target = None
+            best_mtime = -1.0
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith(".jsonl"):
+                    continue
+                fpath = os.path.join(sessions_dir, fname)
+                if self._read_session_f1(fpath) == identifier:
+                    m = os.path.getmtime(fpath)
+                    if m > best_mtime:
+                        best_mtime = m
+                        target = fpath
+            if target is None:
+                return None
+        session = Session.load(target)
+        # Session.load sets session_id to the filename stem (F2); recover the
+        # original F1 from the records so identity survives hydration.
+        f1 = self._read_session_f1(target)
+        if f1:
+            session.session_id = f1
+        return session
+
     async def inject_message(self, project_id: str, content: str, *,
                              nonce: str | None = None,
                              session_id: str | None = None,
@@ -1152,9 +1222,24 @@ class AgentManager:
         self._clear_last_terminal_event(project_id, session_id)
         handle = self._handles.get(sk)
         if handle is None:
-            # Case 3: no handle — auto-start from project store
-            logger.info("inject_message(%s): no handle, auto-starting agent", project_id)
             config = self._build_agent_config_from_project(project_id)
+            # Hydrate-on-inject: if a JSONL exists for this identifier (F1 or
+            # F2/uuid), load it and CONTINUE the conversation rather than
+            # forking a fresh empty session. This is the chat flow's only load
+            # path — the cold-resume experiment proved Case 3 alone discarded
+            # all history. Identity (original F1) is preserved from the meta.
+            loaded = self._load_session_from_disk(project_id, session_id)
+            if loaded is not None:
+                logger.info(
+                    "inject_message(%s): hydrating session %s (uuid %s) from disk",
+                    project_id, loaded.session_id, loaded.session_uuid,
+                )
+                await self.start_agent(project_id, config, initial_message=content,
+                                      initial_nonce=nonce, session_id=loaded.session_id,
+                                      queue_state=queue_state, session=loaded)
+                return "started"
+            # Case 3: no session on disk — auto-start a fresh agent.
+            logger.info("inject_message(%s): no handle, auto-starting fresh agent", project_id)
             await self.start_agent(project_id, config, initial_message=content,
                                   initial_nonce=nonce, session_id=session_id,
                                   queue_state=queue_state)
