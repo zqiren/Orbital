@@ -687,23 +687,25 @@ describe('T5 ChatView: inject targets the viewed session', () => {
   });
 });
 
-describe('T5 ChatView: session switching does not auto-start', () => {
-  it('does not call startAgent when switching to a different (empty) session', async () => {
-    // Initial session s1 is empty → it auto-starts once (legacy first-open).
-    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+describe('T5 ChatView: opening a project never auto-starts an agent', () => {
+  it('does not call startAgent on open, regardless of session/agent state', async () => {
+    // Supervisor model: opening a project is pure navigation. The agent only
+    // starts when the user sends a message — never automatically. The legacy
+    // auto-start useEffect (which fired on first open of an empty session) was
+    // removed.
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' }); // empty + idle
     await flushEffects();
-    const afterInitial = startAgentCalls.length;
-    expect(afterInitial).toBe(1);
+    expect(startAgentCalls.length).toBe(0);
 
-    // Switch to a different empty session — must NOT trigger another start.
+    // Switching to another empty session must not auto-start either.
     await renderChat({ agentStatus: 'idle', sessionId: 's2' });
     await flushEffects();
-    expect(startAgentCalls.length).toBe(afterInitial);
+    expect(startAgentCalls.length).toBe(0);
 
-    // Switch back to s1 — still no extra start (already started once).
+    // Switching back is still inert.
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });
     await flushEffects();
-    expect(startAgentCalls.length).toBe(afterInitial);
+    expect(startAgentCalls.length).toBe(0);
   });
 });
 

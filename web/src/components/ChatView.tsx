@@ -370,17 +370,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
+  const { injectMessage, cancelMessage, newSession } = useAgent();
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
   const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
   const queueActive = queueSnapshot?.state === 'running';
-  // Auto-start guard, keyed per session. A given session auto-starts at most
-  // once (only when truly empty AND it is the slot holder). Switching to a
-  // different session must NOT trigger an auto-start for it. See the
-  // auto-start effect below.
-  const autoStartedRef = useRef<Set<string>>(new Set());
   // Per-session composer drafts. Keyed by F1 sessionId so switching to
   // another session and back restores the original session's unsent text.
   // In-memory only (drafts don't survive a full reload — acceptable).
@@ -663,17 +658,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }
 
-  // Track which sessionId was the FIRST one resolved for this ChatView
-  // instance (the default active session on open). Auto-start is gated to
-  // this initial session only — switching to any OTHER session must never
-  // trigger an agent start, even if that session is empty/idle. See §7.
-  const initialSessionIdRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (initialSessionIdRef.current === undefined && sessionId !== undefined) {
-      initialSessionIdRef.current = sessionId;
-    }
-  }, [sessionId]);
-
   // Per-session composer draft (§4). Live mirror of inputText for synchronous
   // reads in the swap effect. Set during render (not in an effect) so the swap
   // effect — which runs in the same commit when sessionId changes — always
@@ -700,21 +684,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const raf = requestAnimationFrame(() => adjustTextareaHeight());
     return () => cancelAnimationFrame(raf);
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-start agent on first open of the INITIAL session when it has no
-  // messages. Per-session guard (autoStartedRef) ensures a session starts at
-  // most once. Gated to the initial session so session switching is inert,
-  // AND gated to an idle agent so we never (re)start a project whose slot is
-  // already busy (running/waiting/pending_approval) — that would be spurious.
-  useEffect(() => {
-    if (sessionId === undefined) return;
-    if (sessionId !== initialSessionIdRef.current) return;
-    if (agentStatus !== 'idle') return;
-    if (loading || items.length > 0) return;
-    if (autoStartedRef.current.has(sessionId)) return;
-    autoStartedRef.current.add(sessionId);
-    startAgent(projectId).catch(console.error);
-  }, [loading, items.length, projectId, startAgent, sessionId, agentStatus]);
 
   // Fix 3C: Show "Thinking..." indicator when agent starts running.
   // Live machinery rows accumulate inside an open agent_run capsule; on
@@ -1757,9 +1726,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
         {!loading && items.length === 0 && !stream && (
           <div className="text-secondary text-sm text-center mt-12">
-            {sessionId !== undefined && autoStartedRef.current.has(sessionId)
-              ? 'Agent is starting...'
-              : 'No messages yet. Send a message to get started.'}
+            No messages yet. Send a message to get started.
           </div>
         )}
 
