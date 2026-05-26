@@ -1345,9 +1345,15 @@ class TestRESTEndpoints:
         })
         assert resp.status_code == 404
 
-    def test_stop_agent_no_session(self, app_client):
+    def test_stop_route_removed(self, app_client):
+        # The user-facing /stop HTTP route was removed; "stop working" is now
+        # POST /api/v2/agents/{project_id}/cancel. The internal
+        # AgentManager.stop_agent(...) still exists for idle-eviction, daemon
+        # shutdown, and project deletion, but is no longer exposed over HTTP.
+        # So this now 404s because the route no longer exists (or 405 if the
+        # path collides with another method).
         resp = app_client.post("/api/v2/agents/nonexistent/stop")
-        assert resp.status_code == 404
+        assert resp.status_code in (404, 405)
 
     def test_approve_no_session(self, app_client):
         resp = app_client.post("/api/v2/agents/nonexistent/approve", json={

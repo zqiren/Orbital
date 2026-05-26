@@ -169,5 +169,7 @@ async def test_cache_audit_logging_multi_turn(client, workspace, caplog):
         has_caching = any(v > 0 for v in later_turns)
         print(f"=== Later turns have caching: {has_caching} ===")
 
-    # Stop the agent
-    await client.post(f"/api/v2/agents/{pid}/stop")
+    # Halt the agent (the user-facing "stop button" is now /cancel; the
+    # removed /stop route's full teardown is unnecessary here — we just want
+    # to interrupt any in-flight turn between turns).
+    await client.post(f"/api/v2/agents/{pid}/cancel")

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: ``/stop`` must terminate a session paused for approval.
+"""Regression: ``stop_agent`` must terminate a session paused for approval.
 
 ``AgentManager.stop_agent`` is state-agnostic: when the loop task is done
 (as it is in ``pending_approval``), it calls ``handle.session.stop()`` and
@@ -10,6 +10,10 @@ pops the handle (see ``agent_manager.py:1759-1771``). The investigation
 in ``TASK/INVESTIGATION-state-model-gaps-verification.md`` confirmed this
 is correct by code reading, but no test exercised the path. This test
 locks in the contract.
+
+The user-facing ``/stop`` HTTP route has been removed; ``stop_agent`` is now
+an internal teardown method (idle eviction, daemon shutdown, project
+deletion). This test drives it directly.
 
 See: ``TASK/TASK-state-model-alignment-fixes.md`` §2.3.
 """
@@ -88,10 +92,10 @@ def _make_manager_with_paused_handle(project_id="proj_stop_approval",
 
 @pytest.mark.asyncio
 async def test_stop_from_pending_approval_pops_handle_and_broadcasts():
-    """/stop on a pending_approval session must:
+    """stop_agent on a pending_approval session must:
       - call session.stop() (legacy stop flag)
       - pop the handle from _handles (so it disappears from list_sessions)
-      - broadcast agent.status: stopped
+      - broadcast agent.status: idle (stop folds into idle)
       - call sub_agent_manager.stop_all
     """
     project_id = "proj_stop_approval"

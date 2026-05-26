@@ -56,11 +56,9 @@ describe('useAgent threads session_id into lifecycle calls', () => {
     expect(lastBody()).toEqual({ session_id: 'sess-9' });
   });
 
-  it('stop sends session_id in the body', async () => {
+  it('no longer exposes a stopAgent action (the /stop route was removed)', () => {
     const { result } = renderHook(() => useAgent());
-    await result.current.stopAgent('p1', 'sess-9');
-    expect(lastUrl()).toContain('/api/v2/agents/p1/stop');
-    expect(lastBody()).toEqual({ session_id: 'sess-9' });
+    expect((result.current as Record<string, unknown>).stopAgent).toBeUndefined();
   });
 
   it('approve sends session_id alongside the existing body fields', async () => {

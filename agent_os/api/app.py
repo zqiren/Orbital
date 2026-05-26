@@ -392,6 +392,18 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                 "Failed to start project dispatchers on startup"
             )
 
+    # Idle-eviction sweep: tears down runtime resources for sessions left idle
+    # past AgentManager.EVICTION_IDLE_TIMEOUT. Cancelled in agent_manager.shutdown().
+    @app.on_event("startup")
+    async def _start_eviction():
+        try:
+            agent_manager.start_eviction()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to start idle-eviction sweep on startup"
+            )
+
     # 7f. Pairing routes
     pairing_routes.configure(getattr(app.state, "relay_client", None))
     app.include_router(pairing_routes.router)

@@ -85,9 +85,15 @@ repo; do not trust that path.
 | Delete project       | DELETE | `/api/v2/projects/{id}`                  |
 | Start agent          | POST   | `/api/v2/agents/start`                   |
 | Inject message       | POST   | `/api/v2/agents/{id}/inject`             |
-| Stop agent           | POST   | `/api/v2/agents/{id}/stop`               |
+| Cancel turn          | POST   | `/api/v2/agents/{id}/cancel`             |
 | Run status           | GET    | `/api/v2/agents/{id}/run-status`         |
 | WebSocket events     | WS     | `/ws` (subscribe protocol — see app.py)  |
+
+The `/stop` route was **removed**. The user-facing "stop button" now
+posts to `/cancel`, which interrupts the in-flight turn but leaves the
+handle + session resumable in memory; full teardown (sub-agents,
+browser, sandbox) happens automatically via idle eviction rather than
+being triggered synchronously by the route.
 
 There is intentionally **no** `/shutdown` endpoint on the daemon; the
 harness teardown path uses `CTRL_BREAK_EVENT` (Windows) / `SIGTERM`

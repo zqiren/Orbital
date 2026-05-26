@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -61,6 +62,12 @@ class ProjectHandle:
     trigger_source: str | None = None
     config_snapshot: dict = field(default_factory=dict)
     started_at: str = ""
+    # Wall-clock of the last USER interaction (or system-initiated session
+    # work) on this handle — message, approval, deny, loop resume. NOT
+    # updated by the agent loop's own chatter (tool calls, LLM responses).
+    # Drives idle eviction; ephemeral (never persisted — a daemon restart
+    # drops all handles anyway). See ``_evict_idle_once``.
+    last_activity: float = field(default_factory=time.time)
 
 
 class AgentManager:
@@ -104,6 +111,9 @@ class AgentManager:
         # Queue infrastructure (per project)
         self._queue_stores: dict[str, QueueStore] = {}
         self._dispatchers: dict[str, QueueDispatcher] = {}
+        # Idle-eviction sweep task (started via ``start_eviction``, cancelled
+        # in ``shutdown``). None until started.
+        self._eviction_task: asyncio.Task | None = None
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
@@ -164,6 +174,15 @@ class AgentManager:
         No state is persisted — the session JSONLs on disk are the only source
         of truth, and the daemon never auto-resumes anything on next start."""
         logger.info("AgentManager shutdown: stopping %d agent(s)", len(self._handles))
+
+        # Stop the idle-eviction sweep so it doesn't race the teardown below.
+        if self._eviction_task is not None and not self._eviction_task.done():
+            self._eviction_task.cancel()
+            try:
+                await self._eviction_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._eviction_task = None
 
         # Append shutdown marker to each active session
         for (pid, sid), handle in list(self._handles.items()):
@@ -992,6 +1011,11 @@ class AgentManager:
                                   queue_state=queue_state)
             return "started"
 
+        # User interaction — defer idle eviction. (Cold-start paths above
+        # create the handle fresh with last_activity=now; this covers the
+        # queue / approval-dismiss / hot-resume paths on an existing handle.)
+        handle.last_activity = time.time()
+
         # New user message resets approve-all bypass (new task context)
         if handle.interceptor is not None:
             handle.interceptor.deactivate_bypass_all()
@@ -1344,6 +1368,7 @@ class AgentManager:
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
+        handle.last_activity = time.time()  # user interaction — defer eviction
 
         # Wait for previous loop task
         if handle.task is not None and not handle.task.done():
@@ -1440,6 +1465,7 @@ class AgentManager:
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
+        handle.last_activity = time.time()  # user interaction — defer eviction
 
         # Wait for previous loop task
         if handle.task is not None and not handle.task.done():
@@ -2026,6 +2052,67 @@ class AgentManager:
                     project_id,
                 )
 
+    # ------------------------------------------------------------------
+    # Idle eviction
+    # ------------------------------------------------------------------
+    # After N seconds with no user interaction, an idle session's runtime
+    # resources (handle, browser pages, sub-agents, sandbox) are torn down
+    # via stop_agent. The next message cold-starts from the JSONL on disk —
+    # measured at ~140ms (TASK/REPORT-restart-costs.md), invisible behind the
+    # LLM round-trip. Hardcoded policy, not a user preference.
+    EVICTION_IDLE_TIMEOUT = 180   # seconds (3 minutes)
+    EVICTION_SWEEP_INTERVAL = 60  # seconds between sweeps
+
+    async def _evict_idle_once(self) -> list:
+        """Run a single eviction pass. Returns the SessionKeys evicted.
+
+        Only sessions that are BOTH idle longer than ``EVICTION_IDLE_TIMEOUT``
+        AND in run-status ``idle`` are evicted. Running, pending_approval, and
+        waiting sessions are never evicted regardless of idle time — their
+        in-memory state (loop, approval, sub-agent poll) would be lost.
+
+        A failure tearing down one session is logged and does not abort the
+        sweep. Factored out of ``_eviction_sweep`` so the decision logic is
+        unit-testable without the infinite loop.
+        """
+        now = time.time()
+        to_evict = []
+        for sk, handle in list(self._handles.items()):
+            if now - handle.last_activity < self.EVICTION_IDLE_TIMEOUT:
+                continue
+            pid, sid = sk
+            if self.get_run_status(pid, session_id=sid) != "idle":
+                continue
+            to_evict.append(sk)
+        for sk in to_evict:
+            pid, sid = sk
+            logger.info("evicting idle project %s session %s", pid, sid)
+            try:
+                await self.stop_agent(pid, session_id=sid)
+            except Exception:
+                logger.warning(
+                    "eviction failed for %s/%s", pid, sid, exc_info=True
+                )
+        return to_evict
+
+    async def _eviction_sweep(self) -> None:
+        """Forever: sleep, then run one eviction pass. Cancelled on shutdown."""
+        while True:
+            await asyncio.sleep(self.EVICTION_SWEEP_INTERVAL)
+            try:
+                await self._evict_idle_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("eviction sweep iteration error", exc_info=True)
+
+    def start_eviction(self) -> None:
+        """Launch the idle-eviction sweep task. Idempotent. Called at daemon
+        startup; the task is cancelled in ``shutdown``."""
+        if self._eviction_task is not None and not self._eviction_task.done():
+            return
+        self._eviction_task = asyncio.create_task(self._eviction_sweep())
+
     async def shutdown_dispatcher(self, project_id: str) -> None:
         """Tear down a single project's dispatcher (project-deletion path)."""
         dispatcher = self._dispatchers.pop(project_id, None)
@@ -2097,6 +2184,7 @@ class AgentManager:
         handle = self._handles.get(sk)
         if handle is None:
             return
+        handle.last_activity = time.time()  # resume = activity; defer eviction
 
         # Re-resolve API key so a key changed in settings takes effect
         # without requiring a full agent restart.

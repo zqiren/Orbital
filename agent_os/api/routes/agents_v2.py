@@ -922,22 +922,14 @@ async def cancel_message(project_id: str, req: SessionScopedRequest | None = Non
     )
 
 
-@router.post("/agents/{project_id}/stop")
-async def stop_agent(project_id: str, req: SessionScopedRequest | None = None):
-    """Internal/admin: full teardown of agent, session, and sub-agents.
-
-    NOT wired to the UI — the Stop button uses /cancel, which preserves
-    sub-agent and browser-page state. /stop is reserved for crash
-    recovery, debug tooling, and daemon shutdown coordination. ``session_id``
-    (body) targets a specific session.
-    """
-    try:
-        await _agent_manager.stop_agent(
-            project_id, session_id=(req.session_id if req else None),
-        )
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No active session for project")
-    return {"status": "stopping"}
+# NOTE: the user-facing POST /agents/{project_id}/stop route was removed.
+# Under the multi-session + idle-eviction model there is no user-facing
+# "tear down this session" action: /cancel interrupts the turn (handle and
+# session stay resumable), and idle eviction reclaims runtime resources
+# automatically after AgentManager.EVICTION_IDLE_TIMEOUT. The full-teardown
+# AgentManager.stop_agent() remains an INTERNAL method, called only by the
+# eviction sweep, daemon shutdown, and project deletion — never by an HTTP
+# request. See TASK-idle-eviction-and-remove-stop.md.
 
 
 @router.post("/agents/{project_id}/new-session")

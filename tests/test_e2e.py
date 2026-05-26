@@ -421,7 +421,15 @@ async def test_inject_message(client, workspace):
 @pytest.mark.asyncio
 @pytest.mark.timeout(90)
 async def test_stop_agent(tmp_path, workspace):
-    """POST /api/v2/agents/{pid}/stop -> agent.status stopped via WS."""
+    """POST /api/v2/agents/{pid}/cancel -> in-flight turn interrupted.
+
+    NOTE: the old ``/stop`` route (which returned ``{"status": "stopping"}``
+    and emitted an ``agent.status: stopped`` WS event after full teardown)
+    was removed. ``/cancel`` interrupts the turn but leaves the handle +
+    session resumable in memory, so we assert the cancel-shaped response
+    (``status`` in {"cancelled", "idle"}) and that the agent returns to an
+    idle/stopped-ish state — NOT a teardown ``stopped`` event.
+    """
     from httpx_ws import aconnect_ws
     from httpx_ws.transport import ASGIWebSocketTransport
 
@@ -460,29 +468,41 @@ async def test_stop_agent(tmp_path, workspace):
                     except Exception:
                         break
 
-                # Stop agent
-                resp = await client.post(f"/api/v2/agents/{pid}/stop")
+                # Cancel the in-flight turn (the user-facing "stop button").
+                resp = await client.post(f"/api/v2/agents/{pid}/cancel")
                 assert resp.status_code == 200
-                assert resp.json()["status"] == "stopping"
+                # NOTE: /cancel replaces the removed /stop route. It returns
+                # the cancel shape (cancelled when a turn was interrupted, idle
+                # when there was nothing to cancel) instead of "stopping", and
+                # it does NOT tear the session down — the handle + session stay
+                # resumable in memory.
+                assert resp.json().get("status") in ("cancelled", "idle")
 
-                # Collect stopped event
+                # Collect status events. After a cancel the agent settles back
+                # to idle (or stopped) rather than emitting a teardown-driven
+                # "stopped" event.
                 stop_start = time.time()
                 while time.time() - stop_start < 15:
                     try:
                         data = await asyncio.wait_for(ws.receive_json(), timeout=3)
                         events.append(data)
                         if (data.get("type") == "agent.status"
-                                and data.get("status") == "stopped"):
+                                and data.get("status") in ("idle", "stopped")):
                             break
                     except asyncio.TimeoutError:
                         continue
                     except Exception:
                         break
 
+    # NOTE: semantics changed with /cancel — the session is interrupted but
+    # NOT torn down, so we accept any idle-ish settle state rather than
+    # requiring a dedicated "stopped" teardown event.
     status_events = [e for e in events if e.get("type") == "agent.status"]
-    stopped_events = [e for e in status_events if e.get("status") == "stopped"]
-    assert len(stopped_events) >= 1, (
-        f"Expected agent.status stopped, got: "
+    settled_events = [
+        e for e in status_events if e.get("status") in ("idle", "stopped")
+    ]
+    assert len(settled_events) >= 1, (
+        f"Expected agent.status idle/stopped after cancel, got: "
         f"{[(e.get('status'), e.get('reason', '')) for e in status_events]}"
     )
 
@@ -565,8 +585,10 @@ async def test_full_workflow(tmp_path, workspace):
                     f"Expected file content in tool results: {tool_contents}"
                 )
 
-                # 7. Stop agent (it may already be idle)
-                resp = await client.post(f"/api/v2/agents/{pid}/stop")
+                # 7. Cancel the turn (it may already be idle).
+                # /cancel replaces the removed /stop route; it interrupts the
+                # in-flight turn without tearing the session down.
+                resp = await client.post(f"/api/v2/agents/{pid}/cancel")
                 if resp.status_code == 200:
                     stop_start = time.time()
                     while time.time() - stop_start < 15:
@@ -574,7 +596,7 @@ async def test_full_workflow(tmp_path, workspace):
                             data = await asyncio.wait_for(ws.receive_json(), timeout=3)
                             events.append(data)
                             if (data.get("type") == "agent.status"
-                                    and data.get("status") == "stopped"):
+                                    and data.get("status") in ("idle", "stopped")):
                                 break
                         except asyncio.TimeoutError:
                             continue

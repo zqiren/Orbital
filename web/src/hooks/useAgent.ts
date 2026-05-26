@@ -50,19 +50,9 @@ export function useAgent() {
     [],
   );
 
-  // kept for admin/debug use; UI Stop button uses cancelMessage (T05)
-  const stopAgent = useCallback(async (projectId: string, sessionId?: string) => {
-    return api<ActionResult>(
-      `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          ...(sessionId !== undefined && { session_id: sessionId }),
-        }),
-      },
-    );
-  }, []);
-
+  // The UI Stop button uses cancelMessage (/cancel). There is no user-facing
+  // /stop endpoint: runtime-resource teardown is automatic via the daemon's
+  // idle-eviction sweep. See TASK-idle-eviction-and-remove-stop.md.
   const cancelMessage = useCallback(async (projectId: string, sessionId?: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/cancel`,
@@ -154,5 +144,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, stopAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
 }

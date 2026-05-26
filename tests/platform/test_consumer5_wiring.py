@@ -380,8 +380,9 @@ class TestExistingRoutesNotBroken:
 
     def test_no_url_conflicts(self, app_client):
         """Platform routes (/api/v2/platform/...) don't conflict with agent routes (/api/v2/...)."""
-        # Agent routes should still 404 correctly
-        resp = app_client.post("/api/v2/agents/nonexistent/stop")
+        # An existing agent route should still 404 for an unknown project
+        # (the /stop route was removed, so probe a route that still exists).
+        resp = app_client.post("/api/v2/agents/nonexistent/inject", json={"content": "hello"})
         assert resp.status_code == 404
 
         # Platform status should work
