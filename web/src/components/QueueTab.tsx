@@ -36,8 +36,8 @@ function Section({
         <p className="text-sm text-secondary px-1 italic">{emptyHint}</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((item) => (
-            <QueueItemCard key={item.id} item={item} onRemove={onRemove} />
+          {items.map((item, i) => (
+            <QueueItemCard key={item.id} item={item} index={i + 1} onRemove={onRemove} />
           ))}
         </div>
       )}

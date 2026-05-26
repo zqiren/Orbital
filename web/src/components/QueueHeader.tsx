@@ -45,7 +45,7 @@ export default function QueueHeader({
             isPaused
               ? 'bg-warning/15 text-warning'
               : snapshot.state === 'running'
-                ? 'bg-info/15 text-info'
+                ? 'bg-accent/15 text-accent'
                 : 'bg-secondary/15 text-secondary'
           }`}
           data-testid="queue-state-pill"

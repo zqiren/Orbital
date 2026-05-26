@@ -8,6 +8,25 @@ import ProjectDetail from './ProjectDetail';
 import type { Project } from '../types';
 import type { Route } from '../route';
 
+// ProjectDetail now calls useSessions and useQueue (both need WebSocketProvider).
+// Mock them to avoid the provider requirement in these unit tests.
+vi.mock('../hooks/useSessions', () => ({
+  useSessions: () => ({ sessions: [], loading: false, error: null, refresh: vi.fn() }),
+}));
+vi.mock('../hooks/useQueue', () => ({
+  useQueue: () => ({
+    snapshot: null,
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    addItem: vi.fn(),
+    removeItem: vi.fn(),
+    editItem: vi.fn(),
+    stopQueue: vi.fn(),
+    resumeQueue: vi.fn(),
+  }),
+}));
+
 const mockProject: Project = {
   project_id: 'proj-42',
   name: 'Alpha Project',
@@ -38,7 +57,6 @@ function renderProjectDetail(
       agentStatus="idle"
       route={route}
       setRoute={setRoute}
-      onStopAgent={vi.fn()}
     />,
   );
 }

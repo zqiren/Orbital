@@ -26,6 +26,25 @@ vi.mock('./hooks/useBlockedCount', () => ({
   useBlockedCount: () => ({ blockedCount: 0, blockedSessions: [], loading: false }),
 }));
 
+// ProjectDetail now calls useSessions and useQueue (both need WebSocketProvider).
+// Mock them to avoid the provider requirement in these unit tests.
+vi.mock('./hooks/useSessions', () => ({
+  useSessions: () => ({ sessions: [], loading: false, error: null, refresh: vi.fn() }),
+}));
+vi.mock('./hooks/useQueue', () => ({
+  useQueue: () => ({
+    snapshot: null,
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    addItem: vi.fn(),
+    removeItem: vi.fn(),
+    editItem: vi.fn(),
+    stopQueue: vi.fn(),
+    resumeQueue: vi.fn(),
+  }),
+}));
+
 import Sidebar from './components/Sidebar';
 import ProjectDetail from './components/ProjectDetail';
 import type { Project, AgentRunStatus } from './types';
@@ -184,7 +203,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={baseRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -208,7 +227,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={routeWithSession}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -231,7 +250,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={baseRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -259,7 +278,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={settingsRoute}
         setRoute={setRoute}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -280,7 +299,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={{ ...baseRoute, settings: true }}
         setRoute={vi.fn()}
-        onStopAgent={vi.fn()}
+
       />,
     );
 
@@ -295,7 +314,7 @@ describe('ProjectDetail routing', () => {
         agentStatus={'idle' as AgentRunStatus}
         route={{ ...baseRoute, tab: 'chat', settings: true }}
         setRoute={vi.fn()}
-        onStopAgent={vi.fn()}
+
       />,
     );
 

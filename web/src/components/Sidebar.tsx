@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { FolderOpen } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import BlockedBadge from './BlockedBadge';
@@ -18,6 +19,7 @@ interface SidebarProps {
   onSelectProject: (id: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
+  onShowAllProjects?: () => void;
 }
 
 function getProjectDotColor(
@@ -55,6 +57,7 @@ export default function Sidebar({
   onSelectProject,
   onNewProject,
   onSettings,
+  onShowAllProjects,
 }: SidebarProps) {
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
@@ -71,9 +74,34 @@ export default function Sidebar({
         </span>
       </div>
 
-      {/* Global routes — Blocked badge */}
-      <div className="px-2 pb-1">
+      {/* Global nav-row block */}
+      <div className="px-2 pb-1 space-y-0.5">
+        {/* All projects row */}
+        <button
+          onClick={onShowAllProjects}
+          aria-current={route.name !== 'project' ? 'page' : undefined}
+          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[12.5px] transition-all duration-150 ${
+            route.name !== 'project'
+              ? 'bg-card-hover text-primary font-medium'
+              : 'text-secondary hover:bg-card-hover/50'
+          }`}
+        >
+          <FolderOpen size={14} className="shrink-0" aria-hidden="true" />
+          <span className="flex-1 text-left">All projects</span>
+        </button>
+
+        {/* Blocked row — reuses BlockedBadge restyled into V1MNavRow form */}
         <BlockedBadge />
+      </div>
+
+      {/* Projects section header */}
+      <div className="flex items-center justify-between px-4 pt-2 pb-1">
+        <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
+          Projects
+        </span>
+        <span className="font-mono text-[9.5px] text-secondary">
+          {projects.length}
+        </span>
       </div>
 
       {/* Project list */}
@@ -97,7 +125,7 @@ export default function Sidebar({
                   <button
                     key={project.project_id}
                     onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
                   >
@@ -105,11 +133,11 @@ export default function Sidebar({
                       className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
                     />
                     <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-primary block truncate">
+                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
                         {truncate(project.name, 20)}
                       </span>
                       {summary && (
-                        <span className="text-xs text-secondary block truncate mt-0.5">
+                        <span className="text-[10px] text-secondary block truncate mt-0.5">
                           {summary}
                         </span>
                       )}
@@ -135,7 +163,7 @@ export default function Sidebar({
                   <button
                     key={project.project_id}
                     onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
                       isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
                     }`}
                   >
@@ -143,11 +171,11 @@ export default function Sidebar({
                       className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
                     />
                     <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-primary block truncate">
+                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
                         {truncate(project.name, 20)}
                       </span>
                       {summary && (
-                        <span className="text-xs text-secondary block truncate mt-0.5">
+                        <span className="text-[10px] text-secondary block truncate mt-0.5">
                           {summary}
                         </span>
                       )}
@@ -164,7 +192,7 @@ export default function Sidebar({
       <div className="px-3 pb-3 pt-2 border-t border-border space-y-2">
         <button
           onClick={onNewProject}
-          className="w-full text-sm font-medium text-primary border border-border rounded-lg px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
+          className="w-full text-sm font-medium text-primary border border-border rounded-[6px] px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
         >
           + New Project
         </button>

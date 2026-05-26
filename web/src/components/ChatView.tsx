@@ -152,7 +152,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="mb-1 text-[13px] text-secondary">
+    <div className="mb-1 font-mono text-[11.5px] text-secondary">
       <button
         type="button"
         onClick={expandable ? () => setExpanded(e => !e) : undefined}
@@ -164,8 +164,8 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         ) : (
           <span className="shrink-0 w-3" aria-hidden />
         )}
-        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
-        <span className="font-mono text-primary">{row.tool_name}</span>
+        <span className="text-primary font-medium">{row.tool_name}</span>
+        <span className="text-muted" aria-hidden>·</span>
         <span className="truncate">{row.target_description}</span>
       </button>
       {expanded && expandable && (() => {
@@ -257,6 +257,7 @@ import type {
 } from '../types';
 import ChatMessage from './ChatMessage';
 import StreamingMessage from './StreamingMessage';
+import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
@@ -1735,7 +1736,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           onDismiss={() => setClaudemdWarning(null)}
         />
       )}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 max-md:pb-20">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
@@ -1773,7 +1774,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
             } else if (item.type === 'session_separator') {
               return (
-                <div key={`sep-${index}`} className="flex items-center gap-3 my-4 px-2 opacity-50">
+                <div key={`sep-${index}`} className="flex items-center gap-3 px-2 opacity-50">
                   <div className="flex-1 border-t border-border" />
                   <span className="text-xs text-secondary whitespace-nowrap">
                     Previous session
@@ -1792,8 +1793,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   data-testid="agent_run"
                   data-capsule-id={item.capsule_id}
                   data-capsule-status={item.status}
-                  className="mb-3 rounded-md border border-border bg-sidebar/40 px-3 py-2"
+                  className="ml-9 flex gap-[10px]"
                 >
+                  <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
+                  <div className="min-w-0 flex-1">
                   <button
                     type="button"
                     onClick={
@@ -1809,16 +1812,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                           }
                     }
                     disabled={isLocked}
-                    className={`flex items-center gap-2 w-full text-left text-[13px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+                    className={`flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
                   >
-                    <Chevron size={14} className="shrink-0" />
+                    <Chevron size={13} className="shrink-0" />
                     {item.status === 'running' && (
                       <Loader2 size={12} className="shrink-0 animate-spin" />
                     )}
-                    <span className="truncate">{summary}</span>
+                    <span className="truncate text-primary font-medium">{summary}</span>
                   </button>
                   {isExpanded && item.items.length > 0 && (
-                    <div className="mt-2 pl-2 border-t border-border/30 pt-2">
+                    <div className="mt-2 pt-2 border-t border-border/30">
                       {item.items.map((child, ci) => {
                         if (child.type === 'reasoning_block') {
                           return (
@@ -1852,12 +1855,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       })}
                     </div>
                   )}
+                  </div>
                 </div>
               );
             } else if (item.type === 'agent_notify') {
               const urgencyColor = item.urgency === 'high' ? 'border-error/40 bg-error/5' : 'border-accent/30 bg-accent/5';
               rendered = (
-                <div key={`notify-${index}`} className={`mb-3 rounded-lg border ${urgencyColor} px-4 py-3`}>
+                <div key={`notify-${index}`} className={`rounded-lg border ${urgencyColor} px-4 py-3`}>
                   <p className="text-sm font-medium text-primary">{item.title}</p>
                   <p className="text-sm text-secondary mt-1">{item.body}</p>
                 </div>
@@ -1984,12 +1988,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
 
         {subAgentLoading && (
-          <div className="flex justify-start mb-3">
-            <div className="max-w-[75%] max-md:max-w-[85%]">
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-sm font-medium text-secondary">{subAgentLoading}</span>
+          <div className="flex gap-[10px]">
+            <MessageAvatar variant="agent" />
+            <div className="flex-1 min-w-0">
+              <div className="font-mono text-[11px] mb-1">
+                <span className="text-secondary">{subAgentLoading}</span>
               </div>
-              <div className="bg-background border border-border rounded-lg px-4 py-2 text-sm">
+              <div className="text-[13px] leading-[1.55]">
                 <span className="inline-flex gap-1 text-secondary">
                   <span className="animate-pulse">●</span>
                   <span className="animate-pulse" style={{animationDelay: '0.2s'}}>●</span>
@@ -2074,7 +2079,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {queueActive ? (
           <ComposerDisabledPrompt onPauseQueue={stopQueue} />
         ) : (
-        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
+        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-[10px] shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredCommands.map((cmd, i) => (
@@ -2154,6 +2159,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             >
               <Plus size={18} />
             </button>
+            <span className="shrink-0 font-mono text-secondary select-none" aria-hidden>›</span>
             <textarea
               ref={textareaRef}
               value={inputText}
@@ -2163,7 +2169,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               placeholder="Send a message..."
               rows={1}
               disabled={isCancelling}
-              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
+              className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             {(agentStatus === 'running' || agentStatus === 'waiting') ? (
               <>
@@ -2234,6 +2240,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <Send size={18} />
               </button>
             )}
+            <kbd className="shrink-0 px-1 py-0.5 border border-border rounded-[3px] text-[9.5px] font-mono bg-sidebar text-secondary select-none max-md:hidden" aria-hidden>⌘↩</kbd>
           </div>
         </div>
         )}

@@ -6,6 +6,7 @@ import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
 import AttachmentChip from './AttachmentChip';
 import MarkdownContent from './MarkdownContent';
+import MessageAvatar from './MessageAvatar';
 
 type MessageItem = Extract<
   DisplayItem,
@@ -23,7 +24,7 @@ function basename(path: string): string {
 
 function inferSize(label: string): number {
   // Best-effort: parse the same human label format we produce. Used only for
-  // chip display in the user bubble.
+  // chip display in the user message.
   const m = label.match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
   if (!m) return 0;
   const value = parseFloat(m[1]);
@@ -35,24 +36,50 @@ function inferSize(label: string): number {
   return 0;
 }
 
+/** 24-hour HH:MM from an ISO timestamp; empty string if unparseable. */
+function formatTime(timestamp: string): string {
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
+ * Up-to-2 uppercase chars for the user avatar. There is no first-class
+ * "current user" identity in this app, so derive from a meaningful source
+ * label when present, else fall back to the static "ME" placeholder.
+ */
+function userInitials(source?: string): string {
+  const s = (source ?? '').trim();
+  if (!s || s === 'user' || s === 'management') return 'ME';
+  return s.slice(0, 2).toUpperCase();
+}
+
+/**
+ * One message rendered as a flat avatar-log row (Design §5): a 26×26 avatar
+ * box, a "<sender> · HH:MM" label line, and the content underneath — no
+ * bubble background, border, or rounding. User and agent rows share the same
+ * left-aligned layout.
+ */
 export default function ChatMessage({ message }: ChatMessageProps) {
+  const time = formatTime(message.timestamp);
+
   if (message.type === 'user_message') {
     const { strippedContent, attachments } = parseAttachmentsBlock(message.content);
     const hasChips = attachments.length > 0;
     const hasText = strippedContent.length > 0;
+    const senderLabel = message.target ? `you → @${message.target}` : 'you';
 
     return (
-      <div className="flex justify-end mb-3">
-        <div className="max-w-[75%] max-md:max-w-[85%]">
-          {message.target && (
-            <div className="text-right mb-0.5">
-              <span className="text-xs text-accent font-medium">@{message.target}</span>
-            </div>
-          )}
-          <div
-            className="bg-card-hover rounded-lg px-4 py-2 whitespace-pre-wrap break-words overflow-x-auto text-sm"
-            title={message.timestamp}
-          >
+      <div className="flex gap-[10px]" title={message.timestamp}>
+        <MessageAvatar variant="user" label={userInitials()} />
+        <div className="flex-1 min-w-0">
+          <div className="font-mono text-[11px] mb-1">
+            <span className="text-secondary">{senderLabel}</span>
+            {time && <span className="text-muted"> · {time}</span>}
+          </div>
+          <div className="text-[13px] leading-[1.55] text-primary whitespace-pre-wrap break-words">
             {hasChips && (
               <div className="flex flex-wrap gap-2 mb-2">
                 {attachments.map((a, i) => (
@@ -77,18 +104,17 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   const isSubAgent =
     message.type === 'sub_agent_message' ||
     (message.type === 'agent_message' && message.source && message.source !== 'management' && message.source !== 'user');
-  const senderLabel = isSubAgent && message.source ? message.source : 'Agent';
+  const senderLabel = isSubAgent && message.source ? message.source : 'agent';
 
   return (
-    <div className="flex justify-start mb-3">
-      <div className="max-w-[75%] max-md:max-w-[85%]">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-sm font-medium text-secondary">{senderLabel}</span>
+    <div className="flex gap-[10px]" title={message.timestamp}>
+      <MessageAvatar variant="agent" />
+      <div className="flex-1 min-w-0">
+        <div className="font-mono text-[11px] mb-1">
+          <span className="text-secondary">{senderLabel}</span>
+          {time && <span className="text-muted"> · {time}</span>}
         </div>
-        <div
-          className={`bg-background border border-border rounded-lg px-4 py-2 break-words overflow-x-auto${isSubAgent ? ' border-l-2 border-l-accent' : ''}`}
-          title={message.timestamp}
-        >
+        <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
           <MarkdownContent content={message.content} />
         </div>
       </div>

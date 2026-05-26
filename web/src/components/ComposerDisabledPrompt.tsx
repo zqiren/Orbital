@@ -33,7 +33,7 @@ export default function ComposerDisabledPrompt({
     <div
       role="region"
       aria-label="Composer unavailable — queue is active"
-      className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-lg shadow-lg"
+      className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-[6px] shadow-lg"
       data-testid="composer-disabled-prompt"
     >
       <span className="text-sm text-secondary">

@@ -104,8 +104,8 @@ export function SessionListItem({ session, selected, onSelect }: SessionListItem
       <span className="flex-1 min-w-0 flex items-baseline gap-1.5">
         <span
           data-testid="session-name"
-          className="font-mono text-sm text-primary truncate"
-          style={{ fontSize: '12.5px' }}
+          className="font-mono text-[11.5px] text-primary truncate"
+          style={{ fontSize: '11.5px' }}
         >
           {session.session_id}
         </span>
