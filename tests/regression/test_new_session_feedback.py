@@ -41,6 +41,7 @@ def project(tmp_path):
     requests.delete(f"{BASE}/projects/{pid}")
 
 
+@_requires_test_daemon
 def test_new_session_returns_fresh_id_even_with_no_handle(project):
     """new_session is pure-create: it mints and returns a fresh session_id
     even when no agent has ever been started (no handle required — the session
@@ -53,6 +54,7 @@ def test_new_session_returns_fresh_id_even_with_no_handle(project):
     assert body["session_uuid"]
 
 
+@_requires_test_daemon
 def test_new_session_no_handle_does_not_broadcast_ws_event(project):
     """No WS event should be broadcast when there's no active session —
     frontend feedback must come from API response, not WS."""

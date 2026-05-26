@@ -15,7 +15,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 from agent_os.agent.context import ContextManager
@@ -101,8 +100,6 @@ class AgentManager:
         # can render a persistent warning glyph across WS disconnects and
         # page reloads. See TASK-state-model-alignment-fixes.md §2.4.
         self._last_terminal_events: dict[SessionKey, dict] = {}
-        self._state_file: Path = Path.home() / "orbital" / "daemon-state.json"
-        self._heartbeat_task: asyncio.Task | None = None
         self._sleep_handle: object | None = None
         # Queue infrastructure (per project)
         self._queue_stores: dict[str, QueueStore] = {}
@@ -137,82 +134,6 @@ class AgentManager:
         payload.setdefault("session_id", sid)
         self._ws.broadcast(project_id, payload)
 
-    # ── Daemon state file (shutdown hardening) ──────────────────────────
-
-    def _write_state(self) -> None:
-        """Write daemon-state.json with current agent snapshot (atomic)."""
-        state_file = getattr(self, '_state_file', None)
-        if state_file is None:
-            return
-        agents: dict[str, dict] = {}
-        for (pid, sid), handle in self._handles.items():
-            # Only include agents with a running task
-            if handle.task is None or handle.task.done():
-                continue
-            # State file historically keys by ``pid`` alone. Multi-loop
-            # support is opt-in for callers — we preserve the legacy shape
-            # for default sessions and additionally emit a compact
-            # ``project_id::session_id`` form for non-default sessions so
-            # auto-resume can find them after restart.
-            entry = {
-                "status": "running",
-                "config_snapshot": getattr(handle, 'config_snapshot', {}),
-                "started_at": getattr(handle, 'started_at', ""),
-                "shutdown_clean": False,
-                "session_id": sid,
-            }
-            key = pid if sid == DEFAULT_SESSION_ID else f"{pid}::{sid}"
-            agents[key] = entry
-        state = {
-            "version": 1,
-            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-            "agents": agents,
-        }
-        try:
-            state_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-            tmp.replace(state_file)
-        except OSError:
-            logger.warning("Failed to write daemon state file")
-
-    def _read_state(self) -> dict | None:
-        """Read and parse daemon-state.json. Returns None if missing or corrupt."""
-        state_file = getattr(self, '_state_file', None)
-        if state_file is None:
-            return None
-        try:
-            text = state_file.read_text(encoding="utf-8")
-            return json.loads(text)
-        except (OSError, json.JSONDecodeError, ValueError):
-            return None
-
-    async def _start_heartbeat(self) -> None:
-        """Periodically write daemon state every 30 seconds."""
-        try:
-            while True:
-                self._write_state()
-                await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            return
-
-    def _ensure_heartbeat_running(self) -> None:
-        """Start the heartbeat task if not already running."""
-        heartbeat = getattr(self, '_heartbeat_task', None)
-        if heartbeat is None or heartbeat.done():
-            self._heartbeat_task = asyncio.create_task(self._start_heartbeat())
-
-    def _stop_heartbeat_if_idle(self) -> None:
-        """Cancel heartbeat if no agents are running."""
-        has_running = any(
-            h.task is not None and not h.task.done()
-            for h in self._handles.values()
-        )
-        heartbeat = getattr(self, '_heartbeat_task', None)
-        if not has_running and heartbeat is not None and not heartbeat.done():
-            heartbeat.cancel()
-            self._heartbeat_task = None
-
     def _prevent_sleep_if_needed(self) -> None:
         """Prevent system sleep when the first agent starts."""
         if self._sleep_handle is None and self._platform_provider is not None:
@@ -238,9 +159,11 @@ class AgentManager:
                 self._sleep_handle = None
 
     async def shutdown(self, timeout: float = 5.0) -> None:
-        """Graceful shutdown: stop all agents, cancel heartbeat, write final state."""
+        """Graceful shutdown: stop all agents and project dispatchers, then exit.
+
+        No state is persisted — the session JSONLs on disk are the only source
+        of truth, and the daemon never auto-resumes anything on next start."""
         logger.info("AgentManager shutdown: stopping %d agent(s)", len(self._handles))
-        self.mark_shutdown_clean()
 
         # Append shutdown marker to each active session
         for (pid, sid), handle in list(self._handles.items()):
@@ -282,181 +205,7 @@ class AgentManager:
                     pid, exc_info=True,
                 )
         self._dispatchers.clear()
-
-        # Cancel heartbeat
-        if self._heartbeat_task is not None and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
-            self._heartbeat_task = None
-
-        # Write final state
-        self._write_state()
         logger.info("AgentManager shutdown complete")
-
-    def mark_shutdown_clean(self) -> None:
-        """Mark all agents as cleanly shut down in the state file."""
-        state = self._read_state()
-        if state is None:
-            return
-        for agent_entry in state.get("agents", {}).values():
-            agent_entry["shutdown_clean"] = True
-        state_file = getattr(self, '_state_file', None)
-        if state_file is None:
-            return
-        try:
-            state_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-            tmp.replace(state_file)
-        except OSError:
-            logger.warning("Failed to write clean shutdown state")
-
-    async def auto_resume_agents(self) -> None:
-        """Resume agents that were running when the daemon last shut down.
-
-        Reads daemon-state.json, rebuilds AgentConfig from project_store
-        (not the stale config_snapshot), and restarts each agent.
-        """
-        state = self._read_state()
-        if state is None:
-            return
-
-        agents = state.get("agents", {})
-        if not agents:
-            return
-
-        resumed = 0
-        for state_key, agent_state in agents.items():
-            if agent_state.get("status") != "running":
-                continue
-
-            # State-file key shape:
-            #   - legacy single-loop entries: ``project_id``
-            #   - multi-loop entries:         ``project_id::session_id``
-            # An explicit ``session_id`` field is also written by
-            # ``_write_state``; prefer it when present so we don't need to
-            # parse ambiguous separators in the project id.
-            session_id_for_resume = agent_state.get("session_id")
-            if "::" in state_key and session_id_for_resume is None:
-                project_id, _, parsed_sid = state_key.partition("::")
-                session_id_for_resume = parsed_sid
-            else:
-                project_id = state_key
-            session_id_for_resume = (
-                session_id_for_resume or DEFAULT_SESSION_ID
-            )
-
-            try:
-                # Load fresh project config from store (may have changed)
-                project = self._project_store.get_project(project_id)
-                if project is None:
-                    logger.warning(
-                        "auto_resume: project %s no longer exists, skipping",
-                        project_id,
-                    )
-                    continue
-
-                # Build AgentConfig the same way inject_message / start endpoint do
-                from agent_os.agent.prompt_builder import Autonomy
-
-                autonomy_str = project.get("autonomy", "hands_off")
-                try:
-                    autonomy = Autonomy(autonomy_str)
-                except ValueError:
-                    autonomy = Autonomy.HANDS_OFF
-
-                # Compute available sub-agents from setup_engine, minus any
-                # entries on the project's disabled_sub_agents denylist.
-                # Note: legacy ``enabled_sub_agents`` is intentionally ignored
-                # here for v1 — ``disabled_sub_agents`` is the new canonical
-                # source of truth (informational-only legacy field).
-                disabled = set(project.get("disabled_sub_agents", []) or [])
-                if self._setup_engine is not None:
-                    available = self._setup_engine.check_all()
-                    enabled_sub_agents = [
-                        a.slug for a in available
-                        if a.installed and a.slug != "built-in"
-                        and a.slug not in disabled
-                    ]
-                else:
-                    enabled_sub_agents = [
-                        s for s in (project.get("enabled_sub_agents") or [])
-                        if s not in disabled
-                    ]
-
-                # Use global settings as fallback for missing project-level LLM config
-                global_settings = self._settings_store.get() if self._settings_store else None
-                cred_key = self._credential_store.get_api_key() if self._credential_store else None
-                api_key = (
-                    project.get("api_key")
-                    or cred_key
-                    or (global_settings.llm.api_key if global_settings else None)
-                    or ""
-                )
-                base_url = project.get("base_url") or (
-                    global_settings.llm.base_url if global_settings else None
-                )
-                model = (
-                    project.get("model")
-                    or (global_settings.llm.model if global_settings else None)
-                    or ""
-                )
-
-                config = AgentConfig(
-                    workspace=project["workspace"],
-                    model=model,
-                    api_key=api_key,
-                    base_url=base_url,
-                    autonomy=autonomy,
-                    sdk=project.get("sdk", "openai"),
-                    provider=project.get("provider", "custom"),
-                    project_name=project.get("name", ""),
-                    project_instructions=project.get("instructions", ""),
-                    agent_slug=project.get("agent_slug", "built-in"),
-                    enabled_sub_agents=enabled_sub_agents or [],
-                    disabled_sub_agents=list(disabled),
-                    agent_credentials=project.get("agent_credentials", {}),
-                    network_extra_domains=project.get("network_extra_domains", []),
-                    is_scratch=project.get("is_scratch", False),
-                    agent_name=project.get("agent_name", project.get("name", "")),
-                    global_preferences_path="",
-                    budget_limit_usd=project.get("budget_limit_usd"),
-                    budget_action=project.get("budget_action", "ask"),
-                )
-
-                await self.start_agent(
-                    project_id, config,
-                    initial_message=None,
-                    trigger_source="auto_resume",
-                    session_id=session_id_for_resume,
-                )
-
-                # If the previous session was interrupted (not a clean shutdown),
-                # inject a system warning so the agent knows to verify state.
-                if not agent_state.get("shutdown_clean", False):
-                    handle = self._handles.get(
-                        make_session_key(project_id, session_id_for_resume)
-                    )
-                    if handle and hasattr(handle.session, "append"):
-                        handle.session.append({
-                            "role": "system",
-                            "content": (
-                                "NOTICE: The daemon was interrupted unexpectedly. "
-                                "Your previous session may have had in-flight "
-                                "operations that did not complete. Verify current "
-                                "state before proceeding."
-                            ),
-                        })
-
-                resumed += 1
-                logger.info("auto_resume: resumed agent for project %s", project_id)
-
-            except Exception:
-                logger.exception(
-                    "auto_resume: failed to resume agent for project %s",
-                    project_id,
-                )
-
-        logger.info("Resumed %d agent(s) from previous session", resumed)
 
     def _record_approval_decision(self, project_id: str, tool_name: str,
                                    tool_args: dict, decision: str,
@@ -856,10 +605,8 @@ class AgentManager:
             status_event["trigger_source"] = trigger_source
         self._broadcast(project_id, status_event, session_id=session_id)
 
-        # 15. Daemon state checkpoint + heartbeat + sleep prevention
-        self._ensure_heartbeat_running()
+        # 15. Prevent system sleep while an agent is active.
         self._prevent_sleep_if_needed()
-        self._write_state()
 
         # 16. Ensure the project's queue dispatcher exists (idempotent). The
         # dispatcher is project-scoped and normally created at daemon startup /
@@ -1908,9 +1655,7 @@ class AgentManager:
 
         self._handles.pop(sk, None)
 
-        # Update daemon state, stop heartbeat, and allow sleep if no agents remain
-        self._write_state()
-        self._stop_heartbeat_if_idle()
+        # Allow system sleep again if no agents remain.
         self._allow_sleep_if_idle()
 
     def list_sessions(self, project_id: str) -> list[dict]:
@@ -2471,7 +2216,6 @@ class AgentManager:
                 # Notify all clients that the global blocked count changed
                 # (this session just entered pending_approval).
                 self._broadcast_blocked_count()
-                self._write_state()
                 return
 
             # Drain messages queued while the loop was running (e.g. during
@@ -2521,9 +2265,7 @@ class AgentManager:
                     "source": "management",
                 }, session_id=session_id)
 
-            # Update daemon state after loop completes
-            self._write_state()
-            self._stop_heartbeat_if_idle()
+            # Allow system sleep again if no agents remain.
             self._allow_sleep_if_idle()
         return callback
 

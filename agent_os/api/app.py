@@ -378,18 +378,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _stop_agent_manager():
         await agent_manager.shutdown()
 
-    # 7h. Auto-resume agents from previous session
-    @app.on_event("startup")
-    async def _auto_resume_agents():
-        try:
-            await agent_manager.auto_resume_agents()
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception(
-                "Failed to auto-resume agents on startup"
-            )
-
-    # 7i. Create one queue dispatcher per project. The dispatcher is the
+    # 7h. Create one queue dispatcher per project. The dispatcher is the
     # project's session-lifecycle manager — it exists for the life of the
     # project, independent of agent lifecycle, so it is created at boot
     # rather than inside start_agent.
