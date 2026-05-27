@@ -224,7 +224,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
 
     const chatCalls = apiWithTotalCalls.filter((p) => p.includes('/chat?limit='));
     expect(chatCalls.length).toBe(1);
-    expect(chatCalls[0]).toContain('/api/v2/agents/p1/chat?limit=50');
+    expect(chatCalls[0]).toContain('/api/v2/agents/p1/chat?limit=100');
     expect(chatCalls[0]).toContain('session_id=s1');
   });
 });
@@ -980,9 +980,9 @@ describe('FE-1 ChatView: transform-once pairs tool results across page seams', (
         { role: 'tool', content: 'SEAM-RESULT-CONTENT', source: 'management', timestamp: TS3, tool_call_id: 'seam' },
         { role: 'assistant', content: 'continuing', source: 'management', timestamp: TS4 },
       ],
-      // total must exceed loadedOffset (CHAT_PAGE_SIZE=50) so hasMore is true
+      // total must exceed loadedOffset (CHAT_PAGE_SIZE=100) so hasMore is true
       // and the "Load earlier" button renders.
-      total: 60,
+      total: 120,
     };
     chatOlderResponse = {
       data: [
@@ -996,7 +996,7 @@ describe('FE-1 ChatView: transform-once pairs tool results across page seams', (
           tool_calls: [tc('seam', 'read', '{"path":"seam.txt"}')],
         },
       ],
-      total: 60,
+      total: 120,
     };
 
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });

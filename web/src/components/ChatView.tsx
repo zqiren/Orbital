@@ -225,7 +225,12 @@ function markLatestLiveCallResultReceived(
 // is now decided at source by `transformChatHistory`'s `isActivelyRunning`
 // flag — so no post-pass reconciliation is needed.
 
-const CHAT_PAGE_SIZE = 50;
+// Messages (raw JSONL lines) fetched per page on initial load and per
+// "Load earlier" click. Larger page → fewer paginations; sessions at or under
+// this size load fully with no "Load earlier" button. Render cost is modest:
+// tool activity collapses into capsules, so 100 raw messages render ~30
+// markdown bubbles, well within the already-reachable full-session ceiling.
+const CHAT_PAGE_SIZE = 100;
 const REST_FALLBACK_DELAY_MS = 500;
 const SLASH_COMMANDS = [
   { name: '/new', description: 'Start a fresh session' },

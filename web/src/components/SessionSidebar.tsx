@@ -124,7 +124,7 @@ export function SessionSidebar({
           data-testid="session-active-count"
           style={{ fontSize: '9.5px' }}
         >
-          {sortedSessions.length}
+          ({sortedSessions.length})
         </span>
       </div>
 
