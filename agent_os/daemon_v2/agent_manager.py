@@ -1541,16 +1541,22 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
 
-        Three cases:
+        ``/cancel`` means "stop all work in this project": in every active
+        state it also tears down sub-agents and the idle-poll via
+        ``_stop_sub_agents`` (the handle and on-disk session always survive —
+        everything stays resumable). Cases:
         - No handle → ``no_agent``.
         - Handle present, paused for approval (task done but
           ``_paused_for_approval`` True) → dismiss any pending approval,
-          clear the flag, broadcast idle, return ``cancelled``.
-          Mirrors inject Case 1b's approval-dismissal pattern.
-        - Handle present, task running → call ``cancel_turn()``, broadcast
-          idle, return ``cancelled``.
-        - Handle present, task done and not paused → ``idle`` (legitimate
-          no-op — there was nothing to cancel).
+          clear the flag, stop sub-agents, broadcast idle, return
+          ``cancelled``. Mirrors inject Case 1b's approval-dismissal pattern.
+        - Handle present, task done but sub-agents still working (idle-poll
+          alive, the ``waiting`` state) → cancel the poll, stop sub-agents,
+          write a cancellation marker, broadcast idle, return ``cancelled``.
+        - Handle present, task running → call ``cancel_turn()``, stop
+          sub-agents, broadcast idle, return ``cancelled``.
+        - Handle present, task done, not paused, no sub-agents → ``idle``
+          (legitimate no-op — there was nothing to cancel).
         """
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
@@ -1589,6 +1595,9 @@ class AgentManager:
                 # Clear the approval-pause flag and the legacy paused flag.
                 handle.session._paused_for_approval = False
                 handle.session.resume()
+                # A management agent paused at approval could have spawned
+                # sub-agents earlier in the turn that are still running.
+                await self._stop_sub_agents(project_id, session_id=session_id)
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -1597,6 +1606,31 @@ class AgentManager:
                 # Notify all clients that blocked count dropped.
                 self._broadcast_blocked_count()
                 return {"status": "cancelled"}
+
+            # Waiting state: main loop exited but sub-agents are still working
+            # (idle-poll alive). /cancel must stop them, not no-op.
+            poll_task = self._idle_poll_tasks.get(project_id)
+            has_poll = poll_task is not None and not poll_task.done()
+            if has_poll:
+                await self._stop_sub_agents(project_id, session_id=session_id)
+                # Write the cancellation marker directly: the loop task is
+                # already done, so loop._persist_cancellation_marker_inner
+                # cannot run. Format matches loop.py's marker exactly so the
+                # management agent reads a uniform cancellation on resume.
+                handle.session.append({
+                    "role": "system",
+                    "content": "[cancelled by user]",
+                    "source": "management",
+                    "cancelled_by_user": True,
+                })
+                self._broadcast(project_id, {
+                    "type": "agent.status",
+                    "project_id": project_id,
+                    "status": "idle",
+                }, session_id=session_id)
+                return {"status": "cancelled"}
+
+            # Truly idle — nothing to cancel.
             return {"status": "idle"}
 
         # cancel_turn exceptions intentionally bubble: cancel_turn has its own
@@ -1604,6 +1638,10 @@ class AgentManager:
         # wait_for, so any exception escaping here indicates a real bug worth
         # surfacing as an HTTP 500.
         await handle.loop.cancel_turn()
+        # Sub-agents spawned earlier in this turn keep running after the main
+        # loop is interrupted — tear them down too. Idempotent: a no-op when
+        # there are no sub-agents.
+        await self._stop_sub_agents(project_id, session_id=session_id)
         # Broadcast after cancel_turn returns: the cancellation marker is
         # written synchronously inside cancel_turn before any await
         # (loop.py:779), so the JSONL is durable by the time we reach this
@@ -1615,6 +1653,31 @@ class AgentManager:
             "status": "idle",
         }, session_id=session_id)
         return {"status": "cancelled"}
+
+    async def _stop_sub_agents(self, project_id: str, *,
+                               session_id: str | None = None) -> None:
+        """Cancel idle-poll and stop all sub-agents for a project. Idempotent.
+
+        Shared by ``stop_agent`` (full teardown) and ``cancel_message``
+        (turn interrupt). ``_idle_poll_tasks`` is keyed by bare ``project_id``
+        (NOT ``SessionKey``), so the pop uses ``project_id`` directly.
+        """
+        # Cancel idle poll task if running
+        poll_task = self._idle_poll_tasks.pop(project_id, None)
+        if poll_task and not poll_task.done():
+            poll_task.cancel()
+
+        # Stop sub-agents with timeout budget. A hung adapter must not wedge
+        # the HTTP response — log and move on if the budget is exceeded.
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "sub-agent stop_all timed out for project %s", project_id
+            )
 
     async def stop_agent(self, project_id: str, *,
                          session_id: str | None = None) -> None:
@@ -1638,13 +1701,8 @@ class AgentManager:
         # impossible and produced the "queue stuck RUNNING / 409 on stop" bugs.)
         # Teardown lives in shutdown() (daemon) and shutdown_dispatcher() (delete).
 
-        # Cancel idle poll task if running
-        poll_task = self._idle_poll_tasks.pop(project_id, None)
-        if poll_task and not poll_task.done():
-            poll_task.cancel()
-
-        # Stop sub-agents (uses stopping flag to reject concurrent starts)
-        await self._sub_agent_manager.stop_all(project_id, session_id=session_id)
+        # Cancel idle-poll + stop sub-agents (shared with cancel_message).
+        await self._stop_sub_agents(project_id, session_id=session_id)
 
         # Close browser pages for this project
         if self._browser_manager is not None:

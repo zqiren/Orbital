@@ -35,6 +35,9 @@ def manager():
     project_store = MagicMock()
     sub_agent_manager = MagicMock()
     sub_agent_manager.list_active = MagicMock(return_value=[])
+    # cancel_message now tears down sub-agents in the approval-paused branch
+    # (TASK-cancel-propagates-to-subagents), so stop_all must be awaitable.
+    sub_agent_manager.stop_all = AsyncMock()
     activity_translator = MagicMock()
     process_manager = MagicMock()
     mgr = AgentManager(

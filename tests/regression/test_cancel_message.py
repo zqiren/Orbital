@@ -7,8 +7,10 @@
 Verifies that cancel_message():
   1. Calls AgentLoop.cancel_turn() exactly once when a turn is in flight.
   2. Returns {"status": "no_agent"} when no handle exists.
-  3. Returns {"status": "idle"} when task.done() == True.
-  4. Does NOT stop the session, pop the handle, or call stop_all.
+  3. Returns {"status": "idle"} when task.done() == True (and not waiting).
+  4. Does NOT stop the session or pop the handle (sub-agents ARE torn down —
+     see TASK-cancel-propagates-to-subagents; cancel now propagates to
+     sub-agents via stop_all in the running/approval/waiting branches).
   5. Is idempotent — second call returns {"status": "idle"} without double broadcast.
 
 Each test is designed to FAIL before the fix (no cancel_message method) and
@@ -150,7 +152,12 @@ async def test_cancel_message_idle_loop():
 
 @pytest.mark.asyncio
 async def test_cancel_message_does_not_stop_session():
-    """cancel_message() must NOT stop session, pop handle, or call stop_all."""
+    """cancel_message() must NOT stop the session or pop the handle.
+
+    It DOES tear down sub-agents (stop_all) — see
+    TASK-cancel-propagates-to-subagents. The session stays alive and
+    resumable; only the in-flight work (turn + sub-agents) is interrupted.
+    """
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-session-alive"
     handle, task = _make_active_handle(mgr, pid)
@@ -163,8 +170,8 @@ async def test_cancel_message_does_not_stop_session():
     # Handle must still be in _handles
     assert (pid, "default") in mgr._handles
 
-    # Sub-agent stop_all must not be called
-    sub_agent_mgr.stop_all.assert_not_awaited()
+    # Sub-agents ARE torn down now (cancel propagates to sub-agents).
+    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id="default")
 
     # Cleanup
     task.cancel()

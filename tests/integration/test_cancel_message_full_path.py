@@ -300,7 +300,9 @@ async def test_cancel_via_http_during_stream():
     - returns {"status": "cancelled"} within 5s
     - session JSONL contains cancellation marker (cancelled_by_user=True)
     - agent task still alive in _handles (not popped)
-    - sub-agent stop_all NOT called (this is /cancel, not /stop)
+    - sub-agent stop_all IS called — /cancel now propagates to sub-agents
+      (TASK-cancel-propagates-to-subagents). The handle/session stay alive;
+      only the in-flight work is interrupted.
     - ws.broadcast called with agent.status: idle
     """
     with tempfile.TemporaryDirectory() as workspace:
@@ -361,8 +363,10 @@ async def test_cancel_via_http_during_stream():
             assert (project_id, "default") in mgr._handles
             assert mgr._handles[(project_id, "default")] is handle
 
-            # /cancel must NOT call stop_all (that's /stop's job).
-            mgr._sub_agent_manager.stop_all.assert_not_awaited()
+            # /cancel now propagates to sub-agents: stop_all is awaited (a
+            # no-op here since no sub-agents were dispatched, but the call
+            # must fire so any in-flight sub-agent is torn down).
+            mgr._sub_agent_manager.stop_all.assert_awaited()
         finally:
             # The cancel-only path leaves the loop running (by design — that's
             # what /cancel means). To tear down the test cleanly, mark the
@@ -405,7 +409,12 @@ async def test_cancel_via_http_idle_loop():
 
 @pytest.mark.asyncio
 async def test_cancel_then_send_continues():
-    """After /cancel, handle stays in _handles, session not stopped, stop_all not called."""
+    """After /cancel, handle stays in _handles and the session is not stopped.
+
+    stop_all IS called now (cancel propagates to sub-agents,
+    TASK-cancel-propagates-to-subagents) — but the handle/session survive so
+    the next message hot-resumes the same conversation.
+    """
     mgr, ws, sub_agent_mgr, _ = _make_manager_mock_only()
     pid = "proj-cancel-continue"
     handle, task = _inject_mock_handle(mgr, pid)
@@ -422,8 +431,8 @@ async def test_cancel_then_send_continues():
         # Session not stopped.
         handle.session.stop.assert_not_called()
 
-        # stop_all not called.
-        sub_agent_mgr.stop_all.assert_not_awaited()
+        # stop_all IS called — cancel propagates to sub-agents.
+        sub_agent_mgr.stop_all.assert_awaited()
     finally:
         client.close()
         _restore(saved)
