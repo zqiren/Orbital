@@ -16,6 +16,8 @@ afterEach(() => cleanup());
 // ---------------------------------------------------------------------------
 
 let mockSessions: SessionListEntry[] = [];
+const renameSessionMock = vi.fn(async () => 'renamed');
+const deleteSessionMock = vi.fn(async () => undefined);
 
 vi.mock('../hooks/useSessions', () => ({
   useSessions: (_projectId: string | null) => ({
@@ -23,6 +25,8 @@ vi.mock('../hooks/useSessions', () => ({
     loading: false,
     error: null,
     refresh: vi.fn(),
+    renameSession: renameSessionMock,
+    deleteSession: deleteSessionMock,
   }),
 }));
 
@@ -59,6 +63,8 @@ function makeSession(overrides: Partial<SessionListEntry> = {}): SessionListEntr
 
 function resetMocks() {
   mockSessions = [];
+  renameSessionMock.mockClear();
+  deleteSessionMock.mockClear();
 }
 
 // ---------------------------------------------------------------------------
@@ -280,5 +286,50 @@ describe('SessionSidebar — session selection (controlled)', () => {
       'aria-selected',
       'true',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Display names (label = name → session_id fallback)
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — display names', () => {
+  it('shows the human-readable name instead of the session_id when present', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess_8badf00d', session_uuid: 'u1', name: 'Fix the deploy' }),
+    ];
+    render(<SessionSidebar projectId="proj-1" />);
+    expect(screen.getByTestId('session-name')).toHaveTextContent('Fix the deploy');
+    expect(screen.getByTestId('session-name')).not.toHaveTextContent('sess_8badf00d');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Delete → navigation callback
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — delete + navigation', () => {
+  it('calls deleteSession and onSessionDeleted with the remaining sessions', async () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess-keep', session_uuid: 'uk', last_activity_at: '2026-06-01T00:00:00Z' }),
+      makeSession({ session_id: 'sess-del', session_uuid: 'ud', last_activity_at: '2026-05-01T00:00:00Z' }),
+    ];
+    const onSessionDeleted = vi.fn();
+
+    render(<SessionSidebar projectId="proj-1" onSessionDeleted={onSessionDeleted} />);
+
+    // Open the menu for the row to delete, click Delete, confirm.
+    const row = screen.getByTestId('session-list-item-sess-del');
+    await userEvent.pointer({ keys: '[MouseRight]', target: row });
+    await userEvent.click(screen.getByTestId('session-action-delete'));
+    await userEvent.click(screen.getByTestId('session-delete-confirm-button'));
+
+    expect(deleteSessionMock).toHaveBeenCalledWith('sess-del');
+    expect(onSessionDeleted).toHaveBeenCalledTimes(1);
+    const [deletedId, remaining] = onSessionDeleted.mock.calls[0];
+    expect(deletedId).toBe('sess-del');
+    expect((remaining as SessionListEntry[]).map((s) => s.session_id)).toEqual(['sess-keep']);
   });
 });

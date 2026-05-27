@@ -1742,6 +1742,151 @@ class AgentManager:
         # Allow system sleep again if no agents remain.
         self._allow_sleep_if_idle()
 
+    def _resolve_session_uuid_on_disk(self, project_id: str,
+                                      identifier: str) -> tuple[str, str] | None:
+        """Resolve an F1 or F2 identifier to ``(session_uuid, jsonl_path)``.
+
+        Mirrors ``_find_session_uuid_on_disk`` (agents_v2): a direct
+        ``{identifier}.jsonl`` match wins (uuid addressing — how the sidebar
+        addresses disk-only sessions); otherwise scan each JSONL for a record
+        whose F1 ``session_id`` matches. Returns ``None`` if nothing matches.
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if project else ""
+        if not workspace:
+            return None
+        sessions_dir = ProjectPaths(workspace).sessions_dir
+        if not os.path.isdir(sessions_dir):
+            return None
+        # Direct F2 match.
+        direct = os.path.join(sessions_dir, f"{identifier}.jsonl")
+        if os.path.isfile(direct):
+            return identifier, direct
+        # F1 scan.
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            rec = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if rec.get("session_id") == identifier:
+                            return fname[:-6], fpath
+            except OSError:
+                continue
+        return None
+
+    async def delete_session(self, project_id: str, session_id: str) -> dict:
+        """Delete a single session: remove its JSONL from disk.
+
+        Steps (TASK-session-naming-and-deletion.md PART 2):
+          1. Resolve ``session_id`` (F1 or F2/uuid) to its JSONL path.
+             Raises ``FileNotFoundError`` if no session matches → 404.
+          2. If the session is currently running (run-status != idle) raise
+             ``RuntimeError`` → 409. Idle handles are fine to delete.
+          3. If a live handle exists for this session, tear it down like
+             eviction (``stop_agent`` — which also cancels the idle-poll task
+             and stops sub-agents) so no in-memory state outlives the file.
+          4. ``os.remove`` the JSONL (meta line lives inside it — Option A).
+          5. Return ``{"status": "deleted", "session_id": <identifier>}``.
+
+        Workspace files the agent created are NOT touched — they belong to the
+        project, not the session.
+        """
+        resolved = self._resolve_session_uuid_on_disk(project_id, session_id)
+        if resolved is None:
+            raise FileNotFoundError(
+                f"No session '{session_id}' for project '{project_id}'"
+            )
+        session_uuid, jsonl_path = resolved
+
+        # Locate any live handle for this session. Both the F1 chat id and the
+        # F2 uuid can address it, so match on either the handle's session_id
+        # key OR the loaded session's session_uuid.
+        handle_key = None
+        for (pid, sid), handle in self._handles.items():
+            if pid != project_id:
+                continue
+            if sid == session_id or getattr(
+                handle.session, "session_uuid", None
+            ) == session_uuid:
+                handle_key = (pid, sid)
+                break
+
+        if handle_key is not None:
+            _pid, sid = handle_key
+            # Running / pending_approval / waiting → refuse (409). Only idle
+            # sessions may be deleted; the caller must cancel first.
+            if self.get_run_status(project_id, session_id=sid) != "idle":
+                raise RuntimeError(
+                    "Cannot delete a running session. Cancel it first."
+                )
+            # Idle handle: tear it down (cancels idle-poll, stops sub-agents,
+            # pops the handle) before unlinking the file — same as eviction.
+            try:
+                await self.stop_agent(project_id, session_id=sid)
+            except KeyError:
+                pass
+
+        # Remove the JSONL from disk. The session_start meta (and thus the
+        # name) lives inside the file and is deleted with it (Option A).
+        try:
+            os.remove(jsonl_path)
+        except FileNotFoundError:
+            pass
+
+        # Drop any recorded terminal event so a stale warning glyph can't
+        # outlive the deleted session in a future re-list.
+        for (pid, sid) in list(self._last_terminal_events.keys()):
+            if pid == project_id and (sid == session_id):
+                self._last_terminal_events.pop((pid, sid), None)
+
+        logger.info(
+            "delete_session(%s): removed session %s (uuid %s)",
+            project_id, session_id, session_uuid,
+        )
+        return {"status": "deleted", "session_id": session_id}
+
+    def rename_session(self, project_id: str, session_id: str, name: str) -> dict:
+        """Rename a session: update its display name in memory + on disk.
+
+        Resolves the session (F1 or F2/uuid). If a live handle exists, update
+        the in-memory ``session.name`` (which rewrites the meta line). Otherwise
+        load the on-disk session, rename it (rewrites the meta line), and let it
+        fall out of scope — the file is the source of truth and is now updated.
+
+        Raises ``FileNotFoundError`` if no session matches → 404.
+        Returns ``{"status": "renamed", "session_id": <id>, "name": <name>}``.
+        """
+        resolved = self._resolve_session_uuid_on_disk(project_id, session_id)
+        if resolved is None:
+            raise FileNotFoundError(
+                f"No session '{session_id}' for project '{project_id}'"
+            )
+        session_uuid, jsonl_path = resolved
+
+        # Live handle path: rename in memory (also rewrites the meta line).
+        for (pid, sid), handle in self._handles.items():
+            if pid != project_id:
+                continue
+            if sid == session_id or getattr(
+                handle.session, "session_uuid", None
+            ) == session_uuid:
+                handle.session.set_name(name)
+                return {"status": "renamed", "session_id": session_id, "name": name}
+
+        # Disk-only path: load, rename (rewrites the meta line), done.
+        loaded = Session.load(jsonl_path)
+        loaded.set_name(name)
+        return {"status": "renamed", "session_id": session_id, "name": name}
+
     def list_sessions(self, project_id: str) -> list[dict]:
         """Return a list of active/idle sessions for a project.
 
@@ -1783,6 +1928,10 @@ class AgentManager:
                 # session_id. Consumers (e.g. the /chat session_id filter) build
                 # ``{session_uuid}.jsonl`` from this value, so it MUST be F2.
                 "session_uuid": getattr(handle.session, "session_uuid", None),
+                # Display label (auto-derived from first user message or set via
+                # rename). None for headless sessions; frontend falls back to
+                # the first message / session id.
+                "name": getattr(handle.session, "name", None),
                 "last_terminal_event": self._last_terminal_events.get(
                     (pid, sid),
                 ),
@@ -1819,6 +1968,8 @@ class AgentManager:
             if uuid in seen_uuids:
                 continue  # already represented by a live in-memory handle
             last_activity_at = None
+            stored_name = None  # name on the session_start meta, if present
+            first_user_content = None  # for name backfill
             try:
                 with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
                     first_real = None  # first non-meta (conversation) record
@@ -1834,9 +1985,14 @@ class AgentManager:
                         # Skip identity metadata (session_start, model_swap, …)
                         # — a log with only meta records is not a real session.
                         if rec.get("role") == "meta":
+                            if (rec.get("event") == "session_start"
+                                    and rec.get("name") is not None):
+                                stored_name = rec["name"]
                             continue
                         if first_real is None:
                             first_real = rec
+                        if first_user_content is None and rec.get("role") == "user":
+                            first_user_content = rec.get("content")
                         last_real = rec
             except OSError:
                 continue
@@ -1844,6 +2000,10 @@ class AgentManager:
                 continue  # empty / meta-only log — not a materialized session
             if last_real is not None:
                 last_activity_at = last_real.get("timestamp")
+            # Name: stored meta name wins; else derive from first user message
+            # (lazy backfill, in-memory only — no file rewrite); else None.
+            from agent_os.agent.session import _derive_name
+            name = stored_name if stored_name is not None else _derive_name(first_user_content)
             # Address a disk-only session by its unique session_uuid: the F1
             # session_id on disk is often "default" and not unique across many
             # prior logs, which would shadow the active session and break the
@@ -1853,6 +2013,7 @@ class AgentManager:
                 "session_id": uuid,
                 "status": "idle",
                 "session_uuid": uuid,
+                "name": name,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,
             })

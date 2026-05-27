@@ -137,6 +137,13 @@ export interface SessionListEntry {
   session_id: string;
   status: AgentRunStatus;
   session_uuid: string | null;
+  /**
+   * Human-readable display label for the session. Auto-derived from the first
+   * user message (truncated, word-boundary-aware) and user-editable via the
+   * inline rename. null for legacy/headless sessions with no derivable name —
+   * the UI falls back to the session_id. Display-only: never an identifier.
+   */
+  name?: string | null;
   last_terminal_event: LastTerminalEvent | null;
   /** ISO timestamp of the last activity in this session, or null. Added in Phase 1B. */
   last_activity_at?: string | null;

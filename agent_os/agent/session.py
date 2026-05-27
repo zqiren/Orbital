@@ -27,6 +27,34 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_NAME_MAX_LEN = 50
+
+
+def _derive_name(content) -> str | None:
+    """Derive a session display name from a user message's content.
+
+    Truncates to ``_NAME_MAX_LEN`` characters, word-boundary-aware, appending
+    an ellipsis (``…``) when truncated. Returns ``None`` for content that is
+    not a non-empty string (e.g. multimodal list content with no usable text).
+    """
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return None
+    if len(text) <= _NAME_MAX_LEN:
+        return text
+    # Truncate to the budget, then back up to the last word boundary so we
+    # don't cut mid-word. Fall back to a hard cut if the first word is longer
+    # than the budget.
+    head = text[:_NAME_MAX_LEN]
+    cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    head = head.rstrip()
+    return head + "…"
+
+
 class Session:
     """Append-only conversation log backed by a JSONL file.
 
@@ -92,6 +120,14 @@ class Session:
         # the session_start meta here, and the first physical write flushes it
         # as the first line (see ``_write_line``). None for loaded sessions.
         self._pending_meta: dict | None = None
+
+        # Human-readable display label (TASK-session-naming-and-deletion.md).
+        # Auto-derived from the first ``role: user`` message (truncated) and
+        # user-editable via ``set_name``. Stored on the ``session_start`` meta
+        # record so it lives in the single JSONL with no sidecar. ``None`` until
+        # a name exists (e.g. headless sessions with no user message — DATA-1).
+        # Display-only: never an identifier, never used for routing/lookup.
+        self.name: str | None = None
 
     # ------------------------------------------------------------------
     # Construction
@@ -161,6 +197,7 @@ class Session:
         session = cls(filepath)
         with session._file_lock:
             skipped = 0
+            stored_name: str | None = None
             with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -177,11 +214,35 @@ class Session:
                     # message state so the sliding window never surfaces them
                     # to the LLM.
                     if msg.get("role") == "meta":
+                        # The session_start meta carries the display name when
+                        # it was set (auto or via rename). Capture it for the
+                        # name backfill below.
+                        if (msg.get("event") == "session_start"
+                                and msg.get("name") is not None):
+                            stored_name = msg["name"]
                         continue
                     session._messages.append(msg)
 
             if skipped > 0:
                 logger.warning("Skipped %d corrupted lines during session load", skipped)
+
+            # Name resolution (display label):
+            #   1. Stored name on the session_start meta wins (explicit rename
+            #      or a previously persisted auto-name).
+            #   2. Otherwise derive lazily from the first user message — legacy
+            #      sessions and meta-records-without-name. This is IN-MEMORY
+            #      ONLY: we do NOT rewrite the JSONL on load (avoid touching
+            #      every legacy file). It persists on the next append/rename.
+            #   3. Else None (headless / no user message — DATA-1).
+            if stored_name is not None:
+                session.name = stored_name
+            else:
+                for m in session._messages:
+                    if m.get("role") == "user":
+                        derived = _derive_name(m.get("content"))
+                        if derived is not None:
+                            session.name = derived
+                        break
 
             # Rebuild pending_tool_calls
             all_tool_call_ids: set[str] = set()
@@ -221,6 +282,16 @@ class Session:
             message["session_uuid"] = self.session_uuid
 
         self._messages.append(message)
+
+        # Auto-name on the FIRST user message. The name is a display label
+        # derived by truncation (see ``_derive_name``); it is stored on the
+        # session_start meta record so it persists with the JSONL. Only the
+        # first user message sets it — later messages and renames don't.
+        if self.name is None and message.get("role") == "user":
+            derived = _derive_name(message.get("content"))
+            if derived is not None:
+                self.name = derived
+                self._apply_name_to_meta(derived)
 
         # Track tool_call IDs from assistant messages
         if message.get("role") == "assistant" and "tool_calls" in message:
@@ -345,6 +416,72 @@ class Session:
         }
         line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
         self._write_line(line_bytes)
+
+    # ------------------------------------------------------------------
+    # Session naming (display label)
+    # ------------------------------------------------------------------
+
+    def set_name(self, name: str) -> None:
+        """Set the session's display name (user rename) and persist it.
+
+        Updates ``self.name`` in memory and writes the value onto the
+        ``session_start`` meta record — the pending meta if the file does not
+        exist yet, otherwise an in-place rewrite of the first meta line. The
+        name is display-only and never affects routing or hydration.
+        """
+        self.name = name
+        self._apply_name_to_meta(name)
+
+    def _apply_name_to_meta(self, name: str) -> None:
+        """Stamp ``name`` onto the session_start meta.
+
+        If the file is not yet materialized, the meta is still pending — set the
+        field there so it lands when the first write flushes it. Otherwise the
+        meta is already the first physical line: rewrite it in place.
+        """
+        if self._pending_meta is not None:
+            self._pending_meta["name"] = name
+            return
+        self._rewrite_meta_name(name)
+
+    def _rewrite_meta_name(self, name: str) -> None:
+        """Read-modify-write the session_start meta line to carry ``name``.
+
+        The JSONL is otherwise append-only; this is the one mutation of an
+        existing line. Atomic via tmp-file + ``os.replace`` (same pattern as
+        ``_compact``). No-op if the file has no session_start meta line.
+        """
+        with self._lock:
+            with self._file_lock:
+                try:
+                    with open(self._filepath, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                except OSError:
+                    return
+
+                changed = False
+                for idx, raw in enumerate(lines):
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        rec = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("role") == "meta" and rec.get("event") == "session_start":
+                        rec["name"] = name
+                        lines[idx] = json.dumps(rec, ensure_ascii=False) + "\n"
+                        changed = True
+                        break
+                if not changed:
+                    return
+
+                tmp_path = self._filepath + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self._filepath)
 
     def get_messages(self) -> list[dict]:
         """Return full in-memory message list."""

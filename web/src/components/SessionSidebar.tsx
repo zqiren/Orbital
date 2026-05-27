@@ -42,6 +42,13 @@ export interface SessionSidebarProps {
   selectedSessionId?: string | null;
   onNewSession?: () => void;
   onSessionSelect?: (sessionId: string) => void;
+  /**
+   * Called after a session is successfully deleted. ChatTab uses this to
+   * navigate away when the deleted session was the one being viewed. Receives
+   * the deleted session_id and the list of session_ids that REMAIN (already
+   * pruned), so the caller can navigate to the most-recent remaining session.
+   */
+  onSessionDeleted?: (deletedId: string, remaining: SessionListEntry[]) => void;
 }
 
 export function SessionSidebar({
@@ -49,8 +56,9 @@ export function SessionSidebar({
   selectedSessionId,
   onNewSession,
   onSessionSelect,
+  onSessionDeleted,
 }: SessionSidebarProps) {
-  const { sessions, loading } = useSessions(projectId);
+  const { sessions, loading, renameSession, deleteSession } = useSessions(projectId);
 
   // One unified list of ALL sessions, sorted by last-activity descending
   // (most recent first). Null/missing timestamps sort last. Sort a copy so we
@@ -65,6 +73,29 @@ export function SessionSidebar({
 
   function handleSelect(session: SessionListEntry) {
     onSessionSelect?.(session.session_id);
+  }
+
+  async function handleRename(sessionId: string, name: string) {
+    try {
+      await renameSession(sessionId, name);
+    } catch (e) {
+      console.error('Failed to rename session', e);
+    }
+  }
+
+  async function handleDelete(sessionId: string) {
+    try {
+      await deleteSession(sessionId);
+      // Compute the remaining set (sorted, most-recent first) so ChatTab can
+      // navigate to the most recent remaining session if the deleted one was
+      // being viewed.
+      const remaining = sortedSessions.filter((s) => s.session_id !== sessionId);
+      onSessionDeleted?.(sessionId, remaining);
+    } catch (e) {
+      // 409 (running session) or network error — surface to console; the row
+      // stays put because deleteSession only prunes on success.
+      console.error('Failed to delete session', e);
+    }
   }
 
   return (
@@ -118,6 +149,8 @@ export function SessionSidebar({
             session={session}
             selected={selectedSessionId === session.session_id}
             onSelect={() => handleSelect(session)}
+            onRename={handleRename}
+            onDelete={handleDelete}
           />
         ))}
       </div>

@@ -888,6 +888,59 @@ async def list_project_sessions(project_id: str):
     return {"project_id": project_id, "sessions": sessions}
 
 
+class SessionRenameRequest(BaseModel):
+    """Body for renaming a session (display label only). ``name`` is the new
+    human-readable label; it has no effect on routing or hydration."""
+    name: str
+
+
+@router.patch("/agents/{project_id}/sessions/{session_id}")
+async def rename_session(project_id: str, session_id: str, req: SessionRenameRequest):
+    """Rename a session's display label.
+
+    Updates ``session.name`` in memory (when a live handle exists) and rewrites
+    the ``session_start`` meta line in the JSONL so the name persists. The name
+    is display-only — F1/F2 identifiers are unchanged.
+
+    Returns ``{"status": "renamed", "session_id", "name"}``. 404 if no session
+    with this id (F1 or F2/uuid) exists for the project.
+    """
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    try:
+        return await asyncio.to_thread(
+            _agent_manager.rename_session, project_id, session_id, name
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.delete("/agents/{project_id}/sessions/{session_id}")
+async def delete_session(project_id: str, session_id: str):
+    """Delete a single session (removes its JSONL from disk).
+
+    - 404 if no session with this id (F1 or F2/uuid) exists for the project.
+    - 409 if the session is currently running — the caller must cancel first.
+    - 200 ``{"status": "deleted", "session_id"}`` otherwise. An idle handle is
+      torn down (idle-poll cancelled, sub-agents stopped) before the unlink.
+
+    Workspace files the agent created are NOT deleted — they belong to the
+    project, not the session. Deleting the only session is allowed; the next
+    message creates a fresh one.
+    """
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        return await _agent_manager.delete_session(project_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.get("/blocked")
 async def list_blocked_globally():
     """Global blocked-session summary across ALL projects.

@@ -100,7 +100,60 @@ export function useSessions(projectId: string | null) {
     };
   }, [projectId, refresh, ws]);
 
-  return { sessions, loading, error, refresh };
+  // Rename a session (display label only). Optimistically updates the local
+  // list + cache so the new name shows immediately, then PATCHes the backend.
+  // Resolves to the new name; rejects (and reverts) on API failure.
+  const renameSession = useCallback(
+    async (sessionId: string, name: string): Promise<string> => {
+      if (!projectId) throw new Error('No project selected');
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error('name must not be empty');
+      // Optimistic update.
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.session_id === sessionId ? { ...s, name: trimmed } : s,
+        );
+        sessionsCache.set(projectId, next);
+        return next;
+      });
+      try {
+        await api(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ name: trimmed }),
+          },
+        );
+        return trimmed;
+      } catch (e) {
+        // Revert by refetching authoritative state.
+        void refresh();
+        throw e;
+      }
+    },
+    [projectId, refresh],
+  );
+
+  // Delete a session (removes its JSONL on disk). Removes the row from the
+  // local list + cache on success. Rejects on failure (e.g. 409 for a running
+  // session) so the caller can surface an error without mutating the list.
+  const deleteSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      if (!projectId) throw new Error('No project selected');
+      await api(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
+        { method: 'DELETE' },
+      );
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.session_id !== sessionId);
+        sessionsCache.set(projectId, next);
+        return next;
+      });
+    },
+    [projectId],
+  );
+
+  return { sessions, loading, error, refresh, renameSession, deleteSession };
 }
 
 // Alias for consumers that prefer the more explicit name.

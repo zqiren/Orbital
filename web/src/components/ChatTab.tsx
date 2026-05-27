@@ -116,6 +116,22 @@ export default function ChatTab({
     setActiveSessionId(sessionId);
   }
 
+  // After a session is deleted: if it was the one being viewed, navigate to the
+  // most recent remaining session, else to a blank state (sessionId undefined,
+  // which lets the resolution effect pick a default or render the empty state).
+  // The sidebar passes the already-pruned remaining list (sorted most-recent
+  // first), so [0] is the most recent.
+  function handleSessionDeleted(deletedId: string, remaining: SessionListEntry[]) {
+    if (routeSessionId !== deletedId) return; // a non-viewed row was deleted
+    const nextId = remaining[0]?.session_id;
+    setRoute((prev) =>
+      prev.name === 'project' && prev.projectId === projectId
+        ? { ...prev, sessionId: nextId }
+        : prev,
+    );
+    setActiveSessionId(nextId ?? null);
+  }
+
   // "+ new session": mint a genuinely BLANK session on the backend and
   // navigate to it. We must NOT clear route.sessionId to undefined — that
   // would let the resolution effect re-open the most-recent existing session
@@ -158,6 +174,7 @@ export default function ChatTab({
           selectedSessionId={routeSessionId}
           onSessionSelect={handleSessionSelect}
           onNewSession={handleNewSession}
+          onSessionDeleted={handleSessionDeleted}
         />
       </div>
       <div className="flex-1 min-w-0 min-h-0">

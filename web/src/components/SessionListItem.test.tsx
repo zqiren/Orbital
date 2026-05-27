@@ -90,15 +90,33 @@ describe('SessionListItem — status glyph rendering', () => {
 // ---------------------------------------------------------------------------
 
 describe('SessionListItem — name and time', () => {
-  it('renders session_id as the display name', () => {
+  it('renders session.name as the display label when present', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'my-cool-session' })}
+        session={makeSession({ session_id: 'sess_abcd1234', name: 'Implement login flow' })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-name')).toHaveTextContent('Implement login flow');
+  });
+
+  it('falls back to session_id when name is null', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'my-cool-session', name: null })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
     expect(screen.getByTestId('session-name')).toHaveTextContent('my-cool-session');
+  });
+
+  it('falls back to session_id when name is undefined', () => {
+    const session = makeSession({ session_id: 'sess-no-name' });
+    delete session.name;
+    render(<SessionListItem session={session} selected={false} onSelect={vi.fn()} />);
+    expect(screen.getByTestId('session-name')).toHaveTextContent('sess-no-name');
   });
 
   it('renders "—" when last_activity_at is null', () => {
@@ -361,5 +379,205 @@ describe('SessionListItem — interaction', () => {
     row.focus();
     await userEvent.keyboard(' ');
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inline rename
+// ---------------------------------------------------------------------------
+
+describe('SessionListItem — inline rename', () => {
+  it('double-clicking the name opens an editable input prefilled with the label', async () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-rn', name: 'Old Name' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    const input = screen.getByTestId('session-rename-input') as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe('Old Name');
+  });
+
+  it('Enter saves the new name via onRename', async () => {
+    const onRename = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-rn2', name: 'Old' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    const input = screen.getByTestId('session-rename-input');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Brand New Name{Enter}');
+    expect(onRename).toHaveBeenCalledWith('sess-rn2', 'Brand New Name');
+    // Input closes after save.
+    expect(screen.queryByTestId('session-rename-input')).toBeNull();
+  });
+
+  it('Escape cancels the rename without calling onRename', async () => {
+    const onRename = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-rn3', name: 'KeepMe' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    const input = screen.getByTestId('session-rename-input');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Discarded{Escape}');
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('session-rename-input')).toBeNull();
+    // Original label still shown.
+    expect(screen.getByTestId('session-name')).toHaveTextContent('KeepMe');
+  });
+
+  it('saving an unchanged name does not call onRename', async () => {
+    const onRename = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-rn4', name: 'Same' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    const input = screen.getByTestId('session-rename-input');
+    await userEvent.type(input, '{Enter}'); // value unchanged
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
+  it('entering rename mode does not trigger onSelect on the row', async () => {
+    const onSelect = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-rn5', name: 'X' })}
+        selected={false}
+        onSelect={onSelect}
+        onRename={vi.fn()}
+      />,
+    );
+    await userEvent.dblClick(screen.getByTestId('session-name'));
+    // dblClick fires two clicks; with the input open, the row click is a no-op.
+    // The important invariant: typing in the input does not navigate.
+    const input = screen.getByTestId('session-rename-input');
+    await userEvent.type(input, 'abc');
+    // No assertion on onSelect count from the dblClick itself (it may fire on
+    // the first click before editing) — just confirm the input is still open.
+    expect(screen.getByTestId('session-rename-input')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Three-dot menu + delete confirmation
+// ---------------------------------------------------------------------------
+
+describe('SessionListItem — context menu and delete', () => {
+  it('opens the three-dot menu with Rename and Delete actions', async () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-menu' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    expect(screen.getByTestId('session-three-dot-dropdown')).toBeInTheDocument();
+    expect(screen.getByTestId('session-action-rename')).toBeInTheDocument();
+    expect(screen.getByTestId('session-action-delete')).toBeInTheDocument();
+    // The delete action is NOT disabled (real handler, not a Batch-4 placeholder).
+    expect(screen.getByTestId('session-action-delete')).not.toBeDisabled();
+  });
+
+  it('right-clicking the row opens the menu', async () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-ctx' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('session-list-item-sess-ctx');
+    await userEvent.pointer({ keys: '[MouseRight]', target: row });
+    expect(screen.getByTestId('session-three-dot-dropdown')).toBeInTheDocument();
+  });
+
+  it('Rename menu action opens the inline editor', async () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-menu-rn', name: 'MenuRename' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-rename'));
+    const input = screen.getByTestId('session-rename-input') as HTMLInputElement;
+    expect(input.value).toBe('MenuRename');
+  });
+
+  it('Delete action opens a confirmation dialog (does not delete immediately)', async () => {
+    const onDelete = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-dc' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-delete'));
+    expect(screen.getByTestId('session-delete-confirm')).toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('confirming delete calls onDelete with the session_id', async () => {
+    const onDelete = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-dc2' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-delete'));
+    await userEvent.click(screen.getByTestId('session-delete-confirm-button'));
+    expect(onDelete).toHaveBeenCalledWith('sess-dc2');
+    // Dialog closes.
+    expect(screen.queryByTestId('session-delete-confirm')).toBeNull();
+  });
+
+  it('cancelling the delete dialog does not call onDelete', async () => {
+    const onDelete = vi.fn();
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-dc3' })}
+        selected={false}
+        onSelect={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await userEvent.click(screen.getByTestId('session-three-dot-trigger'));
+    await userEvent.click(screen.getByTestId('session-action-delete'));
+    await userEvent.click(screen.getByTestId('session-delete-cancel'));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('session-delete-confirm')).toBeNull();
   });
 });

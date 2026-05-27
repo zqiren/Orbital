@@ -215,4 +215,115 @@ describe('useSessions', () => {
     // No additional fetch
     expect(apiFn.mock.calls.length).toBe(callCountBeforeEvent);
   });
+
+  it('surfaces the name field on returned session entries', async () => {
+    const sessions: SessionListEntry[] = [
+      makeSession({ session_id: 's1', name: 'My Login Flow' }),
+    ];
+    apiFn.mockResolvedValueOnce(sessions);
+
+    const { result } = renderHook(() => useSessions('proj-name'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.sessions[0].name).toBe('My Login Flow');
+  });
+});
+
+describe('useSessions — rename', () => {
+  beforeEach(() => {
+    onMock.mockClear();
+    offMock.mockClear();
+    apiFn = vi.fn();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('PATCHes the rename endpoint and optimistically updates the list', async () => {
+    const sessions: SessionListEntry[] = [makeSession({ session_id: 's1', name: 'old' })];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockResolvedValueOnce(undefined); // PATCH
+
+    const { result } = renderHook(() => useSessions('proj-rn'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.renameSession('s1', 'new name');
+    });
+
+    // PATCH was issued with the right path + body.
+    const patchCall = apiFn.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(patchCall).toBeDefined();
+    expect(patchCall![0]).toBe('/api/v2/agents/proj-rn/sessions/s1');
+    expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({ name: 'new name' });
+
+    // Optimistic local update.
+    expect(result.current.sessions[0].name).toBe('new name');
+  });
+
+  it('rejects an empty rename without calling the API', async () => {
+    apiFn.mockResolvedValueOnce([makeSession({ session_id: 's1' })]);
+    const { result } = renderHook(() => useSessions('proj-rn2'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const callsBefore = apiFn.mock.calls.length;
+    await expect(
+      act(async () => {
+        await result.current.renameSession('s1', '   ');
+      }),
+    ).rejects.toThrow();
+    // No PATCH issued.
+    expect(apiFn.mock.calls.length).toBe(callsBefore);
+  });
+});
+
+describe('useSessions — delete', () => {
+  beforeEach(() => {
+    onMock.mockClear();
+    offMock.mockClear();
+    apiFn = vi.fn();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('DELETEs the endpoint and removes the row from the list', async () => {
+    const sessions: SessionListEntry[] = [
+      makeSession({ session_id: 's1' }),
+      makeSession({ session_id: 's2' }),
+    ];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockResolvedValueOnce(undefined); // DELETE
+
+    const { result } = renderHook(() => useSessions('proj-del'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.deleteSession('s1');
+    });
+
+    const delCall = apiFn.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'DELETE',
+    );
+    expect(delCall).toBeDefined();
+    expect(delCall![0]).toBe('/api/v2/agents/proj-del/sessions/s1');
+
+    // Row removed locally.
+    expect(result.current.sessions.map((s) => s.session_id)).toEqual(['s2']);
+  });
+
+  it('does NOT remove the row when the DELETE fails (e.g. 409)', async () => {
+    const sessions: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockRejectedValueOnce(new Error('409 running')); // DELETE fails
+
+    const { result } = renderHook(() => useSessions('proj-del-fail'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await expect(
+      act(async () => {
+        await result.current.deleteSession('s1');
+      }),
+    ).rejects.toThrow();
+
+    // Row still present.
+    expect(result.current.sessions.map((s) => s.session_id)).toEqual(['s1']);
+  });
 });
