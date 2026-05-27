@@ -514,62 +514,6 @@ describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunni
   });
 });
 
-describe('transformChatHistory — FE-2 auto-expand reasoning for content-null turns', () => {
-  it('content:null with reasoning_content and tool_calls → capsule.defaultExpanded is true', () => {
-    const messages: ChatMessage[] = [
-      asst({
-        content: null,
-        reasoning_content: 'I need to read the config file...',
-        tool_calls: [tc('c1', 'read', '{"path":"config"}')],
-        timestamp: TS,
-      }),
-    ];
-
-    const items = transformChatHistory(messages);
-    const capsule = items.find(i => i.type === 'agent_run');
-    expect(capsule).toBeDefined();
-    if (capsule && capsule.type === 'agent_run') {
-      expect(capsule.defaultExpanded).toBe(true);
-    }
-  });
-
-  it('content present with reasoning_content and tool_calls → capsule.defaultExpanded is false', () => {
-    const messages: ChatMessage[] = [
-      asst({
-        content: "Here's what I found",
-        reasoning_content: 'some thinking',
-        tool_calls: [tc('c1', 'read')],
-        timestamp: TS,
-      }),
-    ];
-
-    const items = transformChatHistory(messages);
-    // Visible text emits an agent_message; the machinery still forms a capsule.
-    const capsule = items.find(i => i.type === 'agent_run');
-    expect(capsule).toBeDefined();
-    if (capsule && capsule.type === 'agent_run') {
-      expect(capsule.defaultExpanded).toBe(false);
-    }
-  });
-
-  it('content:null with no reasoning_content but tool_calls → capsule.defaultExpanded is false', () => {
-    const messages: ChatMessage[] = [
-      asst({
-        content: null,
-        tool_calls: [tc('c1', 'read')],
-        timestamp: TS,
-      }),
-    ];
-
-    const items = transformChatHistory(messages);
-    const capsule = items.find(i => i.type === 'agent_run');
-    expect(capsule).toBeDefined();
-    if (capsule && capsule.type === 'agent_run') {
-      expect(capsule.defaultExpanded).toBe(false);
-    }
-  });
-});
-
 describe('truncateResult', () => {
   it('returns short input as-is with no footer', () => {
     const r = truncateResult('hello world');

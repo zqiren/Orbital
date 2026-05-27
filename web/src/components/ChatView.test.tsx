@@ -915,8 +915,8 @@ describe('FE-3 ChatView: trailing capsule spinner reflects active-running state'
   });
 });
 
-describe('FE-2 ChatView: content-null reasoning turns auto-expand', () => {
-  it('renders the reasoning text by default for a content-null turn with reasoning', async () => {
+describe('ChatView: tool-call capsules are collapsed by default', () => {
+  it('hides reasoning and tool results until the user expands the capsule', async () => {
     runStatusHolder = null;
     chatInitialResponse = {
       data: [
@@ -926,32 +926,8 @@ describe('FE-2 ChatView: content-null reasoning turns auto-expand', () => {
           content: null,
           source: 'management',
           timestamp: TS2,
-          reasoning_content: 'REASONING-PREVIEW-XYZ deciding which file to read',
+          reasoning_content: 'REASONING-HIDDEN-BY-DEFAULT deciding which file to read',
           tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
-        },
-        { role: 'tool', content: 'file body', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
-        { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
-      ],
-      total: 4,
-    };
-    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
-    await flushEffects();
-
-    // The capsule's reasoning is visible without the user expanding it.
-    expect(container.textContent ?? '').toContain('REASONING-PREVIEW-XYZ');
-  });
-
-  it('does NOT auto-expand a content-null turn that has no reasoning', async () => {
-    runStatusHolder = null;
-    chatInitialResponse = {
-      data: [
-        { role: 'user', content: 'go', source: 'user', timestamp: TS },
-        {
-          role: 'assistant',
-          content: null,
-          source: 'management',
-          timestamp: TS2,
-          tool_calls: [tc('c1', 'read', '{"path":"secret.txt"}')],
         },
         { role: 'tool', content: 'TOOL-RESULT-HIDDEN', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
         { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
@@ -961,8 +937,9 @@ describe('FE-2 ChatView: content-null reasoning turns auto-expand', () => {
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });
     await flushEffects();
 
-    // The capsule is collapsed by default → the tool result content (only
-    // shown when a row is expanded) is not in the DOM.
+    // An idle/historical content-null turn renders a COLLAPSED capsule: neither
+    // its reasoning nor its tool result is in the DOM until the user expands it.
+    expect(container.textContent ?? '').not.toContain('REASONING-HIDDEN-BY-DEFAULT');
     expect(container.textContent ?? '').not.toContain('TOOL-RESULT-HIDDEN');
   });
 });
@@ -1021,12 +998,14 @@ describe('FE-1 ChatView: transform-once pairs tool results across page seams', (
     // surface the paired result content.
     const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
     expect(capsule).toBeTruthy();
-    // The reasoning auto-expands (content-null turn). The capsule's first
-    // button is its header (expand/collapse the whole capsule); the tool-call
-    // rows are the subsequent buttons. Expand each tool row (skipping the
-    // header so we don't collapse the capsule) to reveal the paired result.
-    const buttons = Array.from(capsule!.querySelectorAll('button')) as HTMLButtonElement[];
-    const toolRowButtons = buttons.slice(1); // skip the capsule header button
+    // Capsules are collapsed by default — click the header (first button) to
+    // expand the capsule and render its tool-call rows.
+    await act(async () => {
+      (capsule!.querySelector('button') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    // Now expand each tool row (skipping the header) to reveal the paired result.
+    const toolRowButtons = (Array.from(capsule!.querySelectorAll('button')) as HTMLButtonElement[]).slice(1);
     await act(async () => {
       for (const b of toolRowButtons) {
         if (!b.disabled) b.click();

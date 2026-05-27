@@ -37,12 +37,6 @@ export type DisplayItem =
       has_thinking: boolean;
       started_at: number;
       ended_at: number | null;
-      // FE-2: true when this capsule originated from a content-null assistant
-      // turn that carried reasoning_content — i.e. the agent did tool work and
-      // "said" nothing visible. The render layer initializes the capsule's
-      // expand state from this so the user sees the reasoning (the turn's
-      // intent) by default instead of a bare collapsed capsule.
-      defaultExpanded?: boolean;
       isHistorical?: boolean;
     }
   | { type: 'session_separator'; timestamp: string }
@@ -212,10 +206,6 @@ interface OpenCapsule {
   items: CapsuleChild[];
   startedAtMs: number;
   endedAtMs: number;
-  // FE-2: set true when a content-null assistant turn that carried
-  // reasoning_content contributed to this capsule. Drives the capsule's
-  // defaultExpanded flag so the reasoning is shown by default.
-  defaultExpanded: boolean;
 }
 
 export function transformChatHistory(
@@ -236,7 +226,7 @@ export function transformChatHistory(
 
   function openCapsuleAt(ts: string): OpenCapsule {
     const ms = tsToMs(ts);
-    return { items: [], startedAtMs: ms, endedAtMs: ms, defaultExpanded: false };
+    return { items: [], startedAtMs: ms, endedAtMs: ms };
   }
 
   function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
@@ -262,7 +252,6 @@ export function transformChatHistory(
       has_thinking: hasThinking,
       started_at: currentCapsule.startedAtMs,
       ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
-      defaultExpanded: currentCapsule.defaultExpanded,
     });
     currentCapsule = null;
   }
@@ -376,13 +365,6 @@ export function transformChatHistory(
       if (reasoning || hasTools) {
         if (!currentCapsule) {
           currentCapsule = openCapsuleAt(msg.timestamp);
-        }
-        // FE-2: a content-null assistant turn that carries reasoning means the
-        // agent did work and said nothing visible. Surface its thinking by
-        // default. (When visible text was emitted above, `text` is truthy and
-        // we leave the capsule collapsed — the response already explains it.)
-        if (!text && reasoning) {
-          currentCapsule.defaultExpanded = true;
         }
         if (reasoning) {
           currentCapsule.items.push({

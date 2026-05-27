@@ -1244,33 +1244,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     el.scrollTop += el.scrollHeight - prevHeight;
   }, [items]);
 
-  // FE-2: capsules from content-null assistant turns that carried reasoning
-  // (the agent did tool work and "said" nothing visible) carry
-  // defaultExpanded:true from the transform. Seed their capsule_id into
-  // expandedCapsules so the reasoning shows by default instead of a bare
-  // collapsed capsule. Each id is seeded at most once (tracked in a ref) so a
-  // user who collapses it stays collapsed — we never force it back open.
-  const seededDefaultExpandRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const toSeed: string[] = [];
-    for (const it of items) {
-      if (
-        it.type === 'agent_run' &&
-        it.defaultExpanded &&
-        !seededDefaultExpandRef.current.has(it.capsule_id)
-      ) {
-        toSeed.push(it.capsule_id);
-      }
-    }
-    if (toSeed.length === 0) return;
-    for (const id of toSeed) seededDefaultExpandRef.current.add(id);
-    setExpandedCapsules((prev) => {
-      const next = new Set(prev);
-      for (const id of toSeed) next.add(id);
-      return next;
-    });
-  }, [items]);
-
   // Auto-scroll to bottom only when a NEW message arrives at the tail.
   // Gating on the last-item fingerprint prevents a snap-to-bottom when
   // history is prepended at the head (loadOlderMessages).

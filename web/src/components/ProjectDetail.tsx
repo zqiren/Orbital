@@ -8,7 +8,6 @@ import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
-import { useSessions } from '../hooks/useSessions';
 import { useQueue } from '../hooks/useQueue';
 
 interface ProjectDetailProps {
@@ -43,10 +42,8 @@ export default function ProjectDetail({
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
 
-  // Tab count badges
-  const { sessions } = useSessions(project.project_id);
+  // Tab count badges (queue only — Chat's session count lives in the sidebar).
   const { snapshot } = useQueue(project.project_id);
-  const chatCount = sessions.length;
   const queueCount = snapshot?.items.filter(
     (item) => item.state === 'queued' || item.state === 'running',
   ).length ?? 0;
@@ -95,8 +92,9 @@ export default function ProjectDetail({
       {/* Tab bar */}
       <div className="flex gap-1 px-6 border-b border-border max-md:px-4">
         {TABS.map((t) => {
-          const count =
-            t.key === 'chat' ? chatCount : t.key === 'queue' ? queueCount : 0;
+          // Chat shows no count badge — the session count lives in the
+          // sidebar header. Only the queue badge (pending/running items) shows.
+          const count = t.key === 'queue' ? queueCount : 0;
           return (
             <button
               key={t.key}
