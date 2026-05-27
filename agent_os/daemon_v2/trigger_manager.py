@@ -477,6 +477,11 @@ class TriggerManager:
                 "trigger_name": trigger_name,
                 "timestamp": now_iso,
             })
+        except ValueError as e:
+            # Single-slot guard (start_agent): another session holds the
+            # project's active-loop slot, so this trigger is blocked this cycle.
+            # Not an error — skip quietly without broadcasting trigger.fired.
+            logger.info("Trigger %s: not started — %s", trigger_id, e)
         except Exception:
             logger.exception("Trigger %s: failed to start agent for project %s", trigger_id, project_id)
 

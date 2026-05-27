@@ -1030,10 +1030,15 @@ class TestAgentManager:
         """
         mgr, ws, _, _, _ = self._make_manager()
 
-        # An existing "default" session for proj_lazy.
+        # An existing "default" session for proj_lazy that is IDLE (its loop
+        # task is done and it is not paused for approval) — so it does NOT hold
+        # the project's single active-loop slot. Lazy-minting a new session is
+        # only permitted when the slot is free; the cross-session-blocked case
+        # (an active holder) is covered by tests/regression/test_slot_enforcement.py.
         existing_session = MagicMock(name="default_session")
+        existing_session._paused_for_approval = False
         existing_task = MagicMock()
-        existing_task.done.return_value = False
+        existing_task.done.return_value = True
         # config_snapshot must be a real dict — _write_state json-serializes it.
         existing_handle = MagicMock(
             session=existing_session, task=existing_task,

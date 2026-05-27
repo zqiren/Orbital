@@ -289,6 +289,16 @@ class AgentManager:
             # Stale handle: clean up
             del self._handles[sk]
 
+        # Cross-session slot guard: a project has at most one active-loop slot.
+        # Enforced HERE (not just at the inject route) so EVERY caller is
+        # covered — HTTP /agents/start, the queue dispatcher's inject_message,
+        # triggers, and internal auto-starts. session_id is already resolved
+        # (None → DEFAULT_SESSION_ID above), so a None-session caller is checked
+        # too. See REPORT-subagent-leak-and-slot-gap.md Q4.
+        holder = self.current_holder_session_id(project_id)
+        if holder is not None and holder != session_id:
+            raise ValueError(f"Slot held by session {holder}")
+
         # Guard: check platform capabilities (skip for NullProvider / no isolation)
         if self._platform_provider is not None:
             caps = self._platform_provider.get_capabilities()
@@ -2565,6 +2575,16 @@ class AgentManager:
                 )
                 self._idle_poll_tasks[project_id] = poll_task
             else:
+                # No busy sub-agents — reap any alive-but-idle process(es).
+                # is_idle()==True means the turn (and, under the current
+                # architecture, the task) finished, so the process must be torn
+                # down rather than left to leak. This callback is synchronous,
+                # so schedule the async reap. Belt-and-suspenders for the case
+                # where the idle-poll was never registered (sub-agents reported
+                # idle at loop-done). See REPORT-subagent-leak-and-slot-gap.md.
+                asyncio.ensure_future(
+                    self._reap_sub_agents(project_id, session_id=session_id)
+                )
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -2575,6 +2595,30 @@ class AgentManager:
             # Allow system sleep again if no agents remain.
             self._allow_sleep_if_idle()
         return callback
+
+    async def _reap_sub_agents(self, project_id: str,
+                               session_id: str | None = None) -> None:
+        """Stop (reap) a session's sub-agents at a turn boundary.
+
+        Called when no busy sub-agent remains. `stop_all` tears down each
+        adapter (adapter.stop → transport.stop → SIGTERM/SIGKILL). Bounded so a
+        wedged transport never blocks the caller; a no-op when the session has
+        no sub-agents.
+        """
+        try:
+            await asyncio.wait_for(
+                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "stop_all timed out reaping sub-agents for %s", project_id
+            )
+        except Exception:
+            logger.warning(
+                "stop_all raised reaping sub-agents for %s", project_id,
+                exc_info=True,
+            )
 
     async def _check_sub_agents_done(self, project_id: str, *,
                                      session_id: str | None = None) -> None:
@@ -2590,6 +2634,9 @@ class AgentManager:
 
             handle = self._handles.get(sk)
             if handle is None or handle.session.is_stopped():
+                # Handle gone (or session stopped) but sub-agents may still be
+                # alive — reap them so the process doesn't orphan.
+                await self._reap_sub_agents(project_id, session_id=session_id)
                 return
 
             # A new loop started — stop polling, loop callback will handle status
@@ -2601,6 +2648,8 @@ class AgentManager:
             )
             busy = [a for a in active if a.get("status") != "idle"]
             if not busy:
+                # Turn finished (sub-agents alive-but-idle) — reap before idling.
+                await self._reap_sub_agents(project_id, session_id=session_id)
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,

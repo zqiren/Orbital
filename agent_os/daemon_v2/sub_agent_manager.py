@@ -860,10 +860,19 @@ class SubAgentManager:
 
     def list_active(self, project_id: str, *,
                     session_id: str | None = None) -> list[dict]:
-        """Return [{'handle', 'display_name', 'status'}, ...] for a session."""
+        """Return [{'handle', 'display_name', 'status'}, ...] for a session.
+
+        Lazily evicts dead adapters: an adapter is otherwise removed only by
+        ``stop()``, so a sub-agent process that exits on its own would leave a
+        stale entry forever (REPORT-is-idle-and-adapter-lifecycle.md Q6).
+        ``is_alive()==False`` means the process is gone, so the entry is popped
+        as we scan; an emptied SessionKey bucket is dropped too.
+        """
         session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
+        sk = make_session_key(project_id, session_id)
+        adapters = self._adapters.get(sk, {})
         result = []
+        dead: list[str] = []
         for handle, adapter in adapters.items():
             if adapter.is_alive():
                 result.append({
@@ -871,6 +880,13 @@ class SubAgentManager:
                     "display_name": getattr(adapter, "display_name", handle),
                     "status": "running" if not adapter.is_idle() else "idle",
                 })
+            else:
+                dead.append(handle)
+        for handle in dead:
+            adapters.pop(handle, None)
+            logger.debug("cleaned stale adapter %s for %s", handle, sk)
+        if not adapters:
+            self._adapters.pop(sk, None)
         return result
 
     def get_transcript(self, project_id: str, handle: str):

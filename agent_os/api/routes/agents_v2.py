@@ -720,35 +720,13 @@ async def inject_message(project_id: str, req: InjectRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Slot enforcement guard (Track J Phase 1, per ACTIVE-session-and-queue-model.md §3
-    # and INVESTIGATION-slot-enforcement-surface.md §5).
-    #
-    # When the caller explicitly addresses a session_id and that is NOT the
-    # session currently holding the project's active-loop slot, reject with
-    # 202 Accepted and a structured `slot_held` payload. The frontend renders
-    # an intermediate notice; future Phase 2 will turn 202 into "queued for
-    # later dispatch" without changing the status code (forward-compat).
-    #
-    # Cases that proceed normally (no guard fires):
-    #   - session_id is absent (backward compat — old clients keep working)
-    #   - no session currently holds the slot (project idle / never started)
-    #   - the requested session matches the holder (same-session continuation)
-    #
-    # Sub-agent dispatches happen INSIDE the holding session's turn and do
-    # not consume a separate slot, so we apply the guard regardless of
-    # `req.target`: a /inject with target= addressed to a non-holding
-    # session would still be a cross-session attempt to start a turn.
-    if req.session_id is not None:
-        holder = _agent_manager.current_holder_session_id(project_id)
-        if holder is not None and holder != req.session_id:
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "status": "slot_held",
-                    "holding_session_id": holder,
-                    "message": "Another session in this project is currently running.",
-                },
-            )
+    # Single-slot enforcement now lives at the MANAGER level: start_agent()
+    # raises ValueError("Slot held by session …") when a different session
+    # holds the project's active-loop slot, so every caller is covered (HTTP,
+    # dispatcher, triggers, internal auto-starts) — not just this route. The
+    # route's only job is to translate that rejection into the 202 `slot_held`
+    # response the frontend's SlotHeldNotice expects (see below, around the
+    # inject_message call). See REPORT-subagent-leak-and-slot-gap.md Q4.
 
     # Build the ``<attached_files>...</attached_files>`` prefix BEFORE the branch split so
     # both the management-agent branch and the sub-agent branch see the
@@ -826,10 +804,28 @@ async def inject_message(project_id: str, req: InjectRequest):
         # The prefix is part of effective_content; agent_manager.inject_message
         # itself does not learn about attachments — see PR description for the
         # deliberate v1 audit-field asymmetry.
-        result = await _agent_manager.inject_message(
-            project_id, effective_content, nonce=req.nonce,
-            session_id=req.session_id,
-        )
+        try:
+            result = await _agent_manager.inject_message(
+                project_id, effective_content, nonce=req.nonce,
+                session_id=req.session_id,
+            )
+        except ValueError:
+            # The manager rejected the inject — most commonly because another
+            # session holds the project's active-loop slot (start_agent raised).
+            # Translate that into the same 202 `slot_held` payload the frontend
+            # expects, instead of a 500. Re-check the holder to confirm it is a
+            # genuine slot conflict; re-raise anything else.
+            holder = _agent_manager.current_holder_session_id(project_id)
+            if holder is not None and holder != req.session_id:
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "slot_held",
+                        "holding_session_id": holder,
+                        "message": "Another session in this project is currently running.",
+                    },
+                )
+            raise
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,
         # includes status + approval_dismissed + dismissed_tool_call_id).
