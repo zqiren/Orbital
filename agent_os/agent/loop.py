@@ -722,6 +722,18 @@ class AgentLoop:
                         # Store result for observation-aware hash
                         _exec_result = result
 
+                        # yield_turn: a dispatch tool that delivered a task to a
+                        # sub-agent ends the management turn immediately so the
+                        # LLM cannot busy-poll it (which trips the ping-pong
+                        # guard). The result is already appended above
+                        # (tool_call_id paired), so resolve_pending_tool_calls
+                        # will not CANCEL it. The sub-agent's result is pushed
+                        # back later via on_completed and the loop restarts.
+                        if result.meta and result.meta.get("yield_turn"):
+                            logger.info("yield_turn: dispatch tool ended the management turn")
+                            exit_outer = True
+                            break
+
                         # Pause if credential was requested (wait for user input)
                         if result.meta and result.meta.get("credential_request"):
                             self._session.pause()

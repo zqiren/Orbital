@@ -561,10 +561,10 @@ class PromptBuilder:
 
         lines = ["## Sub-Agent Coordination\n"]
         lines.append("You coordinate sub-agents via the agent_message tool. Key behaviors:")
-        lines.append("- agent_message(send) returns IMMEDIATELY. It does NOT wait for the sub-agent to finish.")
+        lines.append("- agent_message(send) returns IMMEDIATELY and ENDS YOUR TURN. You cannot send another message or poll in the same turn.")
+        lines.append("- After dispatching, WAIT. You are AUTOMATICALLY RESUMED with a [Sub-agent] system message when the sub-agent completes or errors — you do not need to (and cannot) poll for it.")
         lines.append("- Sub-agent output goes directly to the user's chat. You do not see it in your conversation.")
-        lines.append("- You are notified via [Sub-agent] system messages when sub-agents complete or error.")
-        lines.append('- To check progress: agent_message(action="status", agent="handle")')
+        lines.append('- Do NOT call agent_message(action="status") in a loop to wait — that does nothing useful and wastes a turn. Use status only if the user explicitly asks about progress.')
         lines.append("- To see detailed output: read the transcript file path from the notification message.")
         lines.append("- Sub-agent results appear as file changes in the workspace. Use the read tool to inspect.\n")
 

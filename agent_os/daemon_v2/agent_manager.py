@@ -1149,6 +1149,34 @@ class AgentManager:
                                   queue_state=queue_state)
             return "started"
 
+        # WAIT-STATE QUEUE: if the management agent is in the "waiting" state —
+        # it dispatched a sub-agent, yielded its turn, and the idle-poll is
+        # alive while the sub-agent works — a new user message must NOT start a
+        # loop. The agent is busy; on_completed owns the restart and will
+        # surface this message when the sub-agent finishes. Append it and
+        # return "queued". See TASK-yield-turn-dispatch-and-push-coordination.md.
+        poll_task = self._idle_poll_tasks.get(project_id)
+        if poll_task is not None and not poll_task.done():
+            user_msg = {
+                "role": "user",
+                "content": content,
+                "source": "user",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if nonce:
+                user_msg["nonce"] = nonce
+            handle.session.append(user_msg)
+            self._broadcast(project_id, {
+                "type": "chat.user_message",
+                "project_id": project_id,
+                "content": content,
+            }, session_id=session_id)
+            logger.info(
+                "inject_message(%s): queued user message during waiting state",
+                project_id,
+            )
+            return {"status": "queued", "session_id": session_id}
+
         if handle.task is not None and handle.task.done():
             try:
                 exc = handle.task.exception()

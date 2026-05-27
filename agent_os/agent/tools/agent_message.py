@@ -88,7 +88,20 @@ class AgentMessageTool(Tool):
                         )
                     )
                 result = await self.sub_agent_manager.send(self.project_id, agent, message)
-                return ToolResult(content=result)
+                # A failed dispatch (e.g. agent not running) must NOT yield —
+                # surface the error so the LLM can start the agent and retry.
+                if isinstance(result, str) and result.startswith("Error"):
+                    return ToolResult(content=result)
+                # Successful dispatch: delivering a task ends the management
+                # turn (yield_turn). The send is non-blocking; the sub-agent's
+                # result is pushed back later via on_completed and the loop
+                # restarts. Yielding here prevents the LLM from busy-polling the
+                # sub-agent (which trips the ping-pong guard). See
+                # docs/investigations/REPORT-dispatch-yield-and-push.md.
+                return ToolResult(
+                    content=f"Dispatched to {agent}. Awaiting completion. {result}",
+                    meta={"yield_turn": True},
+                )
 
             if action == "stop":
                 result = await self.sub_agent_manager.stop(self.project_id, agent)
