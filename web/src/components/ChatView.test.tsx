@@ -27,6 +27,12 @@ import { createRoot, type Root } from 'react-dom/client';
 const apiCalls: string[] = [];
 const apiWithTotalCalls: string[] = [];
 
+// Configurable /chat responses keyed by whether the request is the initial
+// page (no offset) or a "Load earlier" page (offset present). Tests set these
+// to drive ChatView's transform-once history rendering (FE-1/FE-2/FE-3).
+let chatInitialResponse: { data: unknown[]; total: number } = { data: [], total: 0 };
+let chatOlderResponse: { data: unknown[]; total: number } = { data: [], total: 0 };
+
 // Configurable run-status holder. fetchHolder() and the run-status poll read
 // /run-status; tests set this to drive the slot-holder comparison that gates
 // live-event rendering. null = no holder.
@@ -53,6 +59,12 @@ vi.mock('../config', () => ({
   }),
   apiWithTotal: vi.fn(async (path: string) => {
     apiWithTotalCalls.push(path);
+    // /chat?limit=... is the history fetch. An `offset=` param marks a
+    // "Load earlier" page; otherwise it's the initial page.
+    if (path.includes('/chat?limit=')) {
+      if (path.includes('offset=')) return chatOlderResponse;
+      return chatInitialResponse;
+    }
     return { data: [], total: 0 };
   }),
   ApiError: class ApiError extends Error {},
@@ -156,6 +168,8 @@ beforeEach(() => {
   startAgentCalls.length = 0;
   injectMessageMock = async () => undefined;
   runStatusHolder = null;
+  chatInitialResponse = { data: [], total: 0 };
+  chatOlderResponse = { data: [], total: 0 };
   queueState = 'idle';
   stopQueueMock.mockClear();
   resetWs();
@@ -801,5 +815,227 @@ describe('T6 ChatView: queue-active composer gating', () => {
     await flushEffects();
     expect(container.querySelector('textarea')).toBeTruthy();
     expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeNull();
+  });
+});
+
+// ─── Frontend chat-rendering fixes (FE-1 / FE-2 / FE-3) ────────────────────
+
+const TS = '2026-05-08T10:00:00Z';
+const TS2 = '2026-05-08T10:00:01Z';
+const TS3 = '2026-05-08T10:00:02Z';
+const TS4 = '2026-05-08T10:00:03Z';
+
+function tc(id: string, name: string, args = '{}') {
+  return { id, type: 'function', function: { name, arguments: args } };
+}
+
+describe('FE-3 ChatView: trailing capsule spinner reflects active-running state', () => {
+  it('idle session ending on a tool result renders a completed capsule (no spinner)', async () => {
+    // A historical/idle session whose final turn ended on tool activity.
+    // The viewed session is NOT the holder (runStatusHolder null + idle), so
+    // isActivelyRunning is false → the trailing capsule must be completed.
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          reasoning_content: 'reading',
+          tool_calls: [tc('c1', 'read')],
+        },
+        { role: 'tool', content: 'r1', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+      ],
+      total: 3,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    const capsule = container.querySelector('[data-testid="agent_run"]');
+    expect(capsule).toBeTruthy();
+    expect(capsule?.getAttribute('data-capsule-status')).toBe('completed');
+    // No running spinner anywhere in the capsule.
+    expect(capsule?.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('idle session ending on a system message renders a completed capsule (no spinner)', async () => {
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          tool_calls: [tc('c1', 'agent_message')],
+        },
+        { role: 'tool', content: 'unknown', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'system', content: 'Repetitive action detected.', source: 'management', timestamp: TS4 },
+      ],
+      total: 4,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    const capsule = container.querySelector('[data-testid="agent_run"]');
+    expect(capsule).toBeTruthy();
+    expect(capsule?.getAttribute('data-capsule-status')).toBe('completed');
+    expect(capsule?.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('actively-running holder session keeps the trailing capsule running (spinner shown)', async () => {
+    // The viewed session IS the holder and the agent is running →
+    // isActivelyRunning true → trailing capsule stays running with a spinner.
+    runStatusHolder = 's1';
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          reasoning_content: 'working',
+          tool_calls: [tc('c1', 'shell')],
+        },
+        { role: 'tool', content: 'r1', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+      ],
+      total: 3,
+    };
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    const capsule = container.querySelector('[data-testid="agent_run"]');
+    expect(capsule).toBeTruthy();
+    expect(capsule?.getAttribute('data-capsule-status')).toBe('running');
+    expect(capsule?.querySelector('.animate-spin')).toBeTruthy();
+  });
+});
+
+describe('FE-2 ChatView: content-null reasoning turns auto-expand', () => {
+  it('renders the reasoning text by default for a content-null turn with reasoning', async () => {
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          reasoning_content: 'REASONING-PREVIEW-XYZ deciding which file to read',
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
+        },
+        { role: 'tool', content: 'file body', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
+      ],
+      total: 4,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // The capsule's reasoning is visible without the user expanding it.
+    expect(container.textContent ?? '').toContain('REASONING-PREVIEW-XYZ');
+  });
+
+  it('does NOT auto-expand a content-null turn that has no reasoning', async () => {
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          tool_calls: [tc('c1', 'read', '{"path":"secret.txt"}')],
+        },
+        { role: 'tool', content: 'TOOL-RESULT-HIDDEN', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
+      ],
+      total: 4,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // The capsule is collapsed by default → the tool result content (only
+    // shown when a row is expanded) is not in the DOM.
+    expect(container.textContent ?? '').not.toContain('TOOL-RESULT-HIDDEN');
+  });
+});
+
+describe('FE-1 ChatView: transform-once pairs tool results across page seams', () => {
+  it('pairs a boundary tool result after "Load earlier" instead of dropping it', async () => {
+    // Initial page (most-recent 50) starts with the tool result whose
+    // tool_call lives in the OLDER page. With per-page transform this result
+    // would be an orphan and dropped; transform-once on the full raw list
+    // pairs it correctly once both pages are loaded.
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        // Boundary tool result (its call is in the older page).
+        { role: 'tool', content: 'SEAM-RESULT-CONTENT', source: 'management', timestamp: TS3, tool_call_id: 'seam' },
+        { role: 'assistant', content: 'continuing', source: 'management', timestamp: TS4 },
+      ],
+      // total must exceed loadedOffset (CHAT_PAGE_SIZE=50) so hasMore is true
+      // and the "Load earlier" button renders.
+      total: 60,
+    };
+    chatOlderResponse = {
+      data: [
+        { role: 'user', content: 'older question', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          reasoning_content: 'reading across the seam',
+          tool_calls: [tc('seam', 'read', '{"path":"seam.txt"}')],
+        },
+      ],
+      total: 60,
+    };
+
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // Before loading earlier, the boundary result has no matching call → it is
+    // an orphan and not paired into any capsule (capsule render shows it only
+    // when paired). The "Load earlier" button is present because hasMore.
+    const loadMoreBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').toLowerCase().includes('load earlier'),
+    ) as HTMLButtonElement | undefined;
+    expect(loadMoreBtn).toBeTruthy();
+
+    await act(async () => {
+      loadMoreBtn!.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    // After the older page loads, the full raw list is transformed once and
+    // the seam tool_call_row is paired with its result. Expand the capsule to
+    // surface the paired result content.
+    const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
+    expect(capsule).toBeTruthy();
+    // The reasoning auto-expands (content-null turn). The capsule's first
+    // button is its header (expand/collapse the whole capsule); the tool-call
+    // rows are the subsequent buttons. Expand each tool row (skipping the
+    // header so we don't collapse the capsule) to reveal the paired result.
+    const buttons = Array.from(capsule!.querySelectorAll('button')) as HTMLButtonElement[];
+    const toolRowButtons = buttons.slice(1); // skip the capsule header button
+    await act(async () => {
+      for (const b of toolRowButtons) {
+        if (!b.disabled) b.click();
+      }
+      await Promise.resolve();
+    });
+
+    // The paired result content is now surfaced — proving the seam tool result
+    // was paired (received), not dropped as an orphan.
+    expect(container.textContent ?? '').toContain('SEAM-RESULT-CONTENT');
   });
 });

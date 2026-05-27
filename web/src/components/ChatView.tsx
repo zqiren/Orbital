@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -219,21 +219,11 @@ function markLatestLiveCallResultReceived(
   return prev;
 }
 
-// chatTransform emits status:'running' for each chunk's tail capsule —
-// fine when the chunk truly is the live tail, but on pagination earlier
-// chunks' tails end up mid-history and stay incorrectly running. Sweep
-// any non-trailing 'running' capsule down to 'completed'. The last item
-// is left alone so a genuinely live capsule keeps its running status.
-function reconcileTrailingRunning(items: DisplayItem[]): DisplayItem[] {
-  let changed = false;
-  const next: DisplayItem[] = items.map((it, idx) => {
-    if (it.type !== 'agent_run' || it.status !== 'running') return it;
-    if (idx === items.length - 1) return it;
-    changed = true;
-    return { ...it, status: 'completed' as const };
-  });
-  return changed ? next : items;
-}
+// FE-1/FE-3: the legacy `reconcileTrailingRunning` sweep is gone. With the
+// transform-once approach (full raw history in one pass) there are no
+// non-trailing 'running' capsules to sweep, and the trailing capsule's status
+// is now decided at source by `transformChatHistory`'s `isActivelyRunning`
+// flag — so no post-pass reconciliation is needed.
 
 const CHAT_PAGE_SIZE = 50;
 const REST_FALLBACK_DELAY_MS = 500;
@@ -311,6 +301,18 @@ interface PendingApproval {
 }
 
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId }: ChatViewProps) {
+  // FE-1 (transform-once): loaded chat history is stored as RAW messages
+  // across all paginated pages (initial page + each "Load earlier" prepend),
+  // then transformed in a SINGLE pass via the useMemo below. This eliminates
+  // the per-page transform's page-boundary tool-result drops and stranded
+  // pending tool-calls — the transform always sees the complete conversation.
+  //
+  // `items` remains the render/live state: it is seeded from the memoized
+  // history transform whenever history (re)loads, and live WS handlers
+  // continue to mutate it incrementally (live capsule appends, optimistic
+  // user messages, sub-agent messages, finalize-on-idle, etc.). The live tail
+  // therefore layers on top of the transform-once history.
+  const [rawMessages, setRawMessages] = useState<ChatMessageType[]>([]);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -414,6 +416,36 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     (holderSessionId === null ? agentIsActive : sessionId === holderSessionId);
   const viewingHolderRef = useRef(viewingHolder);
   viewingHolderRef.current = viewingHolder;
+
+  // FE-3: the trailing open capsule is only genuinely "running" when the
+  // viewed session is the one actively executing. Historical/idle sessions
+  // (including non-holder sessions and idle holders) finalize their trailing
+  // capsule as `completed` so they never show a perpetual spinner.
+  const isActivelyRunning = viewingHolder && agentStatus === 'running';
+
+  // FE-1: single-pass transform of the FULL accumulated raw history. Re-runs
+  // only when the raw history, workspace, or the active-running flag changes.
+  // The result seeds `items` (see effect below); live WS events then mutate
+  // `items` on top of this baseline.
+  const historyItems = useMemo(
+    () => transformChatHistory(rawMessages, project.workspace, isActivelyRunning),
+    [rawMessages, project.workspace, isActivelyRunning],
+  );
+
+  // Seed the render/live `items` from the transform-once history whenever that
+  // baseline changes (initial load, session switch, "Load earlier" prepend, or
+  // an isActivelyRunning flip). Live handlers mutate `items` afterward; the
+  // catch-up fetch on idle recovers any tail not yet persisted to history.
+  //
+  // Gate on a non-empty history: when there is no loaded history (empty
+  // session, or the post-/new reset), `items` is owned entirely by the live
+  // overlay (e.g. the "New session started" notice). Clearing `items` for an
+  // empty session is handled explicitly in the load effect, so the seed here
+  // must not stomp a live-only overlay back to [].
+  useEffect(() => {
+    if (historyItems.length === 0) return;
+    setItems(historyItems);
+  }, [historyItems]);
 
   /**
    * REST fallback: fetch the latest assistant message from the REST API.
@@ -577,6 +609,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (sessionId === undefined) {
       // No active session resolved yet — clear and show the (non-loading)
       // empty state. Reset pagination so a later session load starts fresh.
+      // Clearing rawMessages re-seeds `items` to [] via the history memo.
+      setRawMessages([]);
       setItems([]);
       setStream(null);
       setApprovals(new Map());
@@ -604,13 +638,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
         if (chatResult) {
           const { data: messages, total } = chatResult;
-          const transformed = reconcileTrailingRunning(
-            transformChatHistory(messages, project.workspace),
-          );
-          setItems(transformed);
+          // FE-1: store RAW messages; the transform-once memo turns them into
+          // DisplayItems and seeds `items`. No per-page transform here.
+          setRawMessages(messages);
+          // Empty history: seed effect is gated on non-empty, so clear `items`
+          // here explicitly. Non-empty history is seeded by the effect.
+          if (messages.length === 0) setItems([]);
           setTotalMessages(total);
           setLoadedOffset(CHAT_PAGE_SIZE);
         } else {
+          setRawMessages([]);
           setItems([]);
         }
       } finally {
@@ -645,11 +682,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}&offset=${loadedOffset}${sessionParam}`,
       );
       if (messages.length === 0) return;
-      const transformed = transformChatHistory(messages, project.workspace);
+      // FE-1: prepend the older RAW messages to the accumulated history. The
+      // transform-once memo re-runs on the FULL concatenated list, so a
+      // tool-call/result pair straddling the page seam is paired correctly
+      // (no orphan drops, no stranded pending rows). The memo result re-seeds
+      // `items` via its effect.
       // Stash prevHeight; the useLayoutEffect on `items` will compensate
       // synchronously after the prepended DOM has committed.
       pendingPrependPrevHeightRef.current = prevHeight;
-      setItems(prev => reconcileTrailingRunning([...transformed, ...prev]));
+      setRawMessages(prev => [...messages, ...prev]);
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
@@ -727,6 +768,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (!viewing) return;
       // WS event is the single source of truth for session swap
       wasRunningRef.current = false;
+      // Clear the accumulated raw history first so the transform-once memo
+      // re-seeds `items` to [] (matching the reset), then overlay the notice.
+      setRawMessages([]);
       setItems([{
         type: 'agent_notify' as const,
         title: 'New session started',
@@ -1193,6 +1237,33 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop += el.scrollHeight - prevHeight;
+  }, [items]);
+
+  // FE-2: capsules from content-null assistant turns that carried reasoning
+  // (the agent did tool work and "said" nothing visible) carry
+  // defaultExpanded:true from the transform. Seed their capsule_id into
+  // expandedCapsules so the reasoning shows by default instead of a bare
+  // collapsed capsule. Each id is seeded at most once (tracked in a ref) so a
+  // user who collapses it stays collapsed — we never force it back open.
+  const seededDefaultExpandRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const toSeed: string[] = [];
+    for (const it of items) {
+      if (
+        it.type === 'agent_run' &&
+        it.defaultExpanded &&
+        !seededDefaultExpandRef.current.has(it.capsule_id)
+      ) {
+        toSeed.push(it.capsule_id);
+      }
+    }
+    if (toSeed.length === 0) return;
+    for (const id of toSeed) seededDefaultExpandRef.current.add(id);
+    setExpandedCapsules((prev) => {
+      const next = new Set(prev);
+      for (const id of toSeed) next.add(id);
+      return next;
+    });
   }, [items]);
 
   // Auto-scroll to bottom only when a NEW message arrives at the tail.

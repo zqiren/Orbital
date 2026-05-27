@@ -320,6 +320,256 @@ describe('transformChatHistory — tool result pairing (NEW)', () => {
   });
 });
 
+function system(content: string, timestamp = TS): ChatMessage {
+  return {
+    role: 'system',
+    content,
+    source: 'management',
+    timestamp,
+  };
+}
+
+describe('transformChatHistory — FE-1 transform-once across page boundaries', () => {
+  // The FE-1 fix accumulates raw messages across pages and transforms the FULL
+  // concatenated list once. These tests assert the transform-once property:
+  // a tool-call/tool-result pair split across what would be a page boundary is
+  // paired correctly when the full raw list is transformed together.
+
+  it('pairs a tool result whose tool_call is in the prior page (no orphan drop)', () => {
+    // Simulate a 100-message conversation. The page boundary at limit=50 would
+    // split the assistant tool_call (msg 49) from its tool result (msg 51).
+    // page1 = messages 0..49, page2 = messages 50..99.
+    const page1: ChatMessage[] = [];
+    for (let n = 0; n < 49; n++) {
+      page1.push(user(`q${n}`, TS));
+      page1.push(asst({ content: `a${n}`, timestamp: TS2 }));
+    }
+    // msg 49 (end of page 1): assistant emits a tool call, no result yet here.
+    page1.push(
+      asst({
+        content: null,
+        reasoning_content: 'reading the file across the seam',
+        tool_calls: [tc('seam', 'read', '{"path":"seam.txt"}')],
+        timestamp: TS3,
+      }),
+    );
+
+    const page2: ChatMessage[] = [
+      // msg 51 (start of page 2): the matching tool result.
+      tool('seam', 'SEAM RESULT CONTENT', TS4),
+      asst({ content: 'continuing', timestamp: TS5 }),
+    ];
+
+    // Transform-once on the full concatenated list (page1 + page2).
+    const items = transformChatHistory([...page1, ...page2]);
+
+    // Walk every capsule child looking for the seam tool_call_row and assert
+    // its result was paired in (not dropped, not pending).
+    let found: { result_content: string | null; result_status: string } | null = null;
+    for (const it of items) {
+      if (it.type === 'agent_run') {
+        for (const child of it.items) {
+          if (child.type === 'tool_call_row' && child.tool_call_id === 'seam') {
+            found = { result_content: child.result_content, result_status: child.result_status };
+          }
+        }
+      }
+    }
+    expect(found).not.toBeNull();
+    expect(found!.result_status).toBe('received');
+    expect(found!.result_content).toBe('SEAM RESULT CONTENT');
+  });
+
+  it('boundary tool_call resolves to received (not stuck pending) once both pages are present', () => {
+    // page1 ends with an assistant tool_call; page2 begins with its result.
+    const page1: ChatMessage[] = [
+      user('start', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('b1', 'shell', '{"command":"ls"}')],
+        timestamp: TS2,
+      }),
+    ];
+    const page2: ChatMessage[] = [tool('b1', 'file listing', TS3)];
+
+    // Transform-once on the full concatenated list.
+    const items = transformChatHistory([...page1, ...page2]);
+    let row: { result_status: string; result_content: string | null } | null = null;
+    for (const it of items) {
+      if (it.type === 'agent_run') {
+        for (const child of it.items) {
+          if (child.type === 'tool_call_row' && child.tool_call_id === 'b1') {
+            row = { result_status: child.result_status, result_content: child.result_content };
+          }
+        }
+      }
+    }
+    expect(row).not.toBeNull();
+    expect(row!.result_status).toBe('received');
+    expect(row!.result_content).toBe('file listing');
+  });
+});
+
+describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunning)', () => {
+  it('list ending on a system message finalizes the trailing capsule as completed when not actively running', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        reasoning_content: 'reason',
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'r1', TS3),
+      system('Repetitive action detected.', TS4),
+    ];
+
+    const items = transformChatHistory(messages, undefined, false);
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.status).toBe('completed');
+      // ended_at is set (not null) for a completed capsule.
+      expect(capsule.ended_at).not.toBeNull();
+    }
+  });
+
+  it('same list with isActivelyRunning=true keeps the trailing capsule running', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        reasoning_content: 'reason',
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'r1', TS3),
+      system('Repetitive action detected.', TS4),
+    ];
+
+    const items = transformChatHistory(messages, undefined, true);
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.status).toBe('running');
+      expect(capsule.ended_at).toBeNull();
+    }
+  });
+
+  it('list ending on a tool result finalizes as completed when not actively running', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'r1', TS3),
+    ];
+
+    const items = transformChatHistory(messages, undefined, false);
+    const capsule = items.find(i => i.type === 'agent_run');
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.status).toBe('completed');
+    }
+  });
+
+  it('list ending on a visible assistant text closes the capsule as completed regardless of the flag', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        reasoning_content: 'reason',
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'r1', TS3),
+      asst({ content: 'all done', timestamp: TS4 }),
+    ];
+
+    // Even with isActivelyRunning=true, the capsule was already closed by the
+    // trailing visible-text assistant message, so it is completed.
+    const itemsRunning = transformChatHistory(messages, undefined, true);
+    const capsuleRunning = itemsRunning.find(i => i.type === 'agent_run');
+    if (capsuleRunning && capsuleRunning.type === 'agent_run') {
+      expect(capsuleRunning.status).toBe('completed');
+    }
+
+    const itemsIdle = transformChatHistory(messages, undefined, false);
+    const capsuleIdle = itemsIdle.find(i => i.type === 'agent_run');
+    if (capsuleIdle && capsuleIdle.type === 'agent_run') {
+      expect(capsuleIdle.status).toBe('completed');
+    }
+  });
+
+  it('defaults isActivelyRunning to false (idle behavior) when omitted', () => {
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'shell')], timestamp: TS }),
+    ];
+    const items = transformChatHistory(messages);
+    const capsule = items.find(i => i.type === 'agent_run');
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.status).toBe('completed');
+    }
+  });
+});
+
+describe('transformChatHistory — FE-2 auto-expand reasoning for content-null turns', () => {
+  it('content:null with reasoning_content and tool_calls → capsule.defaultExpanded is true', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        reasoning_content: 'I need to read the config file...',
+        tool_calls: [tc('c1', 'read', '{"path":"config"}')],
+        timestamp: TS,
+      }),
+    ];
+
+    const items = transformChatHistory(messages);
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.defaultExpanded).toBe(true);
+    }
+  });
+
+  it('content present with reasoning_content and tool_calls → capsule.defaultExpanded is false', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: "Here's what I found",
+        reasoning_content: 'some thinking',
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS,
+      }),
+    ];
+
+    const items = transformChatHistory(messages);
+    // Visible text emits an agent_message; the machinery still forms a capsule.
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.defaultExpanded).toBe(false);
+    }
+  });
+
+  it('content:null with no reasoning_content but tool_calls → capsule.defaultExpanded is false', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read')],
+        timestamp: TS,
+      }),
+    ];
+
+    const items = transformChatHistory(messages);
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.defaultExpanded).toBe(false);
+    }
+  });
+});
+
 describe('truncateResult', () => {
   it('returns short input as-is with no footer', () => {
     const r = truncateResult('hello world');
