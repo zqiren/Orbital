@@ -27,7 +27,6 @@ from agent_os.api.routes.agents_v2 import (
     cancel_message,
     deny,
     new_session,
-    stop_agent,
 )
 
 
@@ -53,7 +52,6 @@ def _mgr():
     m = MagicMock()
     m.new_session = AsyncMock(return_value={"status": "ok"})
     m.cancel_message = AsyncMock(return_value={"status": "cancelled"})
-    m.stop_agent = AsyncMock()
     m.approve = AsyncMock()
     m.deny = AsyncMock()
     return m
@@ -75,12 +73,9 @@ async def test_cancel_forwards_session_id():
     assert m.cancel_message.await_args.kwargs.get("session_id") == "sess_abc"
 
 
-@pytest.mark.asyncio
-async def test_stop_forwards_session_id():
-    m = _mgr()
-    with _Globals(_agent_manager=m, _ws_manager=MagicMock()):
-        await stop_agent("proj", SessionScopedRequest(session_id="sess_abc"))
-    assert m.stop_agent.await_args.kwargs.get("session_id") == "sess_abc"
+# NOTE: test_stop_forwards_session_id removed — the POST /stop route was removed
+# (stop_agent is now an internal AgentManager method, not an HTTP endpoint). The
+# route-removed coverage lives in tests/integration/test_stop_removed.py.
 
 
 @pytest.mark.asyncio
