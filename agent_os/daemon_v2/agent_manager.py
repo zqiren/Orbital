@@ -98,7 +98,13 @@ class AgentManager:
         # callers route through ``DEFAULT_SESSION_ID`` automatically via
         # ``_resolve_session_id`` + ``make_session_key``.
         self._handles: dict[SessionKey, ProjectHandle] = {}
-        self._idle_poll_tasks: dict[str, asyncio.Task] = {}  # project_id -> poll task
+        # ``_idle_poll_tasks`` is keyed by ``SessionKey`` so each session in
+        # a project has its own poll task. Under the single-slot invariant
+        # only one entry per project is ever alive at a time, but keying by
+        # SessionKey keeps state aligned with ``_handles`` and prevents a
+        # second session from silently overwriting the first's poll task if
+        # the slot ever races.
+        self._idle_poll_tasks: dict[SessionKey, asyncio.Task] = {}
         # Per-session record of the most recent terminal event (error /
         # stopped / new_session). Lives outside `_handles` so it survives
         # handle pop on /stop. Cleared by `_clear_last_terminal_event`
@@ -436,8 +442,8 @@ class AgentManager:
             )
 
         # 6-7. Observers
-        session.on_append = self._on_message(project_id)
-        session.on_stream = self._on_stream(project_id)
+        session.on_append = self._on_message(project_id, session_id)
+        session.on_stream = self._on_stream(project_id, session_id)
 
         # 8. Workspace files
         workspace_files = WorkspaceFileManager(config.workspace)
@@ -1157,7 +1163,7 @@ class AgentManager:
         # loop. The agent is busy; on_completed owns the restart and will
         # surface this message when the sub-agent finishes. Append it and
         # return "queued". See TASK-yield-turn-dispatch-and-push-coordination.md.
-        poll_task = self._idle_poll_tasks.get(project_id)
+        poll_task = self._idle_poll_tasks.get(make_session_key(project_id, session_id))
         if poll_task is not None and not poll_task.done():
             user_msg = {
                 "role": "user",
@@ -1238,11 +1244,11 @@ class AgentManager:
            at an approval boundary but the session is logically still
            "in" the turn. A new turn from another session would clash
            with the pending approval decision.
-        3. ``_idle_poll_tasks[project_id]`` is alive — the main loop has
-           exited but sub-agents spawned during the turn are still working
-           (the ``waiting`` state). A concurrent turn from another session
-           would interleave workspace writes with the still-running
-           sub-agents.
+        3. ``_idle_poll_tasks[(project_id, session_id)]`` is alive — the
+           main loop has exited but sub-agents spawned during the turn are
+           still working (the ``waiting`` state). A concurrent turn from
+           another session would interleave workspace writes with the
+           still-running sub-agents.
 
         Condition 1 covers ``running``. Condition 2 covers
         ``pending_approval``. Condition 3 covers ``waiting``. Together
@@ -1264,7 +1270,7 @@ class AgentManager:
             if handle.session._paused_for_approval:
                 return sid
             # Condition 3: sub-agents still working (waiting state).
-            poll_task = self._idle_poll_tasks.get(project_id)
+            poll_task = self._idle_poll_tasks.get(make_session_key(pid, sid))
             if poll_task is not None and not poll_task.done():
                 return sid
         return None
@@ -1344,7 +1350,7 @@ class AgentManager:
         if handle.task is not None and not handle.task.done():
             return "running"
         # Check for sub-agents
-        poll_task = self._idle_poll_tasks.get(project_id)
+        poll_task = self._idle_poll_tasks.get(make_session_key(project_id, session_id))
         if poll_task is not None and not poll_task.done():
             return "waiting"
         return "idle"
@@ -1649,7 +1655,7 @@ class AgentManager:
 
             # Waiting state: main loop exited but sub-agents are still working
             # (idle-poll alive). /cancel must stop them, not no-op.
-            poll_task = self._idle_poll_tasks.get(project_id)
+            poll_task = self._idle_poll_tasks.get(make_session_key(project_id, session_id))
             has_poll = poll_task is not None and not poll_task.done()
             if has_poll:
                 await self._stop_sub_agents(project_id, session_id=session_id)
@@ -1699,11 +1705,13 @@ class AgentManager:
         """Cancel idle-poll and stop all sub-agents for a project. Idempotent.
 
         Shared by ``stop_agent`` (full teardown) and ``cancel_message``
-        (turn interrupt). ``_idle_poll_tasks`` is keyed by bare ``project_id``
-        (NOT ``SessionKey``), so the pop uses ``project_id`` directly.
+        (turn interrupt). ``_idle_poll_tasks`` is keyed by ``SessionKey`` so
+        each session's poll task is tracked independently — the pop here
+        targets only the calling session's poll.
         """
+        session_id = self._resolve_session_id(session_id)
         # Cancel idle poll task if running
-        poll_task = self._idle_poll_tasks.pop(project_id, None)
+        poll_task = self._idle_poll_tasks.pop(make_session_key(project_id, session_id), None)
         if poll_task and not poll_task.done():
             poll_task.cancel()
 
@@ -1951,7 +1959,7 @@ class AgentManager:
             elif handle.task is not None and not handle.task.done():
                 status = "running"
             else:
-                poll_task = self._idle_poll_tasks.get(project_id)
+                poll_task = self._idle_poll_tasks.get(make_session_key(pid, sid))
                 if poll_task is not None and not poll_task.done():
                     status = "waiting"
                 else:
@@ -2249,8 +2257,8 @@ class AgentManager:
                 fallback_models=snap.get("fallback_models", []),
             )
 
-        new_session.on_append = self._on_message(project_id)
-        new_session.on_stream = self._on_stream(project_id)
+        new_session.on_append = self._on_message(project_id, session_id)
+        new_session.on_stream = self._on_stream(project_id, session_id)
 
         cm = handle.context_manager
         if hasattr(cm, "_session"):
@@ -2479,16 +2487,25 @@ class AgentManager:
             "source": "management",
         }, session_id=session_id)
 
-    def _on_message(self, project_id: str):
-        """Returns callback for session.on_append."""
+    def _on_message(self, project_id: str, session_id: str):
+        """Returns callback for session.on_append.
+
+        ``session_id`` is captured in the closure and forwarded to the
+        translator so the WebSocket ``agent.activity`` / ``agent.status_summary``
+        events carry it. Without it the frontend cannot attribute the event
+        to a specific session and falls back to the holder heuristic, which
+        races with holder resolution.
+        """
         def callback(msg):
-            self._activity_translator.on_message(msg, project_id)
+            self._activity_translator.on_message(msg, project_id, session_id=session_id)
         return callback
 
-    def _on_stream(self, project_id: str):
+    def _on_stream(self, project_id: str, session_id: str):
         """Returns callback for session.on_stream."""
         def callback(chunk):
-            self._activity_translator.on_stream_chunk(chunk, project_id, "management")
+            self._activity_translator.on_stream_chunk(
+                chunk, project_id, "management", session_id=session_id,
+            )
         return callback
 
     _MAX_IDLE_POLLS = 150  # 5 minutes at 2s intervals
@@ -2603,7 +2620,7 @@ class AgentManager:
                 poll_task = asyncio.ensure_future(
                     self._check_sub_agents_done(project_id, session_id=session_id)
                 )
-                self._idle_poll_tasks[project_id] = poll_task
+                self._idle_poll_tasks[make_session_key(project_id, session_id)] = poll_task
             else:
                 # No busy sub-agents — reap any alive-but-idle process(es).
                 # is_idle()==True means the turn (and, under the current

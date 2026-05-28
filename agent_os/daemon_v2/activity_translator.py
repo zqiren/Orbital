@@ -118,8 +118,15 @@ class ActivityTranslator:
         """Return the last extracted status summary for a project."""
         return self._last_status.get(project_id)
 
-    def on_message(self, message: dict, project_id: str) -> None:
-        """Translate session messages to WS events."""
+    def on_message(self, message: dict, project_id: str,
+                   *, session_id: str | None = None) -> None:
+        """Translate session messages to WS events.
+
+        ``session_id`` is included in every emitted event so the frontend
+        can attribute each event to the correct session. Without it,
+        multi-session projects route by holder heuristic and race during
+        holder resolution.
+        """
         role = message.get("role")
         source = message.get("source", "management")
 
@@ -132,6 +139,7 @@ class ActivityTranslator:
                 self._ws.broadcast(project_id, {
                     "type": "agent.status_summary",
                     "project_id": project_id,
+                    "session_id": session_id,
                     "summary": status,
                     "timestamp": _now(),
                 })
@@ -167,6 +175,7 @@ class ActivityTranslator:
                 self._ws.broadcast(project_id, {
                     "type": "agent.activity",
                     "project_id": project_id,
+                    "session_id": session_id,
                     "id": uuid4().hex,
                     "category": category,
                     "description": description,
@@ -183,6 +192,7 @@ class ActivityTranslator:
             self._ws.broadcast(project_id, {
                 "type": "agent.activity",
                 "project_id": project_id,
+                "session_id": session_id,
                 "id": uuid4().hex,
                 "category": "tool_result",
                 "description": "Tool result received",
@@ -195,6 +205,7 @@ class ActivityTranslator:
             self._ws.broadcast(project_id, {
                 "type": "chat.user_message",
                 "project_id": project_id,
+                "session_id": session_id,
                 "content": message.get("content", ""),
                 "nonce": message.get("nonce", ""),
                 "timestamp": message.get("timestamp") or _now(),
@@ -204,6 +215,7 @@ class ActivityTranslator:
             self._ws.broadcast(project_id, {
                 "type": "agent.activity",
                 "project_id": project_id,
+                "session_id": session_id,
                 "id": uuid4().hex,
                 "category": "agent_output",
                 "description": (message.get("content", "") or "")[:100],
@@ -212,7 +224,8 @@ class ActivityTranslator:
                 "timestamp": _now(),
             })
 
-    def on_stream_chunk(self, chunk, project_id: str, source: str) -> None:
+    def on_stream_chunk(self, chunk, project_id: str, source: str,
+                        *, session_id: str | None = None) -> None:
         """Broadcast chat.stream_delta with monotonic seq number."""
         is_final = getattr(chunk, "is_final", False)
 
@@ -232,11 +245,20 @@ class ActivityTranslator:
         if is_final:
             self._stream_seq[project_id] = 0
 
-    def on_network_blocked(self, project_id: str, domain: str, method: str) -> None:
-        """Broadcast network_blocked event from platform provider."""
+    def on_network_blocked(self, project_id: str, domain: str, method: str,
+                           *, session_id: str | None = None) -> None:
+        """Broadcast network_blocked event from platform provider.
+
+        The platform observer runs project-scoped (not session-scoped), so
+        ``session_id`` is typically ``None`` here — the field is included
+        for shape consistency with other ``agent.activity`` events. The
+        frontend filter passes events with falsy session_id through, so a
+        ``None`` value still surfaces in the viewed session.
+        """
         self._ws.broadcast(project_id, {
             "type": "agent.activity",
             "project_id": project_id,
+            "session_id": session_id,
             "id": uuid4().hex,
             "category": "network_blocked",
             "description": f"Blocked {method} request to {domain}",

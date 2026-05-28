@@ -536,6 +536,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
    * already present (dedup by tool_call_id). No-ops on network error.
    */
   const fetchPendingApproval = useCallback(() => {
+    // Scope the recovery to the viewed session. Without this, the backend
+    // resolves to the default-session sentinel and silently misses approvals
+    // pending in non-default sessions.
+    const viewed = sessionIdRef.current;
+    const qs = viewed ? `?session_id=${encodeURIComponent(viewed)}` : '';
     api<{
       pending: boolean;
       tool_call_id?: string;
@@ -544,7 +549,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       what?: string;
       recent_activity?: ChatMessageType[];
       reasoning?: string;
-    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`)
+    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval${qs}`)
       .then((result) => {
         if (!result.pending || !result.tool_call_id) return;
         // The pending approval belongs to the (single) holder session. Only
@@ -941,6 +946,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
+      // Session-id filter (additive): when the backend tags the event with
+      // session_id, drop events that don't belong to the viewed session.
+      // Legacy events without session_id fall through to the holder check.
+      if (e.session_id && e.session_id !== sessionIdRef.current) return;
       if (!viewingHolderRef.current) return;
 
       // agent_output activities duplicate sub-agent messages already
@@ -985,6 +994,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalRequest(event: WebSocketEvent) {
       const e = event as ApprovalRequestEvent;
       if (e.project_id !== projectId) return;
+      // Session-id filter (additive): drop events not for the viewed session.
+      if (e.session_id && e.session_id !== sessionIdRef.current) return;
       // Approvals pertain to the slot holder. Only surface the card when the
       // viewed session is the holder.
       if (!viewingHolderRef.current) return;
@@ -1020,6 +1031,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalResolved(event: WebSocketEvent) {
       const e = event as ApprovalResolvedEvent;
       if (e.project_id !== projectId) return;
+      if (e.session_id && e.session_id !== sessionIdRef.current) return;
 
       setApprovals((prev) => {
         const next = new Map(prev);
@@ -1034,6 +1046,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleSubAgentMessage(event: WebSocketEvent) {
       const e = event as SubAgentMessageEvent;
       if (e.project_id !== projectId) return;
+      if (e.session_id && e.session_id !== sessionIdRef.current) return;
       if (!viewingHolderRef.current) return;
 
       // Strip ANSI codes and filter empty / "(no response)" content

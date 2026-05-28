@@ -86,6 +86,8 @@ class TestGetRunStatus:
 
         poll_task = MagicMock()
         poll_task.done.return_value = False
-        manager._idle_poll_tasks["proj_1"] = poll_task
+        # _idle_poll_tasks is keyed by SessionKey (project_id, session_id);
+        # the bare-project_id key was a pre-multi-session relic.
+        manager._idle_poll_tasks[("proj_1", "default")] = poll_task
 
         assert manager.get_run_status("proj_1") == "waiting"

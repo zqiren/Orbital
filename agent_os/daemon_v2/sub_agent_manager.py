@@ -331,7 +331,8 @@ class SubAgentManager:
             return self._ws_manager
         return getattr(self._process_manager, "_ws", None)
 
-    def _maybe_emit_claudemd_warning(self, project_id: str, workspace: str) -> None:
+    def _maybe_emit_claudemd_warning(self, project_id: str, workspace: str,
+                                     *, session_id: str | None = None) -> None:
         """Inspect workspace CLAUDE.md and emit a one-time WS banner.
 
         - Logs INFO when CLAUDE.md is present (with content hash).
@@ -379,6 +380,7 @@ class SubAgentManager:
                 ws.broadcast(project_id, {
                     "type": "workspace_claudemd_warning",
                     "project_id": project_id,
+                    "session_id": session_id,
                     "claudemd_path": info["claudemd_path"],
                     "content_hash": info["content_hash"],
                     "matched_token": info["matched_token"],
@@ -538,7 +540,7 @@ class SubAgentManager:
             # Detect workspace CLAUDE.md interference (passive surface only).
             # This is a separate side-channel concern from prompt rendering.
             try:
-                self._maybe_emit_claudemd_warning(project_id, workspace)
+                self._maybe_emit_claudemd_warning(project_id, workspace, session_id=session_id)
             except Exception:
                 logger.exception(
                     "claudemd detection failed for project=%s handle=%s",
@@ -671,6 +673,7 @@ class SubAgentManager:
                     self._process_manager._ws.broadcast(project_id, {
                         "type": "chat.sub_agent_message",
                         "project_id": project_id,
+                        "session_id": session_id,
                         "content": response,
                         "source": handle,
                         "timestamp": ts,

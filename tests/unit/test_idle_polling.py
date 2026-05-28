@@ -96,8 +96,10 @@ class TestOnLoopDoneWaiting:
 
         # Should have launched poll task
         mock_ensure.assert_called_once()
-        # Task should be stored
-        assert mgr._idle_poll_tasks.get("proj") is mock_future
+        # Task should be stored under SessionKey (project_id, session_id)
+        # after the multi-session refactor — bare project_id key was a
+        # pre-multi-session relic. See REPORT-session-id-audit.md §1.
+        assert mgr._idle_poll_tasks.get(("proj", "default")) is mock_future
 
     def test_broadcasts_idle_when_no_sub_agents(self):
         mgr, ws, sub_agent_mgr = _make_manager()
@@ -282,16 +284,16 @@ class TestStopAgentCancelsPolling:
         handle = _make_handle()
         mgr._handles[("proj", "default")] = handle
 
-        # Simulate a running poll task
+        # Simulate a running poll task keyed by SessionKey (post-refactor).
         mock_poll_task = MagicMock()
         mock_poll_task.done.return_value = False
         mock_poll_task.cancel = MagicMock()
-        mgr._idle_poll_tasks["proj"] = mock_poll_task
+        mgr._idle_poll_tasks[("proj", "default")] = mock_poll_task
 
         await mgr.stop_agent("proj")
 
         mock_poll_task.cancel.assert_called_once()
-        assert "proj" not in mgr._idle_poll_tasks
+        assert ("proj", "default") not in mgr._idle_poll_tasks
 
     @pytest.mark.asyncio
     async def test_stop_agent_no_poll_task_ok(self):

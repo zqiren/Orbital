@@ -782,6 +782,7 @@ async def inject_message(project_id: str, req: InjectRequest):
         _ws_manager.broadcast(project_id, {
             "type": "chat.sub_agent_message",
             "project_id": project_id,
+            "session_id": req.session_id,
             "content": result,
             "source": req.target,
             "timestamp": ack_ts,
@@ -796,6 +797,7 @@ async def inject_message(project_id: str, req: InjectRequest):
                 initiator="user_mention",
                 message_preview=effective_content[:100],
                 transcript_path=transcript_path,
+                session_id=req.session_id,
             )
 
         return {"status": result}
@@ -847,14 +849,24 @@ async def agent_run_status(project_id: str):
 
 
 @router.get("/agents/{project_id}/pending-approval")
-async def get_pending_approval(project_id: str):
+async def get_pending_approval(
+    project_id: str,
+    session_id: str | None = Query(default=None, description="F1 session_id; omit for default session"),
+):
     """Return the current pending approval payload, if any.
 
     Used by mobile clients to recover approval cards missed via WebSocket.
+
+    ``session_id`` scopes the recovery to a specific session. Without it,
+    both the management-agent and sub-agent lookups resolve to the
+    default-session sentinel and silently miss approvals pending in
+    non-default sessions.
     """
-    approval = _agent_manager.get_pending_approval(project_id)
+    approval = _agent_manager.get_pending_approval(project_id, session_id=session_id)
     if approval is None and _sub_agent_manager is not None:
-        approval = _sub_agent_manager.get_pending_sub_agent_approval(project_id)
+        approval = _sub_agent_manager.get_pending_sub_agent_approval(
+            project_id, session_id=session_id,
+        )
     if approval is None:
         return {"pending": False}
     return {"pending": True, **approval}
@@ -1292,7 +1304,8 @@ async def approve(project_id: str, req: ApproveRequest):
         # Try sub-agent approval path
         if _sub_agent_manager is not None:
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
-                project_id, req.tool_call_id, approved=True
+                project_id, req.tool_call_id, approved=True,
+                session_id=req.session_id,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")
@@ -1301,6 +1314,7 @@ async def approve(project_id: str, req: ApproveRequest):
     _ws_manager.broadcast(project_id, {
         "type": "approval.resolved",
         "project_id": project_id,
+        "session_id": req.session_id,
         "tool_call_id": req.tool_call_id,
         "resolution": "approved",
     })
@@ -1317,7 +1331,8 @@ async def deny(project_id: str, req: DenyRequest):
         # Try sub-agent approval path
         if _sub_agent_manager is not None:
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
-                project_id, req.tool_call_id, approved=False
+                project_id, req.tool_call_id, approved=False,
+                session_id=req.session_id,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")
@@ -1326,6 +1341,7 @@ async def deny(project_id: str, req: DenyRequest):
     _ws_manager.broadcast(project_id, {
         "type": "approval.resolved",
         "project_id": project_id,
+        "session_id": req.session_id,
         "tool_call_id": req.tool_call_id,
         "resolution": "denied",
     })

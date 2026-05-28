@@ -72,6 +72,7 @@ class ProcessManager:
                         self._ws.broadcast(project_id, {
                             "type": "chat.sub_agent_message",
                             "project_id": project_id,
+                            "session_id": session_id,
                             "content": chunk.text,
                             "source": handle,
                             "timestamp": entry["timestamp"],
@@ -82,6 +83,7 @@ class ProcessManager:
                         self._ws.broadcast(project_id, {
                             "type": "approval.request",
                             "project_id": project_id,
+                            "session_id": session_id,
                             "what": f"Sub-agent {handle} requests approval",
                             "tool_name": metadata.get("tool_name", ""),
                             "tool_call_id": metadata.get("request_id", ""),
@@ -92,7 +94,8 @@ class ProcessManager:
 
                     self._activity_translator.on_message(
                         {"role": "agent", "source": handle, "content": chunk.text, "timestamp": entry["timestamp"]},
-                        project_id
+                        project_id,
+                        session_id=session_id,
                     )
 
                 # Stream ended — fire lifecycle event

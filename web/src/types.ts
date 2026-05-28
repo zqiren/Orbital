@@ -196,6 +196,7 @@ export type ActivityCategory =
 export interface ActivityEvent {
   type: 'agent.activity';
   project_id: string;
+  session_id?: string;
   id: string;
   category: ActivityCategory;
   description: string;
@@ -214,6 +215,7 @@ export interface StatusSummaryEvent {
 export interface ApprovalRequestEvent {
   type: 'approval.request';
   project_id: string;
+  session_id?: string;
   what: string;
   tool_name: string;
   tool_call_id: string;
@@ -225,6 +227,7 @@ export interface ApprovalRequestEvent {
 export interface ApprovalResolvedEvent {
   type: 'approval.resolved';
   project_id: string;
+  session_id?: string;
   tool_call_id: string;
   resolution: 'approved' | 'denied';
 }
@@ -232,6 +235,7 @@ export interface ApprovalResolvedEvent {
 export interface SubAgentMessageEvent {
   type: 'chat.sub_agent_message';
   project_id: string;
+  session_id?: string;
   content: string;
   source: string;
   timestamp: string;
