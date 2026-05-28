@@ -222,7 +222,7 @@ class SubAgentManager:
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id)
 
         return f"Started {handle}"
 
@@ -597,7 +597,7 @@ class SubAgentManager:
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id)
 
         return f"Started {manifest.name}"
 
@@ -622,7 +622,7 @@ class SubAgentManager:
         transcript = self._transcripts.get((project_id, handle))
         transcript_path = transcript.filepath if transcript else "unknown"
 
-        await self._dispatch_async(adapter, project_id, handle, message)
+        await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
 
         if self._lifecycle_observer:
             await self._lifecycle_observer.on_message_routed(
@@ -630,11 +630,13 @@ class SubAgentManager:
                 initiator="management_agent",
                 message_preview=message[:100],
                 transcript_path=transcript_path,
+                session_id=session_id,
             )
 
         return f"Message sent to {handle}. Transcript: {transcript_path}"
 
-    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str) -> None:
+    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
+                              *, session_id: str | None = None) -> None:
         """Dispatch message to adapter without blocking on response.
 
         For transports that support non-blocking dispatch (SDK with queue),
@@ -678,6 +680,7 @@ class SubAgentManager:
                             project_id, handle,
                             summary=response[:200] if response else "(no output)",
                             transcript_path=transcript.filepath,
+                            session_id=session_id,
                         )
             except asyncio.CancelledError:
                 raise
@@ -692,6 +695,7 @@ class SubAgentManager:
                         self._lifecycle_observer.on_failed(
                             project_id, handle,
                             reason="background_send_exception",
+                            session_id=session_id,
                         )
                     except Exception:
                         logger.exception(

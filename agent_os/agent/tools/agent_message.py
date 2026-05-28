@@ -17,9 +17,17 @@ class AgentMessageTool(Tool):
     is_async = True  # Signal to ToolRegistry that execute is async
 
     def __init__(self, sub_agent_manager=None, project_id: str = "",
-                 max_sends_per_run: int = 10, depth: int = 0):
+                 max_sends_per_run: int = 10, depth: int = 0,
+                 session_id: str | None = None):
         self.sub_agent_manager = sub_agent_manager
         self.project_id = project_id
+        # The management session this tool instance is registered under. Threaded
+        # to every sub_agent_manager.* call so the sub-agent adapter is keyed by
+        # SessionKey(project, session_id) — list_active, stop_all, eviction,
+        # and the on_completed push all see the same bucket. Without this, a
+        # non-default management session would route sub-agents under "default"
+        # and lose them downstream (see Quick Tasks failure 2026-05-28).
+        self.session_id = session_id
         self.name = "agent_message"
         self.description = "Communicate with sub-agents: start, send, stop, list, status."
         self._max_sends_per_run = max_sends_per_run
@@ -55,11 +63,15 @@ class AgentMessageTool(Tool):
                 )
 
             if action == "list":
-                agents = self.sub_agent_manager.list_active(self.project_id)
+                agents = self.sub_agent_manager.list_active(
+                    self.project_id, session_id=self.session_id,
+                )
                 return ToolResult(content=json.dumps(agents))
 
             if action == "status":
-                status = self.sub_agent_manager.status(self.project_id, agent)
+                status = self.sub_agent_manager.status(
+                    self.project_id, agent, session_id=self.session_id,
+                )
                 return ToolResult(content=status)
 
             if action == "start":
@@ -74,6 +86,7 @@ class AgentMessageTool(Tool):
                     )
                 result = await self.sub_agent_manager.start(
                     self.project_id, agent, depth=self._depth + 1,
+                    session_id=self.session_id,
                 )
                 return ToolResult(content=result)
 
@@ -87,7 +100,10 @@ class AgentMessageTool(Tool):
                             f"Summarize what you have so far and present results to the user."
                         )
                     )
-                result = await self.sub_agent_manager.send(self.project_id, agent, message)
+                result = await self.sub_agent_manager.send(
+                    self.project_id, agent, message,
+                    session_id=self.session_id,
+                )
                 # A failed dispatch (e.g. agent not running) must NOT yield —
                 # surface the error so the LLM can start the agent and retry.
                 if isinstance(result, str) and result.startswith("Error"):
@@ -104,7 +120,9 @@ class AgentMessageTool(Tool):
                 )
 
             if action == "stop":
-                result = await self.sub_agent_manager.stop(self.project_id, agent)
+                result = await self.sub_agent_manager.stop(
+                    self.project_id, agent, session_id=self.session_id,
+                )
                 return ToolResult(content=result)
 
             return ToolResult(content=f"Error: unknown action '{action}'")

@@ -23,53 +23,61 @@ class LifecycleObserver:
         self._ws = ws_manager
 
     async def on_started(self, project_id: str, handle: str, initiator: str,
-                         transcript_path: str = "unknown") -> None:
+                         transcript_path: str = "unknown",
+                         *, session_id: str | None = None) -> None:
         """Sub-agent process spawned."""
         content = f"[Sub-agent] {handle} started (initiated by: {initiator}). Transcript: {transcript_path}"
-        await self._inject(project_id, content)
+        await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.started",
             "project_id": project_id,
             "handle": handle,
             "initiator": initiator,
+            "session_id": session_id,
         })
 
     async def on_message_routed(self, project_id: str, handle: str, initiator: str,
-                                message_preview: str, transcript_path: str) -> None:
+                                message_preview: str, transcript_path: str,
+                                *, session_id: str | None = None) -> None:
         """A message was routed to a sub-agent."""
         preview = message_preview[:100]
         if initiator == "user_mention":
             content = f'[Sub-agent] User sent @{handle}: "{preview}". Transcript: {transcript_path}'
         else:
             content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
-        await self._inject(project_id, content)
+        await self._inject(project_id, content, session_id=session_id)
 
     async def on_completed(self, project_id: str, handle: str, summary: str,
-                           transcript_path: str) -> None:
+                           transcript_path: str,
+                           *, session_id: str | None = None) -> None:
         """Sub-agent finished its current task."""
         summary_text = summary[:500] if summary else "(no output)"
         content = f"[Sub-agent] {handle} completed. Summary: {summary_text}. Transcript: {transcript_path}"
-        await self._inject(project_id, content)
+        await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,
             "handle": handle,
             "summary": summary_text,
+            "session_id": session_id,
         })
 
     async def on_error(self, project_id: str, handle: str, error: str,
-                       transcript_path: str) -> None:
+                       transcript_path: str,
+                       *, session_id: str | None = None) -> None:
         """Sub-agent encountered an error."""
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
-        await self._inject(project_id, content)
+        await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.error",
             "project_id": project_id,
             "handle": handle,
             "error": error,
+            "session_id": session_id,
         })
 
-    def on_failed(self, project_id: str, handle: str, reason: str) -> None:
+    def on_failed(self, project_id: str, handle: str, reason: str,
+                  *, session_id: str | None = None) -> None:
         """Sub-agent adapter transitioned into broken state (e.g. background_send exception).
 
         Synchronous by design — safe to call from exception handlers without
@@ -84,13 +92,23 @@ class LifecycleObserver:
             "project_id": project_id,
             "handle": handle,
             "reason": reason,
+            "session_id": session_id,
         })
 
-    async def _inject(self, project_id: str, content: str) -> None:
-        """Inject a system message into the management agent's session."""
+    async def _inject(self, project_id: str, content: str,
+                      *, session_id: str | None = None) -> None:
+        """Inject a system message into the management agent's session.
+
+        ``session_id`` carries the management session that owns this sub-agent
+        so the push lands under the correct SessionKey (the handle that ran
+        the dispatch). Without it, inject_system_message defaults to the
+        single-loop sentinel and can miss a non-default management session.
+        """
         if self._agent_manager is None:
             return
         try:
-            await self._agent_manager.inject_system_message(project_id, content)
+            await self._agent_manager.inject_system_message(
+                project_id, content, session_id=session_id,
+            )
         except Exception as e:
             logger.warning("Failed to inject lifecycle message for %s: %s", project_id, e)

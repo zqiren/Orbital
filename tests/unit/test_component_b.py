@@ -777,8 +777,10 @@ class TestAgentMessageToolWithManager:
         result = await tool.execute(action="list")
 
         assert isinstance(result, ToolResult)
-        # Should have called list_active on manager with project_id
-        mock_manager.list_active.assert_called_with("proj_123")
+        # session_id kwarg is threaded so the manager scopes to the right
+        # SessionKey bucket. None here = no explicit management session,
+        # resolved to DEFAULT_SESSION_ID inside the manager.
+        mock_manager.list_active.assert_called_with("proj_123", session_id=None)
 
     @pytest.mark.asyncio
     async def test_start_without_agent_returns_error(self):

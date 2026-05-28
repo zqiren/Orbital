@@ -347,7 +347,8 @@ class AgentManager:
         # 2. Tool registry
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
-                             vision_enabled=model_info.capabilities.vision)
+                             vision_enabled=model_info.capabilities.vision,
+                             session_id=session_id)
 
         # 3. Prompt builder
         prompt_builder = PromptBuilder(workspace=config.workspace)
@@ -644,7 +645,8 @@ class AgentManager:
         await self._ensure_dispatcher(project_id, config.workspace)
 
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
-                        project_id: str = "", vision_enabled: bool = False) -> None:
+                        project_id: str = "", vision_enabled: bool = False,
+                        *, session_id: str | None = None) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
         # Queue signal tools — always registered, used by the queue dispatcher
         # to detect attempt completion. Detection happens at response-parsing
@@ -701,7 +703,7 @@ class AgentManager:
             pass
         try:
             from agent_os.agent.tools.agent_message import AgentMessageTool
-            registry.register(AgentMessageTool(sub_agent_manager=self._sub_agent_manager, project_id=project_id, depth=0))
+            registry.register(AgentMessageTool(sub_agent_manager=self._sub_agent_manager, project_id=project_id, depth=0, session_id=session_id))
         except ImportError:
             pass
         try:
