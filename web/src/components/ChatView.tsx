@@ -422,19 +422,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const viewingHolderRef = useRef(viewingHolder);
   viewingHolderRef.current = viewingHolder;
 
-  // FE-3: the trailing open capsule is only genuinely "running" when the
-  // viewed session is the one actively executing. Historical/idle sessions
-  // (including non-holder sessions and idle holders) finalize their trailing
-  // capsule as `completed` so they never show a perpetual spinner.
+  // FE-3 / FE-A1: the trailing open capsule is only genuinely "running" when
+  // the viewed session is the one actively executing. This is applied at
+  // RENDER time below (see the agent_run case) — NOT fed into the transform —
+  // so a status flip never invalidates the memo. Keeping this out of the memo
+  // deps is what prevents the idle transition from wiping live overlay items
+  // (FE-A1).
   const isActivelyRunning = viewingHolder && agentStatus === 'running';
 
-  // FE-1: single-pass transform of the FULL accumulated raw history. Re-runs
-  // only when the raw history, workspace, or the active-running flag changes.
-  // The result seeds `items` (see effect below); live WS events then mutate
-  // `items` on top of this baseline.
+  // FE-1 / FE-A1: single-pass transform of the FULL accumulated raw history.
+  // Deps are purely the source data (rawMessages + workspace) — status flips
+  // do NOT trigger a re-seed. The result seeds `items` only when history
+  // (re)loads; live WS events then mutate `items` on top of this baseline.
   const historyItems = useMemo(
-    () => transformChatHistory(rawMessages, project.workspace, isActivelyRunning),
-    [rawMessages, project.workspace, isActivelyRunning],
+    () => transformChatHistory(rawMessages, project.workspace),
+    [rawMessages, project.workspace],
   );
 
   // Seed the render/live `items` from the transform-once history whenever that
@@ -514,6 +516,43 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           // REST fetch failed — best effort
         });
     }, REST_FALLBACK_DELAY_MS);
+  }, [projectId]);
+
+  // Track the loaded-offset synchronously so the idle-refresh below sees the
+  // current pagination depth without depending on state from a closure.
+  // Mirrored from `loadedOffset` state on every render.
+  const loadedOffsetRef = useRef(loadedOffset);
+  loadedOffsetRef.current = loadedOffset;
+
+  /**
+   * FE-A1: refresh the latest N raw messages from the backend after a
+   * running→idle transition so the just-finished turn's persisted lines
+   * (assistant w/ tool_calls, tool results, [Sub-agent] lifecycle markers)
+   * land in `rawMessages` before the memo re-runs. Without this, the seed
+   * effect overwrites `items` with stale historyItems and the live overlay
+   * from WS handlers is wiped.
+   *
+   * Uses `limit=max(loadedOffset, CHAT_PAGE_SIZE)` so any pages the user
+   * loaded via "Load earlier" stay covered. Scoped to the session captured
+   * at call time — if the user switches sessions mid-fetch, the response is
+   * dropped.
+   */
+  const refreshRawMessages = useCallback(() => {
+    const sid = sessionIdRef.current;
+    if (sid === undefined) return;
+    const targetLimit = Math.max(loadedOffsetRef.current, CHAT_PAGE_SIZE);
+    const url = `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${targetLimit}&session_id=${encodeURIComponent(sid)}`;
+    apiWithTotal<ChatMessageType[]>(url)
+      .then(({ data, total }) => {
+        // Guard against session switch during the in-flight fetch.
+        if (sessionIdRef.current !== sid) return;
+        setRawMessages(data);
+        setTotalMessages(total);
+        setLoadedOffset(Math.min(targetLimit, data.length || targetLimit));
+      })
+      .catch(() => {
+        // best-effort refresh; the seed remains the prior history
+      });
   }, [projectId]);
 
   const scrollToBottom = useCallback(() => {
@@ -755,16 +794,28 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // (A stopped/cancelled agent reports as `idle` — there is no separate
       // `stopped` run status.)
       setIsCancelling(false);
-      if (!viewing) return;
+      // Clear the thinking indicator and catch up the latest message even
+      // when `viewing` is false. Reason: under multi-session, the holder
+      // fetch racing with the running→idle transition can collapse
+      // `viewingHolder` to false in the same tick the idle event arrives —
+      // leaving the spinner stuck and the final reply unfetched on the
+      // session that actually ran. These two cleanups are about loop state,
+      // not the visible chat surface, so they are safe to run unconditionally.
+      // See docs/investigations/INVESTIGATION-thinking-stuck-after-dispatch.md
+      // (Option 1).
       setShowThinking(false);
-      const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
-      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
-      // Catch-up fetch: if the agent was running, fetch the latest message
-      // in case streaming deltas were entirely missed (tunnel down, etc.)
       if (wasRunningRef.current) {
         wasRunningRef.current = false;
         fetchLatestMessage();
+        // FE-A1: refresh raw history so the just-finished turn's persisted
+        // assistant/tool/[Sub-agent] lines reach the memo. Without this, the
+        // live overlay items get wiped on the next seed without a backing
+        // history line to replace them.
+        refreshRawMessages();
       }
+      if (!viewing) return;
+      const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
+      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
     } else if (agentStatus === 'running') {
       if (!viewing) return;
       wasRunningRef.current = true;
@@ -794,7 +845,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setTotalMessages(0);
       setLoadedOffset(0);
     }
-  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval]);
+  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval, refreshRawMessages]);
 
   // Cancel timeout fallback: if the loop hasn't actually idled within 10s
   // of the Stop click, clear the in-flight affordance and surface a
@@ -946,11 +997,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
-      // Session-id filter (additive): when the backend tags the event with
-      // session_id, drop events that don't belong to the viewed session.
-      // Legacy events without session_id fall through to the holder check.
-      if (e.session_id && e.session_id !== sessionIdRef.current) return;
-      if (!viewingHolderRef.current) return;
+      // FE-A4: when the event carries `session_id` (the modern path since
+      // audit cd3325d), trust it — equality with the viewed session is the
+      // authoritative gate and does NOT collapse to false during the
+      // management-yield / lifecycle-restart gap the way viewingHolder does.
+      // Legacy events with no session_id fall back to the holder gate so
+      // cross-session bleed-through is still prevented.
+      if (e.session_id) {
+        if (e.session_id !== sessionIdRef.current) return;
+      } else if (!viewingHolderRef.current) {
+        return;
+      }
 
       // agent_output activities duplicate sub-agent messages already
       // delivered via chat.sub_agent_message — drop them.
@@ -1046,8 +1103,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleSubAgentMessage(event: WebSocketEvent) {
       const e = event as SubAgentMessageEvent;
       if (e.project_id !== projectId) return;
-      if (e.session_id && e.session_id !== sessionIdRef.current) return;
-      if (!viewingHolderRef.current) return;
+      // FE-A4: see handleActivity — session_id when present is authoritative;
+      // legacy events fall back to viewingHolder. The previous holder-only
+      // gate dropped sub-agent replies during the management-yield gap.
+      if (e.session_id) {
+        if (e.session_id !== sessionIdRef.current) return;
+      } else if (!viewingHolderRef.current) {
+        return;
+      }
 
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -1236,6 +1299,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // status + items.length lets the auto-scroll fire on each child append
       // and again on status flip from running → completed.
       return `agent_run:${item.capsule_id}:${item.status}:${item.items.length}`;
+    }
+    if (item.type === 'sub_agent_activity') {
+      return `sub_agent_activity:${item.timestamp}:${item.handle}:${item.action}`;
     }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
@@ -1828,6 +1894,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
+            } else if (item.type === 'sub_agent_activity') {
+              // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
+              const label =
+                item.action === 'started' ? 'started' :
+                item.action === 'sent' ? `sent: ${item.preview ?? ''}` :
+                item.action === 'completed' ? `completed${item.summary ? `: ${item.summary}` : ''}` :
+                /* failed */ `failed${item.error ? `: ${item.error}` : ''}`;
+              const tone = item.action === 'failed' ? 'text-error/80' : 'text-secondary';
+              rendered = (
+                <div
+                  key={`sa-${index}`}
+                  data-testid="sub-agent-activity"
+                  data-action={item.action}
+                  className={`flex items-baseline gap-2 px-2 py-1 text-[11.5px] font-mono ${tone}`}
+                >
+                  <span className="text-primary">{item.handle}</span>
+                  <span className="truncate">{label}</span>
+                </div>
+              );
             } else if (item.type === 'session_separator') {
               return (
                 <div key={`sep-${index}`} className="flex items-center gap-3 px-2 opacity-50">
@@ -1839,16 +1924,30 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 </div>
               );
             } else if (item.type === 'agent_run') {
-              const isExpanded = item.status === 'running' || expandedCapsules.has(item.capsule_id);
-              const isLocked = item.status === 'running';
-              const summary = capsuleSummaryText(item);
+              // FE-A1: trailing-capsule "running" status is a render-time
+              // derivation. The transform always emits `completed`; we
+              // upgrade to `running` only when this is the LAST item AND the
+              // viewed session is actively running. This keeps the transform
+              // pure (no status-flip re-runs that wipe the live overlay) and
+              // still shows a spinner when one is appropriate.
+              const isLastItem = index === items.length - 1;
+              const derivedStatus =
+                isLastItem && isActivelyRunning && item.status === 'completed'
+                  ? 'running'
+                  : item.status;
+              const isExpanded =
+                derivedStatus === 'running' ||
+                item.defaultExpanded === true ||
+                expandedCapsules.has(item.capsule_id);
+              const isLocked = derivedStatus === 'running';
+              const summary = capsuleSummaryText({ ...item, status: derivedStatus });
               const Chevron = isExpanded ? ChevronDown : ChevronRight;
               rendered = (
                 <div
                   key={`run-${item.capsule_id}`}
                   data-testid="agent_run"
                   data-capsule-id={item.capsule_id}
-                  data-capsule-status={item.status}
+                  data-capsule-status={derivedStatus}
                   className="ml-9 flex gap-[10px]"
                 >
                   <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
@@ -1871,7 +1970,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     className={`flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
                   >
                     <Chevron size={13} className="shrink-0" />
-                    {item.status === 'running' && (
+                    {derivedStatus === 'running' && (
                       <Loader2 size={12} className="shrink-0 animate-spin" />
                     )}
                     <span className="truncate text-primary font-medium">{summary}</span>

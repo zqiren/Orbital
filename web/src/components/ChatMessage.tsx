@@ -106,17 +106,29 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     (message.type === 'agent_message' && message.source && message.source !== 'management' && message.source !== 'user');
   const senderLabel = isSubAgent && message.source ? message.source : 'agent';
 
+  // FE-A3: header-only mode. Emitted for content-null assistant turns so the
+  // capsule that follows has a visible agent anchor (avatar + sender · HH:MM)
+  // and does not visually attach to the preceding user message.
+  const isHeaderOnly =
+    message.type === 'agent_message' && message.isHeaderOnly === true;
+
   return (
-    <div className="flex gap-[10px]" title={message.timestamp}>
+    <div
+      className="flex gap-[10px]"
+      title={message.timestamp}
+      data-testid={isHeaderOnly ? 'agent-header' : undefined}
+    >
       <MessageAvatar variant="agent" />
       <div className="flex-1 min-w-0">
         <div className="font-mono text-[11px] mb-1">
           <span className="text-secondary">{senderLabel}</span>
           {time && <span className="text-muted"> · {time}</span>}
         </div>
-        <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
-          <MarkdownContent content={message.content} />
-        </div>
+        {!isHeaderOnly && (
+          <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
+            <MarkdownContent content={message.content} />
+          </div>
+        )}
       </div>
     </div>
   );

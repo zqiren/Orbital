@@ -915,18 +915,18 @@ describe('FE-3 ChatView: trailing capsule spinner reflects active-running state'
   });
 });
 
-describe('ChatView: tool-call capsules are collapsed by default', () => {
-  it('hides reasoning and tool results until the user expands the capsule', async () => {
+describe('ChatView: capsule expand-by-default behavior', () => {
+  it('a tool-only capsule (no reasoning) renders COLLAPSED on idle', async () => {
     runStatusHolder = null;
     chatInitialResponse = {
       data: [
         { role: 'user', content: 'go', source: 'user', timestamp: TS },
         {
+          // No reasoning_content — only tool calls. Capsule stays collapsed.
           role: 'assistant',
           content: null,
           source: 'management',
           timestamp: TS2,
-          reasoning_content: 'REASONING-HIDDEN-BY-DEFAULT deciding which file to read',
           tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
         },
         { role: 'tool', content: 'TOOL-RESULT-HIDDEN', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
@@ -937,10 +937,35 @@ describe('ChatView: tool-call capsules are collapsed by default', () => {
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });
     await flushEffects();
 
-    // An idle/historical content-null turn renders a COLLAPSED capsule: neither
-    // its reasoning nor its tool result is in the DOM until the user expands it.
-    expect(container.textContent ?? '').not.toContain('REASONING-HIDDEN-BY-DEFAULT');
+    // Tool result is inside the collapsed capsule body — not in the DOM.
     expect(container.textContent ?? '').not.toContain('TOOL-RESULT-HIDDEN');
+  });
+
+  it('a content-null capsule WITH reasoning renders EXPANDED on idle (FE-A3 / FE-2)', async () => {
+    runStatusHolder = null;
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'go', source: 'user', timestamp: TS },
+        {
+          role: 'assistant',
+          content: null,
+          source: 'management',
+          timestamp: TS2,
+          reasoning_content: 'REASONING-VISIBLE-BY-DEFAULT deciding which file to read',
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
+        },
+        { role: 'tool', content: 'TOOL-RESULT-VISIBLE', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
+      ],
+      total: 4,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // Reasoning makes the capsule expand by default so the user sees the
+    // thinking without having to click. Tool result inside the body is
+    // visible as a consequence.
+    expect(container.textContent ?? '').toContain('REASONING-VISIBLE-BY-DEFAULT');
   });
 });
 

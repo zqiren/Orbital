@@ -139,18 +139,29 @@ describe('transformChatHistory — capsule grouping (updated for paired results)
     const items = transformChatHistory(messages);
     const itemTypes = items.map(i => i.type);
 
+    // FE-A3: a content-null assistant turn now emits an `agent_message`
+    // header marker before opening its capsule, giving the capsule a visible
+    // agent anchor (avatar + sender · HH:MM) so it does not visually attach
+    // to the preceding user message.
     expect(itemTypes).toEqual([
       'user_message',
+      'agent_message',
       'agent_run',
       'agent_message',
     ]);
+    const header = items[1];
+    expect(header.type).toBe('agent_message');
+    if (header.type === 'agent_message') {
+      expect(header.isHeaderOnly).toBe(true);
+      expect(header.content).toBe('');
+    }
 
-    const capsule = items[1];
+    const capsule = items[2];
     if (capsule.type === 'agent_run') {
       expect(capsule.items.map(x => x.type)).toEqual([
         'reasoning_block',
         'tool_call_row',
-        'agent_message', // silent-turn marker
+        'agent_message', // silent-turn marker (inside the capsule)
         'reasoning_block',
         'tool_call_row',
       ]);
@@ -191,10 +202,14 @@ describe('transformChatHistory — capsule grouping (updated for paired results)
     const items = transformChatHistory(messages);
     const itemTypes = items.map(i => i.type);
 
+    // FE-A3: each content-null assistant turn emits an `agent_message`
+    // header marker before its capsule.
     expect(itemTypes).toEqual([
       'user_message',
+      'agent_message',
       'agent_run',
       'user_message',
+      'agent_message',
       'agent_run',
       'agent_message',
     ]);
@@ -213,8 +228,10 @@ describe('transformChatHistory — tool result pairing (NEW)', () => {
     ];
 
     const items = transformChatHistory(messages);
-    expect(items.length).toBe(1);
-    const capsule = items[0];
+    // FE-A3: header marker + capsule.
+    expect(items.length).toBe(2);
+    expect(items[0].type).toBe('agent_message');
+    const capsule = items[1];
     expect(capsule.type).toBe('agent_run');
     if (capsule.type === 'agent_run') {
       // No tool_result_inline anywhere
@@ -241,8 +258,9 @@ describe('transformChatHistory — tool result pairing (NEW)', () => {
     ];
 
     const items = transformChatHistory(messages);
-    expect(items.length).toBe(1);
-    const capsule = items[0];
+    // FE-A3: header marker + capsule.
+    expect(items.length).toBe(2);
+    const capsule = items[1];
     if (capsule.type === 'agent_run') {
       const row = capsule.items.find(x => x.type === 'tool_call_row');
       if (row && row.type === 'tool_call_row') {
@@ -269,8 +287,10 @@ describe('transformChatHistory — tool result pairing (NEW)', () => {
     ];
 
     const items = transformChatHistory(messages);
-    const capsule = items[0];
-    if (capsule.type === 'agent_run') {
+    // FE-A3: header marker precedes the capsule for content-null turns.
+    const capsule = items.find(i => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
       const rows = capsule.items.filter(x => x.type === 'tool_call_row');
       expect(rows.length).toBe(3);
       // Order is the original call order (a, b, c)
@@ -309,8 +329,9 @@ describe('transformChatHistory — tool result pairing (NEW)', () => {
     ];
 
     const items = transformChatHistory(messages);
-    const capsule = items[0];
-    if (capsule.type === 'agent_run') {
+    // FE-A3: header marker precedes the capsule.
+    const capsule = items.find(i => i.type === 'agent_run');
+    if (capsule && capsule.type === 'agent_run') {
       const row = capsule.items.find(x => x.type === 'tool_call_row');
       if (row && row.type === 'tool_call_row') {
         expect(row.result_content).toBe('');
@@ -410,8 +431,14 @@ describe('transformChatHistory — FE-1 transform-once across page boundaries', 
   });
 });
 
-describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunning)', () => {
-  it('list ending on a system message finalizes the trailing capsule as completed when not actively running', () => {
+describe('transformChatHistory — FE-A1 trailing capsule status is render-time, not transform-time', () => {
+  // The `isActivelyRunning` transform parameter was removed (FE-A1). The
+  // trailing capsule is ALWAYS finalized as `completed`; ChatView upgrades
+  // the last capsule to `running` at render time when the viewed session is
+  // actively executing. This keeps the transform a pure function of
+  // persisted history (no status-flip re-runs that wipe the live overlay).
+
+  it('list ending on a system message finalizes the trailing capsule as completed', () => {
     const messages: ChatMessage[] = [
       user('go', TS),
       asst({
@@ -424,17 +451,16 @@ describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunni
       system('Repetitive action detected.', TS4),
     ];
 
-    const items = transformChatHistory(messages, undefined, false);
+    const items = transformChatHistory(messages);
     const capsule = items.find(i => i.type === 'agent_run');
     expect(capsule).toBeDefined();
     if (capsule && capsule.type === 'agent_run') {
       expect(capsule.status).toBe('completed');
-      // ended_at is set (not null) for a completed capsule.
       expect(capsule.ended_at).not.toBeNull();
     }
   });
 
-  it('same list with isActivelyRunning=true keeps the trailing capsule running', () => {
+  it('trailing capsule is `completed` regardless of session activity (transform is pure)', () => {
     const messages: ChatMessage[] = [
       user('go', TS),
       asst({
@@ -444,15 +470,14 @@ describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunni
         timestamp: TS2,
       }),
       tool('c1', 'r1', TS3),
-      system('Repetitive action detected.', TS4),
     ];
 
-    const items = transformChatHistory(messages, undefined, true);
+    const items = transformChatHistory(messages);
     const capsule = items.find(i => i.type === 'agent_run');
     expect(capsule).toBeDefined();
     if (capsule && capsule.type === 'agent_run') {
-      expect(capsule.status).toBe('running');
-      expect(capsule.ended_at).toBeNull();
+      expect(capsule.status).toBe('completed');
+      expect(capsule.ended_at).not.toBeNull();
     }
   });
 
@@ -467,7 +492,7 @@ describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunni
       tool('c1', 'r1', TS3),
     ];
 
-    const items = transformChatHistory(messages, undefined, false);
+    const items = transformChatHistory(messages, undefined);
     const capsule = items.find(i => i.type === 'agent_run');
     if (capsule && capsule.type === 'agent_run') {
       expect(capsule.status).toBe('completed');
@@ -489,13 +514,13 @@ describe('transformChatHistory — FE-3 trailing capsule status (isActivelyRunni
 
     // Even with isActivelyRunning=true, the capsule was already closed by the
     // trailing visible-text assistant message, so it is completed.
-    const itemsRunning = transformChatHistory(messages, undefined, true);
+    const itemsRunning = transformChatHistory(messages, undefined);
     const capsuleRunning = itemsRunning.find(i => i.type === 'agent_run');
     if (capsuleRunning && capsuleRunning.type === 'agent_run') {
       expect(capsuleRunning.status).toBe('completed');
     }
 
-    const itemsIdle = transformChatHistory(messages, undefined, false);
+    const itemsIdle = transformChatHistory(messages, undefined);
     const capsuleIdle = itemsIdle.find(i => i.type === 'agent_run');
     if (capsuleIdle && capsuleIdle.type === 'agent_run') {
       expect(capsuleIdle.status).toBe('completed');
@@ -565,5 +590,171 @@ describe('truncateResult', () => {
     const r = truncateResult(content);
     expect(r.text).toBe(content);
     expect(r.footer).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------
+// FE-A2 / FE-A3 / FE-A1 contract tests (the four cases called out in the
+// implementation spec). The capsule-grouping and trailing-status tests above
+// already cover Step 1 (no isActivelyRunning) and Step 4 (header marker /
+// defaultExpanded); these tests cover Step 2 (sub-agent lifecycle parsing)
+// and a few targeted invariants the spec calls out.
+// --------------------------------------------------------------------------
+
+function sys(content: string, timestamp = TS): ChatMessage {
+  return { role: 'system', content, source: 'management', timestamp };
+}
+
+describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
+  it('parses [Sub-agent] started / sent / completed lines into sub_agent_activity items', () => {
+    const messages: ChatMessage[] = [
+      user('dispatch to claude-code', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'agent_message', '{"handle":"claude-code","action":"start"}')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'Started Claude Code', TS3),
+      sys('[Sub-agent] claude-code started (claude-code, depth 2)', TS3),
+      sys('[Sub-agent] Message sent to claude-code: list primes', TS4),
+      sys('[Sub-agent] claude-code completed. Summary: 2, 3, 5, 7, 11, 13', TS5),
+      asst({ content: 'The primes from 1-20 are: 2, 3, 5, 7, 11, 13, 17, 19.', timestamp: TS6 }),
+    ];
+
+    const items = transformChatHistory(messages);
+    const activities = items.filter(i => i.type === 'sub_agent_activity');
+    expect(activities.length).toBe(3);
+
+    const actions = activities.map(a => a.type === 'sub_agent_activity' ? a.action : '');
+    expect(actions).toEqual(['started', 'sent', 'completed']);
+
+    for (const a of activities) {
+      if (a.type === 'sub_agent_activity') {
+        expect(a.handle).toBe('claude-code');
+      }
+    }
+
+    const completed = activities[2];
+    if (completed.type === 'sub_agent_activity') {
+      expect(completed.action).toBe('completed');
+      expect(completed.summary).toBe('2, 3, 5, 7, 11, 13');
+    }
+    const sent = activities[1];
+    if (sent.type === 'sub_agent_activity') {
+      expect(sent.preview).toBe('list primes');
+    }
+
+    // The final assistant text is still rendered as the agent_message.
+    const lastAgent = [...items].reverse().find(i => i.type === 'agent_message' && !('isHeaderOnly' in i && i.isHeaderOnly));
+    expect(lastAgent).toBeDefined();
+    if (lastAgent && lastAgent.type === 'agent_message') {
+      expect(lastAgent.content).toContain('The primes from 1-20');
+    }
+  });
+
+  it('parses [Sub-agent] failed lines into sub_agent_activity with error field', () => {
+    const messages: ChatMessage[] = [
+      sys('[Sub-agent] claude-code failed: model timed out after 60s', TS),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('failed');
+      expect(a.handle).toBe('claude-code');
+      expect(a.error).toBe('model timed out after 60s');
+    }
+  });
+
+  it('non-[Sub-agent] system messages (e.g. ping-pong guard) are still dropped', () => {
+    const messages: ChatMessage[] = [
+      sys('Repetitive action detected. Save your state and try a different approach.', TS),
+      sys('Some other internal system note.', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(0);
+  });
+
+  it('an open capsule is finalized before a sub_agent_activity is emitted (chronological order preserved)', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'agent_message', '{"handle":"claude-code","action":"send"}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'Dispatched to claude-code. Awaiting completion.', TS2),
+      sys('[Sub-agent] Message sent to claude-code: hello', TS3),
+    ];
+    const items = transformChatHistory(messages);
+    // header marker, agent_run, sub_agent_activity — in that order.
+    const types = items.map(i => i.type);
+    expect(types).toEqual(['agent_message', 'agent_run', 'sub_agent_activity']);
+  });
+});
+
+describe('transformChatHistory — FE-A3 agent header for content-null turns', () => {
+  it('content-null assistant turn with reasoning produces a header + defaultExpanded capsule', () => {
+    const messages: ChatMessage[] = [
+      user('do something', TS),
+      asst({
+        content: null,
+        reasoning_content: 'I should read the file first.',
+        tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
+        timestamp: TS2,
+      }),
+    ];
+
+    const items = transformChatHistory(messages);
+    expect(items.map(i => i.type)).toEqual(['user_message', 'agent_message', 'agent_run']);
+
+    const header = items[1];
+    expect(header.type).toBe('agent_message');
+    if (header.type === 'agent_message') {
+      expect(header.isHeaderOnly).toBe(true);
+    }
+
+    const capsule = items[2];
+    expect(capsule.type).toBe('agent_run');
+    if (capsule.type === 'agent_run') {
+      expect(capsule.defaultExpanded).toBe(true);
+    }
+  });
+
+  it('content-null turn WITHOUT reasoning emits a header but capsule is NOT defaultExpanded', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
+        timestamp: TS,
+      }),
+    ];
+    const items = transformChatHistory(messages);
+    const header = items[0];
+    const capsule = items[1];
+    expect(header.type).toBe('agent_message');
+    if (header.type === 'agent_message') {
+      expect(header.isHeaderOnly).toBe(true);
+    }
+    expect(capsule.type).toBe('agent_run');
+    if (capsule.type === 'agent_run') {
+      // Falsy / absent — tool-only capsules stay collapsed by default.
+      expect(capsule.defaultExpanded).not.toBe(true);
+    }
+  });
+
+  it('an assistant turn WITH visible text does NOT emit a header marker', () => {
+    const messages: ChatMessage[] = [
+      user('hi', TS),
+      asst({ content: 'hello back', timestamp: TS2 }),
+    ];
+    const items = transformChatHistory(messages);
+    // Just user_message + agent_message (the real one). No header marker.
+    expect(items.length).toBe(2);
+    const agent = items[1];
+    if (agent.type === 'agent_message') {
+      expect(agent.isHeaderOnly).toBeUndefined();
+      expect(agent.content).toBe('hello back');
+    }
   });
 });

@@ -14,7 +14,20 @@ export interface Activity {
 
 export type DisplayItem =
   | { type: 'user_message'; content: string; timestamp: string; target?: string; isHistorical?: boolean }
-  | { type: 'agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
+  | {
+      type: 'agent_message';
+      content: string;
+      source: string;
+      timestamp: string;
+      isHistorical?: boolean;
+      /**
+       * When true, the renderer shows only the avatar + "agent · HH:MM" header
+       * row with no body. Used to give a content-null (tool-only) assistant
+       * turn a visible agent anchor above its capsule so the capsule does not
+       * visually attach to the preceding user message. See FE-A3.
+       */
+      isHeaderOnly?: boolean;
+    }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
   | {
@@ -38,8 +51,35 @@ export type DisplayItem =
       started_at: number;
       ended_at: number | null;
       isHistorical?: boolean;
+      /**
+       * When true, the renderer starts this capsule expanded so the reasoning
+       * is visible without the user having to click the chevron. Set by the
+       * transform when a content-null turn with reasoning opens the capsule.
+       * See FE-A3 / FE-2.
+       */
+      defaultExpanded?: boolean;
     }
   | { type: 'session_separator'; timestamp: string }
+  | {
+      /**
+       * A compact, one-line marker rendered in the chat flow for the daemon's
+       * [Sub-agent] lifecycle system messages — start, message-sent, completion
+       * (with summary), failure. Surfaces the persisted record that a
+       * sub-agent ran; without this, the messages are silently dropped. See
+       * FE-A2.
+       */
+      type: 'sub_agent_activity';
+      action: 'started' | 'sent' | 'completed' | 'failed';
+      handle: string;
+      timestamp: string;
+      /** Present for action='completed'. Trimmed; may be empty. */
+      summary?: string;
+      /** Present for action='sent'. The first chunk of the sent message. */
+      preview?: string;
+      /** Present for action='failed'. */
+      error?: string;
+      isHistorical?: boolean;
+    }
   | {
       type: 'approval_card';
       what: string;
@@ -206,12 +246,60 @@ interface OpenCapsule {
   items: CapsuleChild[];
   startedAtMs: number;
   endedAtMs: number;
+  defaultExpanded: boolean;
+}
+
+// [Sub-agent] lifecycle markers persisted to JSONL by the lifecycle observer.
+// Parsed and surfaced as sub_agent_activity items; without this they are
+// silently dropped along with every other non-approval system message.
+const SUB_AGENT_STARTED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+started\b/;
+const SUB_AGENT_SENT_RE = /^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):\s*(.*)$/;
+const SUB_AGENT_COMPLETED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+completed\.\s*Summary:\s*([\s\S]*)$/;
+const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
+
+type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
+
+function parseSubAgentSystemMessage(
+  content: string,
+  timestamp: string,
+): SubAgentActivity | null {
+  let m: RegExpMatchArray | null;
+  if ((m = content.match(SUB_AGENT_STARTED_RE))) {
+    return { type: 'sub_agent_activity', action: 'started', handle: m[1], timestamp };
+  }
+  if ((m = content.match(SUB_AGENT_SENT_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'sent',
+      handle: m[1],
+      preview: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_COMPLETED_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'completed',
+      handle: m[1],
+      summary: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_FAILED_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'failed',
+      handle: m[1],
+      error: m[2].trim(),
+      timestamp,
+    };
+  }
+  return null;
 }
 
 export function transformChatHistory(
   messages: ChatMessage[],
   workspace?: string,
-  isActivelyRunning = false,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
@@ -224,9 +312,9 @@ export function transformChatHistory(
     return Number.isFinite(n) ? n : 0;
   }
 
-  function openCapsuleAt(ts: string): OpenCapsule {
+  function openCapsuleAt(ts: string, defaultExpanded = false): OpenCapsule {
     const ms = tsToMs(ts);
-    return { items: [], startedAtMs: ms, endedAtMs: ms };
+    return { items: [], startedAtMs: ms, endedAtMs: ms, defaultExpanded };
   }
 
   function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
@@ -252,6 +340,7 @@ export function transformChatHistory(
       has_thinking: hasThinking,
       started_at: currentCapsule.startedAtMs,
       ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+      ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
     });
     currentCapsule = null;
   }
@@ -277,7 +366,20 @@ export function transformChatHistory(
           reasoning: msg._meta.reasoning as string | undefined,
           resolved: msg._meta.resolution as 'approved' | 'denied' | undefined,
         });
+        i++;
+        continue;
       }
+      // [Sub-agent] lifecycle markers — surface them as compact timeline rows.
+      // Finalize the open capsule first so the marker appears AFTER the
+      // capsule that contains the originating dispatch tool call (chronologic
+      // JSONL order), not inside or before it.
+      const activity = parseSubAgentSystemMessage(msg.content ?? '', msg.timestamp);
+      if (activity) {
+        finalizeCapsule();
+        items.push(activity);
+      }
+      // Other system messages (ping-pong guard, etc.) remain dropped — they
+      // are not user-facing.
       i++;
       continue;
     }
@@ -364,7 +466,26 @@ export function transformChatHistory(
       // follows the just-emitted visible text, or extends the current one.
       if (reasoning || hasTools) {
         if (!currentCapsule) {
-          currentCapsule = openCapsuleAt(msg.timestamp);
+          // FE-A3: a content-null assistant turn would otherwise produce a
+          // bare capsule with no agent identity above it, visually attaching
+          // to the preceding user message. Emit an `agent_message` header
+          // marker (rendered as avatar + "agent · HH:MM" only) so the capsule
+          // is anchored to a visible agent turn. Only emitted when we have no
+          // visible text to anchor on — `text` already covered that case.
+          if (!text) {
+            items.push({
+              type: 'agent_message',
+              content: '',
+              source: msg.source,
+              timestamp: msg.timestamp,
+              isHeaderOnly: true,
+            });
+          }
+          currentCapsule = openCapsuleAt(msg.timestamp, !!reasoning);
+        } else if (reasoning) {
+          // Reasoning added to an existing capsule still warrants the
+          // expand-by-default treatment so the user can see the thinking.
+          currentCapsule.defaultExpanded = true;
         }
         if (reasoning) {
           currentCapsule.items.push({
@@ -426,11 +547,11 @@ export function transformChatHistory(
     i++;
   }
 
-  // End of stream: any still-open capsule is in-flight only when the viewed
-  // session is actively running. Historical/idle sessions whose final turn
-  // ended on tool activity (no closing assistant text) must finalize as
-  // `completed` so they don't show a perpetual spinner (FE-3).
-  finalizeCapsule(isActivelyRunning ? 'running' : 'completed');
+  // End of stream: always finalize the trailing capsule as `completed`. The
+  // transform output is now purely a function of persisted history; the
+  // "running" status is applied at render time in ChatView (FE-A1) based on
+  // the live agentStatus + viewingHolder, so this stays a pure transform.
+  finalizeCapsule('completed');
 
   // Mark items from historical sessions
   let lastSepIndex = -1;
