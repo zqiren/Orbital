@@ -218,7 +218,7 @@ class SubAgentManager:
                 transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
                 self._transcripts[(project_id, handle)] = transcript
 
-        await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+        await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
@@ -593,7 +593,7 @@ class SubAgentManager:
         from agent_os.agent.transports.acp_transport import ACPTransport
         from agent_os.agent.transports.pipe_transport import PipeTransport
         if not isinstance(transport, (ACPTransport, PipeTransport)):
-            await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+            await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"

@@ -1586,6 +1586,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
     clearAttachments();
 
+    const optimisticTimestamp = new Date().toISOString();
     setItems((prev) => {
       const afterCapsule = finalizeLiveCapsule(prev, 'completed');
       return [
@@ -1593,11 +1594,26 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {
           type: 'user_message',
           content: wireContent,
-          timestamp: new Date().toISOString(),
+          timestamp: optimisticTimestamp,
           ...(target && { target }),
         },
       ];
     });
+    // F1: also push into rawMessages so the transform-once memo (which the
+    // seed effect re-runs whenever isActivelyRunning flips on idle→running)
+    // reproduces this bubble instead of stomping it. Without this, the very
+    // next memo run would overwrite the optimistic tail and the just-typed
+    // message would vanish until the WS echo / catch-up fetch lands.
+    setRawMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        content: wireContent,
+        source: 'user',
+        timestamp: optimisticTimestamp,
+        ...(target && { target }),
+      },
+    ]);
 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
@@ -1629,6 +1645,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           for (let i = prev.length - 1; i >= 0; i--) {
             const it = prev[i];
             if (it.type === 'user_message' && it.content === wireContent) {
+              return [...prev.slice(0, i), ...prev.slice(i + 1)];
+            }
+          }
+          return prev;
+        });
+        // F1: also strip the optimistic entry we pushed into rawMessages so
+        // the transform-once memo doesn't re-emit a phantom user bubble.
+        setRawMessages((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const m = prev[i];
+            if (m.role === 'user' && m.content === wireContent && m.timestamp === optimisticTimestamp) {
               return [...prev.slice(0, i), ...prev.slice(i + 1)];
             }
           }
@@ -2175,7 +2202,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             >
               <Plus size={18} />
             </button>
-            <span className="shrink-0 font-mono text-secondary select-none" aria-hidden>›</span>
             <textarea
               ref={textareaRef}
               value={inputText}
@@ -2256,7 +2282,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <Send size={18} />
               </button>
             )}
-            <kbd className="shrink-0 px-1 py-0.5 border border-border rounded-[3px] text-[9.5px] font-mono bg-sidebar text-secondary select-none max-md:hidden" aria-hidden>⌘↩</kbd>
           </div>
         </div>
         )}

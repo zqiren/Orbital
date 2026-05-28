@@ -28,8 +28,18 @@ class ProcessManager:
         self._lifecycle = lifecycle_observer
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
 
-    async def start(self, project_id: str, handle: str, adapter, transcript=None) -> None:
-        """Start background task consuming adapter.read_stream()."""
+    async def start(self, project_id: str, handle: str, adapter, transcript=None,
+                    *, session_id: str | None = None) -> None:
+        """Start background task consuming adapter.read_stream().
+
+        ``session_id`` is the management session that owns this sub-agent. It is
+        forwarded to every lifecycle event the consumer fires so the push lands
+        under the correct SessionKey. Without it, ``on_completed`` /
+        ``on_error`` would default to the single-loop sentinel and silently
+        drop on non-default sessions (see investigation
+        ``INVESTIGATION-2026-05-28-backend-still-broken.md`` — this is the SDK
+        transport completion path the prior fix missed).
+        """
         key = f"{project_id}:{handle}"
 
         async def consume():
@@ -42,6 +52,7 @@ class ProcessManager:
                                 project_id, handle,
                                 summary=last_response_text or "(no output)",
                                 transcript_path=transcript.filepath,
+                                session_id=session_id,
                             )
                         last_response_text = ""  # reset for next turn
                         continue
@@ -90,6 +101,7 @@ class ProcessManager:
                         project_id, handle,
                         summary=last_response_text or "(no output)",
                         transcript_path=transcript.filepath,
+                        session_id=session_id,
                     )
             except asyncio.CancelledError:
                 pass
@@ -97,6 +109,7 @@ class ProcessManager:
                 if self._lifecycle and transcript is not None:
                     await self._lifecycle.on_error(
                         project_id, handle, str(e), transcript.filepath,
+                        session_id=session_id,
                     )
 
         task = asyncio.create_task(consume())

@@ -58,9 +58,6 @@ export default function QueueComposer({
           className="flex-1 resize-none bg-transparent leading-5 text-[13px] text-primary placeholder:text-secondary/60 focus:outline-none disabled:opacity-50"
           data-testid="queue-composer-input"
         />
-        <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded border border-border bg-sidebar text-[10px] font-mono text-secondary shrink-0">
-          ⌘↩
-        </kbd>
         <button
           onClick={() => void handleSubmit()}
           disabled={!canSubmit}
