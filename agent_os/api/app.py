@@ -84,7 +84,7 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "agent_name": "Assistant",
         "workspace": scratch_workspace,
         "is_scratch": True,
-        "autonomy": "check_in",
+        "autonomy": "hands_off",
         "model": "",
         "api_key": "",
     })

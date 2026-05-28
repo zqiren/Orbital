@@ -49,7 +49,7 @@ describe('SettingsModalPage', () => {
     expect(backBtn.textContent).toContain('Back to My Test Project');
   });
 
-  it('renders the uppercase mono label and page title with project name', () => {
+  it('renders the page title with the project name and does NOT render the redundant "Project · this project only" chip', () => {
     render(
       <SettingsModalPage
         project={mockProject}
@@ -59,11 +59,12 @@ describe('SettingsModalPage', () => {
         onDelete={vi.fn()}
       />,
     );
-    // Mono label
-    expect(screen.getByText(/project · this project only/i)).toBeInTheDocument();
-    // Title
+    // The h1 carries the project name unambiguously — the mono chip that
+    // previously stacked above it ("Project · this project only") was
+    // redundant with both the back button and the h1, and has been removed.
     const title = screen.getByTestId('settings-modal-title');
     expect(title.textContent).toContain('Project settings — My Test Project');
+    expect(screen.queryByText(/project · this project only/i)).not.toBeInTheDocument();
   });
 
   it('renders the embedded SettingsView', () => {

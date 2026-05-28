@@ -238,13 +238,13 @@ export default function ApprovalCard({
         )}
 
         {!showDenyInput && (
-          <div className="flex flex-col md:flex-row gap-2 md:justify-end sticky bottom-0 md:static bg-[#FFFBF0] pt-2 md:pt-0 -mx-4 px-4 md:mx-0 md:px-0 pb-1 md:pb-0">
+          <div className="flex flex-col md:flex-row gap-2 md:justify-end pt-2 md:pt-0 pb-1 md:pb-0">
             <button
               type="button"
               onClick={handleDenyClick}
               onTouchEnd={(e) => { e.preventDefault(); handleDenyClick(); }}
               disabled={submitting}
-              className="border border-border bg-background text-secondary rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="border border-error/40 text-error bg-background rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
               Deny
             </button>

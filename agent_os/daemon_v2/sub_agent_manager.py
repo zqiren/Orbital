@@ -457,14 +457,15 @@ class SubAgentManager:
             except RuntimeError as e:
                 return f"Error: network configuration failed: {e}"
 
-        # Resolve autonomy preset for SDK transport filtering
-        autonomy = None
-        if project:
-            autonomy_str = project.get("autonomy", "check_in")
-            try:
-                autonomy = Autonomy(autonomy_str)
-            except ValueError:
-                autonomy = Autonomy.CHECK_IN
+        # Sub-agents always run with HANDS_OFF autonomy, regardless of the
+        # project's setting for the management agent. Rationale: dispatching a
+        # sub-agent IS the user's approval — the management agent (acting on
+        # the user's behalf) already decided this work should happen. Requiring
+        # a second per-tool approval inside the sub-agent breaks the
+        # unattended-queue workflow that is the product's headline feature.
+        # The user's project autonomy still applies to the management agent
+        # (see agents_v2.py:651-655).
+        autonomy = Autonomy.HANDS_OFF
 
         # --- Sub-agent inheritance: render prompt + lazily create MEMORY.md ---
         # Re-render fresh per dispatch (per spec: "Do NOT cache the rendered string").
