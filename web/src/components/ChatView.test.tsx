@@ -1023,12 +1023,16 @@ describe('FE-1 ChatView: transform-once pairs tool results across page seams', (
     // surface the paired result content.
     const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
     expect(capsule).toBeTruthy();
-    // Capsules are collapsed by default — click the header (first button) to
-    // expand the capsule and render its tool-call rows.
-    await act(async () => {
-      (capsule!.querySelector('button') as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
+    // This capsule carries reasoning, so it is expanded by default (its id is
+    // seeded into expandedCapsules) and its tool rows are already present. Only
+    // click the header to expand if it happens to be collapsed — clicking an
+    // already-expanded capsule would collapse it and hide the tool rows.
+    if (!capsule!.querySelector('.border-t')) {
+      await act(async () => {
+        (capsule!.querySelector('button') as HTMLButtonElement).click();
+        await Promise.resolve();
+      });
+    }
     // Now expand each tool row (skipping the header) to reveal the paired result.
     const toolRowButtons = (Array.from(capsule!.querySelectorAll('button')) as HTMLButtonElement[]).slice(1);
     await act(async () => {

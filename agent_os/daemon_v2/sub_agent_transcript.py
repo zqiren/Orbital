@@ -6,11 +6,137 @@
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Matches the "[Using tool: X]" text the SDK transport writes for a
+# tool_activity chunk (see process_manager.py). Captures the tool name.
+_TOOL_ACTIVITY_RE = re.compile(r"\[Using tool:\s*([^\]]+)\]")
+
+
+def _parse_ts(value) -> "datetime | None":
+    """Best-effort ISO-8601 parse; returns None on anything unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def read_sub_agent_summary(transcript_path: str) -> "dict | None":
+    """Read a sub-agent JSONL transcript and produce a capsule-shaped summary.
+
+    Returns a dict shaped::
+
+        {
+            "tool_rows": [
+                {"name": "Write", "timestamp": "...", "duration_seconds": 1.2},
+                {"name": "Bash",  "timestamp": "...", "duration_seconds": 1.8},
+                {"name": "Read",  "timestamp": "...", "duration_seconds": 0.4},
+            ],
+            "total_duration_seconds": 7.3,             # first→last chunk timestamp
+            "response": "The file already exists ...",  # last response/message chunk
+            "chunk_count": 4,
+            # Back-compat: a de-duped name list, kept for any older caller.
+            "tools_used": ["Write", "Bash", "Read"],
+            "duration_seconds": 7.3,
+        }
+
+    Tool rows are one-per-``tool_activity`` line, in chronological order. Each
+    row's ``duration_seconds`` is the gap to the next chunk (the last tool's
+    duration is the gap to the following response/turn_complete, or 0 if it is
+    the final chunk). Only the tool *name* is available — the SDK transport
+    streams ``[Using tool: X]`` with no args/results.
+
+    Returns ``None`` when the file does not exist, is empty, or contains no
+    parseable JSON lines. Malformed individual lines are skipped, not fatal.
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+
+    # Collect every parseable entry first so per-tool durations can look ahead
+    # to the next chunk's timestamp.
+    entries: list = []
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except OSError:
+        return None
+
+    if not entries:
+        return None
+
+    chunk_count = len(entries)
+    response = ""
+    tool_rows: list = []
+    tools_used: list = []
+    seen_tools: set = set()
+
+    first_ts = None
+    last_ts = None
+    for e in entries:
+        ts = _parse_ts(e.get("timestamp"))
+        if ts is not None:
+            if first_ts is None:
+                first_ts = ts
+            last_ts = ts
+
+    for idx, e in enumerate(entries):
+        chunk_type = e.get("chunk_type")
+        content = e.get("content") or ""
+
+        if chunk_type == "tool_activity":
+            m = _TOOL_ACTIVITY_RE.search(content)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            if not name:
+                continue
+            ts = _parse_ts(e.get("timestamp"))
+            next_ts = _parse_ts(entries[idx + 1].get("timestamp")) if idx + 1 < len(entries) else None
+            dur = 0.0
+            if ts is not None and next_ts is not None:
+                dur = max(0.0, (next_ts - ts).total_seconds())
+            tool_rows.append({
+                "name": name,
+                "timestamp": e.get("timestamp") or "",
+                "duration_seconds": round(dur, 1),
+            })
+            if name not in seen_tools:
+                seen_tools.add(name)
+                tools_used.append(name)
+        elif chunk_type in ("response", "message") or chunk_type is None:
+            if content:
+                response = content
+
+    total_duration_seconds = 0.0
+    if first_ts is not None and last_ts is not None:
+        total_duration_seconds = round(max(0.0, (last_ts - first_ts).total_seconds()), 1)
+
+    return {
+        "tool_rows": tool_rows,
+        "total_duration_seconds": total_duration_seconds,
+        "response": response,
+        "chunk_count": chunk_count,
+        # Back-compat aliases.
+        "tools_used": tools_used,
+        "duration_seconds": total_duration_seconds,
+    }
 
 
 class SubAgentTranscript:

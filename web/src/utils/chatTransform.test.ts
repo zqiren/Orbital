@@ -758,3 +758,110 @@ describe('transformChatHistory — FE-A3 agent header for content-null turns', (
     }
   });
 });
+
+describe('transformChatHistory — sub-agent renders as a peer agent (capsule + response)', () => {
+  it('Test 1: a source=sub_agent message produces header + agent_run capsule + response', () => {
+    const messages: ChatMessage[] = [
+      { role: 'system', content: '[Sub-agent] claude-code started ...', source: 'daemon', timestamp: TS },
+      {
+        role: 'assistant',
+        content: 'Primes are 2,3,5,7',
+        source: 'sub_agent',
+        timestamp: TS2,
+        sub_agent_handle: 'claude-code',
+        sub_agent_tool_rows: [
+          { name: 'Read', timestamp: TS2, duration_seconds: 0.5 },
+          { name: 'Write', timestamp: TS3, duration_seconds: 1.2 },
+        ],
+        sub_agent_duration: 3.1,
+      },
+      { role: 'system', content: '[Sub-agent] claude-code completed. Summary: done', source: 'daemon', timestamp: TS4 },
+    ];
+
+    const items = transformChatHistory(messages, '/workspace');
+
+    // Header agent_message carries the sub-agent handle as its source.
+    const header = items.find((i) => i.type === 'agent_message' && (i as { isHeaderOnly?: boolean }).isHeaderOnly);
+    expect(header).toBeDefined();
+    if (header && header.type === 'agent_message') {
+      expect(header.source).toBe('claude-code');
+    }
+
+    // agent_run capsule with one tool_call_row per tool.
+    const capsule = items.find((i) => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      const rows = capsule.items.filter((c) => c.type === 'tool_call_row');
+      expect(rows.map((r) => (r.type === 'tool_call_row' ? r.tool_name : ''))).toEqual(['Read', 'Write']);
+    }
+
+    // Response agent_message with the sub-agent's text and handle.
+    const resp = items.find((i) => i.type === 'agent_message' && !(i as { isHeaderOnly?: boolean }).isHeaderOnly && i.content);
+    expect(resp).toBeDefined();
+    if (resp && resp.type === 'agent_message') {
+      expect(resp.content).toBe('Primes are 2,3,5,7');
+      expect(resp.source).toBe('claude-code');
+    }
+  });
+
+  it('Test 2: the sub-agent capsule is collapsible (sub_agent_ id, completed, collapsed)', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant', content: 'done', source: 'sub_agent', timestamp: TS,
+        sub_agent_handle: 'claude-code',
+        sub_agent_tool_rows: [{ name: 'Bash', timestamp: TS, duration_seconds: 1.0 }],
+        sub_agent_duration: 1.0,
+      },
+    ];
+    const items = transformChatHistory(messages, '/workspace');
+    const capsule = items.find((i) => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.capsule_id.startsWith('sub_agent:')).toBe(true);
+      expect(capsule.status).toBe('completed');
+      expect(capsule.defaultExpanded).toBe(false);
+    }
+  });
+
+  it('Test 3: empty response renders capsule only, no response bubble', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant', content: '', source: 'sub_agent', timestamp: TS,
+        sub_agent_handle: 'codex',
+        sub_agent_tool_rows: [{ name: 'Bash', timestamp: TS, duration_seconds: 1.0 }],
+        sub_agent_duration: 1.0,
+      },
+    ];
+    const items = transformChatHistory(messages, '/workspace');
+    expect(items.some((i) => i.type === 'agent_run')).toBe(true);
+    // header agent_message is allowed (empty content + isHeaderOnly); a NON-header
+    // empty-content agent_message response must not be emitted.
+    const emptyResponse = items.find(
+      (i) => i.type === 'agent_message' && !(i as { isHeaderOnly?: boolean }).isHeaderOnly && i.content === '',
+    );
+    expect(emptyResponse).toBeUndefined();
+  });
+
+  it('a sub-agent with no tools emits header + response but no capsule', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant', content: 'just text', source: 'sub_agent', timestamp: TS,
+        sub_agent_handle: 'gemini-cli', sub_agent_tool_rows: [], sub_agent_duration: 0,
+      },
+    ];
+    const items = transformChatHistory(messages, '/workspace');
+    expect(items.some((i) => i.type === 'agent_run')).toBe(false);
+    const resp = items.find((i) => i.type === 'agent_message' && i.content === 'just text');
+    expect(resp).toBeDefined();
+    if (resp && resp.type === 'agent_message') expect(resp.source).toBe('gemini-cli');
+  });
+
+  it('does not treat a normal management assistant message as a sub-agent', () => {
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: 'hello from management', source: 'management', timestamp: TS },
+    ];
+    const items = transformChatHistory(messages, '/workspace');
+    expect(items[0].type).toBe('agent_message');
+    if (items[0].type === 'agent_message') expect(items[0].source).toBe('management');
+  });
+});

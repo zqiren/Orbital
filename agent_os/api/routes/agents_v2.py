@@ -26,6 +26,7 @@ from pydantic import BaseModel, field_validator
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
+from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.routes._attachment_formatter import (
     validate_attachments,
@@ -1472,6 +1473,57 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
     return result, total
 
 
+# Matches the "[Sub-agent] {handle} started ... Transcript: {path}" system
+# line the lifecycle observer writes into the management session JSONL. Group
+# 1 is the sub-agent handle; group 2 is the transcript path.
+_SUB_AGENT_STARTED_RE = re.compile(
+    r"^\[Sub-agent\]\s+(\S+)\s+started\b.*?Transcript:\s*(.+?)\s*$"
+)
+
+
+def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
+    """Inline a compact sub-agent run summary after each dispatch marker.
+
+    For every ``[Sub-agent] {handle} started … Transcript: {path}`` system
+    message in *messages*, read the referenced sub-agent transcript and insert
+    a synthetic ``source="sub_agent"`` message immediately after it. The
+    frontend transforms that into a distinct ``sub_agent_run`` block (tools
+    used, duration, response) so the management chat carries the durable record
+    of the sub-agent's work — not just the one-line completion summary.
+
+    Read-only and best-effort: a missing/empty transcript leaves the markers
+    untouched. Operates on whatever page was already paginated, so it never
+    changes the total-count math.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        out.append(msg)
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content") or ""
+        m = _SUB_AGENT_STARTED_RE.match(content)
+        if not m:
+            continue
+        handle, transcript_path = m.group(1), m.group(2)
+        try:
+            summary = read_sub_agent_summary(transcript_path)
+        except Exception:
+            summary = None
+        if not summary:
+            continue
+        out.append({
+            "role": "assistant",
+            "content": summary.get("response") or "",
+            "source": "sub_agent",
+            "sub_agent_handle": handle,
+            "sub_agent_tool_rows": summary.get("tool_rows", []),
+            "sub_agent_duration": summary.get("total_duration_seconds", 0.0),
+            "timestamp": msg.get("timestamp", ""),
+            "session_id": msg.get("session_id"),
+        })
+    return out
+
+
 def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None:
     """Resolve an F1 ``session_id`` to its F2 JSONL stem by scanning disk.
 
@@ -1570,6 +1622,10 @@ async def chat_history(
         messages, total = await asyncio.to_thread(
             _read_chat_messages_single, session_jsonl, limit, offset
         )
+        # Inline each dispatched sub-agent's run summary (tools/duration/
+        # response) read from its own transcript, so the management chat shows
+        # what the sub-agent actually did. Offloaded — does blocking disk I/O.
+        messages = await asyncio.to_thread(_interleave_sub_agent_summaries, messages)
         resp = JSONResponse(content=messages)
         resp.headers["X-Total-Count"] = str(total)
         return resp

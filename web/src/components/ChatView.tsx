@@ -449,9 +449,28 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // overlay (e.g. the "New session started" notice). Clearing `items` for an
   // empty session is handled explicitly in the load effect, so the seed here
   // must not stomp a live-only overlay back to [].
+  // Seed the expanded-capsules Set with every capsule the transform marked
+  // `defaultExpanded` (content-null turns whose opening reasoning should be
+  // visible without a click). Membership in this Set is the SOLE source of
+  // truth for whether a capsule is expanded — so a user chevron-click that
+  // removes the id can actually collapse it. (Previously `defaultExpanded`
+  // was OR'd into the render-time check, which made the toggle a no-op.)
+  // Seeded in the SAME effect as setItems so a default-expanded capsule never
+  // flashes collapsed for a frame before a follow-up effect expands it.
   useEffect(() => {
     if (historyItems.length === 0) return;
     setItems(historyItems);
+    setExpandedCapsules((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const item of historyItems) {
+        if (item.type === 'agent_run' && item.defaultExpanded && !next.has(item.capsule_id)) {
+          next.add(item.capsule_id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, [historyItems]);
 
   /**
@@ -1937,7 +1956,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   : item.status;
               const isExpanded =
                 derivedStatus === 'running' ||
-                item.defaultExpanded === true ||
                 expandedCapsules.has(item.capsule_id);
               const isLocked = derivedStatus === 'running';
               const summary = capsuleSummaryText({ ...item, status: derivedStatus });

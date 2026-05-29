@@ -118,7 +118,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
       title={message.timestamp}
       data-testid={isHeaderOnly ? 'agent-header' : undefined}
     >
-      <MessageAvatar variant="agent" />
+      <MessageAvatar variant="agent" agentHandle={isSubAgent ? message.source : undefined} />
       <div className="flex-1 min-w-0">
         <div className="font-mono text-[11px] mb-1">
           <span className="text-secondary">{senderLabel}</span>

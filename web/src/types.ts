@@ -117,6 +117,18 @@ export interface ChatMessage {
    */
   session_uuid?: string;
   chunk_type?: string;
+  /**
+   * Set on synthetic rows the /chat endpoint injects after a sub-agent
+   * dispatch marker (source === "sub_agent"). Carry the sub-agent's run
+   * summary read from its own transcript so the management chat renders a
+   * distinct `sub_agent_run` block. See agents_v2._interleave_sub_agent_summaries.
+   */
+  sub_agent_handle?: string;
+  /** Per-tool rows synthesized from the sub-agent transcript: one entry per
+   *  `[Using tool: X]` chunk, in chronological order. Name + duration only —
+   *  the SDK transport streams no args/results. */
+  sub_agent_tool_rows?: Array<{ name: string; timestamp: string; duration_seconds: number }>;
+  sub_agent_duration?: number;
 }
 
 export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'error' | 'new_session' | 'pending_approval';

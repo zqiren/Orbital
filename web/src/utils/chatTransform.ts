@@ -353,6 +353,81 @@ export function transformChatHistory(
       continue;
     }
 
+    // Synthetic sub-agent run injected by the /chat endpoint after a dispatch
+    // marker (source === "sub_agent"). A sub-agent is a first-class agent, so
+    // it renders with the SAME display items as the management agent: an
+    // agent header, a collapsible `agent_run` tool capsule, and a response
+    // bubble. The handle rides on `source` (drives both the name and the icon
+    // in ChatMessage). Tool rows carry name + duration only — no args/results
+    // are on the wire.
+    if (msg.source === 'sub_agent') {
+      finalizeCapsule();
+      const handle = msg.sub_agent_handle ?? 'sub-agent';
+      const startedAtMs = tsToMs(msg.timestamp);
+      const toolRows = msg.sub_agent_tool_rows ?? [];
+
+      // 1. Agent header (avatar + "<handle> · HH:MM"), no body.
+      items.push({
+        type: 'agent_message',
+        content: '',
+        source: handle,
+        timestamp: msg.timestamp,
+        isHeaderOnly: true,
+      });
+
+      // 2. Tool capsule — identical shape to a management `agent_run` so the
+      //    existing capsule renderer (chevron, expand/collapse, tool rows,
+      //    summary) works unchanged. Collapsed by default.
+      if (toolRows.length > 0) {
+        const counts: Record<string, number> = {};
+        const capsuleItems: CapsuleChild[] = [];
+        for (let r = 0; r < toolRows.length; r++) {
+          const row = toolRows[r];
+          const name = row.name || 'tool';
+          counts[name] = (counts[name] ?? 0) + 1;
+          const category = TOOL_NAME_TO_CATEGORY[name.toLowerCase()] ?? 'tool_use';
+          capsuleItems.push({
+            type: 'tool_call_row',
+            tool_name: name,
+            // No args/results available; surface the per-tool duration as the
+            // row detail (honest: "Write · 1.2s").
+            target_description: `${(row.duration_seconds ?? 0).toFixed(1)}s`,
+            tool_call_id: `sub:${handle}:${msg.timestamp}:${r}`,
+            category,
+            timestamp: row.timestamp || msg.timestamp,
+            result_content: null,
+            result_status: 'received',
+          });
+        }
+        const durationMs = Math.round((msg.sub_agent_duration ?? 0) * 1000);
+        items.push({
+          type: 'agent_run',
+          capsule_id: `sub_agent:${handle}:${msg.timestamp}:${capsuleCounter++}`,
+          status: 'completed',
+          items: capsuleItems,
+          tool_call_count_by_name: counts,
+          has_thinking: false,
+          started_at: startedAtMs,
+          ended_at: startedAtMs + durationMs,
+          defaultExpanded: false,
+        });
+      }
+
+      // 3. Response bubble (same as a management agent_message), if non-empty.
+      const respText = (msg.content ?? '').trim();
+      if (respText) {
+        items.push({
+          type: 'agent_message',
+          content: msg.content ?? '',
+          source: handle,
+          timestamp: msg.timestamp,
+        });
+      }
+
+      i++;
+      continue;
+    }
+
     if (msg.role === 'system') {
       if (msg._meta?.approval_request) {
         finalizeCapsule();
