@@ -15,6 +15,13 @@ type MessageItem = Extract<
 
 interface ChatMessageProps {
   message: MessageItem;
+  /**
+   * The project's configured agent name. Shown as the sender label for the
+   * MANAGEMENT agent's messages (in place of the generic "agent"). Sub-agent
+   * rows ignore this — they always show their own handle (claude-code, etc.).
+   * Falls back to "agent" when empty/undefined.
+   */
+  agentName?: string;
 }
 
 function basename(path: string): string {
@@ -62,7 +69,7 @@ function userInitials(source?: string): string {
  * bubble background, border, or rounding. User and agent rows share the same
  * left-aligned layout.
  */
-export default function ChatMessage({ message }: ChatMessageProps) {
+export default function ChatMessage({ message, agentName }: ChatMessageProps) {
   const time = formatTime(message.timestamp);
 
   if (message.type === 'user_message') {
@@ -104,7 +111,9 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   const isSubAgent =
     message.type === 'sub_agent_message' ||
     (message.type === 'agent_message' && message.source && message.source !== 'management' && message.source !== 'user');
-  const senderLabel = isSubAgent && message.source ? message.source : 'agent';
+  const senderLabel = isSubAgent && message.source
+    ? message.source
+    : (agentName && agentName.trim() ? agentName : 'agent');
 
   // FE-A3: header-only mode. Emitted for content-null assistant turns so the
   // capsule that follows has a visible agent anchor (avatar + sender · HH:MM)

@@ -287,6 +287,12 @@ interface ChatViewProps {
    * `current_holder_session_id`). See §5 of the T5 task brief.
    */
   sessionId?: string;
+  /**
+   * Re-fetch this project's runtime fields (e.g. `budget_spent_usd`) and merge
+   * them into the App-level projects list. Called on the running→idle
+   * transition so the header's budget/cost reflects the just-finished turn.
+   */
+  onRefreshProject?: (id: string) => void;
 }
 
 interface StreamState {
@@ -305,7 +311,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
   // FE-1 (transform-once): loaded chat history is stored as RAW messages
   // across all paginated pages (initial page + each "Load earlier" prepend),
   // then transformed in a SINGLE pass via the useMemo below. This eliminates
@@ -831,6 +837,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         // live overlay items get wiped on the next seed without a backing
         // history line to replace them.
         refreshRawMessages();
+        // Refresh the project's runtime fields (budget_spent_usd) so the
+        // header reflects the spend from the just-completed turn.
+        onRefreshProject?.(projectId);
       }
       if (!viewing) return;
       const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
@@ -864,7 +873,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setTotalMessages(0);
       setLoadedOffset(0);
     }
-  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval, refreshRawMessages]);
+  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval, refreshRawMessages, onRefreshProject]);
 
   // Cancel timeout fallback: if the loop hasn't actually idled within 10s
   // of the Stop click, clear the in-flight affordance and surface a
@@ -1912,7 +1921,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             if (item.type === 'user_message') {
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} />;
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               const label =

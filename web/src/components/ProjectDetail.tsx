@@ -19,6 +19,12 @@ interface ProjectDetailProps {
   triggers?: Trigger[];
   onTriggerToggle?: (triggerId: string, enabled: boolean) => void;
   onTriggerDelete?: (triggerId: string) => void;
+  /**
+   * The global/default LLM model (from app settings). Used as the header's
+   * model label only when the project has no per-project model pinned. NOT a
+   * substitute for `agent_name` — a model id, not an identity.
+   */
+  globalDefaultModel?: string;
   children?: React.ReactNode;
 }
 
@@ -37,6 +43,7 @@ export default function ProjectDetail({
   triggers = [],
   onTriggerToggle,
   onTriggerDelete,
+  globalDefaultModel,
   children,
 }: ProjectDetailProps) {
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
@@ -66,7 +73,9 @@ export default function ProjectDetail({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {(() => {
-            const modelName = project.model || project.agent_name || '';
+            // Model label: the project's pinned model, else the global default.
+            // NEVER agent_name (an identity, not a model). Empty → cost only.
+            const modelName = project.model || globalDefaultModel || '';
             const cost = `$${(project.budget_spent_usd ?? 0).toFixed(2)}`;
             const label = modelName ? `${modelName} · ${cost}` : cost;
             return (

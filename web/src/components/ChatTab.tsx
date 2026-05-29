@@ -41,6 +41,8 @@ interface ChatTabProps {
   mentionAgents: Array<{ slug: string; name: string }>;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
+  /** Re-fetch this project's runtime fields (e.g. budget) after a turn ends. */
+  onRefreshProject?: (id: string) => void;
 }
 
 /**
@@ -78,6 +80,7 @@ export default function ChatTab({
   mentionAgents,
   route,
   setRoute,
+  onRefreshProject,
 }: ChatTabProps) {
   const projectId = project.project_id;
   const { sessions } = useSessions(projectId);
@@ -186,6 +189,7 @@ export default function ChatTab({
           statusTick={statusTick}
           mentionAgents={mentionAgents}
           sessionId={routeSessionId}
+          onRefreshProject={onRefreshProject}
         />
       </div>
     </div>

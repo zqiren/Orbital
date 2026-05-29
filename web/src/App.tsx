@@ -51,6 +51,7 @@ export default function App() {
     projects,
     listProjects,
     createProject,
+    refreshProject,
     updateProject,
     deleteProject,
   } = useProjects();
@@ -69,6 +70,14 @@ export default function App() {
   // tab switch doesn't block on the daemon's /agents/available cache miss
   // (cold call can take up to 8s). null = not yet loaded.
   const [agentsAvailable, setAgentsAvailable] = useState<Array<{ slug: string; name: string }> | null>(null);
+  // Global/default LLM model (from app settings) — header fallback when a
+  // project has no per-project model pinned. Fetched once on mount.
+  const [defaultModel, setDefaultModel] = useState<string>('');
+  useEffect(() => {
+    api<{ llm?: { model?: string } }>('/api/v2/settings')
+      .then((d) => setDefaultModel(d?.llm?.model || ''))
+      .catch(() => {});
+  }, []);
 
   // Derive selected project ID from route for convenience
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
@@ -503,6 +512,7 @@ export default function App() {
                 triggers={triggers}
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
+                globalDefaultModel={defaultModel}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
@@ -519,6 +529,7 @@ export default function App() {
                     mentionAgents={agentsAvailable ?? []}
                     route={route}
                     setRoute={setRoute}
+                    onRefreshProject={refreshProject}
                   />
                 )}
                 {route.tab === 'files' && (

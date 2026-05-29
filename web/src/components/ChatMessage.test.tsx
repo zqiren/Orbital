@@ -146,3 +146,34 @@ describe('ChatMessage — assistant/agent messages do not parse the block', () =
     // We assert at least that no chips appeared (the key invariant).
   });
 });
+
+describe('ChatMessage — configured agent name', () => {
+  const subAgentMsg: Extract<DisplayItem, { type: 'sub_agent_message' }> = {
+    type: 'sub_agent_message',
+    content: 'sub reply',
+    source: 'claude-code',
+    timestamp: '2026-04-30T10:23:00Z',
+  };
+
+  it('Test 1: a management message shows the configured agent_name', () => {
+    render(<ChatMessage message={agentMsg('mgmt reply')} agentName="Research Bot" />);
+    expect(screen.getByText('Research Bot')).toBeInTheDocument();
+    expect(screen.queryByText('agent')).not.toBeInTheDocument();
+  });
+
+  it('Test 2: a management message with empty agent_name falls back to "agent"', () => {
+    render(<ChatMessage message={agentMsg('mgmt reply')} agentName="" />);
+    expect(screen.getByText('agent')).toBeInTheDocument();
+  });
+
+  it('Test 2b: a whitespace-only agent_name also falls back to "agent"', () => {
+    render(<ChatMessage message={agentMsg('mgmt reply')} agentName="   " />);
+    expect(screen.getByText('agent')).toBeInTheDocument();
+  });
+
+  it('Test 3: a sub-agent message shows its handle regardless of agentName', () => {
+    render(<ChatMessage message={subAgentMsg} agentName="Research Bot" />);
+    expect(screen.getByText('claude-code')).toBeInTheDocument();
+    expect(screen.queryByText('Research Bot')).not.toBeInTheDocument();
+  });
+});

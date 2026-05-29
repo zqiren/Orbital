@@ -99,3 +99,59 @@ describe('ProjectDetail — gear icon in header', () => {
     );
   });
 });
+
+describe('ProjectDetail — model + budget header label', () => {
+  it('Test 4: model label uses the global default (not agent_name) when project.model is empty', () => {
+    const project: Project = {
+      ...mockProject,
+      model: '',
+      agent_name: 'Research Bot',
+      budget_spent_usd: 0,
+    };
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+        globalDefaultModel="deepseek-chat"
+      />,
+    );
+    expect(screen.getByText('deepseek-chat · $0.00')).toBeInTheDocument();
+    expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
+  });
+
+  it('Test 5: with no model anywhere, the header shows the cost only', () => {
+    const project: Project = {
+      ...mockProject,
+      model: '',
+      agent_name: 'Research Bot',
+      budget_spent_usd: 0,
+    };
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+        globalDefaultModel=""
+      />,
+    );
+    expect(screen.getByText('$0.00')).toBeInTheDocument();
+    expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/·/)).not.toBeInTheDocument();
+  });
+
+  it('prefers the project-pinned model over the global default', () => {
+    render(
+      <ProjectDetail
+        project={{ ...mockProject, model: 'gpt-4o', budget_spent_usd: 1.5 }}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+        globalDefaultModel="deepseek-chat"
+      />,
+    );
+    expect(screen.getByText('gpt-4o · $1.50')).toBeInTheDocument();
+  });
+});
