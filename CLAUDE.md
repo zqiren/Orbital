@@ -19,10 +19,21 @@ AgentOS is an AI agent orchestration platform with a Python backend (FastAPI) an
 Run the unit test suite to catch regressions:
 
 ```bash
-python -m pytest tests/unit/ tests/platform/ -q --ignore=tests/platform/test_consumer3_wiring.py
+python -m pytest tests/unit/ tests/platform/ -q
 ```
 
-Expected: 629+ passed, 0 failures. The `test_consumer3_wiring.py` failures are pre-existing (sandbox user not configured).
+Expected: unit + platform green except the 3 documented pre-existing env-fails
+(`test_consumer2_wiring::test_echo_with_null_provider`,
+`test_macos_provider_integration::test_portal_readonly`,
+`test_pty_reconciliation::test_windows_provider_run_process_accepts_use_pty`).
+
+NOTE: `test_consumer3_wiring.py` is **no longer** a pre-existing failure. Its
+reds were *stale test fixtures* — the shared `_setup_handle_with_pending_approval`
+helper predated the approve/deny refactor (SessionKey-keyed handles +
+`get_pending()` + the `has_result_for` guard) and the seam-3 `"default"`
+retirement. Fixed in the seam-3 sweep; consumer3 now passes. The old
+"sandbox user not configured" reason was inaccurate for these (they use
+mocked/null providers, not the sandbox account).
 
 ### 2. TypeScript Check (for frontend changes)
 
@@ -316,7 +327,8 @@ If any of these become priorities, add them as a separate section rather than in
 
 ## Known Issues
 
-- `tests/platform/test_consumer3_wiring.py` — pre-existing failures (Windows sandbox user not configured)
+- `tests/platform/test_consumer3_wiring.py` — **now passes** (the old "Windows sandbox user not configured" note was stale; its reds were stale approve/deny test fixtures, fixed in the seam-3 sweep). The 3 actual pre-existing env-fails are: `test_consumer2_wiring::test_echo_with_null_provider`, `test_macos_provider_integration::test_portal_readonly`, `test_pty_reconciliation::test_windows_provider_run_process_accepts_use_pty`.
+- ⚠️ `tests/platform/test_e2e_agent_isolation.py` and `test_macos_provider_integration.py` spawn a **real `sandbox-exec`** against the actual `~/Desktop` (e.g. `test_e2e_agent_isolation.py:121`). Running them can **revoke the dev tree's filesystem access mid-suite** (observed: `.venv` + `~/Desktop` EPERM-locked until access was re-granted). They need a guard so the live provider can't touch `~/Desktop/orbital-test` — logged in `ACTIVE-seam3-test-sweep-resume.md` as a follow-up. Until then, exclude both when running the full platform suite locally.
 - `tests/test_e2e.py`, `tests/test_user_stories.py`, `tests/test_wiring.py` — require real LLM API key and platform setup
 - Daemon on Windows: use `tasklist | grep python` / `taskkill /F /PID <pid>` if `pkill` doesn't work
 
