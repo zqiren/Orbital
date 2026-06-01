@@ -96,6 +96,11 @@ class Session:
         # equality key either way.
         self.session_uuid: str = os.path.splitext(os.path.basename(filepath))[0]
         self.session_id: str = self.session_uuid
+        # Seam 3 / Phase 4: how this session was born — "chat" (user-initiated)
+        # or "queue" (minted by the QueueDispatcher per attempt). Set by new()
+        # and recovered by load() from the session_start meta; legacy logs with
+        # no origin meta default to "chat".
+        self.origin: str = "chat"
 
         # Pending tool call tracking
         self.pending_tool_calls: set[str] = set()
@@ -145,6 +150,7 @@ class Session:
         model: str = "unknown",
         sdk: str = "unknown",
         fallback_models: list[str] | None = None,
+        origin: str = "chat",
     ) -> Session:
         """Create a fresh session.
 
@@ -170,11 +176,13 @@ class Session:
         # existing callers (and legacy tests) keep working unchanged. The
         # frontend treats the field as an opaque equality key in either form.
         session.session_id = session_id if session_id is not None else session_uuid
+        session.origin = origin
         meta_record = {
             "role": "meta",
             "event": "session_start",
             "session_id": session.session_id,
             "session_uuid": session.session_uuid,
+            "origin": origin,
             "provider": provider,
             "model": model,
             "sdk": sdk,
@@ -217,9 +225,13 @@ class Session:
                         # The session_start meta carries the display name when
                         # it was set (auto or via rename). Capture it for the
                         # name backfill below.
-                        if (msg.get("event") == "session_start"
-                                and msg.get("name") is not None):
-                            stored_name = msg["name"]
+                        if msg.get("event") == "session_start":
+                            if msg.get("name") is not None:
+                                stored_name = msg["name"]
+                            # Origin recovered from meta; legacy logs predating
+                            # the field keep the "chat" default set in __init__.
+                            if msg.get("origin"):
+                                session.origin = msg["origin"]
                         continue
                     session._messages.append(msg)
 

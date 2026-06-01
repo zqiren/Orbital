@@ -25,6 +25,11 @@ import pytest
 from agent_os.agent.adapters.base import AdapterConfig
 from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, adapter
+# slates are keyed by a real session uuid and SubAgentManager.start/stop require
+# an explicit session_id (None hard-raises — a sub-agent always has a parent).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -103,7 +108,7 @@ class TestStartCallsConfigureNetwork:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
         provider.configure_network.assert_called_once()
         call_args = provider.configure_network.call_args
@@ -122,7 +127,7 @@ class TestStartCallsConfigureNetwork:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            result = await mgr.start("proj_1", "claudecode")
+            result = await mgr.start("proj_1", "claudecode", session_id=SID)
             assert "Started" in result or "claudecode" in result
 
 
@@ -145,7 +150,7 @@ class TestStartInjectsProviderIsolation:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
             mock_instance.start.assert_awaited_once()
 
@@ -160,7 +165,7 @@ class TestStartInjectsProviderIsolation:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
             pm.start.assert_awaited_once()
 
@@ -175,10 +180,10 @@ class TestStartInjectsProviderIsolation:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
-            assert ("proj_1", "default") in mgr._adapters
-            assert "claudecode" in mgr._adapters[("proj_1", "default")]
+            assert ("proj_1", SID) in mgr._adapters
+            assert "claudecode" in mgr._adapters[("proj_1", SID)]
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +205,8 @@ class TestStopCallsStopProcess:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            await mgr.stop("proj_1", "claudecode", session_id=SID)
 
         provider.stop_process.assert_not_awaited()
 
@@ -216,8 +221,8 @@ class TestStopCallsStopProcess:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            await mgr.stop("proj_1", "claudecode", session_id=SID)
 
             mock_instance.stop.assert_awaited_once()
 
@@ -232,8 +237,8 @@ class TestStopCallsStopProcess:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            await mgr.stop("proj_1", "claudecode", session_id=SID)
 
             pm.stop.assert_awaited_once()
 
@@ -247,8 +252,8 @@ class TestStopCallsStopProcess:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            result = await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            result = await mgr.stop("proj_1", "claudecode", session_id=SID)
             assert "Stopped" in result
 
 
@@ -274,17 +279,17 @@ class TestStartStopCycle:
             MockAdapter.return_value = mock_instance
 
             # Start
-            result = await mgr.start("proj_1", "claudecode")
+            result = await mgr.start("proj_1", "claudecode", session_id=SID)
             assert "Started" in result or "claudecode" in result
 
             # Verify configure_network was called
             provider.configure_network.assert_called_once()
 
             # Verify adapter is registered
-            assert mgr.status("proj_1", "claudecode") in ("running", "idle")
+            assert mgr.status("proj_1", "claudecode", session_id=SID) in ("running", "idle")
 
             # Stop
-            result = await mgr.stop("proj_1", "claudecode")
+            result = await mgr.stop("proj_1", "claudecode", session_id=SID)
             assert "Stopped" in result
 
             # Verify cleanup — provider.stop_process is NOT called directly
@@ -299,7 +304,7 @@ class TestStartStopCycle:
         provider = _make_mock_provider()
         mgr, pm = _make_sub_agent_manager(platform_provider=provider)
 
-        result = await mgr.start("proj_1", "nonexistent")
+        result = await mgr.start("proj_1", "nonexistent", session_id=SID)
         assert "Error" in result or "error" in result.lower()
 
     @pytest.mark.asyncio
@@ -308,5 +313,5 @@ class TestStartStopCycle:
         provider = _make_mock_provider()
         mgr, pm = _make_sub_agent_manager(platform_provider=provider)
 
-        result = await mgr.stop("proj_1", "claudecode")
+        result = await mgr.stop("proj_1", "claudecode", session_id=SID)
         assert "not running" in result.lower() or result != ""

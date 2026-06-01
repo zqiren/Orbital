@@ -21,6 +21,12 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 import pytest
 import pytest_asyncio
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, handles
+# and adapters are keyed by a real session uuid; every session-scoped call must
+# carry it explicitly. None now means: holder-aware read (AgentManager) or hard
+# ValueError (SubAgentManager) — never a "default" routing sentinel.
+SID = "proj_1_sess0001"
+
 # ---------------------------------------------------------------------------
 # models.py tests
 # ---------------------------------------------------------------------------
@@ -113,13 +119,10 @@ class TestModels:
         assert evt.source == "management"
         assert evt.tool_name == "read"
 
-    def test_default_session_id_constant(self):
-        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID
-
-        # The constant must be a non-empty string; back-compat code paths
-        # rely on it as a stable sentinel for the single-loop default.
-        assert isinstance(DEFAULT_SESSION_ID, str)
-        assert DEFAULT_SESSION_ID == "default"
+    def test_default_session_id_constant_retired(self):
+        # Seam 3 / D1: the "default" sentinel is retired; the sentinel is None.
+        import agent_os.daemon_v2.models as models
+        assert not hasattr(models, "DEFAULT_SESSION_ID")
 
     def test_make_session_key_with_explicit_session(self):
         from agent_os.daemon_v2.models import make_session_key
@@ -130,19 +133,13 @@ class TestModels:
         assert isinstance(key, tuple)
         assert len(key) == 2
 
-    def test_make_session_key_default(self):
-        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
+    def test_make_session_key_none_passes_through(self):
+        from agent_os.daemon_v2.models import make_session_key
 
-        # Both omission and explicit ``None`` collapse to the default sentinel.
-        assert make_session_key("proj_1") == ("proj_1", DEFAULT_SESSION_ID)
-        assert make_session_key("proj_1", None) == ("proj_1", DEFAULT_SESSION_ID)
-
-    def test_make_session_key_empty_string_treated_as_none(self):
-        from agent_os.daemon_v2.models import DEFAULT_SESSION_ID, make_session_key
-
-        # Empty string is falsy — we collapse to the default so callers do not
-        # have to special-case "" themselves.
-        assert make_session_key("proj_1", "") == ("proj_1", DEFAULT_SESSION_ID)
+        # Seam 3 / D1: None is NOT collapsed to a "default" sentinel — it passes
+        # through to a key that matches no live handle (safe handle-miss).
+        assert make_session_key("proj_1") == ("proj_1", None)
+        assert make_session_key("proj_1", None) == ("proj_1", None)
 
 
 # ---------------------------------------------------------------------------
@@ -577,9 +574,9 @@ class TestSubAgentManager:
             mock_instance = AsyncMock()
             MockAdapter.return_value = mock_instance
 
-            result = await mgr.start("proj_1", "claudecode")
-            assert ("proj_1", "default") in mgr._adapters
-            assert "claudecode" in mgr._adapters[("proj_1", "default")]
+            result = await mgr.start("proj_1", "claudecode", session_id=SID)
+            assert ("proj_1", SID) in mgr._adapters
+            assert "claudecode" in mgr._adapters[("proj_1", SID)]
             mock_instance.start.assert_awaited_once()
             pm.start.assert_awaited_once()
 
@@ -592,8 +589,8 @@ class TestSubAgentManager:
             mock_instance._transport = None  # Legacy path: background task calls adapter.send()
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            result = await mgr.send("proj_1", "claudecode", "hello")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            result = await mgr.send("proj_1", "claudecode", "hello", session_id=SID)
             assert "Message sent to claudecode" in result
             # Background task dispatches asynchronously
             await asyncio.sleep(0.05)
@@ -607,14 +604,14 @@ class TestSubAgentManager:
             mock_instance = AsyncMock()
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            await mgr.stop("proj_1", "claudecode", session_id=SID)
             mock_instance.stop.assert_awaited_once()
             pm.stop.assert_awaited_once()
 
     def test_status_unknown_when_not_started(self):
         mgr, _ = self._make_manager()
-        assert mgr.status("proj_1", "claudecode") == "unknown"
+        assert mgr.status("proj_1", "claudecode", session_id=SID) == "unknown"
 
     @pytest.mark.asyncio
     async def test_list_active(self):
@@ -627,8 +624,8 @@ class TestSubAgentManager:
             mock_instance.handle = "claudecode"
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            active = mgr.list_active("proj_1")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            active = mgr.list_active("proj_1", session_id=SID)
             assert len(active) == 1
             assert active[0]["handle"] == "claudecode"
 
@@ -685,8 +682,8 @@ class TestSubAgentManager:
         active_b = mgr.list_active("proj_iso", session_id="sess_b")
         assert len(active_a) == 1 and active_a[0]["handle"] == "claudecode"
         assert len(active_b) == 1 and active_b[0]["handle"] == "claudecode"
-        # Default-session list is empty — neither was registered under default.
-        assert mgr.list_active("proj_iso") == []
+        # An unregistered session's list is empty — slates are per-session.
+        assert mgr.list_active("proj_iso", session_id="sess_unused") == []
 
         # stop_all on sess_a tears down only A's adapter slate.
         await mgr.stop_all("proj_iso", session_id="sess_a")
@@ -774,9 +771,9 @@ class TestAgentManager:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
-            assert ("proj_1", "default") in mgr._handles
+            assert ("proj_1", SID) in mgr._handles
             # Should broadcast running status
             ws.broadcast.assert_called()
 
@@ -804,9 +801,9 @@ class TestAgentManager:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
             with pytest.raises(ValueError, match="already running"):
-                await mgr.start_agent("proj_1", config)
+                await mgr.start_agent("proj_1", config, session_id=SID)
 
     @pytest.mark.asyncio
     async def test_inject_while_running_queues(self):
@@ -818,9 +815,9 @@ class TestAgentManager:
         mock_session = MagicMock()
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        mgr._handles[("proj_1", "default")] = MagicMock(session=mock_session, task=mock_task)
+        mgr._handles[("proj_1", SID)] = MagicMock(session=mock_session, task=mock_task)
 
-        await mgr.inject_message("proj_1", "hello")
+        await mgr.inject_message("proj_1", "hello", session_id=SID)
         mock_session.queue_message.assert_called_once_with("hello", nonce=None)
 
     @pytest.mark.asyncio
@@ -837,10 +834,10 @@ class TestAgentManager:
         mock_task.exception.return_value = None
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            await mgr.inject_message("proj_1", "continue work")
+            await mgr.inject_message("proj_1", "continue work", session_id=SID)
             mock_session.append.assert_called_once()
             mock_start.assert_awaited_once()
 
@@ -859,10 +856,10 @@ class TestAgentManager:
         mock_task.exception.return_value = RuntimeError("LLM timeout")
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            result = await mgr.inject_message("proj_1", "are you there?")
+            result = await mgr.inject_message("proj_1", "are you there?", session_id=SID)
             # Message must be appended to session (not lost)
             mock_session.append.assert_called_once()
             appended = mock_session.append.call_args[0][0]
@@ -887,10 +884,10 @@ class TestAgentManager:
         mock_task.exception.side_effect = asyncio.CancelledError()
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            result = await mgr.inject_message("proj_1", "hello again")
+            result = await mgr.inject_message("proj_1", "hello again", session_id=SID)
             mock_session.append.assert_called_once()
             mock_start.assert_awaited_once()
             assert result == "delivered"
@@ -908,9 +905,9 @@ class TestAgentManager:
         mock_loop = MagicMock(terminate=AsyncMock())
         handle = MagicMock(session=mock_session, task=mock_task,
                            loop=mock_loop)
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
-        await mgr.stop_agent("proj_1")
+        await mgr.stop_agent("proj_1", session_id=SID)
         # Task is still pending (one `await asyncio.sleep(0)` is not enough
         # to mark a sleep(0) future done) ⇒ stop_agent takes the alive
         # path and awaits handle.loop.terminate(). The terminate() call is
@@ -1203,10 +1200,14 @@ class TestAgentManager:
         assert mgr.get_run_status("proj_iso", session_id="sess_b") == "idle"
         assert mgr.get_session("proj_iso", session_id="sess_a") is session_a
         assert mgr.get_session("proj_iso", session_id="sess_b") is session_b
-        # Default-session lookup against this project returns None — neither
-        # handle was registered under the default sentinel.
+        # Bare (no-session) reads no longer route through a "default" sentinel;
+        # the two read APIs split deliberately on their None-policy:
+        #  - get_session is a PRECISE lookup (passthrough None → handle-miss):
+        #    a bare call leaks neither session, so it returns None.
+        #  - is_running is HOLDER-AWARE (D1): a bare call reports the active-loop
+        #    slot holder, which is session A (its task is not done) → True.
         assert mgr.get_session("proj_iso") is None
-        assert mgr.is_running("proj_iso") is False
+        assert mgr.is_running("proj_iso") is True
 
 
 # ---------------------------------------------------------------------------

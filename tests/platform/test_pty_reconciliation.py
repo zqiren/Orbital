@@ -28,6 +28,10 @@ from agent_os.agent.adapters.cli_adapter import CLIAdapter, strip_ansi
 from agent_os.platform.base import PlatformProvider
 from agent_os.platform.types import ProcessHandle, NetworkRules
 
+# Canonical chat-session uuid for SubAgentManager wiring fixtures (post-"default"
+# retirement: start/stop require an explicit session_id — None hard-raises).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -720,7 +724,7 @@ class TestSubAgentManagerWiring:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
             # Verify CLIAdapter was created with provider and project_id
             MockAdapter.assert_called_once_with(
@@ -759,8 +763,8 @@ class TestSubAgentManagerWiring:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
-            await mgr.stop("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
+            await mgr.stop("proj_1", "claudecode", session_id=SID)
 
             # adapter.stop() should be called
             mock_instance.stop.assert_awaited_once()
@@ -796,7 +800,7 @@ class TestSubAgentManagerWiring:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            await mgr.start("proj_1", "claudecode")
+            await mgr.start("proj_1", "claudecode", session_id=SID)
 
             provider.configure_network.assert_called_once()
             call_args = provider.configure_network.call_args
@@ -831,7 +835,7 @@ class TestSubAgentManagerWiring:
             mock_instance.is_alive = MagicMock(return_value=True)
             MockAdapter.return_value = mock_instance
 
-            result = await mgr.start("proj_1", "aider")
+            result = await mgr.start("proj_1", "aider", session_id=SID)
             assert "Started" in result
 
             MockAdapter.assert_called_once_with(

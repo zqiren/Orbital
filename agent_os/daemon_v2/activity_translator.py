@@ -235,6 +235,10 @@ class ActivityTranslator:
         self._ws.broadcast(project_id, {
             "type": "chat.stream_delta",
             "project_id": project_id,
+            # Seam 3 / Phase 2: stamp the canonical session id so the frontend
+            # can route deltas strictly by session_id (it previously had only
+            # the viewingHolder heuristic — stream deltas carried no id).
+            "session_id": session_id,
             "text": getattr(chunk, "text", ""),
             "source": source,
             "is_final": is_final,

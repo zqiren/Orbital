@@ -23,6 +23,11 @@ import pytest
 
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, handles
+# are keyed by a real session uuid and stop_agent takes an explicit session_id
+# (a bare None now misses the handle and raises KeyError — no "default" fallback).
+SID = "proj-1_sess0001"
+
 
 def _make_manager(tmp_path, project_store=None):
     mgr = AgentManager(
@@ -85,9 +90,9 @@ async def test_stop_agent_preserves_dispatcher(tmp_path):
     fake_dispatcher = MagicMock()
     fake_dispatcher.shutdown = AsyncMock()
     mgr._dispatchers["proj-1"] = fake_dispatcher
-    mgr._handles[("proj-1", "default")] = _make_handle(task_is_none=True)
+    mgr._handles[("proj-1", SID)] = _make_handle(task_is_none=True)
 
-    await mgr.stop_agent("proj-1")
+    await mgr.stop_agent("proj-1", session_id=SID)
 
     assert "proj-1" in mgr._dispatchers, "dispatcher must survive agent stop"
     fake_dispatcher.shutdown.assert_not_awaited()

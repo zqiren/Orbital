@@ -12,9 +12,12 @@ from .base import Tool, ToolResult
 class NotifyTool(Tool):
     """Send a notification to the user via WebSocket (and optionally push)."""
 
-    def __init__(self, ws_manager, project_id: str):
+    def __init__(self, ws_manager, project_id: str, *, session_id: str | None = None):
         self._ws_manager = ws_manager
         self._project_id = project_id
+        # Seam 3 / Phase 2: canonical session id stamped on agent.notify so the
+        # frontend can route it by session_id (it previously carried none).
+        self._session_id = session_id
         self.name = "notify"
         self.description = (
             "Send a notification to the user. Use this to alert the user about "
@@ -51,6 +54,7 @@ class NotifyTool(Tool):
         self._ws_manager.broadcast(self._project_id, {
             "type": "agent.notify",
             "project_id": self._project_id,
+            "session_id": self._session_id,
             "title": title,
             "body": body,
             "urgency": urgency,

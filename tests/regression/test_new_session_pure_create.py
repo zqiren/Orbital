@@ -47,8 +47,10 @@ async def test_new_session_mints_ids_without_file_or_handle(tmp_path):
     result = await mgr.new_session("proj")
 
     assert result["status"] == "ok"
-    assert result["session_id"].startswith("sess_"), result
+    # D2: uuid-only — session_id IS the uuid (the 'sess_' F1 mint is retired).
     assert result["session_uuid"], result
+    assert result["session_id"] == result["session_uuid"], result
+    assert not result["session_id"].startswith("sess_"), result
     # No handle registered — pure create does not hydrate.
     assert ("proj", result["session_id"]) not in mgr._handles
     # No file on disk — deferred to first message.

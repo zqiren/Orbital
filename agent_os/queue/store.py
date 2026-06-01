@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,8 +64,14 @@ class QueueStore:
                 # the strict pydantic enum doesn't reject them. Save back to
                 # disk so the migration is applied permanently on first read.
                 migrated_text, migrated = self._migrate_state_values(text)
-                self._state = QueueState.model_validate_json(migrated_text)
-                if migrated:
+                # Seam 3 / decision D3: one-time forward remap of any
+                # F1-shaped AttemptRecord.session_id (the retired "sess_…" mint
+                # or legacy "default") to the session's uuid, so resume/retry
+                # route on the canonical id. Self-retiring: persisted on save,
+                # later loads are no-ops.
+                remapped_text, remapped = self._remap_attempt_session_ids(migrated_text)
+                self._state = QueueState.model_validate_json(remapped_text)
+                if migrated or remapped:
                     self._save_locked()
             except (OSError, ValueError, json.JSONDecodeError):
                 logger.warning(
@@ -74,6 +81,72 @@ class QueueStore:
                 self._state = QueueState()
                 self._save_locked()
             return self._state
+
+    def _remap_attempt_session_ids(self, text: str) -> tuple[str, bool]:
+        """Forward-remap F1-shaped attempt session_ids to the session uuid.
+
+        queue.json lives at ``{workspace}/orbital/queue.json``; session JSONLs
+        at ``{workspace}/orbital/sessions/{uuid}.jsonl``. We build an F1→uuid
+        map from each log's ``session_start`` meta and rewrite any attempt
+        session_id that is F1-shaped (``"default"`` or ``sess_…``) to its uuid.
+        Unresolvable ids are left as-is (the resolver's instrumented F1-scan
+        fallback still covers them). Idempotent. Returns (text, changed).
+        """
+        try:
+            parsed = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            return text, False
+        items = parsed.get("items") if isinstance(parsed, dict) else None
+        if not items:
+            return text, False
+
+        def _is_f1(sid: object) -> bool:
+            return isinstance(sid, str) and (sid == "default" or sid.startswith("sess_"))
+
+        # Only build the (potentially I/O-heavy) F1→uuid map if some attempt
+        # actually carries an F1-shaped id.
+        if not any(_is_f1(a.get("session_id"))
+                   for it in items for a in (it.get("attempts") or [])):
+            return text, False
+
+        f1_to_uuid: dict[str, str] = {}
+        sessions_dir = self._path.parent / "sessions"
+        try:
+            fnames = os.listdir(sessions_dir)
+        except OSError:
+            fnames = []
+        for fname in fnames:
+            if not fname.endswith(".jsonl"):
+                continue
+            uuid = fname[:-6]
+            try:
+                with open(sessions_dir / fname, "r", encoding="utf-8") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            rec = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if rec.get("role") == "meta" and rec.get("event") == "session_start":
+                            f1 = rec.get("session_id")
+                            if isinstance(f1, str):
+                                f1_to_uuid.setdefault(f1, uuid)
+                            break  # meta is the first line; stop scanning this file
+            except OSError:
+                continue
+
+        changed = False
+        for it in items:
+            for a in (it.get("attempts") or []):
+                sid = a.get("session_id")
+                if _is_f1(sid) and sid in f1_to_uuid:
+                    a["session_id"] = f1_to_uuid[sid]
+                    changed = True
+        if not changed:
+            return text, False
+        return json.dumps(parsed), True
 
     @staticmethod
     def _migrate_state_values(text: str) -> tuple[str, bool]:

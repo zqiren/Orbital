@@ -24,10 +24,15 @@ class AutonomyInterceptor:
     """Implements ToolInterceptor protocol from Component A."""
 
     def __init__(self, preset: Autonomy, ws_manager, project_id: str,
-                 user_credential_store=None):
+                 user_credential_store=None, *, session_id: str | None = None):
         self._preset = preset
         self._ws = ws_manager
         self._project_id = project_id
+        # Seam 3 / Phase 2: the canonical session id this project handle runs
+        # under, stamped on the approval.request broadcast so the frontend can
+        # route it by session_id (management approvals previously carried no
+        # session_id — the interceptor only knew the project).
+        self._session_id = session_id
         self._user_credential_store = user_credential_store
         self._recent_approvals: dict[str, float] = {}  # hash(tool+args) -> timestamp
         self._bypass_window = 60  # seconds
@@ -104,6 +109,7 @@ class AutonomyInterceptor:
         payload = {
             "type": "approval.request",
             "project_id": self._project_id,
+            "session_id": self._session_id,
             "what": _describe_tool(tool_name, tool_args),
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,

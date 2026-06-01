@@ -14,29 +14,49 @@ from enum import Enum
 from agent_os.agent.prompt_builder import Autonomy
 
 
-# Default chat session identifier used when callers do not supply one.
-# Existing single-loop call sites pass through ``DEFAULT_SESSION_ID`` so
-# the new ``(project_id, session_id)`` keying remains backward-compatible
-# with code that only knows about ``project_id``.
-DEFAULT_SESSION_ID: str = "default"
-
+# Seam 3 / decision D1: the "default" routing sentinel is retired. The canonical
+# session identity is the uuid; the sentinel for "no session specified" is None.
+# Resolution of None is CALLER-CLASS specific (read/affect → holder; inject →
+# persistent chat session; sub-agent → raise), so it is decided at the call site
+# via ``resolve_session_id``'s on_none policy, NOT by a global default.
 
 # A ``SessionKey`` is the composite key used by the agent and sub-agent
-# managers to address a particular chat session within a project. Phase 3c
-# multi-loop work introduces per-session isolation; the alias lets us refactor
-# the dict keying from ``project_id`` to ``(project_id, session_id)`` without
-# spreading raw tuples through the call graph.
-SessionKey = tuple[str, str]
+# managers to address a particular chat session within a project. The second
+# element may be None (no session resolved) — a key that intentionally matches
+# no live handle, so callers degrade to handle-miss / no-op rather than routing
+# to a phantom "default" session.
+SessionKey = tuple[str, str | None]
 
 
 def make_session_key(project_id: str, session_id: str | None = None) -> SessionKey:
     """Build a ``SessionKey`` from a project id + optional session id.
 
-    Passing ``None`` (or omitting ``session_id``) yields the default-session
-    key, which is the back-compat target for every existing single-loop call
-    site that has not yet been multi-session aware.
+    Passing ``None`` yields ``(project_id, None)`` — a key that matches no live
+    handle. Callers that must resolve None to a concrete session do so BEFORE
+    keying, via ``resolve_session_id`` with the appropriate on_none policy.
     """
-    return (project_id, session_id or DEFAULT_SESSION_ID)
+    return (project_id, session_id)
+
+
+def resolve_session_id(session_id, *, on_none):
+    """Shared session-id resolution (seam 3 / D1).
+
+    The COMMON rule — identical for every caller class — is: a provided
+    (non-None) ``session_id`` passes through unchanged. The ONLY per-caller
+    variation is the None-policy callback ``on_none``:
+
+      - read/affect paths pass ``on_none=lambda: current_holder_session_id(pid)``
+        (None → holder, or None again → handle-miss → idle/no-op; never mints);
+      - the inject path passes a policy that resolves the project's persistent
+        chat session (holder if draining, else lazy-mint via the single funnel);
+      - the sub-agent resolver passes a raising policy (None is a real bug).
+
+    Centralizing the common rule here means the call sites differ ONLY in
+    on_none — there is no second hand-maintained "default" rule to drift.
+    """
+    if session_id is not None:
+        return session_id
+    return on_none()
 
 
 class AgentStatus(str, Enum):
@@ -47,13 +67,6 @@ class AgentStatus(str, Enum):
     ERROR = "error"
 
 
-# Default Format-1 chat session id used when an API caller does not pass one
-# explicitly on /agents/start or /inject. See
-# ``TASK/ACTIVE-session-and-queue-model.md`` and the F7 audit for the F1/F2
-# split. Omitting ``session_id`` on the request means "the only session, use
-# the default" — which mirrors the historical single-session-per-project
-# behaviour and keeps existing API clients working unchanged.
-DEFAULT_SESSION_ID: str = "default"
 
 
 @dataclass

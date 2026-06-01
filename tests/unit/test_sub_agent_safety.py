@@ -20,6 +20,12 @@ from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 from agent_os.agent.tools.agent_message import AgentMessageTool
 
+# Canonical chat-session uuid for these fixtures. Post-"default" retirement,
+# handles/adapters are keyed by a real session uuid and every session-scoped
+# call must carry it explicitly (None → handle-miss no-op for the AgentManager
+# class, hard ValueError for the SubAgentManager class).
+SID = "proj1_sess0001"
+
 
 def _make_mock_adapter(send_delay: float = 0):
     """CLIAdapter-like mock with controllable send delay."""
@@ -51,9 +57,9 @@ def _make_sub_agent_manager(**kwargs):
     return SubAgentManager(process_manager=pm, **kwargs)
 
 
-def _register_adapter(mgr, project_id, handle, adapter):
+def _register_adapter(mgr, project_id, handle, adapter, *, session_id=SID):
     """Directly inject an adapter into SubAgentManager for testing."""
-    sk = (project_id, "default")
+    sk = (project_id, session_id)
     if sk not in mgr._adapters:
         mgr._adapters[sk] = {}
     mgr._adapters[sk][handle] = adapter
@@ -137,8 +143,8 @@ class TestSendSerialization:
 
         t0 = asyncio.get_event_loop().time()
         await asyncio.gather(
-            mgr.send("proj1", "agent-a", "msg-a"),
-            mgr.send("proj1", "agent-b", "msg-b"),
+            mgr.send("proj1", "agent-a", "msg-a", session_id=SID),
+            mgr.send("proj1", "agent-b", "msg-b", session_id=SID),
         )
         elapsed = asyncio.get_event_loop().time() - t0
 
@@ -151,7 +157,7 @@ class TestSendSerialization:
     async def test_send_to_stopped_adapter_returns_error(self):
         """send() after adapter removed returns error, no lock issues."""
         mgr = _make_sub_agent_manager()
-        result = await mgr.send("proj1", "ghost", "hello")
+        result = await mgr.send("proj1", "ghost", "hello", session_id=SID)
         assert "Error" in result or "not running" in result
 
 
@@ -252,9 +258,10 @@ class TestCancelRace:
 
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter",
                     return_value=slow_adapter):
-            start_task = asyncio.create_task(mgr.start("proj1", "agent-a"))
+            start_task = asyncio.create_task(
+                mgr.start("proj1", "agent-a", session_id=SID))
             await asyncio.sleep(0.02)  # let start begin but not finish
-            await mgr.stop_all("proj1")
+            await mgr.stop_all("proj1", session_id=SID)
             start_result = await start_task
 
         # Adapter was stopped (stop_all found it after start registered it)
@@ -276,14 +283,14 @@ class TestCancelRace:
             await asyncio.sleep(0.1)
         adapter.stop = slow_stop
 
-        stop_task = asyncio.create_task(mgr.stop_all("proj1"))
+        stop_task = asyncio.create_task(mgr.stop_all("proj1", session_id=SID))
         await asyncio.sleep(0.02)  # let stop_all begin
 
-        result = await mgr.start("proj1", "agent-b")
+        result = await mgr.start("proj1", "agent-b", session_id=SID)
         await stop_task
 
         assert ("shutting down" in result.lower() or
-                "agent-b" not in mgr._adapters.get(("proj1", "default"), {}))
+                "agent-b" not in mgr._adapters.get(("proj1", SID), {}))
 
     @pytest.mark.asyncio
     async def test_concurrent_start_stop_no_deadlock(self):
@@ -294,8 +301,8 @@ class TestCancelRace:
 
         async def run_both():
             await asyncio.gather(
-                mgr.stop_all("proj1"),
-                mgr.start("proj1", "agent-b"),
+                mgr.stop_all("proj1", session_id=SID),
+                mgr.start("proj1", "agent-b", session_id=SID),
             )
 
         await asyncio.wait_for(run_both(), timeout=5.0)
@@ -345,7 +352,7 @@ class TestIdleStatus:
             interceptor=MagicMock(),
             task=MagicMock(done=MagicMock(return_value=task_done)),
         )
-        mgr._handles[(project_id, "default")] = handle
+        mgr._handles[(project_id, SID)] = handle
         return handle
 
     @pytest.mark.asyncio
@@ -356,7 +363,7 @@ class TestIdleStatus:
 
         mock_task = MagicMock()
         mock_task.exception = MagicMock(return_value=None)
-        callback = mgr._on_loop_done("proj1")
+        callback = mgr._on_loop_done("proj1", session_id=SID)
         callback(mock_task)
 
         calls = ws.broadcast.call_args_list
@@ -374,7 +381,7 @@ class TestIdleStatus:
 
         mock_task = MagicMock()
         mock_task.exception = MagicMock(return_value=None)
-        callback = mgr._on_loop_done("proj1")
+        callback = mgr._on_loop_done("proj1", session_id=SID)
         mock_future = MagicMock()
         with patch("asyncio.ensure_future", return_value=mock_future) as mock_ef:
             callback(mock_task)
@@ -399,7 +406,7 @@ class TestIdleStatus:
         ])
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj1")
+            await mgr._check_sub_agents_done("proj1", session_id=SID)
 
         calls = ws.broadcast.call_args_list
         statuses = [c[0][1]["status"] for c in calls]
@@ -421,7 +428,7 @@ class TestIdleStatus:
             sleep_count[0] += 1
 
         with patch("asyncio.sleep", side_effect=counting_sleep):
-            await mgr._check_sub_agents_done("proj1")
+            await mgr._check_sub_agents_done("proj1", session_id=SID)
 
         assert sleep_count[0] == 3
         calls = ws.broadcast.call_args_list
@@ -440,7 +447,7 @@ class TestIdleStatus:
         self._install_handle(mgr, "proj1", task_done=False)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj1")
+            await mgr._check_sub_agents_done("proj1", session_id=SID)
 
         idle_calls = [
             c for c in ws.broadcast.call_args_list

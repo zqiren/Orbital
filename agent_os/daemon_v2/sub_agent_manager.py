@@ -15,7 +15,6 @@ import os
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.daemon_v2.models import (
-    DEFAULT_SESSION_ID,
     SessionKey,
     make_session_key,
 )
@@ -29,6 +28,14 @@ MAX_CONCURRENT_SUBAGENTS = 5  # Max active sub-agents per project
 
 class SubAgentManager:
     """Owns all sub-agent adapters. Provides interface for AgentMessageTool."""
+
+    # Upper bound on a single adapter teardown (Direction B, invariant 6). Must
+    # exceed the transport's own kill budget (SIGTERM grace + SIGKILL grace +
+    # parent reap ≈ 4s) plus margin. On exceeding it, ``stop()`` force-drops the
+    # adapter and logs ERROR rather than hanging unbounded — a stuck adapter in
+    # ``_adapters`` would make the next dispatch to this session refuse/reuse
+    # stale state. Bounded-and-loud beats hung-and-silent.
+    ADAPTER_STOP_TIMEOUT = 6.0
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
@@ -73,13 +80,22 @@ class SubAgentManager:
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
-        """Normalize optional ``session_id`` to a non-empty string.
+        """Resolve a sub-agent's parent session id (seam 3 / D1).
 
-        Mirror of ``AgentManager._resolve_session_id`` — both managers
-        share the same back-compat sentinel so single-loop callers do
-        not need to know about ``DEFAULT_SESSION_ID``.
+        A sub-agent ALWAYS has a parent session, so ``None`` here is a real
+        programming bug — it is a hard raise, never a fallback. This is the
+        deliberate None-policy difference from the project-level resolver
+        (which maps None → holder / persistent chat); the common non-None
+        passthrough is the shared ``resolve_session_id`` rule.
         """
-        return session_id or DEFAULT_SESSION_ID
+        from agent_os.daemon_v2.models import resolve_session_id
+
+        def _required():
+            raise ValueError(
+                "sub-agent session_id is required (a sub-agent always has a "
+                "parent session); got None"
+            )
+        return resolve_session_id(session_id, on_none=_required)
 
     def _get_lock(self, project_id: str,
                   session_id: str | None = None) -> asyncio.Lock:
@@ -617,15 +633,22 @@ class SubAgentManager:
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
-        adapters = self._adapters.get(sk, {})
-        adapter = adapters.get(handle)
-        if adapter is None:
-            return f"Error: agent '{handle}' not running for project '{project_id}'"
+        # Invariant 7 (reap-vs-dispatch): take the per-session lifecycle lock
+        # around the dispatch so turn-start is mutually exclusive with a reap in
+        # ``stop`` (which holds the same lock across the kill). If a reap is
+        # mid-kill, this blocks until the adapter is dropped, then finds it gone
+        # and refuses — never opening a new turn on a process being killed.
+        lock = self._get_lock(project_id, session_id=session_id)
+        async with lock:
+            adapters = self._adapters.get(sk, {})
+            adapter = adapters.get(handle)
+            if adapter is None:
+                return f"Error: agent '{handle}' not running for project '{project_id}'"
 
-        transcript = self._transcripts.get((project_id, handle))
-        transcript_path = transcript.filepath if transcript else "unknown"
+            transcript = self._transcripts.get((project_id, handle))
+            transcript_path = transcript.filepath if transcript else "unknown"
 
-        await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
+            await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
 
         if self._lifecycle_observer:
             await self._lifecycle_observer.on_message_routed(
@@ -759,12 +782,37 @@ class SubAgentManager:
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
         lock = self._get_lock(project_id, session_id=session_id)
+        # Invariant 7 (reap-vs-dispatch): hold the per-session lifecycle lock
+        # across the WHOLE teardown so a concurrent dispatch (which now also
+        # takes this lock in ``send``) cannot open a new turn on this adapter
+        # mid-kill — SIGKILL during a workspace write corrupts files.
+        # Invariant 6 (drop ordering): do NOT pop the adapter until termination
+        # is confirmed, or ``ADAPTER_STOP_TIMEOUT`` elapses. Popping first (the
+        # old behavior) orphaned the live process with no handle to retry the
+        # kill — the root of the leak.
         async with lock:
             adapters = self._adapters.get(sk, {})
-            adapter = adapters.pop(handle, None)
-        if adapter is None:
-            return f"Agent '{handle}' not running"
-        await adapter.stop()
+            adapter = adapters.get(handle)
+            if adapter is None:
+                return f"Agent '{handle}' not running"
+            try:
+                await asyncio.wait_for(
+                    adapter.stop(), timeout=self.ADAPTER_STOP_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "stop: adapter %s did not terminate within %.1fs; "
+                    "force-dropping (process may leak)",
+                    handle, self.ADAPTER_STOP_TIMEOUT,
+                )
+            except Exception:
+                logger.exception(
+                    "stop: adapter %s stop() raised; force-dropping", handle,
+                )
+            # Drop only after confirmed-dead-or-bounded-timeout (never unbounded).
+            adapters.pop(handle, None)
+            if not adapters:
+                self._adapters.pop(sk, None)
         await self._process_manager.stop(project_id, handle)
 
         return f"Stopped {handle}"
@@ -818,17 +866,32 @@ class SubAgentManager:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
+
+        Unlike ``start``/``send``/``stop`` (which act on one named session and so
+        require a session_id), approval routing is a *lookup by tool_call_id*: the
+        REST approve/deny endpoints may not know which session owns the pending
+        request. So ``session_id`` is optional here — when omitted (None), every
+        adapter slate in the project is scanned. The tool_call_id is globally
+        unique, so a project-wide scan is unambiguous. This is the one sub-agent
+        path that legitimately tolerates None (seam 3 / D1: no "default" sentinel —
+        a None search just widens to all sessions, it does not route to a phantom).
         """
-        session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
-        for handle, adapter in adapters.items():
-            transport = getattr(adapter, '_transport', None)
-            if transport is not None and hasattr(transport, 'respond_to_permission'):
-                # Check if this transport has the pending approval
-                pending = getattr(transport, '_pending_approvals', {})
-                if tool_call_id in pending:
-                    await transport.respond_to_permission(tool_call_id, approved)
-                    return True
+        if session_id is None:
+            slates = [
+                adapters for (pid, _sid), adapters in self._adapters.items()
+                if pid == project_id
+            ]
+        else:
+            slates = [self._adapters.get(make_session_key(project_id, session_id), {})]
+        for adapters in slates:
+            for handle, adapter in adapters.items():
+                transport = getattr(adapter, '_transport', None)
+                if transport is not None and hasattr(transport, 'respond_to_permission'):
+                    # Check if this transport has the pending approval
+                    pending = getattr(transport, '_pending_approvals', {})
+                    if tool_call_id in pending:
+                        await transport.respond_to_permission(tool_call_id, approved)
+                        return True
         return False
 
     def update_sub_agent_autonomy(self, project_id: str, preset, *,

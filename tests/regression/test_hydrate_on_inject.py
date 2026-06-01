@@ -98,8 +98,13 @@ async def test_inject_hydrates_existing_session(tmp_path):
     assert mgr.start_agent.await_count == 1
     kwargs = mgr.start_agent.await_args.kwargs
     assert kwargs.get("session") is not None, "must pass the hydrated session (not fork fresh)"
-    assert kwargs["session"].session_id == "sess_live", "continue under the original F1"
-    assert kwargs.get("session_id") == "sess_live"
+    # The hydrated Session object still preserves the original F1 from meta
+    # (for display / back-compat) — hydration does not rewrite it.
+    assert kwargs["session"].session_id == "sess_live", "F1 preserved on the Session object"
+    # Seam 3 / Phase 1: the routing identity adopted is the session's UUID
+    # (the id the frontend addresses by), NOT the meta F1. This is what makes
+    # viewed == holder. See test_hydrate_adopts_uuid_not_f1.py.
+    assert kwargs.get("session_id") == "proj_cccc3333", "routes under the uuid, not the meta F1"
     assert kwargs.get("initial_message") == "What number?"
 
 

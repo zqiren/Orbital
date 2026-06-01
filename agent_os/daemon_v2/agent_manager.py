@@ -30,12 +30,12 @@ from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.models import (
-    DEFAULT_SESSION_ID,
     AgentConfig,
     SessionKey,
     detect_os,
     make_session_key,
     resolve_api_key,
+    resolve_session_id,
 )
 from agent_os.queue.dispatcher import QueueDispatcher
 from agent_os.queue.store import QueueStore
@@ -122,15 +122,99 @@ class AgentManager:
         self._eviction_task: asyncio.Task | None = None
 
     @staticmethod
-    def _resolve_session_id(session_id: str | None) -> str:
-        """Normalize an optional ``session_id`` to a non-empty string.
+    def _resolve_session_id(session_id: str | None) -> str | None:
+        """Internal-class None-policy (seam 3 / D1): PASSTHROUGH.
 
-        Callers may pass ``None`` (single-loop legacy path) or an explicit
-        chat session id (multi-loop path). Both are funneled through the
-        same normalization here so call-site code does not need to know
-        about the ``DEFAULT_SESSION_ID`` sentinel.
+        For internal/back-compat paths (broadcast, loop-done, stop, etc.) a
+        ``None`` session_id is passed through unchanged. ``make_session_key``
+        then yields ``(project_id, None)`` which matches no live handle, so the
+        path degrades to a handle-miss / no-op (or a None-stamped broadcast that
+        the frontend's strict session routing drops). This is the SAFE-degrade
+        default — never a crash, never a "default" phantom session. Callers that
+        must resolve None to a concrete session use ``_sid_read`` (read/affect →
+        holder) or ``_sid_inject`` (inject → persistent chat) instead.
         """
-        return session_id or DEFAULT_SESSION_ID
+        return resolve_session_id(session_id, on_none=lambda: None)
+
+    def _sid_read(self, project_id: str, session_id: str | None) -> str | None:
+        """Read/affect None-policy (seam 3 / D1): None → the active-loop-slot
+        holder; if no holder, None (→ handle-miss → idle/no-op). NEVER mints.
+
+        Used by run-status, stop/cancel, approve/deny, pending-approval,
+        autonomy, etc. — "act on the running session when none is named."
+        """
+        return resolve_session_id(
+            session_id,
+            on_none=lambda: self.current_holder_session_id(project_id),
+        )
+
+    def _sid_inject(self, project_id: str, session_id: str | None) -> str | None:
+        """Inject (start-work) None-policy (seam 3 / D1): None → the holder if
+        the queue is draining, else the project's persistent chat session
+        (lazy-mint via the single funnel). This is the ONLY path that may mint.
+        """
+        return resolve_session_id(
+            session_id,
+            on_none=lambda: self._resolve_inject_none(project_id),
+        )
+
+    def _resolve_inject_none(self, project_id: str) -> str:
+        """Resolve inject(None): holder if the queue is actively draining,
+        else the persistent chat-origin session (single mint funnel)."""
+        from agent_os.queue.models import QueueRunState
+        dispatcher = self._dispatchers.get(project_id)
+        draining = False
+        if dispatcher is not None:
+            try:
+                draining = dispatcher._store.load().state == QueueRunState.RUNNING
+            except Exception:
+                draining = False
+        if draining:
+            holder = self.current_holder_session_id(project_id)
+            if holder is not None:
+                return holder
+        return self._ensure_chat_session(project_id)
+
+    def _ensure_chat_session(self, project_id: str) -> str:
+        """THE single chat-session funnel (seam 3 / D1).
+
+        Returns the project's persistent chat session uuid: the most-recent
+        chat-origin session if any exist (defensive — degrades gracefully if the
+        at-most-one invariant was ever violated, e.g. by explicit "+ new
+        session"), else lazy-mints exactly one via ``new_session`` (the only
+        auto-mint of a chat session; "at most one" is enforced by minting only
+        when zero exist).
+        """
+        chat_sessions = [
+            s for s in self.list_sessions(project_id)
+            if s.get("origin", "chat") == "chat"
+        ]
+        if chat_sessions:
+            # Most-recent by last_activity_at (None sorts last/oldest).
+            def _ts(s):
+                la = s.get("last_activity_at")
+                try:
+                    from datetime import datetime
+                    return datetime.fromisoformat(la) if la else datetime.min
+                except Exception:
+                    return None
+            chat_sessions.sort(key=lambda s: (s.get("last_activity_at") or ""), reverse=True)
+            return chat_sessions[0]["session_id"]
+        # Zero chat-origin sessions → lazy-mint exactly one (the at-most-one
+        # invariant: we mint only when none exist).
+        return self._mint_session_uuid(project_id)
+
+    def _mint_session_uuid(self, project_id: str) -> str:
+        """Mint a fresh canonical session uuid (sync; no file, no handle).
+
+        Shared by ``new_session`` (the explicit "+ new session" / queue path)
+        and ``_ensure_chat_session`` (the lazy chat funnel) so there is a single
+        uuid-minting primitive.
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        project_name = (project or {}).get("name", "")
+        sanitized = _sanitize_project_name(project_name)
+        return f"{sanitized}_{uuid4().hex[:8]}"
 
     def _broadcast(self, project_id: str, payload: dict,
                    session_id: str | None = None) -> None:
@@ -274,18 +358,21 @@ class AgentManager:
                           session: "Session | None" = None) -> None:
         """Wire all components and start the loop.
 
-        ``session_id`` is the optional Format-1 user-facing chat id (see
-        ``TASK/ACTIVE-session-and-queue-model.md`` and
-        ``TASK/INVESTIGATION-session-id-canonical-audit.md``). When omitted
-        the session gets the ``DEFAULT_SESSION_ID`` Format-1 value, preserving
-        backward compatibility with single-session-per-project callers. The
-        internal Format-2 storage stem (``session_uuid``) is generated
-        unconditionally below.
+        ``session_id`` is the canonical session id (seam 3 / D1+D2: id == uuid
+        == handle key, no "default" sentinel). Resolution:
+          - a hydrated ``session`` was passed → key by ``session.session_uuid``;
+          - an explicit ``session_id`` was passed → it IS the canonical id/stem;
+          - neither → mint a fresh uuid (the session is identified by it).
+        The pure-create branch below sets ``session_uuid = session_id`` so the
+        JSONL stem, the handle key, and the stamped/holder id are ONE value
+        (eliminating the dual-id split that was the seam-3 root cause).
 
-        ``self._handles`` is keyed by ``SessionKey == (project_id, session_id)``
-        so each chat session within a project owns an independent ProjectHandle.
+        ``self._handles`` is keyed by ``SessionKey == (project_id, session_id)``.
         """
-        session_id = self._resolve_session_id(session_id)
+        if session is not None:
+            session_id = session.session_uuid
+        elif session_id is None:
+            session_id = self._mint_session_uuid(project_id)
         sk = make_session_key(project_id, session_id)
         # Guard: check if already running
         handle = self._handles.get(sk)
@@ -430,8 +517,12 @@ class AgentManager:
         # existing on-disk conversation — hydrate-on-inject). When hydrated,
         # the session already carries its original F1/F2 and full history.
         if session is None:
-            sanitized = _sanitize_project_name(config.project_name)
-            session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
+            # Seam 3 / D1+D2: the canonical id IS the storage stem. session_id
+            # was resolved above (explicit, or freshly minted for None), so the
+            # JSONL stem == session_id == handle key — one value, no dual-id
+            # split. Origin derived from the queue context — the QueueDispatcher
+            # injects with queue_state="running", everything else is user chat.
+            session_uuid = session_id
             session = Session.new(
                 session_uuid, config.workspace,
                 session_id=session_id,
@@ -439,6 +530,7 @@ class AgentManager:
                 model=config.model,
                 sdk=config.sdk,
                 fallback_models=[fb.model for fb in config.llm_fallback_models],
+                origin=("queue" if queue_state == "running" else "chat"),
             )
 
         # 6-7. Observers
@@ -467,6 +559,7 @@ class AgentManager:
         interceptor = AutonomyInterceptor(
             config.autonomy, self._ws, project_id,
             user_credential_store=self._user_credential_store,
+            session_id=session_id,
         )
 
         # 11. Session-end callback
@@ -740,6 +833,7 @@ class AgentManager:
                 registry.register(NotifyTool(
                     ws_manager=ws,
                     project_id=project_id,
+                    session_id=session_id,
                 ))
         except ImportError:
             pass
@@ -996,7 +1090,9 @@ class AgentManager:
         the project's workspace and config; it does NOT inherit
         conversation history from any other session in the same project.
         """
-        session_id = self._resolve_session_id(session_id)
+        # Inject (start-work) None-policy: holder if the queue is draining,
+        # else the project's persistent chat session (lazy-mint funnel).
+        session_id = self._sid_inject(project_id, session_id)
         sk = make_session_key(project_id, session_id)
         # A user-initiated message clears any recorded terminal event for
         # this session — the user is taking action, so the error/stopped
@@ -1011,15 +1107,24 @@ class AgentManager:
             # F2/uuid), load it and CONTINUE the conversation rather than
             # forking a fresh empty session. This is the chat flow's only load
             # path — the cold-resume experiment proved Case 3 alone discarded
-            # all history. Identity (original F1) is preserved from the meta.
+            # all history.
+            #
+            # Seam 3 / Phase 1: adopt the session's *uuid* as the routing
+            # identity, NOT the file's meta F1. The frontend addresses a
+            # disk-only session by its session_uuid (the JSONL filename stem),
+            # so keying the handle / holder / stamped events under the uuid is
+            # what makes viewed == holder (the render gate `viewingHolder`).
+            # The meta F1 is still preserved on the loaded Session object
+            # (loaded.session_id) for display/back-compat; it is simply no
+            # longer the routing key. See REPORT-streaming-status-frontend.md.
             loaded = self._load_session_from_disk(project_id, session_id)
             if loaded is not None:
                 logger.info(
-                    "inject_message(%s): hydrating session %s (uuid %s) from disk",
-                    project_id, loaded.session_id, loaded.session_uuid,
+                    "inject_message(%s): hydrating session uuid %s (meta F1 %s) from disk",
+                    project_id, loaded.session_uuid, loaded.session_id,
                 )
                 await self.start_agent(project_id, config, initial_message=content,
-                                      initial_nonce=nonce, session_id=loaded.session_id,
+                                      initial_nonce=nonce, session_id=loaded.session_uuid,
                                       queue_state=queue_state, session=loaded)
                 return "started"
             # Case 3: no session on disk — auto-start a fresh agent.
@@ -1221,7 +1326,7 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return False
@@ -1308,7 +1413,7 @@ class AgentManager:
     def get_last_terminal_event(self, project_id: str, *,
                                  session_id: str | None = None) -> dict | None:
         """Return the recorded terminal event, or None if none recorded."""
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         return self._last_terminal_events.get(
             make_session_key(project_id, session_id),
         )
@@ -1334,10 +1439,21 @@ class AgentManager:
         is not a distinct runtime state, just "not running right now". The
         historical fact that it was stopped lives in last_terminal_event.
 
-        ``session_id`` selects the chat session; defaults to the
-        single-loop default session.
+        ``session_id`` selects the chat session. When omitted (``None``), the
+        call is holder-aware (seam 3 / Phase 1 / decision D1): it resolves to
+        the project's active-loop-slot holder and reports THAT session's
+        status, returning ``idle`` only when no session holds the slot. This
+        replaces the old "default session" resolution, which returned ``idle``
+        during a turn running under a non-default session (e.g. a uuid) and
+        caused the REST poll to revert the WS-driven ``running``. An explicit
+        ``session_id`` still targets exactly that session (unchanged).
         """
-        session_id = self._resolve_session_id(session_id)
+        if session_id is None:
+            session_id = self.current_holder_session_id(project_id)
+            if session_id is None:
+                return "idle"
+        else:
+            session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return "idle"
@@ -1365,7 +1481,7 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return False
@@ -1390,7 +1506,7 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return None
@@ -1410,7 +1526,7 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
@@ -1507,7 +1623,7 @@ class AgentManager:
         ``session_id`` selects the chat session; defaults to the
         single-loop default session.
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
@@ -1565,18 +1681,18 @@ class AgentManager:
         to; ``session_uuid`` is the F2 JSONL stem the session will use once
         materialized.
         """
-        project = self._project_store.get_project(project_id)
-        project_name = (project or {}).get("name", "")
-        sanitized = _sanitize_project_name(project_name)
-        new_session_uuid = f"{sanitized}_{uuid4().hex[:8]}"
-        new_session_id = f"sess_{uuid4().hex[:8]}"
+        # Seam 3 / decision D2: the canonical session identity is the uuid (the
+        # JSONL filename stem). The F1 (`sess_…`) mint is retired — session_id
+        # IS the uuid, no separate/vestigial F1. Uses the shared mint primitive
+        # (also used by the lazy chat funnel) so there is one uuid source.
+        new_session_uuid = self._mint_session_uuid(project_id)
         logger.info(
-            "new_session(%s): minted %s (uuid %s)",
-            project_id, new_session_id, new_session_uuid,
+            "new_session(%s): minted uuid %s (uuid-only; F1 retired)",
+            project_id, new_session_uuid,
         )
         return {
             "status": "ok",
-            "session_id": new_session_id,
+            "session_id": new_session_uuid,
             "session_uuid": new_session_uuid,
         }
 
@@ -1604,7 +1720,7 @@ class AgentManager:
         - Handle present, task done, not paused, no sub-agents → ``idle``
           (legitimate no-op — there was nothing to cancel).
         """
-        session_id = self._resolve_session_id(session_id)
+        session_id = self._sid_read(project_id, session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             return {"status": "no_agent"}
@@ -1826,7 +1942,18 @@ class AgentManager:
                         except json.JSONDecodeError:
                             continue
                         if rec.get("session_id") == identifier:
-                            return fname[:-6], fpath
+                            resolved_uuid = fname[:-6]
+                            # Seam 3 / decision D4: the F1-scan fallback is kept
+                            # for back-compat (a persisted F1/"default" id that
+                            # isn't a filename) but INSTRUMENTED so we can confirm
+                            # it goes cold before deleting it in a later pass.
+                            logger.info(
+                                "f1_scan_fallback fired: project=%s identifier=%s "
+                                "resolved_uuid=%s (legacy F1 addressing — should "
+                                "trend to zero post canonicalization)",
+                                project_id, identifier, resolved_uuid,
+                            )
+                            return resolved_uuid, fpath
             except OSError:
                 continue
         return None
@@ -1976,6 +2103,9 @@ class AgentManager:
                 # session_id. Consumers (e.g. the /chat session_id filter) build
                 # ``{session_uuid}.jsonl`` from this value, so it MUST be F2.
                 "session_uuid": getattr(handle.session, "session_uuid", None),
+                # Seam 3 / Phase 4: chat | queue (session switcher visual
+                # distinction; D1's persistent-chat resolver).
+                "origin": getattr(handle.session, "origin", "chat"),
                 # Display label (auto-derived from first user message or set via
                 # rename). None for headless sessions; frontend falls back to
                 # the first message / session id.
@@ -1991,8 +2121,9 @@ class AgentManager:
         # JSONL only when the user acts on them.
         seen_uuids = {s["session_uuid"] for s in sessions if s.get("session_uuid")}
         sessions.extend(self._disk_session_entries(project_id, seen_uuids))
-        # Stable ordering — default session first, then alphabetical for others.
-        sessions.sort(key=lambda s: (s["session_id"] != DEFAULT_SESSION_ID, s["session_id"]))
+        # Stable ordering by session id (the "default"-first rule retired with
+        # DEFAULT_SESSION_ID; ids are now uuids). None-safe.
+        sessions.sort(key=lambda s: (s.get("session_id") or ""))
         return sessions
 
     def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
@@ -2017,6 +2148,7 @@ class AgentManager:
                 continue  # already represented by a live in-memory handle
             last_activity_at = None
             stored_name = None  # name on the session_start meta, if present
+            origin = "chat"  # session_start meta origin; legacy logs → chat
             first_user_content = None  # for name backfill
             try:
                 with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
@@ -2033,9 +2165,11 @@ class AgentManager:
                         # Skip identity metadata (session_start, model_swap, …)
                         # — a log with only meta records is not a real session.
                         if rec.get("role") == "meta":
-                            if (rec.get("event") == "session_start"
-                                    and rec.get("name") is not None):
-                                stored_name = rec["name"]
+                            if rec.get("event") == "session_start":
+                                if rec.get("name") is not None:
+                                    stored_name = rec["name"]
+                                if rec.get("origin"):
+                                    origin = rec["origin"]
                             continue
                         if first_real is None:
                             first_real = rec
@@ -2061,6 +2195,7 @@ class AgentManager:
                 "session_id": uuid,
                 "status": "idle",
                 "session_uuid": uuid,
+                "origin": origin,
                 "name": name,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,

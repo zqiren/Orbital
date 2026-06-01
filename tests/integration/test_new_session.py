@@ -2,85 +2,46 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Integration tests for the /new session endpoint.
+"""Integration tests for new_session — the CURRENT pure-create contract.
 
-Covers:
-- /new on idle agent archives JSONL and creates new empty one
-- /new on running agent interrupts gracefully then completes
-- Layer 1 files (PROJECT_STATE.md, DECISIONS.md) survive /new unchanged
-- New session boots from Layer 1 — agent has project context, no conversation history
-- Two projects same workspace — /new on project A does not touch project B
+new_session is "pure-create" (seam 3 / Phase 4, decision D2): it mints a fresh
+session IDENTITY only — the canonical uuid (session_id == session_uuid, the
+'sess_' F1 mint retired). It writes no JSONL, registers no handle, runs no
+turn, and takes NO action on any other session or on Layer-1 files. The session
+materializes (handle, loop, file) on the first inject under the returned id.
+
+(The previous behavior — archive old JSONL / create a (project,"default")
+handle / broadcast new_session→idle / retry an LLM turn — was removed; these
+tests assert the pure-create contract that replaced it.)
 """
 
-import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from agent_os.agent.project_paths import ProjectPaths
+from agent_os.daemon_v2.agent_manager import AgentManager
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_agent_manager():
-    """Create an AgentManager with mocked dependencies."""
-    from agent_os.daemon_v2.agent_manager import AgentManager
-
+def _make_agent_manager(workspace: str = "/tmp/ws", name: str = "Test Project"):
     project_store = MagicMock()
-    ws = MagicMock()
-    ws.broadcast = MagicMock()
+    ws = MagicMock(); ws.broadcast = MagicMock()
     sub_agent_mgr = MagicMock()
     sub_agent_mgr.list_active = MagicMock(return_value=[])
-    sub_agent_mgr.stop = AsyncMock()
-    sub_agent_mgr.stop_all = AsyncMock()
-    activity_translator = MagicMock()
-    process_manager = MagicMock()
-    process_manager.set_session = MagicMock()
-
+    sub_agent_mgr.stop = AsyncMock(); sub_agent_mgr.stop_all = AsyncMock()
     mgr = AgentManager(
-        project_store=project_store,
-        ws_manager=ws,
-        sub_agent_manager=sub_agent_mgr,
-        activity_translator=activity_translator,
-        process_manager=process_manager,
+        project_store=project_store, ws_manager=ws,
+        sub_agent_manager=sub_agent_mgr, activity_translator=MagicMock(),
+        process_manager=MagicMock(),
     )
+    project_store.get_project.return_value = {"workspace": workspace, "name": name}
     return mgr, ws, project_store
 
 
-def _make_config(**overrides):
-    from agent_os.daemon_v2.models import AgentConfig
-    defaults = dict(workspace="/tmp/ws", model="gpt-4", api_key="sk-test")
-    defaults.update(overrides)
-    return AgentConfig(**defaults)
-
-
-def _write_layer1_files(workspace: str) -> dict:
-    """Write Layer 1 files at the flat orbital/ layout and return their
-    {absolute_path: content} mapping for assertion."""
-    pp = ProjectPaths(workspace)
-    os.makedirs(pp.orbital_dir, exist_ok=True)
-    files = {
-        pp.project_state: "# Project State\nFeature X is 50% complete.",
-        pp.decisions: "# Decisions\n## 2024-01-01: Use React\n**Chose:** React",
-    }
-    for path, content in files.items():
-        with open(path, "w") as f:
-            f.write(content)
-    return files
-
-
-def _write_session_file(workspace: str, session_uuid: str,
-                        messages: list[dict]) -> str:
-    """Write a session JSONL file at the flat orbital/sessions/ layout and
-    return its absolute path.
-
-    ``session_uuid`` is the Format-2 filename stem (see F7 audit).
-    """
+def _write_session_file(workspace, session_uuid, messages):
     pp = ProjectPaths(workspace)
     os.makedirs(pp.sessions_dir, exist_ok=True)
     filepath = pp.session_file(session_uuid)
@@ -90,262 +51,49 @@ def _write_session_file(workspace: str, session_uuid: str,
     return filepath
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
-class TestNewSessionIdle:
-    """Test /new session on an idle agent (no running loop)."""
+class TestNewSessionPureCreate:
+    @pytest.mark.asyncio
+    async def test_returns_ok_with_uuid_only_ids(self):
+        mgr, _, _ = _make_agent_manager()
+        result = await mgr.new_session("proj_1")
+        assert result["status"] == "ok"
+        assert result["session_id"] == result["session_uuid"]  # D2: uuid-only
+        assert not result["session_id"].startswith("sess_")
 
     @pytest.mark.asyncio
-    async def test_new_session_returns_ok_when_no_handle(self):
-        """When no active session exists, new_session returns immediately."""
+    async def test_registers_no_handle_and_writes_no_file(self):
+        with tempfile.TemporaryDirectory() as ws:
+            mgr, _, _ = _make_agent_manager(workspace=ws)
+            result = await mgr.new_session("proj_1")
+            assert (("proj_1", result["session_id"]) not in mgr._handles)
+            path = ProjectPaths(ws).session_file(result["session_uuid"])
+            assert not os.path.exists(path), "pure-create must not write a JSONL"
+
+    @pytest.mark.asyncio
+    async def test_broadcasts_nothing(self):
         mgr, ws, _ = _make_agent_manager()
-        result = await mgr.new_session("nonexistent_project")
-        assert result["status"] == "no_active_session"
+        await mgr.new_session("proj_1")
+        assert ws.broadcast.call_count == 0, "pure-create must not broadcast"
 
     @pytest.mark.asyncio
-    async def test_new_session_creates_fresh_session(self):
-        """After new_session, a new empty session file exists."""
-        with tempfile.TemporaryDirectory() as workspace:
-            mgr, ws, project_store = _make_agent_manager()
-            project_id = "proj_abc123def456"
-            project_name = "Test Project"
-
-            # Write existing session
-            old_messages = [
-                {"role": "user", "content": "hello", "timestamp": "2024-01-01T00:00:00Z"},
-                {"role": "assistant", "content": "hi there", "timestamp": "2024-01-01T00:00:01Z"},
-            ]
-            old_session_path = _write_session_file(
-                workspace, "old_session_abc", old_messages
-            )
-
-            # Write Layer 1 files
-            _write_layer1_files(workspace)
-
-            # Simulate an idle handle (task done)
-            from agent_os.daemon_v2.agent_manager import ProjectHandle
-            from agent_os.agent.session import Session
-
-            session = Session.new("old_session_abc", workspace)
-            for msg in old_messages:
-                session.append(msg)
-
-            mock_loop = MagicMock()
-            mock_loop.run = AsyncMock()
-            mock_provider = MagicMock()
-            mock_registry = MagicMock()
-            mock_context = MagicMock()
-            mock_interceptor = MagicMock()
-
-            done_task = asyncio.get_event_loop().create_future()
-            done_task.set_result(None)
-
-            handle = ProjectHandle(
-                session=session,
-                loop=mock_loop,
-                provider=mock_provider,
-                registry=mock_registry,
-                context_manager=mock_context,
-                interceptor=mock_interceptor,
-                task=done_task,
-                config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-            )
-            mgr._handles[(project_id, "default")] = handle
-
-            project_store.get_project.return_value = {
-                "project_id": project_id,
-                "name": project_name,
-                "workspace": workspace,
-                "model": "gpt-4",
-                "api_key": "sk-test",
-                "provider": "custom",
-                "sdk": "openai",
-            }
-
-            result = await mgr.new_session(project_id)
-            assert result["status"] == "ok"
-
-            # Old session file should still exist (archived)
-            assert os.path.isfile(old_session_path)
-
-            # A new session should exist in the handle
-            new_session = mgr._handles[(project_id, "default")].session
-            assert new_session.session_id != "old_session_abc"
-            assert new_session.get_messages() == []
-
-
-class TestNewSessionPreservesLayer1:
-    """Layer 1 files survive /new unchanged."""
-
-    @pytest.mark.asyncio
-    async def test_layer1_files_intact_after_new_session(self):
-        with tempfile.TemporaryDirectory() as workspace:
-            mgr, ws, project_store = _make_agent_manager()
-            project_id = "proj_abc123def456"
-            project_name = "Test Project"
-
-            # Write Layer 1 files
-            layer1 = _write_layer1_files(workspace)
-
-            # Write session
-            _write_session_file(workspace, "sess_001", [
-                {"role": "user", "content": "test"},
-            ])
-
-            # Setup handle
-            from agent_os.daemon_v2.agent_manager import ProjectHandle
-            from agent_os.agent.session import Session
-
-            session = Session.new("sess_001", workspace)
-            done_task = asyncio.get_event_loop().create_future()
-            done_task.set_result(None)
-
-            handle = ProjectHandle(
-                session=session,
-                loop=MagicMock(),
-                provider=MagicMock(),
-                registry=MagicMock(),
-                context_manager=MagicMock(),
-                interceptor=MagicMock(),
-                task=done_task,
-                config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-            )
-            mgr._handles[(project_id, "default")] = handle
-
-            project_store.get_project.return_value = {
-                "project_id": project_id,
-                "name": project_name,
-                "workspace": workspace,
-                "model": "gpt-4",
-                "api_key": "sk-test",
-                "provider": "custom",
-                "sdk": "openai",
-            }
-
-            await mgr.new_session(project_id)
-
-            # Verify Layer 1 files are untouched at their flat-layout paths
-            for path, expected_content in layer1.items():
-                with open(path) as f:
-                    assert f.read() == expected_content
-
-
-class TestNewSessionBroadcasts:
-    """Verify the WebSocket broadcast sequence during /new."""
-
-    @pytest.mark.asyncio
-    async def test_broadcasts_new_session_then_idle(self):
-        """new_session must broadcast new_session followed by idle."""
-        with tempfile.TemporaryDirectory() as workspace:
-            mgr, ws, project_store = _make_agent_manager()
-            project_id = "proj_abc123def456"
-            project_name = "Test Project"
-
-            _write_session_file(workspace, "sess_old", [
+    async def test_does_not_touch_existing_session_files(self):
+        with tempfile.TemporaryDirectory() as ws:
+            mgr, _, _ = _make_agent_manager(workspace=ws)
+            old = _write_session_file(ws, "proj_old_aaaa", [
                 {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
             ])
-
-            from agent_os.daemon_v2.agent_manager import ProjectHandle
-            from agent_os.agent.session import Session
-
-            session = Session.new("sess_old", workspace)
-            done_task = asyncio.get_event_loop().create_future()
-            done_task.set_result(None)
-
-            handle = ProjectHandle(
-                session=session,
-                loop=MagicMock(),
-                provider=MagicMock(),
-                registry=MagicMock(),
-                context_manager=MagicMock(),
-                interceptor=MagicMock(),
-                task=done_task,
-                config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-            )
-            mgr._handles[(project_id, "default")] = handle
-
-            project_store.get_project.return_value = {
-                "project_id": project_id,
-                "name": project_name,
-                "workspace": workspace,
-                "model": "gpt-4",
-                "api_key": "sk-test",
-                "provider": "custom",
-                "sdk": "openai",
-            }
-
-            await mgr.new_session(project_id)
-
-            # Extract agent.status broadcasts
-            statuses = [
-                call[0][1]["status"]
-                for call in ws.broadcast.call_args_list
-                if call[0][1].get("type") == "agent.status"
-            ]
-            assert statuses == ["new_session", "idle"]
-
-
-class TestNewSessionIsolation:
-    """Two projects same workspace — /new on project A does not touch
-    project B's session file. (Layer 1 files are workspace-shared after
-    TASK-02's flat-layout migration, so per-project Layer 1 isolation
-    is no longer a meaningful invariant; only sessions are per-id.)"""
+            before = open(old).read()
+            await mgr.new_session("proj_1")
+            assert open(old).read() == before, "must not archive/rewrite other sessions"
 
     @pytest.mark.asyncio
-    async def test_new_session_only_affects_target_project_session(self):
-        with tempfile.TemporaryDirectory() as workspace:
-            mgr, ws, project_store = _make_agent_manager()
-
-            pid_a = "proj_aaaa11112222"
-            name_a = "Project A"
-
-            # Write sessions for both projects (different session_ids share
-            # the flat orbital/sessions/ directory but have distinct files).
-            sess_a_path = _write_session_file(workspace, "sess_a", [
-                {"role": "user", "content": "from A"},
-            ])
-            sess_b_path = _write_session_file(workspace, "sess_b", [
-                {"role": "user", "content": "from B"},
-            ])
-
-            # Setup handle for A only
-            from agent_os.daemon_v2.agent_manager import ProjectHandle
-            from agent_os.agent.session import Session
-
-            session_a = Session.new("sess_a", workspace)
-            done_task = asyncio.get_event_loop().create_future()
-            done_task.set_result(None)
-
-            handle_a = ProjectHandle(
-                session=session_a,
-                loop=MagicMock(),
-                provider=MagicMock(),
-                registry=MagicMock(),
-                context_manager=MagicMock(),
-                interceptor=MagicMock(),
-                task=done_task,
-                config_snapshot={"workspace": workspace, "model": "gpt-4", "autonomy": "hands_off"},
-            )
-            mgr._handles[(pid_a, "default")] = handle_a
-
-            project_store.get_project.return_value = {
-                "project_id": pid_a,
-                "name": name_a,
-                "workspace": workspace,
-                "model": "gpt-4",
-                "api_key": "sk-test",
-                "provider": "custom",
-                "sdk": "openai",
-            }
-
-            await mgr.new_session(pid_a)
-
-            # Project B's session file should be completely untouched
-            assert os.path.isfile(sess_b_path)
-            with open(sess_b_path) as f:
-                lines = f.readlines()
-            assert len(lines) == 1
-            assert json.loads(lines[0])["content"] == "from B"
+    async def test_does_not_touch_a_running_session_handle(self):
+        mgr, _, _ = _make_agent_manager()
+        running = MagicMock()
+        running.task = MagicMock(); running.task.done.return_value = False
+        mgr._handles[("proj_1", "proj_existing_bbbb")] = running
+        await mgr.new_session("proj_1")
+        # The running handle is untouched; no new handle was registered.
+        assert mgr._handles[("proj_1", "proj_existing_bbbb")] is running
+        assert len([k for k in mgr._handles if k[0] == "proj_1"]) == 1

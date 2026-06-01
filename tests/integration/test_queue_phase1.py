@@ -54,6 +54,8 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
     mgr.get_session = MagicMock(return_value=_FakeSession(session_id))
     mgr.get_loop = MagicMock(return_value=_TextOnlyLoop())
     mgr.inject_message = AsyncMock(return_value="delivered")
+    # Corrective-turn path awaits inject_system_message; mock it as async.
+    mgr.inject_system_message = AsyncMock(return_value=None)
     # Concern 4: dispatcher rotates the session on every terminal exit
     # (including the text-only contract-violation path). MagicMock would
     # return a non-awaitable for new_session, so we patch it with an
@@ -64,7 +66,10 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
         counter["n"] += 1
         new_sid = f"{session_id}_r{counter['n']}"
         mgr.get_session.return_value = _FakeSession(new_sid)
-        return {"status": "new_session"}
+        # Current new_session contract (D2): uuid-only — session_id IS the uuid.
+        # The dispatcher reads result["session_id"]; the old {"status":
+        # "new_session"} shape predated that and KeyError'd.
+        return {"status": "ok", "session_id": new_sid, "session_uuid": new_sid}
 
     mgr.new_session = _new_session
 
@@ -74,7 +79,8 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
 
     task_holder = {"task": None}
 
-    def _get_loop_task(_pid):
+    def _get_loop_task(_pid, *args, **kwargs):
+        # Accept the session_id the dispatcher now threads (project, session_id).
         # Lazily create the task on first call so the asyncio loop is alive.
         if task_holder["task"] is None or task_holder["task"].done():
             task_holder["task"] = asyncio.create_task(_instant_loop())
@@ -177,7 +183,10 @@ async def test_dispatcher_records_attempt_with_session_id(dispatcher):
 
     state = store.load()
     assert len(state.items[0].attempts) == 1
-    assert state.items[0].attempts[0].session_id == "sess_phase1"
+    # Each queue item runs in its OWN freshly-minted session (the dispatcher
+    # calls new_session per attempt); the fixture mints "{base}_r{n}". The
+    # recorded attempt id is that minted session — the canonical id D3 remaps.
+    assert state.items[0].attempts[0].session_id == "sess_phase1_r1"
 
 
 @pytest.mark.asyncio

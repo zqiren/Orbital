@@ -22,6 +22,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, passing
+# an explicit session_id is required for SubAgentManager.start (None hard-raises)
+# and avoids start_agent's lazy uuid-mint (which would call get_project on a bare
+# MagicMock project_store and fail in _sanitize_project_name).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # 1. create_app loads registry
@@ -178,7 +184,7 @@ class TestSubAgentStartUsesManifest:
             mock_instance = AsyncMock()
             MockAdapter.return_value = mock_instance
 
-            result = await mgr.start("proj_1", "test-agent")
+            result = await mgr.start("proj_1", "test-agent", session_id=SID)
 
         assert "Started" in result
         assert "Test Agent" in result
@@ -211,7 +217,7 @@ class TestSubAgentStartUnknownSlug:
             setup_engine=setup_engine,
         )
 
-        result = await mgr.start("proj_1", "foobar")
+        result = await mgr.start("proj_1", "foobar", session_id=SID)
         assert "Error" in result
         assert "unknown" in result.lower() or "foobar" in result
 
@@ -242,7 +248,7 @@ class TestSubAgentStartUnknownSlug:
             setup_engine=setup_engine,
         )
 
-        result = await mgr.start("proj_1", "built-in")
+        result = await mgr.start("proj_1", "built-in", session_id=SID)
         assert "Error" in result
         assert "built-in" in result.lower() or "built_in" in result.lower()
 
@@ -399,7 +405,7 @@ class TestPromptContextIncludesCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
             # ContextManager is called with (session, prompt_builder, prompt_context)
             cm_call_args = MockCM.call_args
@@ -466,7 +472,7 @@ class TestPromptContextIncludesCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
             cm_call_args = MockCM.call_args
             prompt_context = cm_call_args[0][2]

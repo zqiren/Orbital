@@ -44,7 +44,6 @@ import pytest
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.session import Session
 from agent_os.api.routes import agents_v2
-from agent_os.daemon_v2.models import DEFAULT_SESSION_ID
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +233,11 @@ async def test_new_session_mints_fresh_f1_and_f2(tmp_path, monkeypatch):
     result = await mgr.new_session("p1")
 
     assert result["status"] == "ok"
-    # A fresh F1 (user-facing chat id) and F2 (storage stem) are minted and
-    # returned — distinct from the seeded session's identities.
-    assert result["session_id"].startswith("sess_")
+    # Seam 3 / decision D2: new_session mints the UUID only — session_id IS the
+    # uuid (the 'sess_' F1 mint is retired). Distinct from the seeded session.
     assert result["session_uuid"]
+    assert result["session_id"] == result["session_uuid"]
+    assert not result["session_id"].startswith("sess_")
     assert result["session_id"] != "default"
     assert result["session_uuid"] != "demo_oldstem1"
 
@@ -278,11 +278,8 @@ def test_api_surface_exposes_session_id_on_start_and_inject():
         content="hello", session_id="sess_explicit",
     )
     assert inj_with_id.session_id == "sess_explicit"
-
-    # The default Format-1 chat id used when callers do not pass one is
-    # exposed as a module constant for downstream consumers (Track J slot
-    # enforcement, etc.).
-    assert DEFAULT_SESSION_ID == "default"
+    # Seam 3 / D1: DEFAULT_SESSION_ID is retired; "no session specified" is None,
+    # resolved per caller class (see test_d1_resolver_no_default.py).
 
 
 # ---------------------------------------------------------------------------

@@ -79,11 +79,14 @@ def _inject_waiting_handle(mgr, project_id, holding_session_id):
     )
     mgr._handles[(project_id, holding_session_id)] = handle
 
-    # Sub-agent poll task — live.
+    # Sub-agent poll task — live. Keyed by the SessionKey tuple
+    # (project_id, session_id) to match production: current_holder_session_id
+    # and _stop_sub_agents look up _idle_poll_tasks via make_session_key, not a
+    # bare project_id (the pre-multi-session relic this test predated).
     async def _never_done():
         await asyncio.sleep(9999)
     poll_task = asyncio.get_event_loop().create_task(_never_done())
-    mgr._idle_poll_tasks[project_id] = poll_task
+    mgr._idle_poll_tasks[(project_id, holding_session_id)] = poll_task
 
     return handle, done_task, poll_task
 

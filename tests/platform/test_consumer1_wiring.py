@@ -23,6 +23,12 @@ import pytest
 
 from agent_os.platform.types import PlatformCapabilities
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, handles are
+# keyed by a real session uuid; start_agent given an explicit session_id avoids the
+# lazy uuid-mint (which re.subs a bare MagicMock project name) and stop_agent needs
+# it too (bare None misses the handle).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,7 +114,7 @@ class TestStartAgentCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
             provider.get_capabilities.assert_called_once()
 
@@ -140,7 +146,7 @@ class TestStartAgentCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
         provider.get_capabilities.assert_called_once()
         mock_logger.warning.assert_any_call(
@@ -174,9 +180,9 @@ class TestStartAgentCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
-            assert ("proj_1", "default") in mgr._handles
+            assert ("proj_1", SID) in mgr._handles
             ws.broadcast.assert_called()
 
 
@@ -207,9 +213,9 @@ class TestStopAgentCallsStopProcess:
         mock_loop = MagicMock(terminate=AsyncMock())
         handle = MagicMock(session=mock_session, task=mock_task,
                            loop=mock_loop)
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
-        await mgr.stop_agent("proj_1")
+        await mgr.stop_agent("proj_1", session_id=SID)
 
         provider.stop_process.assert_awaited_once_with("proj_1")
         # Task is still pending (one `await asyncio.sleep(0)` is not enough
@@ -233,9 +239,9 @@ class TestStopAgentCallsStopProcess:
         mock_loop = MagicMock(terminate=AsyncMock())
         handle = MagicMock(session=mock_session, task=mock_task,
                            loop=mock_loop)
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
-        await mgr.stop_agent("proj_1")
+        await mgr.stop_agent("proj_1", session_id=SID)
 
         # Should still broadcast stopped status
         ws.broadcast.assert_called()
@@ -278,9 +284,9 @@ class TestTriggerSource:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config, trigger_source="desktop_app")
+            await mgr.start_agent("proj_1", config, trigger_source="desktop_app", session_id=SID)
 
-            handle = mgr._handles[("proj_1", "default")]
+            handle = mgr._handles[("proj_1", SID)]
             assert hasattr(handle, "trigger_source") or hasattr(handle, "_trigger_source")
             # Check the stored value
             trigger = getattr(handle, "trigger_source", None) or getattr(handle, "_trigger_source", None)
@@ -313,9 +319,9 @@ class TestTriggerSource:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
-            handle = mgr._handles[("proj_1", "default")]
+            handle = mgr._handles[("proj_1", SID)]
             trigger = getattr(handle, "trigger_source", None) or getattr(handle, "_trigger_source", None)
             assert trigger is None
 
@@ -397,7 +403,7 @@ class TestStartStopCycleNullProvider:
         config = _make_config()
 
         # Should NOT raise — NullProvider is treated as dev mode
-        await mgr.start_agent("proj_1", config)
+        await mgr.start_agent("proj_1", config, session_id=SID)
 
     @pytest.mark.asyncio
     async def test_start_without_provider_proceeds(self):
@@ -422,8 +428,8 @@ class TestStartStopCycleNullProvider:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
-            assert ("proj_1", "default") in mgr._handles
+            await mgr.start_agent("proj_1", config, session_id=SID)
+            assert ("proj_1", SID) in mgr._handles
 
     @pytest.mark.asyncio
     async def test_full_start_stop_with_mock_provider(self):
@@ -456,11 +462,11 @@ class TestStartStopCycleNullProvider:
             MockLoop.return_value = mock_loop
 
             # Start
-            await mgr.start_agent("proj_1", config)
-            assert ("proj_1", "default") in mgr._handles
+            await mgr.start_agent("proj_1", config, session_id=SID)
+            assert ("proj_1", SID) in mgr._handles
             provider.get_capabilities.assert_called_once()
 
             # Stop
-            await mgr.stop_agent("proj_1")
+            await mgr.stop_agent("proj_1", session_id=SID)
             provider.stop_process.assert_awaited_once_with("proj_1")
-            assert ("proj_1", "default") not in mgr._handles
+            assert ("proj_1", SID) not in mgr._handles

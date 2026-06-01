@@ -19,6 +19,12 @@ import pytest
 
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, adapter
+# slates / locks / stopping-flags are keyed by a real session uuid, and every
+# SubAgentManager call must carry it explicitly (None now hard-raises — a
+# sub-agent always has a parent session).
+SID = "proj_sess0001"
+
 
 def _make_manager():
     """Create a SubAgentManager with mock dependencies."""
@@ -57,7 +63,7 @@ class TestStoppingFlag:
 
         adapter.stop = slow_stop
 
-        mgr._adapters[("proj", "default")] = {"agent-a": adapter}
+        mgr._adapters[("proj", SID)] = {"agent-a": adapter}
 
         # Run stop_all and start concurrently
         start_result = None
@@ -66,10 +72,10 @@ class TestStoppingFlag:
             nonlocal start_result
             # Small delay to ensure stop_all has set the flag
             await asyncio.sleep(0.02)
-            start_result = await mgr.start("proj", "agent-b")
+            start_result = await mgr.start("proj", "agent-b", session_id=SID)
 
         await asyncio.gather(
-            mgr.stop_all("proj"),
+            mgr.stop_all("proj", session_id=SID),
             try_start(),
         )
 
@@ -82,19 +88,19 @@ class TestStoppingFlag:
         mgr, pm = _make_manager()
         adapter = _make_mock_adapter()
         adapter.stop = AsyncMock(side_effect=RuntimeError("stop failed"))
-        mgr._adapters[("proj", "default")] = {"agent-a": adapter}
+        mgr._adapters[("proj", SID)] = {"agent-a": adapter}
 
-        await mgr.stop_all("proj")
+        await mgr.stop_all("proj", session_id=SID)
 
         # Flag should be cleared — start should work now
-        assert ("proj", "default") not in mgr._stopping
+        assert ("proj", SID) not in mgr._stopping
 
     @pytest.mark.asyncio
     async def test_stopping_flag_cleared_on_empty_project(self):
         """stop_all on a project with no adapters should still clear cleanly."""
         mgr, pm = _make_manager()
-        await mgr.stop_all("proj")
-        assert ("proj", "default") not in mgr._stopping
+        await mgr.stop_all("proj", session_id=SID)
+        assert ("proj", SID) not in mgr._stopping
 
 
 class TestLifecycleLock:
@@ -129,11 +135,11 @@ class TestLifecycleLock:
             results = {}
 
             async def do_start():
-                results["start"] = await mgr.start("proj", "agent-a")
+                results["start"] = await mgr.start("proj", "agent-a", session_id=SID)
 
             async def do_stop():
                 await asyncio.sleep(0.02)  # start first
-                await mgr.stop_all("proj")
+                await mgr.stop_all("proj", session_id=SID)
 
             await asyncio.gather(do_start(), do_stop())
 
@@ -171,8 +177,8 @@ class TestLifecycleLock:
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter", side_effect=make_adapter):
             r1, r2 = await asyncio.wait_for(
                 asyncio.gather(
-                    mgr.start("proj", "agent-a"),
-                    mgr.start("proj", "agent-b"),
+                    mgr.start("proj", "agent-a", session_id=SID),
+                    mgr.start("proj", "agent-b", session_id=SID),
                 ),
                 timeout=5.0,
             )
@@ -202,12 +208,12 @@ class TestDefensiveCleanup:
         mgr._adapter_configs["agent-a"] = config
 
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter", return_value=adapter):
-            result = await mgr.start("proj", "agent-a")
+            result = await mgr.start("proj", "agent-a", session_id=SID)
 
         assert "adapter start failed" in result
         adapter.stop.assert_called_once()
         # Adapter should NOT be registered
-        assert "agent-a" not in mgr._adapters.get(("proj", "default"), {})
+        assert "agent-a" not in mgr._adapters.get(("proj", SID), {})
 
     @pytest.mark.asyncio
     async def test_failed_start_cleanup_does_not_raise(self):
@@ -228,7 +234,7 @@ class TestDefensiveCleanup:
         mgr._adapter_configs["agent-a"] = config
 
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter", return_value=adapter):
-            result = await mgr.start("proj", "agent-a")
+            result = await mgr.start("proj", "agent-a", session_id=SID)
 
         # Should not raise, just return the original error
         assert "adapter start failed" in result
@@ -241,24 +247,24 @@ class TestLockCleanup:
     async def test_lock_removed_after_stop_all(self):
         """stop_all cleans up the lifecycle lock for the project."""
         mgr, pm = _make_manager()
-        mgr._adapters[("proj", "default")] = {}
+        mgr._adapters[("proj", SID)] = {}
         # Force lock creation
-        mgr._get_lock("proj")
-        assert ("proj", "default") in mgr._lifecycle_locks
+        mgr._get_lock("proj", session_id=SID)
+        assert ("proj", SID) in mgr._lifecycle_locks
 
-        await mgr.stop_all("proj")
+        await mgr.stop_all("proj", session_id=SID)
 
-        assert ("proj", "default") not in mgr._lifecycle_locks
+        assert ("proj", SID) not in mgr._lifecycle_locks
 
     @pytest.mark.asyncio
     async def test_lock_recreated_on_new_start(self):
         """After stop_all cleans up the lock, a new start creates a fresh one."""
         mgr, pm = _make_manager()
-        mgr._adapters[("proj", "default")] = {}
-        await mgr.stop_all("proj")
-        assert ("proj", "default") not in mgr._lifecycle_locks
+        mgr._adapters[("proj", SID)] = {}
+        await mgr.stop_all("proj", session_id=SID)
+        assert ("proj", SID) not in mgr._lifecycle_locks
 
         # _get_lock should create a new one
-        lock = mgr._get_lock("proj")
+        lock = mgr._get_lock("proj", session_id=SID)
         assert lock is not None
-        assert ("proj", "default") in mgr._lifecycle_locks
+        assert ("proj", SID) in mgr._lifecycle_locks
