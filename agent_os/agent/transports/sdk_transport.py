@@ -65,6 +65,13 @@ class SDKTransport(AgentTransport):
         # task so the event loop cannot GC it mid-stream. Also used by
         # stop() to cancel in-flight iteration before disconnect().
         self._bg_task: asyncio.Task | None = None
+        # Direction B (own the kill): captured at connect() so stop() can
+        # terminate the claude subprocess tree directly, independent of the
+        # SDK's cross-task-failing graceful disconnect(). ``_proc`` is a
+        # ``psutil.Process`` (PID-reuse-safe kill anchor); ``_raw_proc`` is the
+        # SDK's anyio process handle, kept only for best-effort FD close.
+        self._proc = None
+        self._raw_proc = None
         # Optional system prompt. Forwarded to ClaudeAgentOptions(system_prompt=...)
         # at start() time. Used by sub-agent inheritance flow.
         self._system_prompt: str | None = system_prompt
@@ -93,6 +100,32 @@ class SDKTransport(AgentTransport):
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
         self._alive = True
+        self._capture_process_handle()
+
+    def _capture_process_handle(self) -> None:
+        """Capture the claude subprocess handle for own-the-kill teardown.
+
+        Reaches into the SDK's subprocess transport (read-only) for the spawned
+        process. Stores a ``psutil.Process`` (identity-checked by pid+create_time,
+        so a recycled PID raises ``NoSuchProcess`` rather than signalling an
+        innocent process) plus the raw anyio handle for best-effort FD close.
+        """
+        try:
+            raw = self._client._transport._process  # anyio Process
+        except Exception:
+            logger.warning("SDKTransport: could not reach subprocess handle; "
+                           "teardown will rely on disconnect() only")
+            return
+        self._raw_proc = raw
+        pid = getattr(raw, "pid", None)
+        if pid is None:
+            return
+        try:
+            import psutil
+            self._proc = psutil.Process(pid)
+        except Exception:
+            logger.warning("SDKTransport: could not wrap subprocess pid=%s in "
+                           "psutil.Process", pid, exc_info=True)
 
     async def send(self, message: str) -> str | None:
         if self._client is None:
@@ -279,15 +312,63 @@ class SDKTransport(AgentTransport):
                 )
         self._bg_task = None
 
+        # 1. Best-effort graceful disconnect. The SDK's Query.close() exits an
+        #    anyio task group that was entered in a DIFFERENT task (the one that
+        #    connected), so on the daemon's reap/eviction path this raises
+        #    "Attempted to exit cancel scope in a different task" — which is
+        #    EXPECTED and harmless here. Termination does NOT depend on it
+        #    succeeding (FINDINGS-reap-confirmation; Direction B).
         if self._client is not None:
             try:
                 await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
+                logger.debug("SDKTransport.stop: disconnect() returned cleanly")
+            except Exception as e:
+                logger.debug("SDKTransport.stop: disconnect() best-effort failed "
+                             "(expected cross-task): %r", e)
 
+        # 2. Own the kill: terminate the claude process tree ourselves,
+        #    independent of the SDK. Snapshots descendants, SIGTERM→SIGKILL,
+        #    reaps the parent zombie, never blocks the loop.
+        if self._proc is not None:
+            try:
+                from agent_os.agent.transports.process_kill import kill_process_tree
+                outcome = await kill_process_tree(self._proc, label="sdk")
+                if not outcome.parent_dead:
+                    logger.error("SDKTransport.stop: claude subprocess survived "
+                                 "kill; PID may leak")
+            except Exception:
+                logger.exception("SDKTransport.stop: kill_process_tree raised")
+
+        # 3. Explicitly close subprocess stdio. The leaked SDK task group may
+        #    not, so close FDs ourselves to avoid descriptor growth across
+        #    dispatch→reap cycles.
+        await self._close_subprocess_fds()
+
+        self._client = None
+        self._proc = None
+        self._raw_proc = None
         self._alive = False
         self._session_id = None
+
+    async def _close_subprocess_fds(self) -> None:
+        """Best-effort close of the claude subprocess stdio streams."""
+        raw = self._raw_proc
+        if raw is None:
+            return
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(raw, name, None)
+            if stream is None:
+                continue
+            try:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+                    continue
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+            except Exception:
+                logger.debug("SDKTransport: closing %s failed", name, exc_info=True)
 
     def is_alive(self) -> bool:
         return self._alive
