@@ -404,37 +404,31 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Latest holder, readable synchronously inside WS handlers.
   const holderSessionIdRef = useRef<string | null>(holderSessionId);
   holderSessionIdRef.current = holderSessionId;
-  // True when the viewed session is the one holding the active-loop slot.
-  // Live WS events (stream/activity/approvals) are appended to the viewed
-  // conversation only when this is true.
+  // Seam 3 / Phase 3: live WS events are routed STRICTLY by session_id. Every
+  // live event now carries the canonical session_id (Phases 1+2), so a handler
+  // renders an event into the viewed conversation iff
+  // ``event.session_id === sessionIdRef.current``. The old ``viewingHolder``
+  // heuristic (with its lenient null-holder "presume the viewed session is the
+  // holder" fallback) is gone: it defaulted to SHOW, which leaked events across
+  // sessions whenever the holder was momentarily unresolved. There is no
+  // default-to-show path anymore — an event with no/other session_id is dropped.
   //
-  // Lenient null-holder window: between mount (or a status flip) and the first
-  // fetchHolder resolving, holderSessionId is still null. If we gated strictly
-  // on a non-null holder, live deltas arriving in that window for a RUNNING
-  // session would be silently dropped — the user would see a mid-stream stall.
-  // So when the holder is not yet known (null) AND the agent is in an active
-  // state, treat the viewed session as the presumptive holder. This matches
-  // fetchPendingApproval's null-holder policy so the two gates never drift.
-  // Once fetchHolder resolves a concrete id, the strict equality check takes
-  // over (a null-holder + idle agent means nothing is running → no events).
-  const agentIsActive =
-    agentStatus === 'running' ||
-    agentStatus === 'waiting' ||
-    agentStatus === 'pending_approval' ||
-    agentStatus === 'new_session';
-  const viewingHolder =
-    sessionId !== undefined &&
-    (holderSessionId === null ? agentIsActive : sessionId === holderSessionId);
-  const viewingHolderRef = useRef(viewingHolder);
-  viewingHolderRef.current = viewingHolder;
+  // ``holderSessionId`` is retained, but ONLY as a fact (which session holds the
+  // project's active-loop slot), never as an event-routing gate. It drives:
+  //   - the cancel target (Stop cancels the RUNNING session, not the viewed one),
+  //   - child props that need the live session, and
+  //   - ``isActivelyRunning`` below (a RENDER concern: is the VIEWED session the
+  //     one currently executing — used to keep the trailing capsule spinning).
 
   // FE-3 / FE-A1: the trailing open capsule is only genuinely "running" when
-  // the viewed session is the one actively executing. This is applied at
-  // RENDER time below (see the agent_run case) — NOT fed into the transform —
-  // so a status flip never invalidates the memo. Keeping this out of the memo
-  // deps is what prevents the idle transition from wiping live overlay items
-  // (FE-A1).
-  const isActivelyRunning = viewingHolder && agentStatus === 'running';
+  // the viewed session is the one actively executing — i.e. the viewed session
+  // IS the holder and the project is running. Applied at RENDER time below (the
+  // agent_run case), NOT fed into the transform, so a status flip never
+  // invalidates the memo (FE-A1).
+  const isActivelyRunning =
+    sessionId !== undefined &&
+    sessionId === holderSessionId &&
+    agentStatus === 'running';
 
   // FE-1 / FE-A1: single-pass transform of the FULL accumulated raw history.
   // Deps are purely the source data (rawMessages + workspace) — status flips
@@ -616,15 +610,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval${qs}`)
       .then((result) => {
         if (!result.pending || !result.tool_call_id) return;
-        // The pending approval belongs to the (single) holder session. Only
-        // surface it in the viewed conversation when the viewed session IS
-        // the holder. If the holder is not yet resolved (null), allow it —
-        // the running session must be the holder and the next holder fetch
-        // reconciles. Drop it only when we KNOW the viewed session is a
-        // non-holder.
-        const holder = holderSessionIdRef.current;
-        const viewed = sessionIdRef.current;
-        if (holder !== null && viewed !== undefined && viewed !== holder) return;
+        // Seam 3 / Phase 3 carryover: route this display path strictly by
+        // session_id, never by the holder. The fetch above is already scoped to
+        // the viewed session (?session_id=<viewed>), and the backend
+        // get_pending_approval resolves the (project, viewed) handle — it
+        // returns an approval ONLY when the viewed session itself is paused, and
+        // None for a non-holder viewed session. So a non-null result here
+        // already belongs to the viewed session; reading holderSessionId to gate
+        // display would be a latent cross-session leak (the old lenient
+        // null-holder branch could surface another session's card). Trust the
+        // session-scoped response.
         setApprovals((prev) => {
           // Dedup: skip if a card already exists for this tool_call_id
           if (prev.has(result.tool_call_id!)) return prev;
@@ -810,7 +805,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // holder. The Stop-button affordance (isCancelling) is project-wide and is
   // always cleared on a terminal status regardless of which session is viewed.
   useEffect(() => {
-    const viewing = viewingHolderRef.current;
+    // "viewing" = the viewed session IS the running/holder session. This is a
+    // render-state concern (finalize capsule, thinking indicator), NOT event
+    // routing — live events route strictly by session_id in the handlers below.
+    const viewing =
+      sessionIdRef.current !== undefined &&
+      sessionIdRef.current === holderSessionIdRef.current;
     if (agentStatus === 'idle' || agentStatus === 'error') {
       // Loop has actually exited — clear the in-flight cancel affordance.
       // Effect re-runs on agentStatus change, so this naturally coincides
@@ -979,7 +979,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleStreamDelta(event: WebSocketEvent) {
       const e = event as StreamDeltaEvent;
       if (e.project_id !== projectId) return;
-      if (!viewingHolderRef.current) return;
+      // Strict session routing: render only deltas for the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       if (e.is_final) {
         setStream((prev) => {
@@ -1025,17 +1026,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
-      // FE-A4: when the event carries `session_id` (the modern path since
-      // audit cd3325d), trust it — equality with the viewed session is the
-      // authoritative gate and does NOT collapse to false during the
-      // management-yield / lifecycle-restart gap the way viewingHolder does.
-      // Legacy events with no session_id fall back to the holder gate so
-      // cross-session bleed-through is still prevented.
-      if (e.session_id) {
-        if (e.session_id !== sessionIdRef.current) return;
-      } else if (!viewingHolderRef.current) {
-        return;
-      }
+      // Strict session routing (seam 3 / Phase 3): render only activity for the
+      // viewed session. Activity events carry session_id; the old viewingHolder
+      // fallback (for legacy no-session_id events) is gone — an event without a
+      // matching session_id is dropped, never shown by default. (A rare
+      // project-scoped activity with no session_id, e.g. network_blocked, is
+      // dropped rather than risk leaking into every session.)
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       // agent_output activities duplicate sub-agent messages already
       // delivered via chat.sub_agent_message — drop them.
@@ -1079,11 +1076,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalRequest(event: WebSocketEvent) {
       const e = event as ApprovalRequestEvent;
       if (e.project_id !== projectId) return;
-      // Session-id filter (additive): drop events not for the viewed session.
-      if (e.session_id && e.session_id !== sessionIdRef.current) return;
-      // Approvals pertain to the slot holder. Only surface the card when the
-      // viewed session is the holder.
-      if (!viewingHolderRef.current) return;
+      // Strict session routing (seam 3 / Phase 3): surface the approval card
+      // only for the viewed session. Management approvals now carry session_id
+      // (Phase 2), so the old always-on viewingHolder gate is removed — an
+      // approval for another session never leaks into this pane.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setApprovals((prev) => {
         const next = new Map(prev);
@@ -1131,14 +1128,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleSubAgentMessage(event: WebSocketEvent) {
       const e = event as SubAgentMessageEvent;
       if (e.project_id !== projectId) return;
-      // FE-A4: see handleActivity — session_id when present is authoritative;
-      // legacy events fall back to viewingHolder. The previous holder-only
-      // gate dropped sub-agent replies during the management-yield gap.
-      if (e.session_id) {
-        if (e.session_id !== sessionIdRef.current) return;
-      } else if (!viewingHolderRef.current) {
-        return;
-      }
+      // Strict session routing (seam 3 / Phase 3): sub-agent replies carry the
+      // parent session_id; render only those for the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -1177,10 +1169,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
 
-      // A non-own user_message echo (no matching nonce) belongs to the slot
-      // holder (e.g. injected from another client). Only render it when the
-      // viewed session is the holder.
-      if (!viewingHolderRef.current) return;
+      // A non-own user_message echo (no matching nonce — e.g. injected from
+      // another client). Strict session routing (seam 3 / Phase 3): render it
+      // only when it belongs to the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => {
         const afterCapsule = finalizeLiveCapsule(prev, 'completed');
@@ -1199,7 +1191,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleAgentNotify(event: WebSocketEvent) {
       const e = event as AgentNotifyEvent;
       if (e.project_id !== projectId) return;
-      if (!viewingHolderRef.current) return;
+      // Strict session routing (seam 3 / Phase 3): agent.notify now carries
+      // session_id (Phase 2); render only for the viewed session — the old
+      // always-on viewingHolder gate is removed so a notify for another session
+      // never leaks into this pane.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => [
         ...prev,
@@ -1223,7 +1219,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleStateRefresh(event: WebSocketEvent) {
       const e = event as StateRefreshLifecycleEvent;
       if (e.project_id !== projectId) return;
-      if (!viewingHolderRef.current) return;
+      // Strict session routing (seam 3 / Phase 3): state_refresh.lifecycle
+      // carries session_id; render only for the viewed session (was: ignored
+      // e.session_id and gated on viewingHolder).
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => {
         // Find the last refresh_status item to update in-place (in_progress → done/failed)

@@ -526,9 +526,14 @@ describe('T5 ChatView: per-session composer draft', () => {
   });
 });
 
-describe('T5 ChatView: holder-based live-event filtering', () => {
-  it('renders a live stream delta when viewing the holder session', async () => {
-    // The viewed session s1 IS the slot holder.
+describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
+  // Live events are routed STRICTLY by session_id. A handler renders an event
+  // iff event.session_id === the viewed sessionId. There is no viewingHolder
+  // heuristic and no default-to-show path: an event for another session, or
+  // with no session_id, is dropped. runStatusHolder is irrelevant to routing
+  // now — these tests prove routing follows session_id, not the holder.
+
+  it('renders a stream delta whose session_id matches the viewed session', async () => {
     runStatusHolder = 's1';
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
@@ -537,6 +542,7 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       emitWs('chat.stream_delta', {
         type: 'chat.stream_delta',
         project_id: 'p1',
+        session_id: 's1',
         text: 'streamed-token-XYZ',
         source: 'assistant',
         is_final: false,
@@ -546,11 +552,11 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
     expect(container.textContent ?? '').toContain('streamed-token-XYZ');
   });
 
-  it('renders live deltas during the null-holder window when the agent is active (lenient gate)', async () => {
-    // Holder not yet resolved (run-status returns null) but the agent is
-    // RUNNING — deltas arriving before fetchHolder converges must still render
-    // (otherwise the user sees a mid-stream stall). Mirrors the lenient
-    // null-holder policy of fetchPendingApproval.
+  it('renders a matching-session delta even when the holder is unresolved (null)', async () => {
+    // Routing is by session_id, not holder: a delta stamped for the viewed
+    // session renders regardless of whether fetchHolder has resolved yet.
+    // (Replaces the old "lenient null-holder window" behavior, which has been
+    // removed because it defaulted to SHOW and leaked across sessions.)
     runStatusHolder = null;
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
@@ -559,6 +565,7 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       emitWs('chat.stream_delta', {
         type: 'chat.stream_delta',
         project_id: 'p1',
+        session_id: 's1',
         text: 'window-token-ABC',
         source: 'assistant',
         is_final: false,
@@ -568,28 +575,27 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
     expect(container.textContent ?? '').toContain('window-token-ABC');
   });
 
-  it('does NOT render live deltas when holder is null AND the agent is idle', async () => {
-    // Null holder + idle agent means nothing is running → the lenient branch
-    // does not apply, so stray deltas are dropped.
-    runStatusHolder = null;
-    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+  it('does NOT render a stream delta with no session_id (no default-to-show)', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
 
     await act(async () => {
       emitWs('chat.stream_delta', {
         type: 'chat.stream_delta',
         project_id: 'p1',
-        text: 'idle-token-NOPE',
+        // session_id deliberately omitted — must be dropped, never shown.
+        text: 'nosession-token-NOPE',
         source: 'assistant',
         is_final: false,
       });
     });
 
-    expect(container.textContent ?? '').not.toContain('idle-token-NOPE');
+    expect(container.textContent ?? '').not.toContain('nosession-token-NOPE');
   });
 
-  it('does NOT render a live stream delta when viewing a NON-holder session', async () => {
-    // The slot holder is s2 but the user is viewing s1.
+  it('does NOT render a stream delta stamped for a DIFFERENT session (even the holder)', async () => {
+    // The holder is s2 but we view s1. s2's delta must not leak into s1's pane.
     runStatusHolder = 's2';
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
@@ -598,16 +604,17 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       emitWs('chat.stream_delta', {
         type: 'chat.stream_delta',
         project_id: 'p1',
-        text: 'streamed-token-XYZ',
+        session_id: 's2',
+        text: 'other-session-token-XYZ',
         source: 'assistant',
         is_final: false,
       });
     });
 
-    expect(container.textContent ?? '').not.toContain('streamed-token-XYZ');
+    expect(container.textContent ?? '').not.toContain('other-session-token-XYZ');
   });
 
-  it('does NOT render a live activity capsule when viewing a NON-holder session', async () => {
+  it('does NOT render a live activity capsule for a DIFFERENT session', async () => {
     runStatusHolder = 's2';
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
@@ -616,6 +623,7 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       emitWs('agent.activity', {
         type: 'agent.activity',
         project_id: 'p1',
+        session_id: 's2',
         category: 'file_read',
         tool_name: 'Read',
         description: 'reading secret-file.txt',
@@ -624,12 +632,11 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       });
     });
 
-    // No agent_run capsule rendered for the non-holder session.
     expect(container.querySelector('[data-testid="agent_run"]')).toBeNull();
     expect(container.textContent ?? '').not.toContain('secret-file.txt');
   });
 
-  it('renders a live activity capsule when viewing the holder session', async () => {
+  it('renders a live activity capsule for the viewed session', async () => {
     runStatusHolder = 's1';
     await renderChat({ agentStatus: 'running', sessionId: 's1' });
     await flushEffects();
@@ -638,6 +645,7 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
       emitWs('agent.activity', {
         type: 'agent.activity',
         project_id: 'p1',
+        session_id: 's1',
         category: 'file_read',
         tool_name: 'Read',
         description: 'reading visible-file.txt',
@@ -648,6 +656,65 @@ describe('T5 ChatView: holder-based live-event filtering', () => {
 
     expect(container.querySelector('[data-testid="agent_run"]')).toBeTruthy();
     expect(container.textContent ?? '').toContain('visible-file.txt');
+  });
+
+  it('MULTI-SESSION LEAK TEST: no event type leaks from session s2 into s1 — and s1 events still render', async () => {
+    // Covers stream_delta PLUS the two formerly-always-on handlers (approval
+    // request + agent.notify). None may default to "show": an event for s2
+    // must never appear while viewing s1, and s1's own events must render.
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    // --- s2 events: must all be dropped ---
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta', project_id: 'p1', session_id: 's2',
+        text: 'LEAK-DELTA-s2', source: 'assistant', is_final: false,
+      });
+      emitWs('approval.request', {
+        type: 'approval.request', project_id: 'p1', session_id: 's2',
+        what: 'LEAK-APPROVAL-s2', tool_name: 'shell', tool_call_id: 'tc-s2',
+        tool_args: {}, recent_activity: [],
+      });
+      emitWs('agent.notify', {
+        type: 'agent.notify', project_id: 'p1', session_id: 's2',
+        title: 'LEAK-NOTIFY-s2', body: 'should not show', urgency: 'normal',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    const afterS2 = container.textContent ?? '';
+    expect(afterS2).not.toContain('LEAK-DELTA-s2');
+    expect(afterS2).not.toContain('LEAK-APPROVAL-s2');
+    expect(afterS2).not.toContain('LEAK-NOTIFY-s2');
+
+    // --- s1 events: must all render (proves routing isn't just dropping everything) ---
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta', project_id: 'p1', session_id: 's1',
+        text: 'SHOW-DELTA-s1', source: 'assistant', is_final: false,
+      });
+      emitWs('approval.request', {
+        type: 'approval.request', project_id: 'p1', session_id: 's1',
+        what: 'SHOW-APPROVAL-s1', tool_name: 'shell', tool_call_id: 'tc-s1',
+        tool_args: {}, recent_activity: [],
+      });
+      emitWs('agent.notify', {
+        type: 'agent.notify', project_id: 'p1', session_id: 's1',
+        title: 'SHOW-NOTIFY-s1', body: 'visible', urgency: 'normal',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    const afterS1 = container.textContent ?? '';
+    expect(afterS1).toContain('SHOW-DELTA-s1');
+    expect(afterS1).toContain('SHOW-APPROVAL-s1');
+    expect(afterS1).toContain('SHOW-NOTIFY-s1');
+    // And the s2 events are STILL absent after rendering s1's.
+    expect(afterS1).not.toContain('LEAK-DELTA-s2');
+    expect(afterS1).not.toContain('LEAK-APPROVAL-s2');
+    expect(afterS1).not.toContain('LEAK-NOTIFY-s2');
   });
 });
 

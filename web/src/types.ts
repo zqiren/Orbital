@@ -181,6 +181,7 @@ export interface AgentStatusEvent {
 export interface StreamDeltaEvent {
   type: 'chat.stream_delta';
   project_id: string;
+  session_id?: string;
   text: string;
   source: string;
   is_final: boolean;
@@ -256,6 +257,7 @@ export interface SubAgentMessageEvent {
 export interface UserMessageEvent {
   type: 'chat.user_message';
   project_id: string;
+  session_id?: string;
   content: string;
   nonce: string;
   timestamp: string;
@@ -264,6 +266,7 @@ export interface UserMessageEvent {
 export interface AgentNotifyEvent {
   type: 'agent.notify';
   project_id: string;
+  session_id?: string;
   title: string;
   body: string;
   urgency: 'high' | 'normal' | 'low';
@@ -307,6 +310,7 @@ export interface TriggerSkippedEvent {
 export interface StateRefreshLifecycleEvent {
   type: 'state_refresh.lifecycle';
   project_id: string;
+  session_id?: string;
   status: 'in_progress' | 'done' | 'failed' | 'skipped';
   trigger: 'turn_count' | 'agent_decided' | 'token_pressure';
   timestamp: string;
