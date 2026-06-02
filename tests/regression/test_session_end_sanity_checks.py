@@ -222,14 +222,16 @@ async def test_decisions_cap_30(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: CONTEXT cap 25, keep="last"
+# Test 4: CONTEXT is token-capped (not entry-capped) post Layer-1 promotion
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_context_cap_25(tmp_path):
-    """LLM returns 30 context entries; on-disk file has the last 25."""
+async def test_context_no_longer_entry_capped(tmp_path):
+    """CONTEXT.md became a section-based project map; entry-based capping was
+    replaced by a token cap. Under-budget content (here, 30 short entries)
+    passes through entirely — no 25-entry truncation."""
     ws = WorkspaceFileManager(str(tmp_path))
-    llm_context = _dashed_context(30)
+    llm_context = _dashed_context(30)  # ~30 short lines, well under 1500 tokens
 
     session = _mock_session(session_id="s_cap_context")
     provider = _mock_provider(_llm_response(context=llm_context))
@@ -241,14 +243,35 @@ async def test_context_cap_25(tmp_path):
     on_disk = ws.read("context") or ""
     import re
     markers = re.findall(r"(?m)^-\s", on_disk)
-    assert len(markers) == 25, (
-        f"expected 25 context entries, got {len(markers)}\n---\n{on_disk[:400]}"
+    assert len(markers) == 30, (
+        f"expected all 30 entries preserved (no entry cap), got {len(markers)}\n"
+        f"---\n{on_disk[:400]}"
     )
-    # keep="last": entries 6..30 present, 1..5 dropped.
-    assert "Entity-1:" not in on_disk
-    assert "Entity-5:" not in on_disk
-    assert "Entity-6:" in on_disk
+    assert "Entity-1:" in on_disk
     assert "Entity-30:" in on_disk
+
+
+@pytest.mark.asyncio
+async def test_context_token_capped_when_oversized(tmp_path):
+    """Over-budget CONTEXT.md is truncated at a line boundary (~1500 token cap
+    => ~6000 char budget)."""
+    ws = WorkspaceFileManager(str(tmp_path))
+    llm_context = _dashed_context(400)  # ~18k chars, ~3x over budget
+    assert len(llm_context) > 6000
+
+    session = _mock_session(session_id="s_cap_context_big")
+    provider = _mock_provider(_llm_response(context=llm_context))
+
+    await run_session_end_routine(
+        session, provider, ws, session_uuid="s_cap_context_big",
+    )
+
+    on_disk = ws.read("context") or ""
+    assert 0 < len(on_disk) < len(llm_context)
+    # truncation lands on a line boundary — every kept line is whole
+    src_lines = set(llm_context.splitlines())
+    for ln in on_disk.splitlines():
+        assert ln in src_lines
 
 
 # ---------------------------------------------------------------------------

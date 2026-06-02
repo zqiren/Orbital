@@ -34,6 +34,10 @@ from agent_os.agent.tool_result_lifecycle import truncate_consumed_tool_results
 
 logger = logging.getLogger(__name__)
 
+# Per-session cache-hit aggregation (Part 4D). Shares the provider's cache
+# audit channel so per-call and per-session lines land together in daemon.log.
+_cache_logger = logging.getLogger("orbital.cache_audit")
+
 # Default cost rates ($/1K tokens) used when no per-model pricing is available.
 _DEFAULT_COST_PER_1K_INPUT = 0.003
 _DEFAULT_COST_PER_1K_OUTPUT = 0.015
@@ -112,6 +116,14 @@ class AgentLoop:
         self._running = False
         self._llm_failed = False
         self._on_session_end = on_session_end
+
+        # Per-session cache-hit telemetry (Part 4D). Accumulated across every
+        # run() of this loop (one loop == one session), logged at each run end.
+        # The CONTEXT.md on-judgment-update decision is an empirical bet on the
+        # prefix cache; this is the instrument that measures its impact.
+        self._cache_read_tokens_total = 0
+        self._prompt_input_tokens_total = 0
+        self._llm_call_count = 0
 
         # Periodic state refresh callback (async callable(trigger_name: str))
         # Injected by agent_manager so loop.py stays decoupled from workspace_files.
@@ -484,6 +496,10 @@ class AgentLoop:
                 # Track token usage
                 if response.usage:
                     cumulative_tokens += response.usage.input_tokens + response.usage.output_tokens
+                    # Per-session cache-hit aggregation (Part 4D)
+                    self._prompt_input_tokens_total += response.usage.input_tokens
+                    self._cache_read_tokens_total += response.usage.cache_read_tokens
+                    self._llm_call_count += 1
 
                 # Budget tracking (always active for spend persistence)
                 if response.usage:
@@ -944,6 +960,21 @@ class AgentLoop:
             # Drain any remaining deferred messages
             for msg in self._session.pop_deferred_messages():
                 self._session.append(msg)
+            # Per-session cache-hit summary (Part 4D). Logged at every run-end
+            # boundary; the totals are cumulative across the session, so the
+            # last line for a session is its session total. Lets us compare
+            # cache hit rate before/after the CONTEXT.md on-judgment change.
+            if self._llm_call_count > 0 and self._prompt_input_tokens_total > 0:
+                _rate = self._cache_read_tokens_total / self._prompt_input_tokens_total
+                _cache_logger.info(
+                    "[CACHE_SESSION] session=%s calls=%d prompt_tokens=%d "
+                    "cached_tokens=%d cache_rate=%.1f%%",
+                    getattr(self._session, "session_uuid", "?"),
+                    self._llm_call_count,
+                    self._prompt_input_tokens_total,
+                    self._cache_read_tokens_total,
+                    _rate * 100,
+                )
             # NOTE: fire-and-forget asyncio.create_task(self._on_session_end())
             # was previously here. Removed in TASK-cancel-arch-04: the
             # synchronous session-end inside agent_manager.new_session() is

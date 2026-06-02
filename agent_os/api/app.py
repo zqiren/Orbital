@@ -330,7 +330,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(settings_routes.router)
 
     # 7b. File browsing routes
-    files_v2.configure(project_store)
+    files_v2.configure(project_store, agent_manager=agent_manager, ws_manager=ws_manager)
     app.include_router(files_v2.router)
 
     # 7c. Platform routes

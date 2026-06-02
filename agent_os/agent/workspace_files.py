@@ -178,12 +178,13 @@ _SESSION_LOG_WRITE_CAP = 10
 # logs a parse-failure warning.
 _LESSONS_ENTRY_PATTERN = r"^\d+\.\s+"      # "1. ", "2. ", ...
 _DECISIONS_ENTRY_PATTERN = r"^##\s+"        # "## 2026-04-22: ..."
-_CONTEXT_ENTRY_PATTERN = r"^-\s+"           # "- **Tencent:** ..."
+# CONTEXT.md is no longer entry-based (see _cap_context_tokens) — it became a
+# section-based project map in the Layer-1 promotion, so it has no entry
+# pattern or entry cap.
 
 # Entry caps per file. Code-side backstop matching the prompt's stated caps.
 _LESSONS_CAP = 20
 _DECISIONS_CAP = 30
-_CONTEXT_CAP = 25
 
 
 def _split_entries(content: str, entry_pattern: str) -> tuple[str, list[str]]:
@@ -336,6 +337,48 @@ def _apply_sanity_checks(
         logger.info("%s: cap enforced, %d dropped", filename, cap_count)
 
     return capped
+
+
+# CONTEXT.md is no longer an entry-list (it became a section-based project map
+# in the Layer-1 promotion). Entry-based dedup/cap does not apply; instead a
+# generous token ceiling backstops a runaway LLM. The prompt targets <1000
+# tokens; this caps at 1500 so normal output passes through untouched (and
+# preserves the input string object so the prefix cache is not thrashed).
+_CONTEXT_TOKEN_CAP = 1500
+
+
+def _cap_context_tokens(
+    content: str, cap_tokens: int = _CONTEXT_TOKEN_CAP, filename: str = "context",
+) -> str:
+    """Truncate CONTEXT.md at the last complete line under ``cap_tokens``.
+
+    Token estimate mirrors the rest of the codebase: ~4 chars/token. If the
+    content is within budget it is returned UNCHANGED (same object). If it
+    exceeds the budget, lines are kept until the next line would push the
+    estimate over the cap; truncation always lands on a line boundary and a
+    warning is logged.
+    """
+    if not content:
+        return content
+    char_budget = cap_tokens * 4
+    if len(content) <= char_budget:
+        return content
+
+    kept: list[str] = []
+    used = 0
+    for line in content.splitlines():
+        # +1 for the newline that rejoins this line.
+        if used + len(line) + 1 > char_budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+
+    truncated = "\n".join(kept)
+    logger.warning(
+        "%s: exceeded token cap (~%d > %d tokens), truncated to %d lines",
+        filename, len(content) // 4, cap_tokens, len(kept),
+    )
+    return truncated
 
 
 class WorkspaceFileManager:
@@ -533,21 +576,40 @@ Given the session information below, produce a JSON object with these fields:
 
 5. "context" (string, empty to preserve existing): The COMPLETE updated
    CONTEXT.md file. This REPLACES the existing file entirely.
-   Scope: external entities relevant to this project — people, services,
-   platforms, third-party APIs, persistent environmental constraints.
-   Exclusions (do NOT include):
-     - Workspace files or internal project artifacts
-     - One-shot session errors or transient tool failures
-     - In-progress work or current task state (belongs in PROJECT_STATE)
-     - Decisions or rationale (belongs in DECISIONS)
-     - Patterns or advice (belongs in LESSONS)
-   - Carry forward every still-relevant entry
-   - Add genuinely new external entities discovered THIS SESSION
-   - Drop entries not referenced in the last 10 sessions
-   - Merge duplicates
-   - Cap: 25 entries
-   - Return empty string "" ONLY to indicate "no updates needed, preserve
-     existing file."
+
+   CONTEXT.md is your map of this project and workspace. If you lost all
+   memory except this file, you should be able to resume effective work.
+
+   Use this structure:
+
+   ## Overview
+   2-3 sentences: what this project is and what it does.
+
+   ## Key Files
+   The 10-20 most important files/dirs with one-line purpose each.
+   Not a full file tree — only what matters. Curated by importance.
+
+   ## Architecture
+   How the project is structured — major components, entry points,
+   relationships. A few paragraphs max.
+
+   ## Conventions
+   Naming patterns, tooling, dependencies, style rules discovered.
+
+   ## External Context
+   People, services, platforms, APIs, environmental constraints.
+
+   Rules:
+   - Carry forward still-relevant content from every section
+   - Add what you learned THIS SESSION
+   - Drop stale information
+   - Total file target: under 1000 tokens. Be concise.
+   - Return empty string "" ONLY to preserve existing file unchanged.
+
+   Exclusions (belong in other files):
+   - In-progress task state → PROJECT_STATE.md
+   - Decisions with reasoning → DECISIONS.md
+   - Pitfalls and error patterns → LESSONS.md
 
 IMPORTANT:
 - For decisions, lessons, context: if you return a non-empty string, it
@@ -797,13 +859,7 @@ async def run_session_end_routine(
     # CONTEXT: full overwrite (LLM returns COMPLETE updated file).
     # Empty string => preserve existing file.
     if result.get("context", "").strip():
-        context_content = _apply_sanity_checks(
-            result["context"],
-            _CONTEXT_ENTRY_PATTERN,
-            _CONTEXT_CAP,
-            keep="last",
-            filename="context",
-        )
+        context_content = _cap_context_tokens(result["context"])
         _occ_write_metadata(
             workspace_files, "context", context_content,
             _occ_baselines["context"], project_id=project_id,

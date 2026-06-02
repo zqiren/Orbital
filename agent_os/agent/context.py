@@ -30,6 +30,7 @@ _LAYER1_FILES: tuple[tuple[str, str], ...] = (
     ("state", "PROJECT_STATE.md"),
     ("decisions", "DECISIONS.md"),
     ("lessons", "LESSONS.md"),
+    ("context", "CONTEXT.md"),
 )
 
 

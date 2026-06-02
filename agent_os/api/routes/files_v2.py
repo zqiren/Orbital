@@ -9,23 +9,35 @@ within project workspaces.
 """
 
 import base64
+import logging
 import mimetypes
 import os
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v2")
 
 # ---- Dependency holders ----
 
 _project_store = None
+_agent_manager = None
+_ws_manager = None
 
 
-def configure(project_store):
-    """Called by app factory to inject dependencies."""
-    global _project_store
+def configure(project_store, agent_manager=None, ws_manager=None):
+    """Called by app factory to inject dependencies.
+
+    ``agent_manager`` and ``ws_manager`` are optional so legacy/unit callers
+    that only pass ``project_store`` keep working (upload then simply skips
+    queue notification).
+    """
+    global _project_store, _agent_manager, _ws_manager
     _project_store = project_store
+    _agent_manager = agent_manager
+    _ws_manager = ws_manager
 
 
 MAX_PREVIEW_BYTES = 512_000  # 500KB
@@ -167,7 +179,61 @@ async def upload_file(project_id: str, file: UploadFile, path: str = "/uploads/"
         f.write(data)
 
     rel_path = os.path.join(path.lstrip("/"), safe_name)
+
+    # Notify the agent of the upload via a queue item (best-effort). The file
+    # write above is the authoritative result — queue failures must never fail
+    # the upload, so this is wrapped and swallowed with a warning.
+    _notify_upload(project_id, rel_path, safe_name, len(data))
+
     return {"path": rel_path, "size": len(data)}
+
+
+def _notify_upload(project_id: str, rel_path: str, filename: str, size: int) -> None:
+    """Enqueue an 'upload' queue item so the running/queued agent is notified.
+
+    Idempotency key is ``upload:{rel_path}:{size}`` (no wall-clock component):
+    re-uploading the same file — e.g. a network retry — must dedup to a single
+    queue item rather than spamming the agent. (The TASK draft suggested adding
+    a timestamp, but that would defeat dedup on retry, which its own
+    integration test requires; dropped deliberately.)
+    """
+    if _agent_manager is None:
+        # Minimal/unit configuration without an agent manager — nothing to
+        # notify. File is on disk; that's the contract.
+        return
+    try:
+        project = _project_store.get_project(project_id) if _project_store else None
+        workspace = (project or {}).get("workspace") if project else None
+        if not workspace:
+            return
+        store = _agent_manager.get_queue_store(project_id, workspace=workspace)
+        item = store.add_item(
+            content=(
+                f"User uploaded `{filename}` to `{rel_path}`. Read the file and "
+                "determine if it's relevant to your current work. If it changes "
+                "your understanding of the project, update CONTEXT.md."
+            ),
+            file_refs=[rel_path],
+            source="upload",
+            priority=0,
+            review_before_advance=False,
+            idempotency_key=f"upload:{rel_path}:{size}",
+        )
+        # Wake the dispatcher if one is already running so it can pick this up.
+        dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is not None:
+            dispatcher.notify_new_item()
+        if _ws_manager is not None:
+            _ws_manager.broadcast(project_id, {
+                "type": "queue.item_added",
+                "project_id": project_id,
+                "item_id": item.id,
+            })
+    except Exception:
+        logger.warning(
+            "upload queue notification failed for %s (%s)",
+            project_id, rel_path, exc_info=True,
+        )
 
 
 @router.get("/projects/{project_id}/files/download")
