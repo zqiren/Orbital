@@ -2831,6 +2831,120 @@
         "notes": "Pass-through to upstream provider; OR does not maintain its own cache. Provider sticky routing activates only when cache-read pricing beats normal input — bypassed by provider.order. Pin provider.order per session to prevent silent re-routing breaking cache continuity. https://openrouter.ai/docs/guides/best-practices/prompt-caching"
       }
     },
+    "minimax": {
+      "display_name": "MiniMax",
+      "base_url": "https://api.minimax.io/v1",
+      "china_base_url": "https://api.minimaxi.com/v1",
+      "supports_model_list": false,
+      "sdk": "openai",
+      "suggested_models": [
+        "MiniMax-M3",
+        "MiniMax-M2.7",
+        "MiniMax-M2.5"
+      ],
+      "notes": "OpenAI-compatible Chat Completions. International keys use api.minimax.io; China-region keys MUST use api.minimaxi.com (credentials are region-specific and not interchangeable). M-series reasoning is enabled with reasoning_split=true and surfaced at message.reasoning_details[0].text (separate from message.content). Model-list endpoint unverified — UI falls back to suggested_models. Pricing below is an estimate; confirm on https://platform.minimax.io/docs.",
+      "pricing": {
+        "MiniMax-M3": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2
+        },
+        "MiniMax-M2.7": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2
+        },
+        "MiniMax-M2.5": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2
+        },
+        "_default": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2
+        }
+      },
+      "models": {
+        "MiniMax-M3": {
+          "display_name": "MiniMax M3",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_details",
+            "echo_back": "optional",
+            "enable": "param:reasoning_split=true",
+            "notes": "Reasoning text returned at message.reasoning_details[0].text when reasoning_split=true; final answer stays in message.content. https://platform.minimax.io/docs/api-reference/text-openai-api",
+            "needs_verification": true
+          }
+        },
+        "MiniMax-M2.7": {
+          "display_name": "MiniMax M2.7",
+          "tier": "flagship",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_details",
+            "echo_back": "optional",
+            "enable": "param:reasoning_split=true",
+            "notes": "M2-series reasoning via reasoning_split=true; text at message.reasoning_details[0].text. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          }
+        },
+        "MiniMax-M2.5": {
+          "display_name": "MiniMax M2.5",
+          "tier": "balanced",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_details",
+            "echo_back": "optional",
+            "enable": "param:reasoning_split=true",
+            "notes": "M2-series reasoning via reasoning_split=true; text at message.reasoning_details[0].text. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          }
+        },
+        "_default": {
+          "context_window": 1000000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          }
+        }
+      },
+      "cache": {
+        "supported": "unknown",
+        "control": "unknown",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "unknown",
+        "isolation_confidence": "unknown",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": null,
+        "observability_field": null,
+        "pollution_risk": "unknown",
+        "notes": "MiniMax caching behavior for the OpenAI-compatible endpoint is unverified."
+      }
+    },
     "custom": {
       "display_name": "Custom / Self-Hosted",
       "base_url": null,
