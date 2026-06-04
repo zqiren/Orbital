@@ -183,6 +183,13 @@ export interface StreamDeltaEvent {
   project_id: string;
   session_id?: string;
   text: string;
+  /**
+   * Model reasoning for this delta. During the model's <think> phase this is
+   * non-empty while `text` is empty (reasoning-only phase). Once visible answer
+   * text begins, `text` is non-empty. Optional for backward compatibility with
+   * older relay payloads.
+   */
+  reasoning_content?: string;
   source: string;
   is_final: boolean;
   seq?: number;

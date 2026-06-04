@@ -837,27 +837,43 @@ class SubAgentManager:
 
         Used by the REST recovery endpoint so clients can fetch sub-agent
         approval card data when they miss the WebSocket event.
+
+        This is a LOOKUP/RECOVERY read (seam 3 / D1): ``session_id`` is
+        optional. The REST poll (``GET /agents/{pid}/pending-approval``) has no
+        session in hand, so it passes ``None`` — a legitimate "not yet known"
+        state, NOT a bug. None must therefore degrade GRACEFULLY (scan), never
+        hard-raise like the sub-agent lifecycle resolver. When ``session_id`` is
+        None we scan every adapter slate in the project (a pending approval is
+        unique to its transport, so a project-wide scan is unambiguous),
+        mirroring the None-tolerance of ``resolve_sub_agent_approval``. A
+        provided ``session_id`` narrows to that one slate.
         """
-        session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
-        for handle, adapter in adapters.items():
-            transport = getattr(adapter, '_transport', None)
-            if transport is None:
-                continue
-            pending = getattr(transport, '_pending_approvals', {})
-            if not pending:
-                continue
-            # Get metadata from _pending_approval_data if available
-            approval_data = getattr(transport, '_pending_approval_data', {})
-            for request_id in pending:
-                data = approval_data.get(request_id, {})
-                return {
-                    "tool_call_id": data.get("request_id", request_id),
-                    "tool_name": data.get("tool_name", ""),
-                    "tool_args": data.get("tool_input", {}),
-                    "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
-                    "source": handle,
-                }
+        if session_id is None:
+            slates = [
+                adapters for (pid, _sid), adapters in self._adapters.items()
+                if pid == project_id
+            ]
+        else:
+            slates = [self._adapters.get(make_session_key(project_id, session_id), {})]
+        for adapters in slates:
+            for handle, adapter in adapters.items():
+                transport = getattr(adapter, '_transport', None)
+                if transport is None:
+                    continue
+                pending = getattr(transport, '_pending_approvals', {})
+                if not pending:
+                    continue
+                # Get metadata from _pending_approval_data if available
+                approval_data = getattr(transport, '_pending_approval_data', {})
+                for request_id in pending:
+                    data = approval_data.get(request_id, {})
+                    return {
+                        "tool_call_id": data.get("request_id", request_id),
+                        "tool_name": data.get("tool_name", ""),
+                        "tool_args": data.get("tool_input", {}),
+                        "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
+                        "source": handle,
+                    }
         return None
 
     async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str,

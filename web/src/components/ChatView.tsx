@@ -123,6 +123,55 @@ function appendToLiveCapsule(
   return next;
 }
 
+/**
+ * Live reasoning accumulation. During the model's <think> phase the WS
+ * stream_delta event carries `reasoning_content` with EMPTY `text`. We render
+ * it as a single reasoning_block inside the running live capsule, accumulating
+ * successive deltas into that one block (rather than emitting one block per
+ * delta). This mirrors how persisted reasoning is rendered (a reasoning_block
+ * within the capsule) so the live and persisted views stay consistent.
+ */
+function appendLiveReasoning(
+  prev: DisplayItem[],
+  reasoning: string,
+  timestamp: string,
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  // Find a trailing reasoning_block in the running capsule to extend.
+  if (live) {
+    const items = live.capsule.items;
+    const lastChild = items[items.length - 1];
+    if (lastChild && lastChild.type === 'reasoning_block') {
+      const merged: CapsuleChild = {
+        ...lastChild,
+        content: lastChild.content + reasoning,
+      };
+      const newItems = [...items];
+      newItems[newItems.length - 1] = merged;
+      const updated: AgentRunItem = {
+        ...live.capsule,
+        items: newItems,
+        has_thinking: true,
+        ended_at: Date.parse(timestamp),
+      };
+      const next = [...prev];
+      next[live.idx] = updated;
+      return next;
+    }
+  }
+  // No running capsule yet, or no trailing reasoning block — start a new block.
+  return appendToLiveCapsule(
+    prev,
+    {
+      type: 'reasoning_block',
+      content: reasoning,
+      timestamp,
+      turn_id: timestamp,
+    },
+    timestamp,
+  );
+}
+
 function finalizeLiveCapsule(
   prev: DisplayItem[],
   status: 'completed' | 'error' | 'stopped',
@@ -484,13 +533,55 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (sid === undefined) return;
     const sessionParam = `&session_id=${encodeURIComponent(sid)}`;
     setTimeout(() => {
-      api<Array<{ role: string; content: string; timestamp?: string }>>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`,
-      )
+      api<
+        Array<{ role: string; content: string; reasoning_content?: string; timestamp?: string }>
+      >(`/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`)
         .then((messages) => {
           if (!messages || messages.length === 0) return;
           const latest = messages[messages.length - 1];
-          if (latest.role !== 'assistant' || !latest.content) return;
+          if (latest.role !== 'assistant') return;
+          const restReasoning = (latest.reasoning_content ?? '').trim();
+          // Carry reasoning_content like the primary refreshRawMessages path:
+          // a recovered reasoning turn is a COMPLETED turn, so emit it as a
+          // closed (collapsed) agent_run capsule containing a reasoning_block,
+          // mirroring transformChatHistory's persisted handling. Without this
+          // the REST fallback silently drops reasoning.
+          if (restReasoning) {
+            setItems((prevItems) => {
+              const ts = latest.timestamp ?? new Date().toISOString();
+              const ms = Date.parse(ts);
+              // Dedup against the primary refetch / live append.
+              const already = prevItems.some(
+                (it) =>
+                  it.type === 'agent_run' &&
+                  it.items.some(
+                    (c) => c.type === 'reasoning_block' && c.content.trim() === restReasoning,
+                  ),
+              );
+              if (already) return prevItems;
+              // Close any still-running live capsule first.
+              const closed = finalizeLiveCapsule(prevItems, 'completed');
+              const capsule: AgentRunItem = {
+                type: 'agent_run',
+                capsule_id: `cap:rest:${ms}:${Math.random().toString(36).slice(2, 8)}`,
+                status: 'completed',
+                items: [
+                  {
+                    type: 'reasoning_block',
+                    content: restReasoning,
+                    timestamp: ts,
+                    turn_id: ts,
+                  },
+                ],
+                tool_call_count_by_name: {},
+                has_thinking: true,
+                started_at: Number.isFinite(ms) ? ms : Date.now(),
+                ended_at: Number.isFinite(ms) ? ms : Date.now(),
+              };
+              return [...closed, capsule];
+            });
+          }
+          if (!latest.content) return;
           const restText = latest.content;
           setItems((prevItems) => {
             // Check if the message is already present (by content match on last item)
@@ -1014,6 +1105,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
 
+      const reasoning = e.reasoning_content ?? '';
+      const hasVisibleText = !!e.text;
+
+      // Reasoning-only phase: the delta carries reasoning with empty text. Keep
+      // the thinking indicator alive and render the streaming reasoning into the
+      // live capsule. Do NOT clear the spinner — that only happens once visible
+      // answer text begins (below) or the turn completes (is_final, above).
+      if (reasoning && !hasVisibleText) {
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString()));
+        scrollToBottom();
+        return;
+      }
+
+      // If this delta also carried reasoning alongside visible text, capture it.
+      if (reasoning) {
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString()));
+      }
+
+      // Visible answer text has begun — transition out of the thinking phase.
       setShowThinking(false);
       setStream((prev) => ({
         text: (prev?.text ?? '') + e.text,

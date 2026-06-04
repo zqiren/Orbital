@@ -1008,7 +1008,13 @@ describe('ChatView: capsule expand-by-default behavior', () => {
     expect(container.textContent ?? '').not.toContain('TOOL-RESULT-HIDDEN');
   });
 
-  it('a content-null capsule WITH reasoning renders EXPANDED on idle (FE-A3 / FE-2)', async () => {
+  it('a content-null capsule WITH reasoning renders COLLAPSED on idle (locked decision: completed ⇒ collapsed)', async () => {
+    // LOCKED PRODUCT DECISION (2026-06-03): a COMPLETED turn that reasoned
+    // renders as a COLLAPSED reasoning capsule (clean summary). It only expands
+    // while actively RUNNING. This session is IDLE (runStatusHolder = null), so
+    // the reasoning body must be hidden behind the collapsed capsule. (This test
+    // previously asserted reasoning was visible-by-default under the old
+    // contract — rewritten to the new invariant.)
     runStatusHolder = null;
     chatInitialResponse = {
       data: [
@@ -1018,10 +1024,10 @@ describe('ChatView: capsule expand-by-default behavior', () => {
           content: null,
           source: 'management',
           timestamp: TS2,
-          reasoning_content: 'REASONING-VISIBLE-BY-DEFAULT deciding which file to read',
+          reasoning_content: 'REASONING-HIDDEN-WHEN-COLLAPSED deciding which file to read',
           tool_calls: [tc('c1', 'read', '{"path":"a.txt"}')],
         },
-        { role: 'tool', content: 'TOOL-RESULT-VISIBLE', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
+        { role: 'tool', content: 'TOOL-RESULT-HIDDEN', source: 'management', timestamp: TS3, tool_call_id: 'c1' },
         { role: 'assistant', content: 'done', source: 'management', timestamp: TS4 },
       ],
       total: 4,
@@ -1029,10 +1035,12 @@ describe('ChatView: capsule expand-by-default behavior', () => {
     await renderChat({ agentStatus: 'idle', sessionId: 's1' });
     await flushEffects();
 
-    // Reasoning makes the capsule expand by default so the user sees the
-    // thinking without having to click. Tool result inside the body is
-    // visible as a consequence.
-    expect(container.textContent ?? '').toContain('REASONING-VISIBLE-BY-DEFAULT');
+    // Completed ⇒ collapsed: the reasoning text is inside the collapsed capsule
+    // body and not rendered in the DOM. The capsule itself is still present
+    // (the turn never vanishes) and the final answer is visible.
+    expect(container.textContent ?? '').not.toContain('REASONING-HIDDEN-WHEN-COLLAPSED');
+    expect(container.textContent ?? '').not.toContain('TOOL-RESULT-HIDDEN');
+    expect(container.textContent ?? '').toContain('done');
   });
 });
 

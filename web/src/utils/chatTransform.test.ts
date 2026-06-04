@@ -694,7 +694,14 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
 });
 
 describe('transformChatHistory — FE-A3 agent header for content-null turns', () => {
-  it('content-null assistant turn with reasoning produces a header + defaultExpanded capsule', () => {
+  it('content-null assistant turn with reasoning produces a header + COLLAPSED capsule', () => {
+    // LOCKED PRODUCT DECISION (2026-06-03): transformChatHistory only ever runs
+    // over PERSISTED (completed) history. A completed reasoning turn renders as a
+    // COLLAPSED reasoning capsule (clean summary); it expands only while actively
+    // RUNNING, which is handled at render time in ChatView (running ⇒ expand),
+    // NOT here. So the transform must NEVER force-expand. (This test previously
+    // asserted defaultExpanded === true under the old contract — rewritten to the
+    // new invariant.)
     const messages: ChatMessage[] = [
       user('do something', TS),
       asst({
@@ -717,8 +724,39 @@ describe('transformChatHistory — FE-A3 agent header for content-null turns', (
     const capsule = items[2];
     expect(capsule.type).toBe('agent_run');
     if (capsule.type === 'agent_run') {
-      expect(capsule.defaultExpanded).toBe(true);
+      // Completed ⇒ collapsed. Falsy / absent defaultExpanded.
+      expect(capsule.defaultExpanded).not.toBe(true);
     }
+  });
+
+  it('completed turn WITH both content and reasoning collapses the reasoning capsule', () => {
+    // After inline-think separation (e.g. MiniMax-M3), one finalized message
+    // carries the answer (content) AND the thinking (reasoning_content). The
+    // turn is done, so the reasoning capsule must NOT default-expand — it
+    // collapses to a summary the user can click open. (Only content-null,
+    // still-thinking turns default-expand; see the test above.)
+    const messages: ChatMessage[] = [
+      user('explain clouds', TS),
+      asst({
+        content: 'Clouds are condensed water vapor.',
+        reasoning_content: 'The user asked a science question; answer plainly.',
+        timestamp: TS2,
+      }),
+    ];
+    const items = transformChatHistory(messages);
+    const capsules = items.filter(i => i.type === 'agent_run');
+    expect(capsules.length).toBe(1);
+    const capsule = capsules[0];
+    if (capsule.type === 'agent_run') {
+      expect(capsule.has_thinking).toBe(true);
+      expect(capsule.defaultExpanded).not.toBe(true);
+    }
+    const bubbles = items.filter(
+      i => i.type === 'agent_message' && !i.isHeaderOnly,
+    );
+    expect(
+      bubbles.some(b => b.type === 'agent_message' && b.content.includes('Clouds are')),
+    ).toBe(true);
   });
 
   it('content-null turn WITHOUT reasoning emits a header but capsule is NOT defaultExpanded', () => {
@@ -863,5 +901,92 @@ describe('transformChatHistory — sub-agent renders as a peer agent (capsule + 
     const items = transformChatHistory(messages, '/workspace');
     expect(items[0].type).toBe('agent_message');
     if (items[0].type === 'agent_message') expect(items[0].source).toBe('management');
+  });
+});
+
+describe('transformChatHistory — reasoning capsule collapse + never-vanish (sites 7 & 8)', () => {
+  it('site 7: a reasoning-only / no-answer COMPLETED turn yields a COLLAPSED reasoning capsule', () => {
+    // A persisted assistant turn that thought heavily but emitted no visible
+    // answer text (content null/empty) and no tool_calls. Per the locked
+    // decision it renders as a COLLAPSED reasoning capsule (defaultExpanded
+    // falsy), since transformChatHistory only sees COMPLETED history.
+    const messages: ChatMessage[] = [
+      user('think hard but say nothing', TS),
+      asst({
+        content: null,
+        reasoning_content: 'A long internal monologue with no visible answer.',
+        timestamp: TS2,
+      }),
+    ];
+    const items = transformChatHistory(messages);
+
+    const capsule = items.find((i) => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.has_thinking).toBe(true);
+      // The reasoning_block is present (capsule is NOT empty).
+      expect(capsule.items.some((c) => c.type === 'reasoning_block')).toBe(true);
+      // COMPLETED ⇒ collapsed.
+      expect(capsule.defaultExpanded).not.toBe(true);
+    }
+  });
+
+  it('site 7: a reasoning-then-answer COMPLETED turn yields an answer body + a COLLAPSED reasoning capsule', () => {
+    const messages: ChatMessage[] = [
+      user('explain rain', TS),
+      asst({
+        content: 'Rain is condensed atmospheric water vapor that falls.',
+        reasoning_content: 'The user asked a science question; answer plainly.',
+        timestamp: TS2,
+      }),
+    ];
+    const items = transformChatHistory(messages);
+
+    // Answer body is present as a non-header agent_message bubble.
+    const bubble = items.find(
+      (i) => i.type === 'agent_message' && !i.isHeaderOnly && i.content.includes('Rain is'),
+    );
+    expect(bubble).toBeDefined();
+
+    // Reasoning capsule is present and COLLAPSED.
+    const capsule = items.find((i) => i.type === 'agent_run');
+    expect(capsule).toBeDefined();
+    if (capsule && capsule.type === 'agent_run') {
+      expect(capsule.has_thinking).toBe(true);
+      expect(capsule.items.some((c) => c.type === 'reasoning_block')).toBe(true);
+      expect(capsule.defaultExpanded).not.toBe(true);
+    }
+  });
+
+  it('site 8 (never-vanish): an assistant message with empty content, no reasoning, no tool_calls emits a minimal placeholder, NOT nothing', () => {
+    const messages: ChatMessage[] = [
+      user('hi', TS),
+      asst({
+        content: '',
+        reasoning_content: undefined,
+        tool_calls: undefined,
+        timestamp: TS2,
+      }),
+    ];
+    const items = transformChatHistory(messages);
+
+    // The assistant turn must NOT silently vanish — at minimum a header-only
+    // agent_message marker is emitted so the turn is always represented.
+    const assistantItems = items.filter((i) => i.type !== 'user_message');
+    expect(assistantItems.length).toBeGreaterThan(0);
+
+    const placeholder = items.find(
+      (i) => i.type === 'agent_message' && i.isHeaderOnly === true,
+    );
+    expect(placeholder).toBeDefined();
+  });
+
+  it('site 8 (never-vanish): even a lone empty assistant message (no preceding user) is not dropped', () => {
+    const messages: ChatMessage[] = [
+      asst({ content: '', reasoning_content: undefined, tool_calls: undefined, timestamp: TS }),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.some((i) => i.type === 'agent_message' && i.isHeaderOnly === true)).toBe(true);
   });
 });

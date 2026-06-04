@@ -535,6 +535,19 @@ export function transformChatHistory(
           });
           currentCapsule.endedAtMs = msTime;
         }
+      } else {
+        // Never-vanish guard: an assistant message with empty content AND no
+        // reasoning AND no tool_calls would otherwise hit neither branch and
+        // emit NOTHING — a silent permanent disappearance. Emit a minimal
+        // header-only marker so the turn is always represented in the UI.
+        finalizeCapsule();
+        items.push({
+          type: 'agent_message',
+          content: '',
+          source: msg.source,
+          timestamp: msg.timestamp,
+          isHeaderOnly: true,
+        });
       }
 
       // Machinery (reasoning + tool_calls) flows into the capsule that
@@ -556,12 +569,16 @@ export function transformChatHistory(
               isHeaderOnly: true,
             });
           }
-          currentCapsule = openCapsuleAt(msg.timestamp, !!reasoning);
-        } else if (reasoning) {
-          // Reasoning added to an existing capsule still warrants the
-          // expand-by-default treatment so the user can see the thinking.
-          currentCapsule.defaultExpanded = true;
+          // transformChatHistory only ever runs over PERSISTED (completed)
+          // history, so a capsule produced here represents a COMPLETED turn.
+          // Per the locked product decision a completed reasoning turn renders
+          // COLLAPSED (clean summary); it expands only while actively RUNNING,
+          // which is handled at render time in ChatView (running ⇒ force-expand).
+          // Therefore never force-expand here — open collapsed.
+          currentCapsule = openCapsuleAt(msg.timestamp, false);
         }
+        // (No force-expand when appending reasoning to an existing capsule
+        // either — see the comment above; completed turns stay collapsed.)
         if (reasoning) {
           currentCapsule.items.push({
             type: 'reasoning_block',

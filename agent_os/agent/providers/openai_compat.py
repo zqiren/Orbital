@@ -25,6 +25,7 @@ from agent_os.agent.providers.types import (
     ContextOverflowError,
     LLMError,
 )
+from agent_os.agent.providers.think_splitter import InlineThinkSplitter
 
 _cache_logger = logging.getLogger("orbital.cache_audit")
 
@@ -46,9 +47,14 @@ def _extract_cache_read_tokens(usage_obj) -> int:
 
 
 def _make_token_usage(usage_obj) -> TokenUsage:
+    # Some OpenAI-compatible endpoints (observed: MiniMax api.minimaxi.com)
+    # return a usage object whose prompt_tokens / completion_tokens are None.
+    # Coerce to 0 so downstream int math (_log_cache_audit, cumulative token
+    # tracking, budget) never hits "'>' not supported between NoneType and int",
+    # which previously crashed the whole turn mid-stream.
     return TokenUsage(
-        input_tokens=usage_obj.prompt_tokens,
-        output_tokens=usage_obj.completion_tokens,
+        input_tokens=getattr(usage_obj, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(usage_obj, "completion_tokens", 0) or 0,
         cache_read_tokens=_extract_cache_read_tokens(usage_obj),
     )
 
@@ -249,6 +255,18 @@ class LLMProvider:
             self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
             self._anthropic_client = None
 
+    def _inline_think_mode(self) -> bool:
+        """True when this model emits reasoning inline as ``<think>…</think>``
+        within ``content`` (ReasoningInfo.field is None + supported). Such
+        models need the think segments peeled into ``reasoning_content``; models
+        with a named reasoning delta field are left untouched."""
+        r = self.reasoning
+        return bool(
+            r is not None
+            and getattr(r, "supported", False)
+            and getattr(r, "field", "sentinel") is None
+        )
+
     def update_api_key(self, new_key: str) -> None:
         """Hot-swap the API key, reconstructing the underlying client."""
         if new_key == self.api_key:
@@ -332,6 +350,11 @@ class LLMProvider:
             else:
                 _classify_error(exc)
 
+        # Inline-think models (e.g. MiniMax M-series) stream reasoning inside
+        # <think>…</think> within `content`. Peel it into reasoning_content as
+        # deltas arrive (tags may span chunk boundaries). None for other models.
+        splitter = InlineThinkSplitter() if self._inline_think_mode() else None
+
         async for chunk in response_iter:
             if not chunk.choices:
                 if chunk.usage is not None:
@@ -348,6 +371,11 @@ class LLMProvider:
             text = delta.content or ""
             tc_delta = delta.tool_calls or []
             reasoning = getattr(delta, "reasoning_content", None) or ""
+
+            if splitter is not None and text:
+                visible, think = splitter.feed(text)
+                text = visible
+                reasoning = reasoning + think
 
             if choice.finish_reason is not None and chunk.usage is not None:
                 usage = _make_token_usage(chunk.usage)
@@ -368,6 +396,13 @@ class LLMProvider:
                 )
             else:
                 yield StreamChunk(text=text, tool_calls_delta=tc_delta, reasoning_content=reasoning)
+
+        # Flush any buffered inline-think remainder (an unclosed <think> block,
+        # or a trailing partial tag) once the upstream stream is exhausted.
+        if splitter is not None:
+            visible, think = splitter.flush()
+            if visible or think:
+                yield StreamChunk(text=visible, reasoning_content=think)
 
     async def _stream_anthropic(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Anthropic SDK streaming path with adapter translation."""
@@ -452,6 +487,21 @@ class LLMProvider:
         finish_reason = choice.finish_reason
         usage = _make_token_usage(response.usage)
         _log_cache_audit(self.model, usage)
+
+        # Inline-think models: peel <think>…</think> out of content into
+        # reasoning_content so the persisted message keeps a clean answer.
+        if self._inline_think_mode() and isinstance(text, str) and text:
+            splitter = InlineThinkSplitter()
+            visible, think = splitter.feed(text)
+            v2, t2 = splitter.flush()
+            text = visible + v2
+            extracted = think + t2
+            raw_message["content"] = text
+            if extracted:
+                raw_message["reasoning_content"] = (
+                    (raw_message.get("reasoning_content") or "") + extracted
+                )
+
         status_text = _extract_status(text)
 
         return LLMResponse(

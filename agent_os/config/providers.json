@@ -2842,7 +2842,7 @@
         "MiniMax-M2.7",
         "MiniMax-M2.5"
       ],
-      "notes": "OpenAI-compatible Chat Completions. International keys use api.minimax.io; China-region keys MUST use api.minimaxi.com (credentials are region-specific and not interchangeable). M-series reasoning is enabled with reasoning_split=true and surfaced at message.reasoning_details[0].text (separate from message.content). Model-list endpoint unverified — UI falls back to suggested_models. Pricing below is an estimate; confirm on https://platform.minimax.io/docs.",
+      "notes": "OpenAI-compatible Chat Completions. International keys use api.minimax.io; China-region keys MUST use api.minimaxi.com (credentials are region-specific and not interchangeable). M-series reasoning is emitted inline in content as <think>…</think>; Orbital separates it into reasoning_content via the InlineThinkSplitter (ReasoningInfo.field=null contract). Model-list endpoint unverified — UI falls back to suggested_models. Pricing below is an estimate; confirm on https://platform.minimax.io/docs.",
       "pricing": {
         "MiniMax-M3": {
           "input_per_1m": 0.3,
@@ -2874,10 +2874,10 @@
           },
           "reasoning": {
             "supported": true,
-            "field": "reasoning_details",
+            "field": null,
             "echo_back": "optional",
-            "enable": "param:reasoning_split=true",
-            "notes": "Reasoning text returned at message.reasoning_details[0].text when reasoning_split=true; final answer stays in message.content. https://platform.minimax.io/docs/api-reference/text-openai-api",
+            "enable": "model_only",
+            "notes": "Inline-think: M3 emits reasoning in <think>…</think> within content by default; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. https://platform.minimax.io/docs/api-reference/text-openai-api",
             "needs_verification": true
           }
         },
@@ -2893,10 +2893,10 @@
           },
           "reasoning": {
             "supported": true,
-            "field": "reasoning_details",
+            "field": null,
             "echo_back": "optional",
-            "enable": "param:reasoning_split=true",
-            "notes": "M2-series reasoning via reasoning_split=true; text at message.reasoning_details[0].text. Confirm specifics on https://platform.minimax.io/docs.",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
             "needs_verification": true
           }
         },
@@ -2912,10 +2912,10 @@
           },
           "reasoning": {
             "supported": true,
-            "field": "reasoning_details",
+            "field": null,
             "echo_back": "optional",
-            "enable": "param:reasoning_split=true",
-            "notes": "M2-series reasoning via reasoning_split=true; text at message.reasoning_details[0].text. Confirm specifics on https://platform.minimax.io/docs.",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
             "needs_verification": true
           }
         },

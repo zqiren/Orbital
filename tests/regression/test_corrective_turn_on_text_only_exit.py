@@ -66,6 +66,7 @@ class _MultiTurnAgentManager:
         self._task: Optional[asyncio.Task] = None
         self.new_session_calls = 0
         self.inject_system_calls: list[str] = []
+        self.inject_system_session_ids: list[str | None] = []
         self.inject_message_calls: list[str] = []
 
     def is_onboarding_complete(self, project_id):
@@ -102,8 +103,11 @@ class _MultiTurnAgentManager:
         self._consume_and_run()
         return "delivered"
 
-    async def inject_system_message(self, project_id, content):
+    async def inject_system_message(self, project_id, content, *, session_id=None):
+        # Mirror the real AgentManager.inject_system_message signature: the
+        # dispatcher now forwards the item's session_id (seam 3 / D1, Root D).
         self.inject_system_calls.append(content)
+        self.inject_system_session_ids.append(session_id)
         self._consume_and_run()
         return "delivered"
 

@@ -809,8 +809,14 @@ class QueueDispatcher:
                     self._project_id, item.id,
                 )
                 try:
+                    # Seam 3 / D1 (Root D): forward the item's session id.
+                    # inject_system_message is passthrough-None, so omitting it
+                    # keys (pid, None) → handle-miss → "no_session" and the
+                    # corrective message is silently dropped. The session this
+                    # item runs in is in scope; route the message to it.
                     await self._agent_manager.inject_system_message(
                         self._project_id, self.CORRECTIVE_TURN_PROMPT,
+                        session_id=session_id,
                     )
                 except Exception:
                     # If inject fails we cannot ask the agent again — fall

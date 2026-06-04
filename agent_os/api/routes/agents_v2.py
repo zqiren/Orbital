@@ -598,7 +598,13 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
         pid = p["project_id"]
         try:
             if _agent_manager.is_running(pid):
-                await _agent_manager.stop_agent(pid)
+                # Seam 3 / D1 (Root C): is_running is holder-aware but
+                # stop_agent is passthrough-None — forward the holder session so
+                # the running loop is actually stopped, not orphaned (a bare
+                # stop_agent(pid) misses the uuid-keyed handle → KeyError).
+                await _agent_manager.stop_agent(
+                    pid, session_id=_agent_manager.current_holder_session_id(pid),
+                )
             workspace = p.get("workspace", "")
             if workspace:
                 _cleanup_project_files(workspace)
@@ -616,9 +622,14 @@ async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Stop agent if running
+    # Stop agent if running. is_running is holder-aware but stop_agent is
+    # passthrough-None (seam 3 / D1, Root C): forward the holder session so the
+    # running loop is stopped rather than orphaned (a bare stop_agent(project_id)
+    # misses the uuid-keyed handle → KeyError → 500 with the loop left alive).
     if _agent_manager.is_running(project_id):
-        await _agent_manager.stop_agent(project_id)
+        await _agent_manager.stop_agent(
+            project_id, session_id=_agent_manager.current_holder_session_id(project_id),
+        )
 
     # Tear down the project's dispatcher. It is project-scoped and survives
     # agent stop, so deletion must shut it down explicitly.
@@ -752,6 +763,15 @@ async def inject_message(project_id: str, req: InjectRequest):
         workspace = project.get("workspace", "")
         session = _get_or_create_session(project_id, workspace)
 
+        # Seam 3 / D1 (Root A): the @mention sub-agent attaches to a CONCRETE
+        # chat session. send()/start() require a parent session id — their
+        # resolver hard-raises on None (a sub-agent always has a parent) — so
+        # this route must FORWARD the session it already has, not drop it.
+        # Prefer the client-supplied session_id (the open chat session); fall
+        # back to the session this message is persisted into so a session-less
+        # @mention still routes to a concrete session instead of 404-ing.
+        mention_session_id = req.session_id or getattr(session, "session_uuid", None)
+
         # Persist user message BEFORE sending to sub-agent
         user_ts = datetime.now(timezone.utc).isoformat()
         user_msg: dict = {
@@ -768,13 +788,13 @@ async def inject_message(project_id: str, req: InjectRequest):
 
         # Auto-start sub-agent if not running
         try:
-            result = await _sub_agent_manager.send(project_id, req.target, effective_content)
+            result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
         if result.startswith("Error: agent") and "not running" in result:
             try:
-                await _sub_agent_manager.start(project_id, req.target)
-                result = await _sub_agent_manager.send(project_id, req.target, effective_content)
+                await _sub_agent_manager.start(project_id, req.target, session_id=mention_session_id)
+                result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
             except Exception:
                 raise HTTPException(status_code=404, detail=f"Failed to auto-start {req.target}")
 
@@ -783,7 +803,7 @@ async def inject_message(project_id: str, req: InjectRequest):
         _ws_manager.broadcast(project_id, {
             "type": "chat.sub_agent_message",
             "project_id": project_id,
-            "session_id": req.session_id,
+            "session_id": mention_session_id,
             "content": result,
             "source": req.target,
             "timestamp": ack_ts,
@@ -798,7 +818,7 @@ async def inject_message(project_id: str, req: InjectRequest):
                 initiator="user_mention",
                 message_preview=effective_content[:100],
                 transcript_path=transcript_path,
-                session_id=req.session_id,
+                session_id=mention_session_id,
             )
 
         return {"status": result}

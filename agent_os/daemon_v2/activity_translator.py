@@ -240,6 +240,13 @@ class ActivityTranslator:
             # the viewingHolder heuristic — stream deltas carried no id).
             "session_id": session_id,
             "text": getattr(chunk, "text", ""),
+            # Reasoning is carried on every delta — including reasoning-only
+            # deltas during the <think> phase, which have empty text but
+            # non-empty reasoning_content. The frontend needs both so it can
+            # keep the thinking indicator alive while the model reasons.
+            # No empty-text guard: dropping reasoning-only deltas was the
+            # "thinking is off / message hidden" symptom.
+            "reasoning_content": getattr(chunk, "reasoning_content", ""),
             "source": source,
             "is_final": is_final,
             "seq": seq,

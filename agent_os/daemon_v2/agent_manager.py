@@ -931,6 +931,23 @@ class AgentManager:
         base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
         model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
 
+        # Provider must track the model. When the project pins its own model it
+        # keeps its own provider (a self-hosted/custom setup); when it leaves
+        # model empty and inherits the global model, it must inherit the global
+        # provider too — otherwise a project left at the default
+        # provider="custom" runs as custom+<global model>, and registry lookups
+        # (get_model_info(provider, model)) miss the real entry, silently
+        # bypassing model-specific behavior such as MiniMax inline-<think>
+        # reasoning separation and capability/pricing metadata.
+        if project.get("model"):
+            provider = project.get("provider") or "custom"
+        else:
+            provider = (
+                (global_settings.llm.provider if global_settings else None)
+                or project.get("provider")
+                or "custom"
+            )
+
         return AgentConfig(
             workspace=project["workspace"],
             model=model,
@@ -938,7 +955,7 @@ class AgentManager:
             base_url=base_url,
             autonomy=autonomy,
             sdk=project.get("sdk", "openai"),
-            provider=project.get("provider", "custom"),
+            provider=provider,
             project_name=project.get("name", ""),
             project_instructions=project.get("instructions", ""),
             enabled_sub_agents=enabled_sub_agents or [],
@@ -2671,6 +2688,16 @@ class AgentManager:
                 }, session_id=session_id)
                 return
             if exc:
+                # Diagnostics (Point 4): the loop task raised. Previously this
+                # branch only recorded a terminal event + broadcast `error`,
+                # logging NOTHING — so mid-stream exceptions were invisible in
+                # daemon.log. Log type/message/traceback BEFORE the existing
+                # broadcast. Logging only; broadcast/terminal-event unchanged.
+                logger.error(
+                    "loop task raised for %s/%s: %s: %s",
+                    project_id, session_id, type(exc).__name__, exc,
+                    exc_info=exc,
+                )
                 self._set_last_terminal_event(
                     project_id, session_id, "error", details=str(exc),
                 )
