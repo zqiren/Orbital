@@ -73,10 +73,13 @@ class _StubAdapter:
     async def read_stream(self) -> AsyncIterator[OutputChunk]:
         # Emit one response chunk so ``last_response_text`` is populated,
         # then a ``turn_complete`` sentinel — exactly the SDK transport's
-        # documented end-of-turn signal.
+        # documented end-of-turn signal. cause="success" because only a
+        # verified success routes to on_completed under the honest-completion
+        # contract (tests/regression/test_honest_completion_reporting.py).
         yield OutputChunk(text="primes are 2 3 5 7", chunk_type="response")
         self._idle = True
-        yield OutputChunk(text="", chunk_type="turn_complete")
+        yield OutputChunk(text="", chunk_type="turn_complete",
+                          metadata={"cause": "success"})
         self._done.set()
 
 
@@ -134,8 +137,9 @@ async def test_process_manager_threads_session_id_to_on_completed():
     await asyncio.wait_for(task, timeout=2.0)
 
     # The completion push must have fired AND carried session_id=sess_X.
-    # Two on_completed calls are expected: one on the turn_complete chunk
-    # mid-stream, one on the stream-ends boundary. Both must carry the kwarg.
+    # Exactly one on_completed is expected — the turn_complete chunk. (The
+    # stream-end boundary after a closed turn emits nothing under the
+    # honest-completion contract.)
     assert mock_agent_mgr.inject_system_message.await_count >= 1, (
         "on_completed never fired — the consumer didn't reach the lifecycle "
         "branch; check the adapter stub or ProcessManager.consume() logic"
@@ -213,8 +217,8 @@ _AGENT_OS = _REPO_ROOT / "agent_os"
 # lines that look like function definitions (``def on_completed(``,
 # ``async def on_completed(``) and type-annotation-only mentions
 # (``on_completed:``).
-_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])(on_completed|on_error)\s*\(")
-_DEF_RE = re.compile(r"^\s*(async\s+)?def\s+(on_completed|on_error)\b")
+_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])(on_completed|on_error|on_failed)\s*\(")
+_DEF_RE = re.compile(r"^\s*(async\s+)?def\s+(on_completed|on_error|on_failed)\b")
 
 
 def _iter_call_sites():

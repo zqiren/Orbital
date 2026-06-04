@@ -27,6 +27,13 @@ class ProcessManager:
         self._activity_translator = activity_translator
         self._lifecycle = lifecycle_observer
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
+        # "{project_id}:{handle}" -> True while a turn has produced activity
+        # that no turn-closure has accounted for yet. A stream that ends with
+        # an open turn died abnormally (→ on_error); a closed or never-opened
+        # turn ending is a clean teardown (→ emit nothing). Closures: a
+        # turn_complete chunk, or note_turn_closed() from the blocking-send
+        # path (Pipe/ACP, which never emit turn_complete).
+        self._turn_open: dict[str, bool] = {}
 
     async def start(self, project_id: str, handle: str, adapter, transcript=None,
                     *, session_id: str | None = None) -> None:
@@ -44,17 +51,38 @@ class ProcessManager:
 
         async def consume():
             last_response_text = ""
+            last_error_text = ""
             try:
                 async for chunk in adapter.read_stream():
                     if chunk.chunk_type == "turn_complete":
+                        # Route by the transport's honest cause. Only a
+                        # verified success may be reported as completed
+                        # (TASK-honest-subagent-completion-reporting):
+                        #   success → on_completed
+                        #   stopped → deliberate teardown, emit nothing
+                        #   error / missing → on_error
+                        cause = (getattr(chunk, "metadata", None) or {}).get("cause")
                         if self._lifecycle and transcript is not None:
-                            await self._lifecycle.on_completed(
-                                project_id, handle,
-                                summary=last_response_text or "(no output)",
-                                transcript_path=transcript.filepath,
-                                session_id=session_id,
-                            )
+                            if cause == "success":
+                                await self._lifecycle.on_completed(
+                                    project_id, handle,
+                                    summary=last_response_text or "(no output)",
+                                    transcript_path=transcript.filepath,
+                                    session_id=session_id,
+                                )
+                            elif cause == "stopped":
+                                pass  # clean reap — a kill is not a completion
+                            else:
+                                await self._lifecycle.on_error(
+                                    project_id, handle,
+                                    last_error_text
+                                    or "turn ended without a completion signal",
+                                    transcript.filepath,
+                                    session_id=session_id,
+                                )
                         last_response_text = ""  # reset for next turn
+                        last_error_text = ""
+                        self._turn_open[key] = False
                         continue
                     entry = {
                         "source": handle,
@@ -65,6 +93,15 @@ class ProcessManager:
                     # Write to sub-agent transcript (v5: never to management session)
                     if transcript is not None:
                         transcript.append(entry)
+
+                    # Any non-closure chunk means a turn is in flight; a
+                    # stream that ends while one is open died abnormally.
+                    self._turn_open[key] = True
+
+                    if chunk.chunk_type == "error":
+                        # Keep error text out of last_response_text — it is
+                        # not a "summary"; it feeds on_error at turn close.
+                        last_error_text = chunk.text
 
                     # Track last response text for completion summary
                     if chunk.chunk_type in ("response", "message") or chunk.chunk_type is None:
@@ -98,14 +135,20 @@ class ProcessManager:
                         session_id=session_id,
                     )
 
-                # Stream ended — fire lifecycle event
-                if self._lifecycle and transcript is not None:
-                    await self._lifecycle.on_completed(
-                        project_id, handle,
-                        summary=last_response_text or "(no output)",
-                        transcript_path=transcript.filepath,
-                        session_id=session_id,
-                    )
+                # Stream ended. With an open turn this is an abnormal death
+                # (process died without any completion signal — path c); a
+                # closed or never-opened turn is a clean teardown and must
+                # emit NOTHING. The old unconditional on_completed here is
+                # what stamped "completed" on killed sub-agents.
+                if self._turn_open.get(key):
+                    if self._lifecycle and transcript is not None:
+                        await self._lifecycle.on_error(
+                            project_id, handle,
+                            last_error_text
+                            or "stream ended without a completion signal",
+                            transcript.filepath,
+                            session_id=session_id,
+                        )
             except asyncio.CancelledError:
                 pass
             except Exception as e:
@@ -118,9 +161,20 @@ class ProcessManager:
         task = asyncio.create_task(consume())
         self._tasks[key] = task
 
+    def note_turn_closed(self, project_id: str, handle: str) -> None:
+        """Mark the current turn as accounted for by a lifecycle event.
+
+        Called by the blocking-send path (Pipe/ACP — transports that never
+        emit ``turn_complete``) after it fires on_completed/on_error itself,
+        so a later clean teardown's stream-end is not misread as an abnormal
+        mid-turn death.
+        """
+        self._turn_open[f"{project_id}:{handle}"] = False
+
     async def stop(self, project_id: str, handle: str) -> None:
         """Cancel consumer task."""
         key = f"{project_id}:{handle}"
+        self._turn_open.pop(key, None)
         task = self._tasks.pop(key, None)
         if task is not None and not task.done():
             task.cancel()

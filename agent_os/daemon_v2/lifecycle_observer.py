@@ -76,17 +76,21 @@ class LifecycleObserver:
             "session_id": session_id,
         })
 
-    def on_failed(self, project_id: str, handle: str, reason: str,
-                  *, session_id: str | None = None) -> None:
+    async def on_failed(self, project_id: str, handle: str, reason: str,
+                        *, session_id: str | None = None) -> None:
         """Sub-agent adapter transitioned into broken state (e.g. background_send exception).
 
-        Synchronous by design — safe to call from exception handlers without
-        requiring an event loop context. Broadcasts a failure event so the
-        frontend can release the idle indicator and surface a loud failure
-        state. No transcript injection here because _inject is async and the
-        caller path is a narrow exception branch; the error log plus the
-        WebSocket event are the authoritative signals.
+        Injects a system message into the management session AND broadcasts
+        the failure event. WebSocket-only (the old behavior) meant the
+        management agent was never told its dispatch failed and would wait
+        on a sub-agent that was already dead
+        (TASK-honest-subagent-completion-reporting, path e).
         """
+        content = (
+            f"[Sub-agent] {handle} failed: {reason}. "
+            f"The dispatched task did not complete."
+        )
+        await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.failed",
             "project_id": project_id,

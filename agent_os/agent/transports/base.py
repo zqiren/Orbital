@@ -58,6 +58,11 @@ def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
         "permission_request": "approval_request",
         "status": "status",
         "turn_complete": "status",
+        # Errors must keep their identity: without this mapping they fell
+        # through the "response" default, so the error text became the
+        # last-response "summary" and a failed turn was reported as
+        # completed (TASK-honest-subagent-completion-reporting, fix 1).
+        "error": "error",
     }
     return OutputChunk(
         text=event.raw_text or event.data.get("text", ""),

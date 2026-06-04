@@ -225,13 +225,30 @@ class SDKTransport(AgentTransport):
         )
 
     async def _consume_response_background(self) -> None:
-        """Background task: iterate receive_response(), feed events to queue."""
+        """Background task: iterate receive_response(), feed events to queue.
+
+        The closing ``turn_complete`` carries an honest ``cause``:
+
+        - ``success`` — a ``ResultMessage`` arrived AND ``is_error`` is False.
+          NOT a bare got-result flag: ``ResultMessage(is_error=True)``
+          (context-window-exceeded, API errors) has a result but is a failure
+          (TASK-honest-subagent-completion-reporting, path b).
+        - ``stopped`` — this task was cancelled, i.e. a deliberate
+          ``stop()``/reap. Tagging it here is what stops the still-alive
+          consumer from reporting a phantom "completed" during the SIGTERM
+          grace window (path g).
+        - ``error`` — everything else: stream exception (path a), stream
+          ended without a ResultMessage (path c — external process death).
+        """
         got_result = False
+        result_is_error = False
+        cause: str | None = None
         try:
             try:
                 async for msg in self._client.receive_response():
                     if isinstance(msg, ResultMessage):
                         got_result = True
+                        result_is_error = bool(getattr(msg, "is_error", False))
                     events = self._message_to_events(msg)
                     for event in events:
                         await self._event_queue.put(event)
@@ -248,9 +265,18 @@ class SDKTransport(AgentTransport):
                 logger.warning("SDKTransport: background response ended without ResultMessage; will flush on next send")
             else:
                 self._needs_flush = False
+        except asyncio.CancelledError:
+            cause = "stopped"
+            raise
         finally:
-            # Always signal turn completion so adapter transitions to idle
-            await self._event_queue.put(TransportEvent(event_type="turn_complete"))
+            if cause is None:
+                cause = "success" if (got_result and not result_is_error) else "error"
+            # Always signal turn completion so adapter transitions to idle.
+            # Queue is unbounded, so this put() does not suspend — safe to
+            # run during cancellation cleanup.
+            await self._event_queue.put(TransportEvent(
+                event_type="turn_complete", data={"cause": cause},
+            ))
 
     async def _flush_stale_messages(self) -> None:
         """Drain leftover messages from the SDK buffer after a prior crash.

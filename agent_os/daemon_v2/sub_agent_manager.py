@@ -703,12 +703,29 @@ class SubAgentManager:
                         "timestamp": ts,
                     })
                     if self._lifecycle_observer and transcript is not None:
-                        await self._lifecycle_observer.on_completed(
-                            project_id, handle,
-                            summary=response[:200] if response else "(no output)",
-                            transcript_path=transcript.filepath,
-                            session_id=session_id,
-                        )
+                        # Honest routing (TASK-honest-subagent-completion-
+                        # reporting, fix 6): blocking transports surface
+                        # failures as "Error:"-prefixed response strings
+                        # (pipe timeout / non-zero exit, SDK send errors).
+                        # Those are failures, not completion summaries.
+                        if response.startswith("Error"):
+                            await self._lifecycle_observer.on_error(
+                                project_id, handle,
+                                response[:500],
+                                transcript.filepath,
+                                session_id=session_id,
+                            )
+                        else:
+                            await self._lifecycle_observer.on_completed(
+                                project_id, handle,
+                                summary=response[:200] if response else "(no output)",
+                                transcript_path=transcript.filepath,
+                                session_id=session_id,
+                            )
+                        # The turn is accounted for — a later clean teardown's
+                        # stream-end must not re-report it (these transports
+                        # never emit turn_complete).
+                        self._process_manager.note_turn_closed(project_id, handle)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -719,7 +736,10 @@ class SubAgentManager:
                 adapter._broken = True
                 if self._lifecycle_observer is not None:
                     try:
-                        self._lifecycle_observer.on_failed(
+                        # on_failed injects into the management session (not
+                        # just WS) so the dispatcher learns the task died —
+                        # path (e) of the honest-reporting contract.
+                        await self._lifecycle_observer.on_failed(
                             project_id, handle,
                             reason="background_send_exception",
                             session_id=session_id,
@@ -813,6 +833,14 @@ class SubAgentManager:
             adapters.pop(handle, None)
             if not adapters:
                 self._adapters.pop(sk, None)
+        # NOTE (shutdown-ordering coupling, TASK-honest-completion fix 4 /
+        # trigger-fix piece 3): adapter.stop() above cancels the SDK bg task,
+        # whose finally pushes a turn_complete tagged cause="stopped" that the
+        # still-alive consumer ingests during the SIGTERM grace window.
+        # ProcessManager routes cause="stopped" to NO lifecycle event — that
+        # tag is the only thing standing between a clean reap and a phantom
+        # "[Sub-agent] completed" in the management session. If piece 3
+        # reorders this teardown, the tag contract must be preserved.
         await self._process_manager.stop(project_id, handle)
 
         return f"Stopped {handle}"

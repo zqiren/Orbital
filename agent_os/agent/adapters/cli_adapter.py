@@ -217,7 +217,14 @@ class CLIAdapter(AgentAdapter):
             async for event in self._transport.read_stream():
                 if event.event_type == "turn_complete":
                     self._idle = True
-                    yield OutputChunk(text="", chunk_type="turn_complete")
+                    # Thread event.data through: it carries the honest
+                    # completion cause ("success" | "error" | "stopped")
+                    # that ProcessManager routes on. Dropping it here was
+                    # how kills got reported as completions.
+                    yield OutputChunk(
+                        text="", chunk_type="turn_complete",
+                        metadata=dict(event.data),
+                    )
                     continue
                 chunk = transport_event_to_chunk(event)
                 yield chunk
