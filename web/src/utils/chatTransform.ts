@@ -705,3 +705,68 @@ export function truncateResult(
     footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
   };
 }
+
+/**
+ * REST-recovery merge for a single recovered assistant row (the text-bubble
+ * half of ChatView's /chat?limit=1 fallback).
+ *
+ * Identity contract (INVESTIGATION-two-speakers): the recovered item's
+ * `source` is taken VERBATIM from the persisted row — exactly how
+ * transformChatHistory stamps it (`source: msg.source`) — never via a
+ * hardcoded default. The old inline version hardcoded source: 'assistant',
+ * which rendered one management turn as two speakers ("Assistant" with the
+ * Orbit glyph vs raw "assistant" with the grey AS monogram).
+ *
+ * Merge semantics, in order:
+ * 1. Dedup: if an identical-content agent_message exists ANYWHERE in
+ *    `prevItems`, return `prevItems` unchanged (the production duplicate
+ *    slipped through a last-item-only check because a system message
+ *    followed the WS-built bubble).
+ * 2. Truncation repair: if the LAST item is an agent_message whose content
+ *    is a shorter prefix-era variant (stream cut mid-delta), replace its
+ *    content with the full persisted text.
+ * 3. Insert: add the recovered message before any trailing user messages so
+ *    a recovered reply lands before follow-up questions.
+ */
+export function mergeRecoveredAssistantMessage(
+  prevItems: DisplayItem[],
+  row: ChatMessage,
+): DisplayItem[] {
+  const text = row.content;
+  if (!text) return prevItems;
+
+  // 1. Dedup against the whole list, not just the tail.
+  const exists = prevItems.some(
+    (it) => it.type === 'agent_message' && it.content === text,
+  );
+  if (exists) return prevItems;
+
+  // 2. Extend a truncated trailing message instead of duplicating it.
+  const last = prevItems[prevItems.length - 1];
+  if (
+    last &&
+    last.type === 'agent_message' &&
+    text.length > last.content.length &&
+    text.startsWith(last.content)
+  ) {
+    const updated = [...prevItems];
+    updated[prevItems.length - 1] = { ...last, content: text };
+    return updated;
+  }
+
+  // 3. Genuinely missing — insert before trailing user messages, identity
+  //    taken verbatim from the row (same as normal ingest).
+  const newMsg: DisplayItem = {
+    type: 'agent_message',
+    content: text,
+    source: row.source,
+    timestamp: row.timestamp ?? new Date().toISOString(),
+  };
+  let insertIdx = prevItems.length;
+  while (insertIdx > 0 && prevItems[insertIdx - 1].type === 'user_message') {
+    insertIdx--;
+  }
+  const updated = [...prevItems];
+  updated.splice(insertIdx, 0, newMsg);
+  return updated;
+}

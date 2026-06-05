@@ -8,8 +8,13 @@ import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
-import { transformChatHistory, truncateResult } from '../utils/chatTransform';
+import {
+  transformChatHistory,
+  truncateResult,
+  mergeRecoveredAssistantMessage,
+} from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+import type { ChatMessage as ChatMessageRow } from '../types';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock } from '../lib/attachment-parsing';
@@ -533,9 +538,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (sid === undefined) return;
     const sessionParam = `&session_id=${encodeURIComponent(sid)}`;
     setTimeout(() => {
-      api<
-        Array<{ role: string; content: string; reasoning_content?: string; timestamp?: string }>
-      >(`/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`)
+      // Typed as the SAME row shape normal ingest consumes (ChatMessage):
+      // the old inline type omitted `source`, which is how a hardcoded
+      // source: 'assistant' crept in and split one management turn into
+      // two speakers (INVESTIGATION-two-speakers).
+      api<ChatMessageRow[]>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`,
+      )
         .then((messages) => {
           if (!messages || messages.length === 0) return;
           const latest = messages[messages.length - 1];
@@ -582,45 +591,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             });
           }
           if (!latest.content) return;
-          const restText = latest.content;
-          setItems((prevItems) => {
-            // Check if the message is already present (by content match on last item)
-            const last = prevItems[prevItems.length - 1];
-            if (
-              last &&
-              last.type === 'agent_message' &&
-              'content' in last &&
-              last.content === restText
-            ) {
-              return prevItems;
-            }
-            // Also check if the last agent_message has shorter content (stream was truncated)
-            if (
-              last &&
-              last.type === 'agent_message' &&
-              'content' in last &&
-              restText.length > last.content.length
-            ) {
-              const updated = [...prevItems];
-              updated[prevItems.length - 1] = { ...last, content: restText };
-              return updated;
-            }
-            // Message not present at all — insert before any trailing user messages
-            // so recovered agent responses appear before follow-up questions
-            const newMsg = {
-              type: 'agent_message' as const,
-              content: restText,
-              source: 'assistant',
-              timestamp: latest.timestamp ?? new Date().toISOString(),
-            };
-            let insertIdx = prevItems.length;
-            while (insertIdx > 0 && prevItems[insertIdx - 1].type === 'user_message') {
-              insertIdx--;
-            }
-            const updated = [...prevItems];
-            updated.splice(insertIdx, 0, newMsg);
-            return updated;
-          });
+          // Identity + dedup live in mergeRecoveredAssistantMessage: source
+          // is taken verbatim from the persisted row (same as normal
+          // ingest), and dedup scans the whole list — the old inline
+          // version hardcoded source: 'assistant' and only checked the
+          // last item, rendering one management turn as two speakers.
+          setItems((prevItems) => mergeRecoveredAssistantMessage(prevItems, latest));
         })
         .catch(() => {
           // REST fetch failed — best effort

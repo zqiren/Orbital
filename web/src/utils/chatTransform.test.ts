@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from 'vitest';
-import { transformChatHistory, truncateResult } from './chatTransform';
+import { transformChatHistory, truncateResult, mergeRecoveredAssistantMessage } from './chatTransform';
 import type { ChatMessage } from '../types';
 
 const TS = '2026-05-08T10:00:00Z';
@@ -988,5 +988,92 @@ describe('transformChatHistory — reasoning capsule collapse + never-vanish (si
     const items = transformChatHistory(messages);
     expect(items.length).toBeGreaterThan(0);
     expect(items.some((i) => i.type === 'agent_message' && i.isHeaderOnly === true)).toBe(true);
+  });
+});
+
+describe('mergeRecoveredAssistantMessage — REST recovery resolves identity like normal ingest', () => {
+  // Regression: the REST /chat?limit=1 recovery fallback hardcoded
+  // source: 'assistant', splitting one management turn into two speaker
+  // bubbles ("Assistant" + ◐ vs raw "assistant" + grey AS monogram).
+  // Contract: recovery resolves source the SAME way normal ingest does —
+  // verbatim from the persisted row (chatTransform `source: msg.source`),
+  // never via a hardcoded default.
+
+  function agentItem(content: string, source = 'management', timestamp = TS) {
+    return { type: 'agent_message' as const, content, source, timestamp };
+  }
+  function userItem(content: string, timestamp = TS2) {
+    return { type: 'user_message' as const, content, timestamp };
+  }
+
+  it('preserves the row source verbatim (management row)', () => {
+    const out = mergeRecoveredAssistantMessage(
+      [],
+      asst({ content: '[STATUS: Starting Claude Code sub-agent]' }),
+    );
+    expect(out).toHaveLength(1);
+    const item = out[0];
+    expect(item.type).toBe('agent_message');
+    if (item.type === 'agent_message') {
+      expect(item.source).toBe('management');
+    }
+  });
+
+  it('passes any row source through untouched — no normalization, no default', () => {
+    // Same-as-ingest means verbatim: a non-management source must survive
+    // exactly, proving there is no hardcoded fallback in either direction.
+    const out = mergeRecoveredAssistantMessage(
+      [],
+      asst({ content: 'sub agent text', source: 'claude-code' }),
+    );
+    const item = out[0];
+    if (item.type === 'agent_message') {
+      expect(item.source).toBe('claude-code');
+    } else {
+      throw new Error('expected agent_message');
+    }
+  });
+
+  it('dedups against an identical message ANYWHERE in the list, not only the last item', () => {
+    // The production bug: the WS-built bubble existed but was not the LAST
+    // item (a system message followed), so the old last-only check missed
+    // and a duplicate was inserted.
+    const prev = [
+      agentItem('[STATUS: Starting Claude Code sub-agent]'),
+      userItem('follow-up question'),
+    ];
+    const out = mergeRecoveredAssistantMessage(
+      prev,
+      asst({ content: '[STATUS: Starting Claude Code sub-agent]' }),
+    );
+    expect(out).toBe(prev); // unchanged, same reference
+  });
+
+  it('extends a truncated trailing message instead of duplicating it', () => {
+    const prev = [agentItem('partial answ')];
+    const out = mergeRecoveredAssistantMessage(
+      prev,
+      asst({ content: 'partial answer, now complete' }),
+    );
+    expect(out).toHaveLength(1);
+    const item = out[0];
+    if (item.type === 'agent_message') {
+      expect(item.content).toBe('partial answer, now complete');
+    }
+  });
+
+  it('inserts a genuinely missing message before trailing user messages', () => {
+    const prev = [agentItem('older turn'), userItem('user typed after')];
+    const out = mergeRecoveredAssistantMessage(
+      prev,
+      asst({ content: 'recovered reply', timestamp: TS3 }),
+    );
+    expect(out).toHaveLength(3);
+    expect(out[1].type).toBe('agent_message');
+    if (out[1].type === 'agent_message') {
+      expect(out[1].content).toBe('recovered reply');
+      expect(out[1].source).toBe('management');
+    }
+    expect(out[2].type).toBe('user_message');
   });
 });
