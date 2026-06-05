@@ -64,18 +64,27 @@ async def test_mention_forwards_client_session_id_to_send(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mention_auto_start_then_retry_forwards_session_id(monkeypatch):
-    # First send reports the sub-agent is not running -> route auto-starts and retries.
+async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
+    """send() spawns-on-demand inside the manager now
+    (TASK-collapse-dispatch-to-send): the route makes ONE send call — no
+    manual auto-start/retry — and that call must carry the session id. A
+    spawn failure surfaces as an HTTP error, never a silent drop."""
+    from fastapi import HTTPException
+
     sam, ws, lifecycle = _wire(monkeypatch)
-    sam.send = AsyncMock(side_effect=["Error: agent researcher not running", "delivered"])
     req = InjectRequest(content="go", target="researcher", session_id="proj_x_sessB")
 
     result = await agents_v2.inject_message("proj_x", req)
 
     assert result == {"status": "delivered"}
-    # both the auto-start and the retry-send must carry the session id
-    assert sam.start.await_args.kwargs.get("session_id") == "proj_x_sessB"
-    assert sam.send.await_args_list[-1].kwargs.get("session_id") == "proj_x_sessB"
+    sam.start.assert_not_awaited()  # spawn is internal to the manager now
+    sam.send.assert_awaited_once()
+    assert sam.send.await_args.kwargs.get("session_id") == "proj_x_sessB"
+
+    # Spawn/dispatch failure path: honest HTTP error, no retry dance.
+    sam.send = AsyncMock(return_value="Error: unknown agent 'researcher'")
+    with pytest.raises(HTTPException):
+        await agents_v2.inject_message("proj_x", req)
 
 
 @pytest.mark.asyncio

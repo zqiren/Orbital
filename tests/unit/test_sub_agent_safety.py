@@ -216,12 +216,13 @@ class TestAgentMessageDepthLimit:
 
     @pytest.mark.asyncio
     async def test_start_stop_not_counted(self):
-        """start and stop actions do not increment the send counter."""
+        """Non-send actions (stop/status — and the removed start, now an
+        unknown action) do not increment the send counter."""
         tool, mgr = self._make_tool(max_sends=2)
 
-        await tool.execute(action="start", agent="a", message="")
         await tool.execute(action="stop", agent="a", message="")
-        await tool.execute(action="start", agent="b", message="")
+        await tool.execute(action="status", agent="a", message="")
+        await tool.execute(action="start", agent="b", message="")  # unknown action now
 
         # Counter should still be 0, sends should still work
         result = await tool.execute(action="send", agent="a", message="msg1")

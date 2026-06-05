@@ -786,17 +786,15 @@ async def inject_message(project_id: str, req: InjectRequest):
             user_msg["attachments"] = attachment_dicts
         session.append(user_msg)
 
-        # Auto-start sub-agent if not running
+        # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
+        # manual try-send -> on-error-start -> re-send dance that used to
+        # live here is now the manager's single built-in implementation.
         try:
             result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
-        if result.startswith("Error: agent") and "not running" in result:
-            try:
-                await _sub_agent_manager.start(project_id, req.target, session_id=mention_session_id)
-                result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
-            except Exception:
-                raise HTTPException(status_code=404, detail=f"Failed to auto-start {req.target}")
+        if result.startswith("Error"):
+            raise HTTPException(status_code=404, detail=f"Failed to dispatch to {req.target}: {result}")
 
         # Broadcast acknowledgement so ChatView knows the message was sent
         ack_ts = datetime.now(timezone.utc).isoformat()

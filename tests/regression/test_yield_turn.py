@@ -206,9 +206,12 @@ async def test_list_and_stop_do_not_yield():
 
 
 @pytest.mark.asyncio
-async def test_bare_start_does_not_yield():
-    """A task-less start is a launch, not a dispatch — it must not yield, or the
-    sub-agent would be stranded idle before any task is sent (and reaped)."""
+async def test_start_action_rejected_without_yield():
+    """The start action no longer exists (send spawns-on-demand,
+    TASK-collapse-dispatch-to-send) — a stray start must be rejected as an
+    unknown action and must not yield. The task-less-start strand state this
+    test used to guard against is now unreachable by construction."""
     tool = _tool_with_mock_mgr()
     result = await tool.execute(action="start", agent="claude-code")
+    assert "unknown action" in result.content.lower()
     assert not (result.meta and result.meta.get("yield_turn"))

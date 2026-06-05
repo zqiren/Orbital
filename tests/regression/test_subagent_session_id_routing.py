@@ -57,11 +57,16 @@ async def test_send_threads_session_id():
 
 
 @pytest.mark.asyncio
-async def test_start_threads_session_id():
+async def test_spawn_via_send_threads_session_id():
+    """start left the tool surface (send spawns-on-demand,
+    TASK-collapse-dispatch-to-send); the spawn's session threading now rides
+    the send call — the manager forwards session_id to its internal start()."""
     tool, mgr = _tool("sess_X")
-    await tool.execute(action="start", agent="claude-code")
-    mgr.start.assert_awaited_once()
-    assert mgr.start.await_args.kwargs.get("session_id") == "sess_X"
+    result = await tool.execute(action="start", agent="claude-code")
+    assert "unknown action" in result.content.lower()
+    mgr.start.assert_not_called()
+    await tool.execute(action="send", agent="claude-code", message="go")
+    assert mgr.send.await_args.kwargs.get("session_id") == "sess_X"
 
 
 @pytest.mark.asyncio

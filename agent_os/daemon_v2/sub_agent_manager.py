@@ -167,11 +167,17 @@ class SubAgentManager:
         return path
 
     async def start(self, project_id: str, handle: str, depth: int = 0,
-                    *, session_id: str | None = None) -> str:
+                    *, session_id: str | None = None,
+                    announce: bool = True) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
         Defaults to ``DEFAULT_SESSION_ID`` for single-loop back-compat.
+
+        ``announce=False`` suppresses the on_started session injection (WS
+        broadcast still fires) — used when the spawn is internal to a
+        spawn-on-demand ``send`` so one action yields one session message
+        (TASK-collapse-dispatch-to-send H2).
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -190,7 +196,7 @@ class SubAgentManager:
         # New path: use registry + setup_engine if available
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
-                project_id, handle, session_id=session_id,
+                project_id, handle, session_id=session_id, announce=announce,
             )
 
         # Legacy path: use adapter_configs
@@ -244,7 +250,7 @@ class SubAgentManager:
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id, inject=announce)
 
         return f"Started {handle}"
 
@@ -477,7 +483,8 @@ class SubAgentManager:
         self._claudemd_warning_state[(project_id, content_hash)] = "dismissed"
 
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
-                                   *, session_id: str | None = None) -> str:
+                                   *, session_id: str | None = None,
+                                   announce: bool = True) -> str:
         """Start a sub-agent using the manifest registry and setup engine."""
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -698,7 +705,7 @@ class SubAgentManager:
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id, inject=announce)
 
         # Resume-status reporting: the spawn result is what the management
         # agent reads, so the outcome travels on it (resumed | fresh +
@@ -711,18 +718,47 @@ class SubAgentManager:
         )
 
     async def send(self, project_id: str, handle: str, message: str,
-                   *, session_id: str | None = None) -> str:
-        """Dispatch message to adapter without blocking on response.
+                   *, session_id: str | None = None, depth: int = 0) -> str:
+        """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
         The response will appear asynchronously in the transcript and
         via WebSocket broadcast.
+
+        Spawn-on-demand (TASK-collapse-dispatch-to-send): a send to a
+        not-running handle spawns it via ``start()`` (announce=False — the
+        dispatch ack is the one announcement, carrying the piece-2
+        resume/honesty clause) and then dispatches, all in one call. ``send``
+        is the management agent's ONLY dispatch verb; the ``start`` tool
+        action was removed so a spawned-but-untasked strand state cannot
+        occur. ``depth`` is the spawning agent's nesting depth + 1, forwarded
+        to the spawn (the MAX_DEPTH policy gate lives in AgentMessageTool).
 
         ``session_id`` selects which session's adapter slate to dispatch
         through; defaults to ``DEFAULT_SESSION_ID``.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+
+        # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
+        # the same per-session lifecycle lock internally (non-reentrant), so
+        # spawning under it would deadlock. A concurrent double-send race here
+        # mirrors the pre-existing @mention try/start/retry race — last
+        # registration wins, same as before this change.
+        spawn_clause = ""
+        if handle not in self._adapters.get(sk, {}):
+            start_result = await self.start(
+                project_id, handle, depth=depth,
+                session_id=session_id, announce=False,
+            )
+            if start_result.startswith("Error"):
+                return start_result
+            spawned = self._adapters.get(sk, {}).get(handle)
+            status, reason = getattr(
+                spawned, "_resume_status", (None, None)) if spawned else (None, None)
+            if status:
+                spawn_clause = f" ({self._format_resume_clause(status, reason)})"
+
         # Invariant 7 (reap-vs-dispatch): take the per-session lifecycle lock
         # around the dispatch so turn-start is mutually exclusive with a reap in
         # ``stop`` (which holds the same lock across the kill). If a reap is
@@ -749,7 +785,7 @@ class SubAgentManager:
                 session_id=session_id,
             )
 
-        return f"Message sent to {handle}. Transcript: {transcript_path}"
+        return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
 
     async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
                               *, session_id: str | None = None) -> None:

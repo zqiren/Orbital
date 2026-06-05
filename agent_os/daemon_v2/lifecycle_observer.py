@@ -24,10 +24,19 @@ class LifecycleObserver:
 
     async def on_started(self, project_id: str, handle: str, initiator: str,
                          transcript_path: str = "unknown",
-                         *, session_id: str | None = None) -> None:
-        """Sub-agent process spawned."""
-        content = f"[Sub-agent] {handle} started (initiated by: {initiator}). Transcript: {transcript_path}"
-        await self._inject(project_id, content, session_id=session_id)
+                         *, session_id: str | None = None,
+                         inject: bool = True) -> None:
+        """Sub-agent process spawned.
+
+        ``inject=False`` suppresses the session injection (the WS broadcast
+        always fires — frontend status chips need it). Used by spawn-on-demand
+        ``send`` (TASK-collapse-dispatch-to-send H2): one action, one session
+        message — the dispatch ack carries the spawn/resume status, so a
+        standalone "started" line would double-announce.
+        """
+        if inject:
+            content = f"[Sub-agent] {handle} started (initiated by: {initiator}). Transcript: {transcript_path}"
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.started",
             "project_id": project_id,

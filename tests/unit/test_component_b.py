@@ -783,14 +783,16 @@ class TestAgentMessageToolWithManager:
         mock_manager.list_active.assert_called_with("proj_123", session_id=None)
 
     @pytest.mark.asyncio
-    async def test_start_without_agent_returns_error(self):
+    async def test_start_action_is_rejected(self):
+        """start was removed from the tool surface — send spawns-on-demand
+        (TASK-collapse-dispatch-to-send)."""
         mock_manager = MagicMock()
         tool = AgentMessageTool(sub_agent_manager=mock_manager)
 
-        result = await tool.execute(action="start", agent="")
+        result = await tool.execute(action="start", agent="claude")
 
         assert isinstance(result, ToolResult)
-        assert "error" in result.content.lower() or "'agent' parameter is required" in result.content.lower()
+        assert "unknown action" in result.content.lower()
 
     @pytest.mark.asyncio
     async def test_send_without_agent_returns_error(self):
