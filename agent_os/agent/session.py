@@ -134,6 +134,16 @@ class Session:
         # Display-only: never an identifier, never used for routing/lookup.
         self.name: str | None = None
 
+        # Sub-agent thread registry (TASK-resume-persistence, piece 2).
+        # handle -> {"session_id", "model", "last_used_at"}: the resume
+        # identity of each sub-agent thread this session owns. The composite
+        # key is (SessionKey, handle): this JSONL is SessionKey-scoped, the
+        # map is per-handle. Persisted as ``event: sub_agent_thread`` meta
+        # rows (last row wins on load) — same single-JSONL, no-sidecar rule
+        # as ``name``. Governance settings are deliberately NOT here; they
+        # resolve live at dispatch.
+        self.sub_agent_threads: dict[str, dict] = {}
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -232,6 +242,14 @@ class Session:
                             # the field keep the "chat" default set in __init__.
                             if msg.get("origin"):
                                 session.origin = msg["origin"]
+                        elif msg.get("event") == "sub_agent_thread":
+                            # Resume identity rows: append-only, last row per
+                            # handle wins (TASK-resume-persistence).
+                            if msg.get("handle") and isinstance(
+                                    msg.get("thread"), dict):
+                                session.sub_agent_threads[msg["handle"]] = (
+                                    dict(msg["thread"])
+                                )
                         continue
                     session._messages.append(msg)
 
@@ -428,6 +446,34 @@ class Session:
         }
         line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
         self._write_line(line_bytes)
+
+    # ------------------------------------------------------------------
+    # Sub-agent thread registry (resume persistence)
+    # ------------------------------------------------------------------
+
+    def set_sub_agent_thread(self, handle: str, *, session_id: str,
+                             model: str | None = None) -> None:
+        """Record (or refresh) the resume identity of a sub-agent thread.
+
+        Appends an ``event: sub_agent_thread`` meta row (the persistence) and
+        updates the in-memory map. Called on each sub-agent completion that
+        carries a thread id, so ``last_used_at`` stays current. The record
+        carries thread-identity only — resume ``session_id`` and ``model``
+        (model is thread-identity: it must be identical on resume; mandatory
+        for Codex in piece 4). Governance settings resolve live at dispatch
+        and are never snapshotted here.
+        """
+        record = {
+            "session_id": session_id,
+            "model": model,
+            "last_used_at": _now(),
+        }
+        self.sub_agent_threads[handle] = record
+        self.append_meta("sub_agent_thread", handle=handle, thread=record)
+
+    def get_sub_agent_thread(self, handle: str) -> dict | None:
+        """Return the persisted resume record for ``handle``, or None."""
+        return self.sub_agent_threads.get(handle)
 
     # ------------------------------------------------------------------
     # Session naming (display label)

@@ -61,7 +61,23 @@ class ProcessManager:
                         #   success → on_completed
                         #   stopped → deliberate teardown, emit nothing
                         #   error / missing → on_error
-                        cause = (getattr(chunk, "metadata", None) or {}).get("cause")
+                        meta = getattr(chunk, "metadata", None) or {}
+                        cause = meta.get("cause")
+                        # Resume persistence: a completed turn (success OR
+                        # error — a failed turn still has a live, resumable
+                        # session) carries the thread's resume identity.
+                        # Record it before the lifecycle event so the id is
+                        # on disk even if injection fails. cause=stopped is
+                        # skipped: the id was recorded at the last completed
+                        # turn (TASK-resume-persistence).
+                        if (self._lifecycle and meta.get("session_id")
+                                and cause in ("success", "error")):
+                            await self._lifecycle.on_thread_update(
+                                project_id, handle,
+                                claude_session_id=meta["session_id"],
+                                model=meta.get("model"),
+                                session_id=session_id,
+                            )
                         if self._lifecycle and transcript is not None:
                             if cause == "success":
                                 await self._lifecycle.on_completed(

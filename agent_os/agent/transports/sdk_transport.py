@@ -5,6 +5,7 @@
 """SDK transport: uses claude-agent-sdk to communicate with Claude Code."""
 import asyncio
 import logging
+import os
 import uuid
 from typing import AsyncIterator
 
@@ -40,11 +41,21 @@ class SDKTransport(AgentTransport):
     AgentOS's approval system.
     """
 
-    def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None):
+    def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
+                 resume_session_id: str | None = None, model: str | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
         self._session_id: str | None = None
+        # Resume identity (TASK-resume-persistence): when set, start() passes
+        # ClaudeAgentOptions(resume=..., model=...) so the spawned claude
+        # session continues the persisted thread instead of starting fresh.
+        # ``model`` is thread-identity — it must match the original thread.
+        self._resume_session_id: str | None = resume_session_id
+        self._model: str | None = model
+        # Last model observed on an AssistantMessage this turn — captured so
+        # the thread record can persist it (turn_complete carries it).
+        self._last_model: str | None = model
         self._alive: bool = False
         self._workspace: str = ""
         # Pending permission requests: request_id -> asyncio.Future
@@ -76,6 +87,38 @@ class SDKTransport(AgentTransport):
         # at start() time. Used by sub-agent inheritance flow.
         self._system_prompt: str | None = system_prompt
 
+    @staticmethod
+    def claude_project_slug(workspace: str) -> str:
+        """Derive claude-code's per-cwd session-store directory name.
+
+        Observed layout (confirmed against ~/.claude/projects):
+        ``/Users/x/Desktop/orbital-test`` -> ``-Users-x-Desktop-orbital-test``;
+        symlinked paths are stored by realpath (``/tmp`` -> ``/private/tmp``
+        on macOS). Non ``[A-Za-z0-9-]`` characters become ``-``.
+        """
+        import re as _re
+        real = os.path.realpath(workspace)
+        return _re.sub(r"[^A-Za-z0-9-]", "-", real)
+
+    @staticmethod
+    def resume_source_exists(workspace: str, session_id: str,
+                             *, projects_root: str | None = None) -> bool:
+        """Pre-check that the resumable session state still exists on disk.
+
+        TASK-resume-persistence: do NOT trust the resume call to error on a
+        dead id — claude-code prunes its store (~30 days, machine-local).
+        Primary check is the derived cwd-slug path; a glob fallback covers
+        any slug-derivation drift (session ids are UUIDs, so a cross-project
+        match is unambiguous).
+        """
+        import glob as _glob
+        root = projects_root or os.path.join(
+            os.path.expanduser("~"), ".claude", "projects")
+        slug = SDKTransport.claude_project_slug(workspace)
+        if os.path.isfile(os.path.join(root, slug, f"{session_id}.jsonl")):
+            return True
+        return bool(_glob.glob(os.path.join(root, "*", f"{session_id}.jsonl")))
+
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
         # Build env for SDK subprocess: override CLAUDECODE to prevent nested session detection
@@ -91,11 +134,18 @@ class SDKTransport(AgentTransport):
             env=sdk_env,
         )
         if self._system_prompt is not None:
+            # Re-rendered per dispatch; idempotent on resume — the append is
+            # per-connection config, never persisted into the session
+            # transcript, so resuming with a fresh render does not duplicate.
             options_kwargs["system_prompt"] = {
                 "type": "preset",
                 "preset": "claude_code",
                 "append": self._system_prompt,
             }
+        if self._resume_session_id is not None:
+            options_kwargs["resume"] = self._resume_session_id
+        if self._model is not None:
+            options_kwargs["model"] = self._model
         options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -273,9 +323,17 @@ class SDKTransport(AgentTransport):
                 cause = "success" if (got_result and not result_is_error) else "error"
             # Always signal turn completion so adapter transitions to idle.
             # Queue is unbounded, so this put() does not suspend — safe to
-            # run during cancellation cleanup.
+            # run during cancellation cleanup. The event carries the thread's
+            # resume identity (session_id + model) so the daemon can persist
+            # it — nothing reads transport.session_id after the fact
+            # (TASK-resume-persistence).
             await self._event_queue.put(TransportEvent(
-                event_type="turn_complete", data={"cause": cause},
+                event_type="turn_complete",
+                data={
+                    "cause": cause,
+                    "session_id": self._session_id,
+                    "model": self._last_model,
+                },
             ))
 
     async def _flush_stale_messages(self) -> None:
@@ -467,6 +525,9 @@ class SDKTransport(AgentTransport):
         events = []
 
         if isinstance(msg, AssistantMessage):
+            # Thread-identity capture: the model actually serving this thread
+            # (persisted with the resume record; must match on resume).
+            self._last_model = getattr(msg, "model", None) or self._last_model
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     events.append(TransportEvent(

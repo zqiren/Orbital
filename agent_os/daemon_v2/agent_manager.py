@@ -2079,6 +2079,36 @@ class AgentManager:
         loaded.set_name(name)
         return {"status": "renamed", "session_id": session_id, "name": name}
 
+    # ------------------------------------------------------------------
+    # Sub-agent resume persistence (TASK-resume-persistence, piece 2)
+    # ------------------------------------------------------------------
+
+    def record_sub_agent_thread(self, project_id: str, handle: str, *,
+                                claude_session_id: str,
+                                model: str | None = None,
+                                session_id: str | None = None) -> None:
+        """Persist a sub-agent's resume identity onto the management session.
+
+        Fired (via LifecycleObserver.on_thread_update) on each completed
+        sub-agent turn. Composite key ``(SessionKey, handle)``: the session
+        JSONL is SessionKey-scoped and the meta row carries the handle. A
+        completion racing an eviction (session no longer hydrated) is logged
+        and dropped — the previous record, if any, remains valid.
+        """
+        # Reuses the existing get_session accessor (keyword-only session_id,
+        # defined further down with the queue-era helpers).
+        session = self.get_session(project_id, session_id=session_id)
+        if session is None:
+            logger.warning(
+                "record_sub_agent_thread: no hydrated session for %s/%s — "
+                "thread id %s for handle %s not recorded",
+                project_id, session_id, claude_session_id, handle,
+            )
+            return
+        session.set_sub_agent_thread(
+            handle, session_id=claude_session_id, model=model,
+        )
+
     def list_sessions(self, project_id: str) -> list[dict]:
         """Return a list of active/idle sessions for a project.
 

@@ -51,6 +51,12 @@ class SubAgentManager:
         # WebSocketManager used to surface CLAUDE.md interference banners.
         # Optional: when None we fall back to process_manager._ws if set.
         self._ws_manager = ws_manager
+        # Resume persistence (TASK-resume-persistence): resolver wired at
+        # bootstrap to AgentManager.get_session so dispatch can read the
+        # per-(SessionKey, handle) thread records without SubAgentManager
+        # holding an AgentManager reference. None => resume disabled
+        # (every spawn is fresh/first_spawn).
+        self._session_resolver = None
         # ``_adapters`` is keyed by ``SessionKey == (project_id, session_id)``
         # so each chat session within a project owns an independent slate of
         # active sub-agents. Single-loop callers route through
@@ -242,7 +248,8 @@ class SubAgentManager:
 
         return f"Started {handle}"
 
-    def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None):
+    def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
+                           resume_record: dict | None = None):
         """Resolve the appropriate transport for a manifest.
 
         system_prompt, when provided, is forwarded to transports that
@@ -298,7 +305,15 @@ class SubAgentManager:
             try:
                 from agent_os.agent.transports.sdk_transport import SDKTransport, HAS_SDK
                 if HAS_SDK:
-                    return SDKTransport(autonomy=autonomy, system_prompt=system_prompt)
+                    # Resume identity (TASK-resume-persistence): when a
+                    # pre-checked record exists, the spawned session resumes
+                    # the persisted thread. model is thread-identity and
+                    # must match the original.
+                    return SDKTransport(
+                        autonomy=autonomy, system_prompt=system_prompt,
+                        resume_session_id=(resume_record or {}).get("session_id"),
+                        model=(resume_record or {}).get("model"),
+                    )
             except ImportError:
                 pass
             # Fallback to pipe if SDK not available
@@ -325,6 +340,51 @@ class SubAgentManager:
         else:
             # Fallback: no transport, use legacy CLIAdapter path
             return None
+
+    def _determine_resume(self, workspace: str, project_id: str, handle: str,
+                          session_id: str | None):
+        """Resume decision for a (SessionKey, handle) dispatch.
+
+        Returns ``(record_or_None, status, reason)`` where status/reason
+        follow the TASK-resume-persistence taxonomy:
+        ``("resumed", None)`` | ``("fresh", "first_spawn")`` |
+        ``("fresh", "resume_failed")``.
+
+        Pre-checks the on-disk resume source instead of trusting the resume
+        call to fail loudly (claude-code prunes its store at ~30 days, and
+        it is machine-local). A fresh start must never look like a resume.
+        """
+        resolver = self._session_resolver
+        session = resolver(project_id, session_id) if resolver else None
+        getter = getattr(session, "get_sub_agent_thread", None)
+        record = getter(handle) if getter else None
+        if not record or not record.get("session_id"):
+            return None, "fresh", "first_spawn"
+        from agent_os.agent.transports.sdk_transport import SDKTransport
+        try:
+            if SDKTransport.resume_source_exists(workspace, record["session_id"]):
+                return record, "resumed", None
+        except Exception:
+            logger.exception(
+                "resume_source_exists check failed for %s/%s — treating as "
+                "resume_failed", project_id, handle,
+            )
+        return None, "fresh", "resume_failed"
+
+    @staticmethod
+    def _format_resume_clause(status: str, reason: str | None) -> str:
+        """Human/LLM-facing resume-status clause for the spawn result.
+
+        Honesty rule (R4): a fresh start must never read as a resume, and a
+        failed resume says so explicitly so the orchestrator re-briefs.
+        """
+        if status == "resumed":
+            return ("resumed prior session — context from previous work "
+                    "is available")
+        if reason == "resume_failed":
+            return ("fresh session — prior session could not be resumed; "
+                    "re-brief any context it needs")
+        return "fresh session — first spawn"
 
     def _get_pipe_config(self, slug: str):
         """Build a PipeTransportConfig for the given agent slug."""
@@ -564,14 +624,36 @@ class SubAgentManager:
                     project_id, handle,
                 )
 
+        # Resume decision (TASK-resume-persistence): load the persisted
+        # (SessionKey, handle) record and pre-check its on-disk source
+        # BEFORE building the transport, so a live record resumes and a
+        # dead one starts fresh — and says so.
+        resume_record, resume_status, resume_reason = self._determine_resume(
+            workspace, project_id, handle, session_id,
+        )
+
         # Resolve transport from manifest. May raise ValueError for invalid
         # manifest combinations (e.g. claude-code with transport: acp).
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
+                resume_record=resume_record,
             )
         except ValueError as e:
             return f"Error: unsupported transport in manifest: {e}"
+
+        # Honesty downgrade: a record existed and its source was live, but
+        # the resolved transport cannot resume (e.g. pipe fallback when the
+        # SDK is unavailable). Never claim "resumed" for a thread the
+        # transport did not actually pick up.
+        if resume_record is not None and getattr(
+                transport, "_resume_session_id", None) != resume_record.get("session_id"):
+            resume_status, resume_reason = "fresh", "resume_failed"
+            logger.warning(
+                "resume record present for %s/%s but transport %s cannot "
+                "resume — starting fresh", project_id, handle,
+                type(transport).__name__,
+            )
 
         adapter = CLIAdapter(
             handle=handle,
@@ -618,7 +700,15 @@ class SubAgentManager:
             tp = transcript.filepath if transcript else "unknown"
             await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id)
 
-        return f"Started {manifest.name}"
+        # Resume-status reporting: the spawn result is what the management
+        # agent reads, so the outcome travels on it (resumed | fresh +
+        # reason). Stashed on the adapter too for list/status surfacing
+        # (consumed by the collaboration model, SPEC-multiagent).
+        adapter._resume_status = (resume_status, resume_reason)
+        return (
+            f"Started {manifest.name} "
+            f"({self._format_resume_clause(resume_status, resume_reason)})"
+        )
 
     async def send(self, project_id: str, handle: str, message: str,
                    *, session_id: str | None = None) -> str:

@@ -275,6 +275,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     lifecycle_observer = LifecycleObserver(agent_manager, ws_manager)
     process_manager._lifecycle = lifecycle_observer
     sub_agent_manager._lifecycle_observer = lifecycle_observer
+    # Resume persistence (TASK-resume-persistence): dispatch reads the
+    # per-(SessionKey, handle) thread records off the management session.
+    # (get_session's session_id is keyword-only; the resolver contract is
+    # positional (project_id, session_id).)
+    sub_agent_manager._session_resolver = (
+        lambda pid, sid: agent_manager.get_session(pid, session_id=sid)
+    )
 
     # 6b. Trigger manager
     trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager)
