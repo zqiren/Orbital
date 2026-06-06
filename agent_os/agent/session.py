@@ -455,15 +455,17 @@ class Session:
                              model: str | None = None,
                              background_loss: bool = False,
                              proc_pid: int | None = None,
-                             proc_create_time: float | None = None) -> None:
+                             proc_create_time: float | None = None,
+                             rollout_path: str | None = None) -> None:
         """Record (or refresh) the resume identity of a sub-agent thread.
 
         Appends an ``event: sub_agent_thread`` meta row (the persistence) and
         updates the in-memory map. Called on each sub-agent completion that
         carries a thread id, so ``last_used_at`` stays current. The record
         carries thread-identity only — resume ``session_id`` and ``model``
-        (model is thread-identity: it must be identical on resume; mandatory
-        for Codex in piece 4). Governance settings resolve live at dispatch
+        (model is thread-identity — passed on Codex thread/start|resume to
+        avoid resume-time model-switch surprises; protocol-optional,
+        FINDINGS D1). Governance settings resolve live at dispatch
         and are never snapshotted here.
 
         ``background_loss`` (Piece 3 Part E): a teardown terminated this
@@ -484,6 +486,10 @@ class Session:
             # attaching to this claude session id.
             record["proc_pid"] = proc_pid
             record["proc_create_time"] = proc_create_time
+        if rollout_path is not None:
+            # Codex thread (TASK-codex-appserver-transport): exact rollout
+            # JSONL path from thread/start|resume — pre-checked before resume.
+            record["rollout_path"] = rollout_path
         self.sub_agent_threads[handle] = record
         self.append_meta("sub_agent_thread", handle=handle, thread=record)
 

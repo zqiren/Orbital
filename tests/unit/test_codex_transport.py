@@ -485,3 +485,71 @@ class TestManagerResolution:
         manifest = registry.get("codex")
         assert manifest is not None
         assert manifest.runtime.transport == "codex-appserver"
+
+
+class TestResumePreCheck:
+    def test_rollout_path_hit(self, tmp_path):
+        rollout = tmp_path / "rollout-2026-06-06T21-19-11-T9.jsonl"
+        rollout.write_text("{}\n")
+        assert CodexTransport.resume_source_exists(
+            {"session_id": "T9", "rollout_path": str(rollout)}) is True
+
+    def test_rollout_path_pruned_falls_to_glob_then_false(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))  # empty sessions dir
+        assert CodexTransport.resume_source_exists(
+            {"session_id": "T9", "rollout_path": str(tmp_path / "gone.jsonl")}) is False
+
+    def test_glob_fallback_finds_by_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        d = tmp_path / "sessions" / "2026" / "06" / "06"
+        d.mkdir(parents=True)
+        (d / "rollout-2026-06-06T21-19-11-T9.jsonl").write_text("{}\n")
+        assert CodexTransport.resume_source_exists({"session_id": "T9"}) is True
+
+
+class TestRolloutPersistenceChain:
+    def test_set_sub_agent_thread_accepts_rollout_path(self, tmp_path):
+        from agent_os.agent.session import Session
+        s = Session.new(
+            "sess_x_ab12cd34", str(tmp_path), "proj_test"
+        )
+        s.append({"role": "user", "content": "hi", "source": "user"})
+        s.set_sub_agent_thread("codex", session_id="T9",
+                               model="gpt-5.4-mini",
+                               rollout_path="/x/rollout-T9.jsonl")
+        rec = s.get_sub_agent_thread("codex")
+        assert rec["rollout_path"] == "/x/rollout-T9.jsonl"
+        assert rec["session_id"] == "T9"
+
+    def test_determine_resume_dispatches_codex_pre_check(self, tmp_path, monkeypatch):
+        """codex-appserver manifests pre-check the ROLLOUT file, not the
+        claude store. A live rollout -> ('resumed'); a pruned one -> fresh."""
+        from unittest.mock import MagicMock
+        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+        mgr = SubAgentManager(
+            process_manager=MagicMock(), registry=MagicMock(),
+            setup_engine=MagicMock(), project_store=MagicMock(),
+        )
+        rollout = tmp_path / "rollout-2026-06-06T21-19-11-T9.jsonl"
+        rollout.write_text("{}\n")
+        record = {"session_id": "T9", "model": "gpt-5.4-mini",
+                  "rollout_path": str(rollout)}
+        session = MagicMock()
+        session.get_sub_agent_thread.return_value = record
+        mgr._session_resolver = lambda pid, sid: session
+        manifest = MagicMock()
+        manifest.runtime.transport = "codex-appserver"
+        mgr._registry.get.return_value = manifest
+        # Part-F backstop: no live attachment recorded -> safe to resume
+        monkeypatch.setattr(mgr, "_ensure_no_live_attachment",
+                            lambda *a, **k: True)
+        rec, status, reason = mgr._determine_resume(
+            str(tmp_path), "proj_x", "codex", "sess_1")
+        assert (status, reason) == ("resumed", None)
+        assert rec is record
+        # pruned rollout (and no glob fallback hit) -> honest fresh
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty"))
+        rollout.unlink()
+        rec2, status2, reason2 = mgr._determine_resume(
+            str(tmp_path), "proj_x", "codex", "sess_1")
+        assert (rec2, status2, reason2) == (None, "fresh", "resume_failed")

@@ -343,6 +343,8 @@ class TestLifecycleThreadUpdate:
             # Piece 3 Part F: the live-attachment anchor rides along
             # (None when the transport exposes no process handle).
             proc_pid=None, proc_create_time=None,
+            # Codex rollout path (None for non-codex transports).
+            rollout_path=None,
         )
 
 

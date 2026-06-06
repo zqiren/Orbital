@@ -129,6 +129,7 @@ class ProcessManager:
                                 session_id=session_id,
                                 proc_pid=proc_pid,
                                 proc_create_time=proc_create_time,
+                                rollout_path=meta.get("rollout_path"),
                             )
                         if self._lifecycle and transcript is not None:
                             if cause == "success":

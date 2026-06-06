@@ -406,9 +406,18 @@ class SubAgentManager:
                 record.get("session_id"), project_id, handle,
             )
             return None, "fresh", "resume_failed"
-        from agent_os.agent.transports.sdk_transport import SDKTransport
         try:
-            if SDKTransport.resume_source_exists(workspace, record["session_id"]):
+            manifest = self._registry.get(handle) if self._registry else None
+            transport_hint = getattr(
+                getattr(manifest, "runtime", None), "transport", None)
+            if transport_hint == "codex-appserver":
+                from agent_os.agent.transports.codex_transport import CodexTransport
+                source_ok = CodexTransport.resume_source_exists(record)
+            else:
+                from agent_os.agent.transports.sdk_transport import SDKTransport
+                source_ok = SDKTransport.resume_source_exists(
+                    workspace, record["session_id"])
+            if source_ok:
                 if record.get("background_loss"):
                     # Part E loud-loss: the prior teardown destroyed live
                     # background work — the resume clause must say so.
