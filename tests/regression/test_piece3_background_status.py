@@ -293,3 +293,8 @@ async def test_sdk_transport_declares_capability():
         pass  # SDK not installed in this env — capability check moot
     assert getattr(PipeTransport, "supports_background_status", False) is False
     assert getattr(ACPTransport, "supports_background_status", False) is False
+    from agent_os.agent.transports.codex_transport import CodexTransport
+    # LOCKED (TASK-codex-appserver-transport): Codex is truthfully two-state —
+    # no between-turn background work exists (probe A5c). Never set True for
+    # UI parity with Claude Code.
+    assert getattr(CodexTransport, "supports_background_status", False) is False
