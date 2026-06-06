@@ -1001,7 +1001,46 @@ class AgentManager:
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
-            return "no_session"
+            # Piece 3 Part C (wake-if-awaited): the handle being gone (e.g.
+            # idle-evicted while a sub-agent straggled to completion) must
+            # NOT silently drop the event — that silence was the live bug's
+            # second half. Hydrate the on-disk session, append the event
+            # FIRST (durable even if the wake fails), then start the loop so
+            # an awaiting management session actually processes it.
+            loaded = self._load_session_from_disk(project_id, session_id)
+            if loaded is None:
+                logger.warning(
+                    "inject_system_message(%s/%s): no live handle and no "
+                    "on-disk session — terminal event could not be "
+                    "delivered: %s",
+                    project_id, session_id, content[:200],
+                )
+                return "no_session"
+            logger.info(
+                "inject_system_message(%s): hydrating session uuid %s from "
+                "disk for terminal sub-agent event",
+                project_id, loaded.session_uuid,
+            )
+            loaded.append({
+                "role": "system",
+                "content": content,
+                "source": "daemon",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            try:
+                config = self._build_agent_config_from_project(project_id)
+                await self.start_agent(
+                    project_id, config, initial_message=None,
+                    session_id=loaded.session_uuid, session=loaded,
+                )
+                return "delivered"
+            except Exception:
+                logger.warning(
+                    "inject_system_message(%s/%s): wake failed; event is "
+                    "persisted on disk", project_id, session_id,
+                    exc_info=True,
+                )
+                return "persisted"
 
         # If loop is idle, append directly (safe — no pending tool calls) and wake
         if handle.task is None or handle.task.done():
