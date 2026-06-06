@@ -1155,6 +1155,62 @@ class SubAgentManager:
             self._adapters.pop(sk, None)
         return result
 
+    def seconds_since_background_activity(self, project_id: str, *,
+                                          session_id: str | None = None) -> float | None:
+        """Seconds since the most recent registered background-work activity
+        across this session's sub-agents, or None if none was ever observed.
+        The eviction timer resets on this (Piece 3 Part B)."""
+        import time as _time
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        if not isinstance(registry, BackgroundWorkRegistry):
+            return None
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        deltas = []
+        for handle in self._adapters.get(sk, {}):
+            t = registry.last_background_activity(project_id, session_id, handle)
+            if t is not None:
+                deltas.append(_time.monotonic() - t)
+        return min(deltas) if deltas else None
+
+    def has_live_descendants_degraded(self, project_id: str, *,
+                                      session_id: str | None = None) -> bool:
+        """Conservative eviction gate for degraded-path transports (Piece 3).
+
+        For adapters whose transport does NOT support background-status
+        classification (Pipe/ACP/PTY — their event streams discard
+        tool_input), we cannot distinguish real work from infrastructure, so
+        ANY live descendant blocks eviction. May over-keep agents holding
+        warm infra — accepted (costs only RAM). SDK adapters are skipped
+        here; the provenance gate covers them.
+        """
+        import psutil as _psutil
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        for handle, adapter in self._adapters.get(sk, {}).items():
+            transport = getattr(adapter, "_transport", None)
+            if transport is not None and getattr(
+                    transport, "supports_background_status", False):
+                continue  # SDK — provenance-gated, not descendant-gated
+            pid = None
+            proc = getattr(transport, "_proc", None)  # psutil handle
+            if proc is not None:
+                pid = getattr(proc, "pid", None)
+            if pid is None:
+                raw = (getattr(transport, "_process", None)
+                       or getattr(adapter, "_process", None)
+                       or getattr(adapter, "_proc_handle", None))
+                pid = getattr(raw, "pid", None)
+            if not isinstance(pid, int):
+                continue  # no reachable process — nothing to gate on
+            try:
+                if _psutil.Process(pid).children(recursive=True):
+                    return True
+            except _psutil.Error:
+                continue
+        return False
+
     def get_transcript(self, project_id: str, handle: str):
         """Return the transcript for a sub-agent, or None."""
         return self._transcripts.get((project_id, handle))

@@ -76,7 +76,10 @@ class TestOnLoopDoneWaiting:
 
     def test_broadcasts_waiting_when_sub_agents_active(self):
         mgr, ws, sub_agent_mgr = _make_manager()
-        sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
+        # Piece 3: only an OPEN TURN (status "running") counts as busy for
+        # the awaiting poll — the fixture carries the real status shape.
+        sub_agent_mgr.list_active.return_value = [
+            {"handle": "agent-a", "status": "running"}]
 
         handle = _make_handle()
         mgr._handles[("proj", SID)] = handle
@@ -252,27 +255,35 @@ class TestCheckSubAgentsDone:
         ws.broadcast.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_poll_terminates_on_max_polls(self):
+    async def test_poll_survives_past_old_max_polls_horizon(self):
+        """Piece 3 Part B (REWRITTEN from test_poll_terminates_on_max_polls):
+        the 150-poll/300s force-stop is removed. A busy sub-agent keeps the
+        poll alive arbitrarily long; the poll exits idle only when the turn
+        actually closes — and never calls stop_all/stop."""
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
         mgr._handles[("proj", SID)] = handle
 
-        # Sub-agents always active (stuck)
-        sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
-
-        # Set low cap for testing
-        mgr._MAX_IDLE_POLLS = 3
+        sub_agent_mgr.list_active.return_value = [
+            {"handle": "agent-a", "status": "running"}]
+        sub_agent_mgr.stop_all = AsyncMock()
+        sub_agent_mgr.stop = AsyncMock()
 
         sleep_count = [0]
+
         async def counting_sleep(duration):
             sleep_count[0] += 1
+            if sleep_count[0] >= 200:  # well past the old 150-poll kill point
+                sub_agent_mgr.list_active.return_value = [
+                    {"handle": "agent-a", "status": "idle"}]
 
         with patch("asyncio.sleep", side_effect=counting_sleep):
             await mgr._check_sub_agents_done("proj", session_id=SID)
 
-        # Should have polled exactly 3 times, then forced idle
-        assert sleep_count[0] == 3
+        assert sleep_count[0] >= 200
+        sub_agent_mgr.stop_all.assert_not_awaited()
+        sub_agent_mgr.stop.assert_not_awaited()
         calls = ws.broadcast.call_args_list
         assert len(calls) == 1
         event = calls[0][0][1]

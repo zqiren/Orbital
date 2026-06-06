@@ -2,14 +2,19 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Sub-agent processes are reaped at the turn boundary, not leaked.
+"""Piece 3 Part B: sub-agents are NOT reaped at turn boundaries.
 
-Per REPORT-subagent-leak-and-slot-gap.md + REPORT-is-idle-and-adapter-lifecycle.md:
-a sub-agent's `is_idle()==True` means its turn completed (the ACP `send()`
-returned, `_pending_response=False`) — it is safe to reap. The idle-poll
-(`_check_sub_agents_done`) and the loop-done callback (`_on_loop_done`) must
-call `stop_all` when no busy sub-agent remains, instead of leaving the process
-alive-but-idle. Busy sub-agents are never reaped.
+REWRITTEN from the pre-Piece-3 contract (which asserted reap-on-turn-boundary,
+per REPORT-subagent-leak-and-slot-gap.md). That policy destroyed live
+background work (the orbital-marketing live bug). The new invariant:
+
+- Turn close / loop-done NEVER reaps. Alive-but-idle agents wait for reuse
+  (live adapters are reused cleanly — REPORT-piece3-prerequisites.md Phase A);
+  inactivity eviction is the only non-teardown reaper.
+- When the owning session disappears mid-poll, ONLY idle adapters are reaped;
+  working and background-running agents are left alive.
+- "background-running" does not count as busy for the awaiting poll (the turn
+  is done; on_completed already fired).
 """
 
 from __future__ import annotations
@@ -20,6 +25,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.daemon_v2.agent_manager import AgentManager
+
+SID = "sess-reap-0001"
 
 
 async def _noop_sleep(*_a, **_k):
@@ -36,6 +43,8 @@ def _manager() -> AgentManager:
     )
     mgr._ws.broadcast = MagicMock()
     mgr._sub_agent_manager.stop_all = AsyncMock()
+    mgr._sub_agent_manager.stop = AsyncMock()
+    mgr._sub_agent_manager.ADAPTER_STOP_TIMEOUT = 6.0
     return mgr
 
 
@@ -51,69 +60,93 @@ def _idle_handle() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_idle_poll_reaps_on_no_busy(monkeypatch):
-    """_check_sub_agents_done: when list_active shows only idle adapters, call stop_all."""
-    monkeypatch.setattr("agent_os.daemon_v2.agent_manager.asyncio.sleep", _noop_sleep)
+async def test_idle_poll_no_reap_on_turn_close(monkeypatch):
+    """Turn closes (no busy sub-agent) → broadcast idle, NO reap of any kind."""
+    monkeypatch.setattr(
+        "agent_os.daemon_v2.agent_manager.asyncio.sleep", _noop_sleep)
     mgr = _manager()
-    sk = ("proj", "default")
-    mgr._handles[sk] = _idle_handle()
-    # Alive-but-idle sub-agent → list_active reports it as "idle" (not busy).
+    mgr._handles[("proj", SID)] = _idle_handle()
     mgr._sub_agent_manager.list_active = MagicMock(
-        return_value=[{"handle": "codex", "status": "idle"}]
+        return_value=[{"handle": "claude-code", "status": "idle"}]
     )
 
-    await mgr._check_sub_agents_done("proj", session_id="default")
+    await mgr._check_sub_agents_done("proj", session_id=SID)
 
-    mgr._sub_agent_manager.stop_all.assert_awaited_once_with("proj", session_id="default")
+    mgr._sub_agent_manager.stop_all.assert_not_awaited()
+    mgr._sub_agent_manager.stop.assert_not_awaited()
+    payloads = [c.args[1] for c in mgr._ws.broadcast.call_args_list]
+    assert any(p.get("status") == "idle" for p in payloads)
 
 
 @pytest.mark.asyncio
-async def test_idle_poll_reaps_when_handle_gone(monkeypatch):
-    """_check_sub_agents_done: if the handle was removed while sub-agents were
-    alive, reap before returning rather than orphaning the process."""
-    monkeypatch.setattr("agent_os.daemon_v2.agent_manager.asyncio.sleep", _noop_sleep)
+async def test_background_running_is_not_busy_for_the_poll(monkeypatch):
+    """background-running = turn done → the poll exits idle without reaping."""
+    monkeypatch.setattr(
+        "agent_os.daemon_v2.agent_manager.asyncio.sleep", _noop_sleep)
     mgr = _manager()
-    # No handle in _handles for ("proj", "default").
-    mgr._sub_agent_manager.list_active = MagicMock(return_value=[])
+    mgr._handles[("proj", SID)] = _idle_handle()
+    mgr._sub_agent_manager.list_active = MagicMock(
+        return_value=[{"handle": "claude-code", "status": "background-running"}]
+    )
 
-    await mgr._check_sub_agents_done("proj", session_id="default")
+    await mgr._check_sub_agents_done("proj", session_id=SID)
 
-    mgr._sub_agent_manager.stop_all.assert_awaited_once_with("proj", session_id="default")
+    mgr._sub_agent_manager.stop_all.assert_not_awaited()
+    mgr._sub_agent_manager.stop.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_on_loop_done_reaps_when_no_busy():
-    """_on_loop_done's no-busy branch reaps alive-but-idle sub-agents."""
+async def test_handle_gone_reaps_only_idle(monkeypatch):
+    """Session gone mid-poll: idle adapters reaped (lossless via resume);
+    working/background-running adapters left alive."""
+    monkeypatch.setattr(
+        "agent_os.daemon_v2.agent_manager.asyncio.sleep", _noop_sleep)
     mgr = _manager()
-    sk = ("proj", "default")
-    mgr._handles[sk] = _idle_handle()
+    # No handle registered for ("proj", SID).
+    mgr._sub_agent_manager.list_active = MagicMock(return_value=[
+        {"handle": "idle-one", "status": "idle"},
+        {"handle": "bg-one", "status": "background-running"},
+        {"handle": "busy-one", "status": "running"},
+    ])
+
+    await mgr._check_sub_agents_done("proj", session_id=SID)
+
+    mgr._sub_agent_manager.stop_all.assert_not_awaited()
+    stopped = [c.args[1] for c in mgr._sub_agent_manager.stop.await_args_list]
+    assert stopped == ["idle-one"]
+
+
+@pytest.mark.asyncio
+async def test_on_loop_done_no_reap_when_no_busy():
+    """loop-done with only idle sub-agents: idle broadcast, NO reap."""
+    mgr = _manager()
+    mgr._handles[("proj", SID)] = _idle_handle()
     mgr._sub_agent_manager.list_active = MagicMock(
-        return_value=[{"handle": "codex", "status": "idle"}]
+        return_value=[{"handle": "claude-code", "status": "idle"}]
     )
 
-    # Build a genuinely-done task with no exception.
     async def _done():
         return None
     task = asyncio.ensure_future(_done())
     await task
 
-    cb = mgr._on_loop_done("proj", session_id="default")
+    cb = mgr._on_loop_done("proj", session_id=SID)
     cb(task)
-    # Reaping is scheduled via ensure_future inside the sync callback.
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    mgr._sub_agent_manager.stop_all.assert_awaited_once_with("proj", session_id="default")
+    mgr._sub_agent_manager.stop_all.assert_not_awaited()
+    mgr._sub_agent_manager.stop.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_on_loop_done_does_not_reap_when_busy():
-    """_on_loop_done with a busy sub-agent registers the idle-poll and does NOT reap."""
+async def test_on_loop_done_background_running_not_busy_no_poll_no_reap():
+    """loop-done with a background-running sub-agent: not busy (turn done) →
+    no waiting-poll registered, no reap, idle broadcast."""
     mgr = _manager()
-    sk = ("proj", "default")
-    mgr._handles[sk] = _idle_handle()
+    mgr._handles[("proj", SID)] = _idle_handle()
     mgr._sub_agent_manager.list_active = MagicMock(
-        return_value=[{"handle": "codex", "status": "running"}]
+        return_value=[{"handle": "claude-code", "status": "background-running"}]
     )
 
     async def _done():
@@ -121,14 +154,38 @@ async def test_on_loop_done_does_not_reap_when_busy():
     task = asyncio.ensure_future(_done())
     await task
 
-    cb = mgr._on_loop_done("proj", session_id="default")
+    cb = mgr._on_loop_done("proj", session_id=SID)
     cb(task)
     await asyncio.sleep(0)
 
     mgr._sub_agent_manager.stop_all.assert_not_awaited()
-    poll = mgr._idle_poll_tasks.get("proj")
+    assert ("proj", SID) not in mgr._idle_poll_tasks
+    payloads = [c.args[1] for c in mgr._ws.broadcast.call_args_list]
+    assert any(p.get("status") == "idle" for p in payloads)
+
+
+@pytest.mark.asyncio
+async def test_on_loop_done_registers_poll_when_running():
+    """loop-done with a RUNNING sub-agent registers the awaiting poll and
+    does not reap (unchanged behavior, re-keyed post-'default'-retirement)."""
+    mgr = _manager()
+    mgr._handles[("proj", SID)] = _idle_handle()
+    mgr._sub_agent_manager.list_active = MagicMock(
+        return_value=[{"handle": "claude-code", "status": "running"}]
+    )
+
+    async def _done():
+        return None
+    task = asyncio.ensure_future(_done())
+    await task
+
+    cb = mgr._on_loop_done("proj", session_id=SID)
+    cb(task)
+    await asyncio.sleep(0)
+
+    mgr._sub_agent_manager.stop_all.assert_not_awaited()
+    poll = mgr._idle_poll_tasks.get(("proj", SID))
     assert poll is not None
-    # Clean up the registered poll task (it would otherwise sleep then reap).
     poll.cancel()
     try:
         await poll

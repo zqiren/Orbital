@@ -414,29 +414,35 @@ class TestIdleStatus:
         assert statuses[-1] == "idle"
 
     @pytest.mark.asyncio
-    async def test_poll_terminates_on_max_polls(self):
-        """Polling must stop after max iterations, not run forever."""
+    async def test_poll_never_force_stops_busy_subagents(self):
+        """Piece 3 Part B (REWRITTEN from test_poll_terminates_on_max_polls):
+        there is no poll cap anymore — a busy sub-agent is NEVER force-stopped
+        on a clock. The poll outlives the old 150-poll horizon and exits idle
+        only when the turn actually closes, without any stop call."""
         mgr, ws, sub_mgr = self._make_agent_manager(
-            active_sub_agents=[{"handle": "stuck-agent"}]
+            active_sub_agents=[{"handle": "stuck-agent", "status": "running"}]
         )
         self._install_handle(mgr, "proj1")
-
-        # Override to small cap for fast test
-        mgr._MAX_IDLE_POLLS = 3
+        sub_mgr.stop_all = AsyncMock()
+        sub_mgr.stop = AsyncMock()
 
         sleep_count = [0]
+
         async def counting_sleep(duration):
             sleep_count[0] += 1
+            if sleep_count[0] >= 200:  # beyond the removed 150-poll kill point
+                sub_mgr.list_active = MagicMock(return_value=[
+                    {"handle": "stuck-agent", "status": "idle"}])
 
         with patch("asyncio.sleep", side_effect=counting_sleep):
             await mgr._check_sub_agents_done("proj1", session_id=SID)
 
-        assert sleep_count[0] == 3
+        assert sleep_count[0] >= 200
+        sub_mgr.stop_all.assert_not_awaited()
+        sub_mgr.stop.assert_not_awaited()
         calls = ws.broadcast.call_args_list
         final_status = calls[-1][0][1]["status"]
-        assert final_status == "idle", (
-            f"Polling didn't terminate — last status was '{final_status}'"
-        )
+        assert final_status == "idle"
 
     @pytest.mark.asyncio
     async def test_new_loop_stops_polling(self):

@@ -2532,6 +2532,13 @@ class AgentManager:
             pid, sid = sk
             if self.get_run_status(pid, session_id=sid) != "idle":
                 continue
+            # Piece 3 Part B: eviction tears down sub-agents too, so only a
+            # session whose sub-agents are ALL true-idle is evictable. A
+            # working or background-running sub-agent blocks eviction, and
+            # the inactivity timer resets on registered background-work
+            # activity — never kill real work on a clock.
+            if self._sub_agents_block_eviction(pid, sid):
+                continue
             to_evict.append(sk)
         for sk in to_evict:
             pid, sid = sk
@@ -2543,6 +2550,43 @@ class AgentManager:
                     "eviction failed for %s/%s", pid, sid, exc_info=True
                 )
         return to_evict
+
+    def _sub_agents_block_eviction(self, project_id: str, session_id: str) -> bool:
+        """True when a session's sub-agents make it non-evictable (Piece 3).
+
+        Blocks eviction when:
+        - any sub-agent is working or background-running (status != idle);
+        - a degraded-path transport (no background-status support) has live
+          descendants — conservative: we cannot classify them, so we do not
+          kill them (may over-keep agents with warm infra; costs only RAM);
+        - registered background work was active more recently than
+          ``EVICTION_IDLE_TIMEOUT`` (the timer resets on background
+          activity, not just turn events).
+
+        Tolerant of partial managers (tests, degraded wiring): any failure to
+        read sub-agent state preserves the legacy eviction decision.
+        """
+        if self._sub_agent_manager is None:
+            return False
+        try:
+            active = self._sub_agent_manager.list_active(
+                project_id, session_id=session_id,
+            )
+            if any(a.get("status") != "idle" for a in active):
+                return True
+            # `is True` keeps partially-mocked managers (tests) on the
+            # legacy decision — a Mock return is not a positive signal.
+            if self._sub_agent_manager.has_live_descendants_degraded(
+                    project_id, session_id=session_id) is True:
+                return True
+            secs = self._sub_agent_manager.seconds_since_background_activity(
+                project_id, session_id=session_id,
+            )
+            if isinstance(secs, (int, float)) and secs < self.EVICTION_IDLE_TIMEOUT:
+                return True
+        except Exception:
+            return False
+        return False
 
     async def _eviction_sweep(self) -> None:
         """Forever: sleep, then run one eviction pass. Cancelled on shutdown."""
@@ -2690,7 +2734,10 @@ class AgentManager:
             )
         return callback
 
-    _MAX_IDLE_POLLS = 150  # 5 minutes at 2s intervals
+    # Piece 3 Part B: _MAX_IDLE_POLLS (the 300s busy-watchdog kill) is
+    # REMOVED. No fixed clock may kill a working or background-running
+    # sub-agent — the live-bug incident was this watchdog force-stopping a
+    # correctly-busy agent mid-work. See _check_sub_agents_done.
 
     def _on_loop_done(self, project_id: str, *,
                       session_id: str | None = None):
@@ -2797,11 +2844,15 @@ class AgentManager:
                 )
                 return
 
-            # Check if sub-agents are still actively running (not just alive)
+            # Check if sub-agents are still actively running (turn open).
+            # Piece 3 Part B: only status=="running" counts as busy for the
+            # awaiting poll — "background-running" means the TURN is done
+            # (on_completed already fired); the management session must not
+            # sit in "waiting" for background work.
             active = self._sub_agent_manager.list_active(
                 project_id, session_id=session_id,
             )
-            busy = [a for a in active if a.get("status") != "idle"]
+            busy = [a for a in active if a.get("status") == "running"]
             if busy:
                 self._broadcast(project_id, {
                     "type": "agent.status",
@@ -2814,16 +2865,12 @@ class AgentManager:
                 )
                 self._idle_poll_tasks[make_session_key(project_id, session_id)] = poll_task
             else:
-                # No busy sub-agents — reap any alive-but-idle process(es).
-                # is_idle()==True means the turn (and, under the current
-                # architecture, the task) finished, so the process must be torn
-                # down rather than left to leak. This callback is synchronous,
-                # so schedule the async reap. Belt-and-suspenders for the case
-                # where the idle-poll was never registered (sub-agents reported
-                # idle at loop-done). See REPORT-subagent-leak-and-slot-gap.md.
-                asyncio.ensure_future(
-                    self._reap_sub_agents(project_id, session_id=session_id)
-                )
+                # Piece 3 Part B: NO turn-boundary reap. Alive-but-idle
+                # agents wait for the next dispatch (live adapters are
+                # reused cleanly — REPORT-piece3-prerequisites.md Phase A)
+                # and background-running agents keep their work. The ONLY
+                # non-teardown reaper is the inactivity eviction
+                # (_evict_idle_once), gated on true-idle status.
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -2835,47 +2882,72 @@ class AgentManager:
             self._allow_sleep_if_idle()
         return callback
 
-    async def _reap_sub_agents(self, project_id: str,
-                               session_id: str | None = None) -> None:
-        """Stop (reap) a session's sub-agents at a turn boundary.
+    async def _reap_idle_sub_agents(self, project_id: str, *,
+                                    session_id: str | None = None) -> None:
+        """Stop ONLY sub-agents whose status is 'idle' (Piece 3 Part B).
 
-        Called when no busy sub-agent remains. `stop_all` tears down each
-        adapter (adapter.stop → transport.stop → SIGTERM/SIGKILL). Bounded so a
-        wedged transport never blocks the caller; a no-op when the session has
-        no sub-agents.
+        Used when the owning session is gone mid-poll: idle adapters are
+        reaped losslessly (resume restores their context); agents that are
+        working or background-running are NEVER reactively killed — they
+        finish (or go idle) and the inactivity eviction collects them later.
         """
         try:
-            await asyncio.wait_for(
-                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
-                timeout=5.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "stop_all timed out reaping sub-agents for %s", project_id
+            active = self._sub_agent_manager.list_active(
+                project_id, session_id=session_id,
             )
         except Exception:
-            logger.warning(
-                "stop_all raised reaping sub-agents for %s", project_id,
-                exc_info=True,
-            )
+            return
+        for a in active:
+            if a.get("status") != "idle":
+                logger.info(
+                    "leaving non-idle sub-agent %s alive for %s/%s "
+                    "(status=%s — no reactive kill; Piece 3)",
+                    a.get("handle"), project_id, session_id, a.get("status"),
+                )
+                continue
+            try:
+                await asyncio.wait_for(
+                    self._sub_agent_manager.stop(
+                        project_id, a["handle"], session_id=session_id,
+                    ),
+                    timeout=self._sub_agent_manager.ADAPTER_STOP_TIMEOUT * 2,
+                )
+            except (asyncio.TimeoutError, Exception):
+                logger.warning(
+                    "idle reap of %s failed for %s/%s",
+                    a.get("handle"), project_id, session_id, exc_info=True,
+                )
 
     async def _check_sub_agents_done(self, project_id: str, *,
                                      session_id: str | None = None) -> None:
-        """Poll until sub-agents finish, then broadcast idle.
+        """Poll until no sub-agent has an OPEN TURN, then broadcast idle.
+
+        Piece 3 Part B: this poll is STATUS-ONLY. The 300s busy-watchdog
+        force-stop that used to live at the end of this loop is removed — it
+        was killing correctly-busy agents mid-work (the signal was right, the
+        policy was wrong; a healthy 262s nested run survived it by 37s). No
+        fixed clock may kill a working or background-running agent. The poll
+        runs until the turn closes, a new loop starts, or the session goes
+        away; a long-busy sub-agent just keeps the session in "waiting" —
+        honestly.
 
         ``session_id`` selects the session whose handle gates the poll;
         defaults to the single-loop default session.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
-        for _ in range(self._MAX_IDLE_POLLS):
+        polls = 0
+        while True:
             await asyncio.sleep(2.0)
+            polls += 1
 
             handle = self._handles.get(sk)
             if handle is None or handle.session.is_stopped():
-                # Handle gone (or session stopped) but sub-agents may still be
-                # alive — reap them so the process doesn't orphan.
-                await self._reap_sub_agents(project_id, session_id=session_id)
+                # Session gone mid-wait. Reap ONLY idle adapters — never
+                # working/background-running ones (no reactive kills).
+                await self._reap_idle_sub_agents(
+                    project_id, session_id=session_id,
+                )
                 return
 
             # A new loop started — stop polling, loop callback will handle status
@@ -2885,10 +2957,11 @@ class AgentManager:
             active = self._sub_agent_manager.list_active(
                 project_id, session_id=session_id,
             )
-            busy = [a for a in active if a.get("status") != "idle"]
+            busy = [a for a in active if a.get("status") == "running"]
             if not busy:
-                # Turn finished (sub-agents alive-but-idle) — reap before idling.
-                await self._reap_sub_agents(project_id, session_id=session_id)
+                # Turn(s) finished — NO reap (Part B). Idle/background
+                # agents stay alive for reuse; eviction is the only
+                # non-teardown reaper.
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
@@ -2897,22 +2970,9 @@ class AgentManager:
                 }, session_id=session_id)
                 return
 
-        # Max polls exceeded — stop sub-agents, then force idle
-        logger.warning("Sub-agent poll timeout for project %s, forcing stop", project_id)
-        try:
-            await asyncio.wait_for(
-                self._sub_agent_manager.stop_all(project_id, session_id=session_id),
-                timeout=10.0,
-            )
-        except asyncio.TimeoutError:
-            logger.error(
-                "Watchdog stop_all timed out for project %s; sub-agents may leak", project_id
-            )
-        except Exception:
-            logger.exception("Watchdog stop_all raised for project %s", project_id)
-        self._broadcast(project_id, {
-            "type": "agent.status",
-            "project_id": project_id,
-            "status": "idle",
-            "source": "management",
-        }, session_id=session_id)
+            if polls % 150 == 0:  # one line every ~5 minutes, not a kill
+                logger.info(
+                    "sub-agents still busy after ~%ds for %s/%s — waiting "
+                    "(no reactive kill; Piece 3)",
+                    polls * 2, project_id, session_id,
+                )

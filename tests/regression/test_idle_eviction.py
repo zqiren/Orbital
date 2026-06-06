@@ -117,6 +117,87 @@ async def test_pending_approval_handle_not_evicted():
     assert sk in mgr._handles
 
 
+def _configured_sam(statuses, *, descendants=False, bg_secs=None):
+    """A sub_agent_manager mock with the Piece 3 eviction-gate surface."""
+    sam = MagicMock()
+    sam.list_active = MagicMock(
+        return_value=[{"handle": f"h{i}", "status": s}
+                      for i, s in enumerate(statuses)])
+    sam.has_live_descendants_degraded = MagicMock(return_value=descendants)
+    sam.seconds_since_background_activity = MagicMock(return_value=bg_secs)
+    return sam
+
+
+@pytest.mark.asyncio
+async def test_background_running_subagent_blocks_eviction():
+    """Piece 3 Part B: a session whose sub-agent is background-running is
+    NEVER evicted, regardless of idle time — eviction would kill the work."""
+    mgr = _manager()
+    mgr._sub_agent_manager = _configured_sam(["background-running"])
+    sk = ("proj_bg", "default")
+    mgr._handles[sk] = _handle(time.time() - 9999)
+    mgr.stop_agent = AsyncMock()
+
+    evicted = await mgr._evict_idle_once()
+
+    assert sk not in evicted
+    mgr.stop_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recent_background_activity_resets_eviction_timer():
+    """Piece 3 Part B: the inactivity timer resets on background-work
+    activity — work that went quiet 10s ago blocks eviction even if the
+    management session has been idle for hours."""
+    mgr = _manager()
+    mgr._sub_agent_manager = _configured_sam(["idle"], bg_secs=10.0)
+    sk = ("proj_bgrecent", "default")
+    mgr._handles[sk] = _handle(time.time() - 9999)
+    mgr.stop_agent = AsyncMock()
+
+    evicted = await mgr._evict_idle_once()
+
+    assert sk not in evicted
+    mgr.stop_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_degraded_transport_descendants_block_eviction():
+    """Piece 3 Part B: degraded-path transports (no background-status
+    support) are evictable only with ZERO live descendants — conservative,
+    may over-keep warm infra (accepted)."""
+    mgr = _manager()
+    mgr._sub_agent_manager = _configured_sam(["idle"], descendants=True)
+    sk = ("proj_desc", "default")
+    mgr._handles[sk] = _handle(time.time() - 9999)
+    mgr.stop_agent = AsyncMock()
+
+    evicted = await mgr._evict_idle_once()
+
+    assert sk not in evicted
+    mgr.stop_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_true_idle_subagents_do_not_block_eviction():
+    """All sub-agents idle + no descendants + stale background activity →
+    eviction proceeds (idle reaps stay lossless via resume)."""
+    mgr = _manager()
+    mgr._sub_agent_manager = _configured_sam(["idle"], bg_secs=99999.0)
+    sk = ("proj_trueidle", "default")
+    mgr._handles[sk] = _handle(time.time() - 9999)
+
+    async def _pop(pid, *, session_id=None):
+        mgr._handles.pop((pid, session_id), None)
+
+    mgr.stop_agent = AsyncMock(side_effect=_pop)
+
+    evicted = await mgr._evict_idle_once()
+
+    assert sk in evicted
+    mgr.stop_agent.assert_awaited_once_with("proj_trueidle", session_id="default")
+
+
 @pytest.mark.asyncio
 async def test_eviction_failure_does_not_abort_sweep():
     """If stop_agent raises for one project, the sweep still evicts the others."""
