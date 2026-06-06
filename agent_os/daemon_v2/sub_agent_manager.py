@@ -1309,7 +1309,8 @@ class SubAgentManager:
 
     async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str,
                                          approved: bool, *,
-                                         session_id: str | None = None) -> bool:
+                                         session_id: str | None = None,
+                                         decision: str | None = None) -> bool:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
@@ -1322,6 +1323,11 @@ class SubAgentManager:
         unique, so a project-wide scan is unambiguous. This is the one sub-agent
         path that legitimately tolerates None (seam 3 / D1: no "default" sentinel —
         a None search just widens to all sessions, it does not route to a phantom).
+
+        Optional ``decision`` passes a richer Codex vocabulary string (e.g.
+        ``"cancel"`` to end the turn as ``interrupted``) to transports that
+        implement ``respond_to_permission_decision``.  When ``decision`` is None
+        the legacy boolean ``respond_to_permission`` path is used unchanged.
         """
         if session_id is None:
             slates = [
@@ -1337,7 +1343,17 @@ class SubAgentManager:
                     # Check if this transport has the pending approval
                     pending = getattr(transport, '_pending_approvals', {})
                     if tool_call_id in pending:
-                        await transport.respond_to_permission(tool_call_id, approved)
+                        if decision is not None and hasattr(
+                                transport, "respond_to_permission_decision"):
+                            # Richer codex vocabulary: "cancel" ends the turn
+                            # `interrupted` (Deny & stop); "decline" lets it
+                            # continue. Transports without the method (SDK)
+                            # fall back to the boolean wire.
+                            await transport.respond_to_permission_decision(
+                                tool_call_id, decision)
+                        else:
+                            await transport.respond_to_permission(
+                                tool_call_id, approved)
                         return True
         return False
 

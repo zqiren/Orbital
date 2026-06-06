@@ -243,6 +243,10 @@ class DenyRequest(BaseModel):
     tool_call_id: str
     reason: str
     session_id: str | None = None  # which session's approval (defaults to holder)
+    # Codex "Deny & stop": route decision="cancel" (turn ends `interrupted`)
+    # instead of the default decline (turn continues). Ignored by transports
+    # without a decision vocabulary.
+    stop_turn: bool = False
 
 
 class SessionScopedRequest(BaseModel):
@@ -1352,6 +1356,7 @@ async def deny(project_id: str, req: DenyRequest):
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
                 project_id, req.tool_call_id, approved=False,
                 session_id=req.session_id,
+                decision="cancel" if req.stop_turn else None,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")

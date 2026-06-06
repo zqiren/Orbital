@@ -553,3 +553,46 @@ class TestRolloutPersistenceChain:
         rec2, status2, reason2 = mgr._determine_resume(
             str(tmp_path), "proj_x", "codex", "sess_1")
         assert (rec2, status2, reason2) == (None, "fresh", "resume_failed")
+
+
+class TestDenyAndStopWire:
+    @pytest.mark.asyncio
+    async def test_decision_pass_through_reaches_transport(self):
+        from unittest.mock import AsyncMock, MagicMock
+        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+        mgr = SubAgentManager(
+            process_manager=MagicMock(), registry=MagicMock(),
+            setup_engine=MagicMock(), project_store=MagicMock(),
+        )
+        transport = MagicMock()
+        transport._pending_approvals = {"req-1": {"rpc_id": 0}}
+        transport.respond_to_permission = AsyncMock()
+        transport.respond_to_permission_decision = AsyncMock()
+        adapter = MagicMock()
+        adapter._transport = transport
+        mgr._adapters[("p1", "s1")] = {"codex": adapter}
+
+        routed = await mgr.resolve_sub_agent_approval(
+            "p1", "req-1", approved=False, session_id="s1", decision="cancel")
+        assert routed is True
+        transport.respond_to_permission_decision.assert_awaited_once_with(
+            "req-1", "cancel")
+        transport.respond_to_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_decision_keeps_bool_path(self):
+        from unittest.mock import AsyncMock, MagicMock
+        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+        mgr = SubAgentManager(
+            process_manager=MagicMock(), registry=MagicMock(),
+            setup_engine=MagicMock(), project_store=MagicMock(),
+        )
+        transport = MagicMock()
+        transport._pending_approvals = {"req-1": {}}
+        transport.respond_to_permission = AsyncMock()
+        adapter = MagicMock()
+        adapter._transport = transport
+        mgr._adapters[("p1", "s1")] = {"codex": adapter}
+        await mgr.resolve_sub_agent_approval("p1", "req-1", approved=False,
+                                             session_id="s1")
+        transport.respond_to_permission.assert_awaited_once_with("req-1", False)

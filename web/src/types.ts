@@ -272,7 +272,8 @@ export interface SubAgentLifecycleEvent {
     | 'sub_agent.completed'
     | 'sub_agent.error'
     | 'sub_agent.failed'
-    | 'sub_agent.stopped';
+    | 'sub_agent.stopped'
+    | 'sub_agent.turn_interrupted';
   project_id: string;
   session_id?: string | null;
   handle: string;

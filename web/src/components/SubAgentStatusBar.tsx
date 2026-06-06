@@ -91,8 +91,8 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
     };
     const events = [
       'sub_agent.started', 'sub_agent.completed', 'sub_agent.error',
-      'sub_agent.failed', 'sub_agent.stopped', 'chat.sub_agent_message',
-      'agent.status',
+      'sub_agent.failed', 'sub_agent.stopped', 'sub_agent.turn_interrupted',
+      'chat.sub_agent_message', 'agent.status',
     ] as const;
     events.forEach((ev) => on(ev, handler));
     return () => {

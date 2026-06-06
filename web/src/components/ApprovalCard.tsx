@@ -143,6 +143,24 @@ export default function ApprovalCard({
     }
   }
 
+  // Codex approvals advertise their valid decisions; "cancel" ends the turn
+  // immediately (no final answer) vs plain deny which lets the agent adapt.
+  const canDenyAndStop = Array.isArray(approval.tool_args?.availableDecisions)
+    && (approval.tool_args.availableDecisions as unknown[]).includes('cancel');
+
+  async function handleDenyAndStop() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || 'Denied by user', sessionId, true);
+      setLocalResolution('denied');
+      onResolve?.(approval.tool_call_id, 'denied');
+    } catch {
+      setSubmitting(false);
+      setError('Failed to submit. Please try again.');
+    }
+  }
+
   return (
     <div className="mb-3 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-[#FFFBF0] overflow-hidden">
       <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
@@ -233,6 +251,18 @@ export default function ApprovalCard({
               >
                 Confirm Deny
               </button>
+              {canDenyAndStop && (
+                <button
+                  type="button"
+                  onClick={handleDenyAndStop}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDenyAndStop(); }}
+                  disabled={submitting}
+                  title="Deny and end the agent's current turn immediately"
+                  className="px-4 py-1.5 text-sm font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                >
+                  Deny &amp; stop
+                </button>
+              )}
             </div>
           </div>
         )}

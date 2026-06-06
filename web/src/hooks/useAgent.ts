@@ -128,7 +128,7 @@ export function useAgent() {
   );
 
   const denyToolCall = useCallback(
-    async (projectId: string, toolCallId: string, reason: string, sessionId?: string) => {
+    async (projectId: string, toolCallId: string, reason: string, sessionId?: string, stopTurn?: boolean) => {
       return api<ActionResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/deny`,
         {
@@ -137,6 +137,7 @@ export function useAgent() {
             tool_call_id: toolCallId,
             reason,
             ...(sessionId !== undefined && { session_id: sessionId }),
+            ...(stopTurn && { stop_turn: true }),
           }),
         },
       );
