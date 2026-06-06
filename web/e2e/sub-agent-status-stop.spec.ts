@@ -30,7 +30,9 @@ const PID_FILE = join(homedir(), 'orbital', 'daemon.pid');
 const API = `http://127.0.0.1:${DAEMON_PORT}`;
 
 const TS = '2026-06-06T10:00:00Z';
-const PROJECT = 'e2e-subagent-badge-proj';
+// Short name: the 375px sidebar ellipsizes long project names and
+// getByText would never match the truncated label.
+const PROJECT = 'e2e-badge';
 const BG_CMD = 'gh api repos/x/y/issues --paginate (mining loop)';
 
 let daemon: ChildProcess | undefined;
