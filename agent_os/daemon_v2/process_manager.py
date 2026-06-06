@@ -108,11 +108,25 @@ class ProcessManager:
                         # turn (TASK-resume-persistence).
                         if (self._lifecycle and meta.get("session_id")
                                 and cause in ("success", "error")):
+                            # Piece 3 Part F: persist the process identity
+                            # (pid + create_time) alongside the resume
+                            # record, so a later spawn can detect a
+                            # still-live attachment and never double-attach.
+                            proc = getattr(
+                                getattr(adapter, "_transport", None),
+                                "_proc", None)
+                            try:
+                                proc_pid = proc.pid
+                                proc_create_time = proc.create_time()
+                            except Exception:
+                                proc_pid, proc_create_time = None, None
                             await self._lifecycle.on_thread_update(
                                 project_id, handle,
                                 claude_session_id=meta["session_id"],
                                 model=meta.get("model"),
                                 session_id=session_id,
+                                proc_pid=proc_pid,
+                                proc_create_time=proc_create_time,
                             )
                         if self._lifecycle and transcript is not None:
                             if cause == "success":

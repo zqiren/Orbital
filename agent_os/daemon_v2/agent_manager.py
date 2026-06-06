@@ -2130,7 +2130,9 @@ class AgentManager:
     def record_sub_agent_thread(self, project_id: str, handle: str, *,
                                 claude_session_id: str,
                                 model: str | None = None,
-                                session_id: str | None = None) -> None:
+                                session_id: str | None = None,
+                                proc_pid: int | None = None,
+                                proc_create_time: float | None = None) -> None:
         """Persist a sub-agent's resume identity onto the management session.
 
         Fired (via LifecycleObserver.on_thread_update) on each completed
@@ -2151,6 +2153,7 @@ class AgentManager:
             return
         session.set_sub_agent_thread(
             handle, session_id=claude_session_id, model=model,
+            proc_pid=proc_pid, proc_create_time=proc_create_time,
         )
 
     def list_sessions(self, project_id: str) -> list[dict]:

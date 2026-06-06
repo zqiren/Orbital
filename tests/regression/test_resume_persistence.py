@@ -340,6 +340,9 @@ class TestLifecycleThreadUpdate:
         mock_am.record_sub_agent_thread.assert_called_once_with(
             "proj_x", "claude-code", claude_session_id="sid-1", model="m",
             session_id="sess_x",
+            # Piece 3 Part F: the live-attachment anchor rides along
+            # (None when the transport exposes no process handle).
+            proc_pid=None, proc_create_time=None,
         )
 
 

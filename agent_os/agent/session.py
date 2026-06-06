@@ -453,7 +453,9 @@ class Session:
 
     def set_sub_agent_thread(self, handle: str, *, session_id: str,
                              model: str | None = None,
-                             background_loss: bool = False) -> None:
+                             background_loss: bool = False,
+                             proc_pid: int | None = None,
+                             proc_create_time: float | None = None) -> None:
         """Record (or refresh) the resume identity of a sub-agent thread.
 
         Appends an ``event: sub_agent_thread`` meta row (the persistence) and
@@ -476,6 +478,12 @@ class Session:
         }
         if background_loss:
             record["background_loss"] = True
+        if proc_pid is not None:
+            # Piece 3 Part F: live-attachment anchor (pid + create_time is
+            # PID-reuse-safe) — the resume backstop checks it before
+            # attaching to this claude session id.
+            record["proc_pid"] = proc_pid
+            record["proc_create_time"] = proc_create_time
         self.sub_agent_threads[handle] = record
         self.append_meta("sub_agent_thread", handle=handle, thread=record)
 

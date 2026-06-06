@@ -382,6 +382,20 @@ class SubAgentManager:
         record = getter(handle) if getter else None
         if not record or not record.get("session_id"):
             return None, "fresh", "first_spawn"
+        # Piece 3 Part F (minimal resume backstop): if a LIVE process is
+        # still attached to this claude session id (the rare force-drop/
+        # OS-refused-kill leftover that survives Part E), do NOT
+        # double-attach — kill-then-resume, confirmed. Resuming a live
+        # session silently shares its store file and loses one branch's
+        # history on the next resume (REPORT-piece3-prerequisites.md Q2).
+        if not self._ensure_no_live_attachment(project_id, handle, record):
+            logger.error(
+                "resume backstop: live process attached to claude session "
+                "%s for %s/%s could NOT be confirmed dead — starting fresh "
+                "instead of double-attaching",
+                record.get("session_id"), project_id, handle,
+            )
+            return None, "fresh", "resume_failed"
         from agent_os.agent.transports.sdk_transport import SDKTransport
         try:
             if SDKTransport.resume_source_exists(workspace, record["session_id"]):
@@ -396,6 +410,42 @@ class SubAgentManager:
                 "resume_failed", project_id, handle,
             )
         return None, "fresh", "resume_failed"
+
+    def _ensure_no_live_attachment(self, project_id: str, handle: str,
+                                   record: dict) -> bool:
+        """Part F backstop body: True when it is safe to resume the record's
+        claude session (no live attachment, or the leftover was killed and
+        CONFIRMED dead). False = could not confirm — caller must not resume.
+
+        Identity check is pid + create_time (PID reuse reads as dead, not
+        alive). Minimal by design: no orphan-sweeping subsystem, just
+        don't-double-attach.
+        """
+        pid = record.get("proc_pid")
+        ctime = record.get("proc_create_time")
+        if not isinstance(pid, int):
+            return True  # no anchor recorded — nothing to check
+        import psutil as _psutil
+        try:
+            proc = _psutil.Process(pid)
+            if ctime is not None and abs(proc.create_time() - ctime) > 1.0:
+                return True  # PID reused by an unrelated process
+        except _psutil.NoSuchProcess:
+            return True
+        except _psutil.Error:
+            return True  # unreadable — treat as gone (can't be attached)
+        logger.warning(
+            "resume backstop: pid %s is still attached to claude session %s "
+            "for %s/%s — killing it (confirmed) before resuming",
+            pid, record.get("session_id"), project_id, handle,
+        )
+        try:
+            victims = [proc] + proc.children(recursive=True)
+        except _psutil.Error:
+            victims = [proc]
+        # Short grace: this runs synchronously inside the dispatch path and
+        # only on the rare leaked-attachment hit; worst case ~3s.
+        return self._reap_stragglers(victims, 1.0)
 
     @staticmethod
     def _format_resume_clause(status: str, reason: str | None) -> str:

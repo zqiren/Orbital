@@ -158,12 +158,16 @@ class LifecycleObserver:
     async def on_thread_update(self, project_id: str, handle: str,
                                *, claude_session_id: str,
                                model: str | None = None,
-                               session_id: str | None = None) -> None:
+                               session_id: str | None = None,
+                               proc_pid: int | None = None,
+                               proc_create_time: float | None = None) -> None:
         """A sub-agent turn completed carrying its resume identity.
 
         Routes to AgentManager, which persists the ``(SessionKey, handle)``
         record into the management session's meta rows
-        (TASK-resume-persistence). Not a user-facing event — no injection,
+        (TASK-resume-persistence). ``proc_pid``/``proc_create_time`` (Piece 3
+        Part F) anchor the live process so a later resume can detect a
+        still-live attachment. Not a user-facing event — no injection,
         no broadcast.
         """
         if self._agent_manager is None:
@@ -173,6 +177,7 @@ class LifecycleObserver:
                 project_id, handle,
                 claude_session_id=claude_session_id, model=model,
                 session_id=session_id,
+                proc_pid=proc_pid, proc_create_time=proc_create_time,
             )
         except Exception:
             logger.exception(
