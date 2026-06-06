@@ -356,6 +356,16 @@ class SubAgentManager:
             from agent_os.agent.transports.pty_transport import PTYTransport
             approval_patterns = config_dict.get("approval_patterns", [])
             return PTYTransport(approval_patterns=approval_patterns)
+        elif transport_type == "codex-appserver":
+            from agent_os.agent.transports.codex_transport import CodexTransport
+            # Resume identity: threadId + model (thread identity) from the
+            # pre-checked record; rollout pre-check happened in
+            # _determine_resume. system_prompt is NOT forwarded — the
+            # protocol's developerInstructions param is live-untested.
+            return CodexTransport(
+                autonomy=autonomy,
+                resume_record=resume_record,
+            )
         elif transport_type == "acp":
             from agent_os.agent.transports.acp_transport import ACPTransport
             return ACPTransport()
@@ -664,7 +674,7 @@ class SubAgentManager:
                 transport_hint = getattr(manifest.runtime, "transport", "auto")
                 runtime_mode = getattr(manifest.runtime, "mode", None)
                 skips_system_prompt = (
-                    transport_hint in ("pty", "acp")
+                    transport_hint in ("pty", "acp", "codex-appserver")
                     or (transport_hint == "auto" and runtime_mode != "pipe")
                 )
                 if skips_system_prompt:

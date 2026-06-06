@@ -34,7 +34,7 @@ class ManifestRuntime:
     prompt_flag: str = "-p"             # flag to pass prompt text
     resume_flag: str = "--resume"       # flag to resume session
     session_id_pattern: str = ""        # regex to extract session_id from output
-    transport: str = "auto"             # "sdk" | "acp" | "pipe" | "pty" | "auto"
+    transport: str = "auto"             # "sdk" | "acp" | "pipe" | "pty" | "codex-appserver" | "auto"
     approval_patterns: list[dict] = field(default_factory=list)
     activity_patterns: list[dict] = field(default_factory=list)
 

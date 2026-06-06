@@ -448,3 +448,40 @@ class TestStop:
             ans.cancel()
             await asyncio.gather(ans, return_exceptions=True)
         assert all(f.get("method") != "turn/interrupt" for f in stdin.frames)
+
+
+class TestManagerResolution:
+    def _manager(self):
+        from unittest.mock import MagicMock
+        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+        return SubAgentManager(
+            process_manager=MagicMock(), registry=MagicMock(),
+            setup_engine=MagicMock(), project_store=MagicMock(),
+        )
+
+    def test_resolve_transport_codex_appserver(self):
+        from unittest.mock import MagicMock
+        mgr = self._manager()
+        manifest = MagicMock()
+        manifest.runtime.transport = "codex-appserver"
+        manifest.runtime.mode = "interactive"
+        manifest.runtime.command = "codex"
+        transport = mgr._resolve_transport(
+            manifest, {}, autonomy=Autonomy.HANDS_OFF,
+            resume_record={"session_id": "T9", "model": "gpt-5.4-mini"},
+        )
+        assert isinstance(transport, CodexTransport)
+        # the manager's honesty downgrade reads this attribute by name
+        assert transport._resume_session_id == "T9"
+        assert transport._model == "gpt-5.4-mini"
+
+    def test_codex_manifest_declares_appserver_transport(self):
+        import os
+        from agent_os.agents.registry import AgentRegistry
+        manifests = os.path.join(os.path.dirname(__file__), "..", "..",
+                                 "agent_os", "agents", "manifests")
+        registry = AgentRegistry()
+        registry.load_directory(manifests)
+        manifest = registry.get("codex")
+        assert manifest is not None
+        assert manifest.runtime.transport == "codex-appserver"
