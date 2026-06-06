@@ -971,9 +971,35 @@ class SubAgentManager:
 
         return f"Stopped {handle}"
 
+    def _adapter_status(self, adapter, project_id: str, session_id: str,
+                        handle: str) -> str:
+        """Three-state status (Piece 3 Part A): 'running' (turn open),
+        'background-running' (turn done but registered background work is
+        live), 'idle' (turn done, nothing real underneath).
+
+        Three-state applies ONLY to transports that declare
+        ``supports_background_status`` (SDK claude-code) AND only when the
+        registry's platform gate is open (the Windows liveness shape is
+        unverified — degraded two-state there). Warm infrastructure (MCP
+        servers, browsers) is never consulted: classification is by
+        provenance records, not by any-live-child.
+        """
+        if not adapter.is_idle():
+            return "running"
+        transport = getattr(adapter, "_transport", None)
+        if transport is not None and getattr(
+                transport, "supports_background_status", False):
+            from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+            registry = getattr(self._process_manager, "background_work", None)
+            if (isinstance(registry, BackgroundWorkRegistry)
+                    and registry.three_state_supported
+                    and registry.has_live(project_id, session_id, handle)):
+                return "background-running"
+        return "idle"
+
     def status(self, project_id: str, handle: str, *,
                session_id: str | None = None) -> str:
-        """Return 'running' | 'idle' | 'stopped' | 'unknown'."""
+        """Return 'running' | 'background-running' | 'idle' | 'stopped' | 'unknown'."""
         session_id = self._resolve_session_id(session_id)
         adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         adapter = adapters.get(handle)
@@ -981,9 +1007,7 @@ class SubAgentManager:
             return "unknown"
         if not adapter.is_alive():
             return "stopped"
-        if adapter.is_idle():
-            return "idle"
-        return "running"
+        return self._adapter_status(adapter, project_id, session_id, handle)
 
     def get_pending_sub_agent_approval(self, project_id: str, *,
                                        session_id: str | None = None) -> dict | None:
@@ -1119,7 +1143,8 @@ class SubAgentManager:
                 result.append({
                     "handle": handle,
                     "display_name": getattr(adapter, "display_name", handle),
-                    "status": "running" if not adapter.is_idle() else "idle",
+                    "status": self._adapter_status(
+                        adapter, project_id, session_id, handle),
                 })
             else:
                 dead.append(handle)

@@ -26,6 +26,12 @@ class ProcessManager:
         self._ws = ws_manager
         self._activity_translator = activity_translator
         self._lifecycle = lifecycle_observer
+        # Piece 3 Part A: provenance-based background-work classification.
+        # Fed below from run_in_background tool_use chunks; read by
+        # SubAgentManager status and the eviction gate. See
+        # agent_os/daemon_v2/background_work.py for the classification rules.
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        self.background_work = BackgroundWorkRegistry()
         self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
         # "{project_id}:{handle}" -> True while a turn has produced activity
         # that no turn-closure has accounted for yet. A stream that ends with
@@ -113,6 +119,27 @@ class ProcessManager:
                     # Any non-closure chunk means a turn is in flight; a
                     # stream that ends while one is open died abnormally.
                     self._turn_open[key] = True
+
+                    # Piece 3 Part A — provenance capture: a Bash tool_use
+                    # with run_in_background=true IS the registration of real
+                    # background work (the only trusted classifier; see
+                    # background_work.py). tool_input survives into
+                    # chunk.metadata via transport_event_to_chunk
+                    # (transports/base.py).
+                    if chunk.chunk_type == "tool_activity":
+                        meta = getattr(chunk, "metadata", None) or {}
+                        tool_input = meta.get("tool_input") or {}
+                        if (meta.get("tool_name") == "Bash"
+                                and tool_input.get("run_in_background")):
+                            root_proc = getattr(
+                                getattr(adapter, "_transport", None),
+                                "_proc", None,
+                            )
+                            self.background_work.register(
+                                project_id, session_id or "", handle,
+                                command=str(tool_input.get("command", "")),
+                                root_proc=root_proc,
+                            )
 
                     if chunk.chunk_type == "error":
                         # Keep error text out of last_response_text — it is

@@ -41,6 +41,12 @@ class SDKTransport(AgentTransport):
     AgentOS's approval system.
     """
 
+    # Piece 3 Part A: this transport's event stream carries tool_input
+    # (incl. run_in_background) and exposes the subprocess handle, so the
+    # provenance-based three-state status applies. Pipe/ACP/PTY discard
+    # tool_input (pipe_transport.py / acp_transport.py) and stay two-state.
+    supports_background_status = True
+
     def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
                  resume_session_id: str | None = None, model: str | None = None):
         if not HAS_SDK:
