@@ -32,14 +32,30 @@ class ProcessManager:
         # agent_os/daemon_v2/background_work.py for the classification rules.
         from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
         self.background_work = BackgroundWorkRegistry()
-        self._tasks: dict[str, asyncio.Task] = {}      # "{project_id}:{handle}" -> consumer task
-        # "{project_id}:{handle}" -> True while a turn has produced activity
+        # Piece 3 Part E (keying fix): consumer slots are scoped by SESSION,
+        # not just (project, handle) — two chat sessions running the same
+        # sub-agent handle must not share/clobber each other's consumer task
+        # or turn-open flag. Key: "{project_id}:{session_id}:{handle}".
+        self._tasks: dict[str, asyncio.Task] = {}
+        # same key -> True while a turn has produced activity
         # that no turn-closure has accounted for yet. A stream that ends with
         # an open turn died abnormally (→ on_error); a closed or never-opened
         # turn ending is a clean teardown (→ emit nothing). Closures: a
         # turn_complete chunk, or note_turn_closed() from the blocking-send
         # path (Pipe/ACP, which never emit turn_complete).
         self._turn_open: dict[str, bool] = {}
+
+    @staticmethod
+    def _key(project_id: str, session_id: "str | None", handle: str) -> str:
+        return f"{project_id}:{session_id or ''}:{handle}"
+
+    def _matching_keys(self, project_id: str, handle: str) -> list[str]:
+        """All consumer keys for (project, handle) across sessions — used by
+        legacy session-less callers."""
+        prefix = f"{project_id}:"
+        suffix = f":{handle}"
+        return [k for k in self._tasks
+                if k.startswith(prefix) and k.endswith(suffix)]
 
     async def start(self, project_id: str, handle: str, adapter, transcript=None,
                     *, session_id: str | None = None) -> None:
@@ -53,7 +69,21 @@ class ProcessManager:
         ``INVESTIGATION-2026-05-28-backend-still-broken.md`` — this is the SDK
         transport completion path the prior fix missed).
         """
-        key = f"{project_id}:{handle}"
+        key = self._key(project_id, session_id, handle)
+        # Piece 3 Part E: never silently overwrite a still-live consumer's
+        # slot (the respawn-over-leak clobber). Cancel-and-await the old one
+        # so exactly one consumer owns the key.
+        prior = self._tasks.get(key)
+        if prior is not None and not prior.done():
+            logger.warning(
+                "ProcessManager.start: live consumer already registered for "
+                "%s — cancelling it before starting a new one", key,
+            )
+            prior.cancel()
+            try:
+                await prior
+            except (asyncio.CancelledError, Exception):
+                pass
 
         async def consume():
             last_response_text = ""
@@ -204,24 +234,37 @@ class ProcessManager:
         task = asyncio.create_task(consume())
         self._tasks[key] = task
 
-    def note_turn_closed(self, project_id: str, handle: str) -> None:
+    def note_turn_closed(self, project_id: str, handle: str,
+                         session_id: "str | None" = None) -> None:
         """Mark the current turn as accounted for by a lifecycle event.
 
         Called by the blocking-send path (Pipe/ACP — transports that never
         emit ``turn_complete``) after it fires on_completed/on_error itself,
         so a later clean teardown's stream-end is not misread as an abnormal
-        mid-turn death.
+        mid-turn death. ``session_id=None`` closes the turn flag in every
+        session-scoped slot for (project, handle) — legacy back-compat.
         """
-        self._turn_open[f"{project_id}:{handle}"] = False
+        if session_id is not None:
+            self._turn_open[self._key(project_id, session_id, handle)] = False
+            return
+        for k in list(self._turn_open):
+            if k.startswith(f"{project_id}:") and k.endswith(f":{handle}"):
+                self._turn_open[k] = False
 
-    async def stop(self, project_id: str, handle: str) -> None:
-        """Cancel consumer task."""
-        key = f"{project_id}:{handle}"
-        self._turn_open.pop(key, None)
-        task = self._tasks.pop(key, None)
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    async def stop(self, project_id: str, handle: str, *,
+                   session_id: "str | None" = None) -> None:
+        """Cancel consumer task(s). Exact session slot when ``session_id`` is
+        given; all of (project, handle)'s slots otherwise (legacy callers)."""
+        if session_id is not None:
+            keys = [self._key(project_id, session_id, handle)]
+        else:
+            keys = self._matching_keys(project_id, handle)
+        for key in keys:
+            self._turn_open.pop(key, None)
+            task = self._tasks.pop(key, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass

@@ -132,7 +132,7 @@ async def test_process_manager_threads_session_id_to_on_completed():
 
     # Wait for the background consume() task to drain (it terminates after
     # the adapter's async generator returns).
-    key = "proj_abc:claude-code"
+    key = "proj_abc:sess_X:claude-code"  # session-scoped key (Piece 3 Part E)
     task = pm._tasks[key]
     await asyncio.wait_for(task, timeout=2.0)
 
@@ -193,7 +193,7 @@ async def test_process_manager_threads_session_id_to_on_error():
         session_id="sess_X",
     )
 
-    key = "proj_abc:claude-code"
+    key = "proj_abc:sess_X:claude-code"  # session-scoped key (Piece 3 Part E)
     await asyncio.wait_for(pm._tasks[key], timeout=2.0)
 
     # on_error → _inject → inject_system_message with session_id=sess_X.

@@ -128,7 +128,7 @@ def _wire_consumer(transport):
 async def _run_consumer(pm, adapter, transcript):
     await pm.start("proj_x", "test-agent", adapter, transcript=transcript,
                    session_id="sess_x")
-    await asyncio.wait_for(pm._tasks["proj_x:test-agent"], timeout=5.0)
+    await asyncio.wait_for(pm._tasks["proj_x:sess_x:test-agent"], timeout=5.0)  # session-scoped key (Part E)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +365,7 @@ class TestBackgroundSendRouting:
         transcript = MagicMock()
         transcript.filepath = "/tmp/fake_transcript.jsonl"
         transcript.append = MagicMock()
-        mgr._transcripts[("proj_x", "pipe-agent")] = transcript
+        mgr._transcripts[("proj_x", "sess_x", "pipe-agent")] = transcript  # session-scoped (Part E)
         adapter = _BlockingAdapter(response)
         await mgr._dispatch_async(adapter, "proj_x", "pipe-agent", "go",
                                   session_id="sess_x")

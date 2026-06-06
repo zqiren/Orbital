@@ -1887,16 +1887,21 @@ class AgentManager:
         if poll_task and not poll_task.done():
             poll_task.cancel()
 
-        # Stop sub-agents with timeout budget. A hung adapter must not wedge
-        # the HTTP response — log and move on if the budget is exceeded.
+        # Stop sub-agents with a budget that EXCEEDS the per-adapter kill
+        # budget (Piece 3 Part E — the old 5.0s here vs ADAPTER_STOP_TIMEOUT
+        # was the budget inversion that cancelled kills mid-flight into the
+        # force-drop leak). Even on expiry nothing leaks: the teardown task
+        # inside SubAgentManager.stop is shielded and runs to confirmed
+        # death; this wait_for only stops WAITING.
         try:
             await asyncio.wait_for(
                 self._sub_agent_manager.stop_all(project_id, session_id=session_id),
-                timeout=5.0,
+                timeout=self.SUB_AGENT_TEARDOWN_BUDGET,
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "sub-agent stop_all timed out for project %s", project_id
+                "sub-agent stop_all wait budget exceeded for project %s "
+                "(kills continue shielded in background)", project_id
             )
 
     async def stop_agent(self, project_id: str, *,
@@ -2777,6 +2782,13 @@ class AgentManager:
     # REMOVED. No fixed clock may kill a working or background-running
     # sub-agent — the live-bug incident was this watchdog force-stopping a
     # correctly-busy agent mid-work. See _check_sub_agents_done.
+
+    # Piece 3 Part E: how long teardown callers WAIT for sub-agent kills.
+    # Must exceed SubAgentManager.TEARDOWN_WAIT_BUDGET-relevant inner budgets
+    # (ADAPTER_STOP_TIMEOUT 15s + escalation grace) — the outer<inner
+    # inversion was the force-drop leak. Expiry stops waiting, never the
+    # (shielded) kill.
+    SUB_AGENT_TEARDOWN_BUDGET = 25.0
 
     def _on_loop_done(self, project_id: str, *,
                       session_id: str | None = None):

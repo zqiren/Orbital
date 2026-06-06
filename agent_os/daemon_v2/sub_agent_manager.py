@@ -29,13 +29,25 @@ MAX_CONCURRENT_SUBAGENTS = 5  # Max active sub-agents per project
 class SubAgentManager:
     """Owns all sub-agent adapters. Provides interface for AgentMessageTool."""
 
-    # Upper bound on a single adapter teardown (Direction B, invariant 6). Must
-    # exceed the transport's own kill budget (SIGTERM grace + SIGKILL grace +
-    # parent reap ≈ 4s) plus margin. On exceeding it, ``stop()`` force-drops the
-    # adapter and logs ERROR rather than hanging unbounded — a stuck adapter in
-    # ``_adapters`` would make the next dispatch to this session refuse/reuse
-    # stale state. Bounded-and-loud beats hung-and-silent.
-    ADAPTER_STOP_TIMEOUT = 6.0
+    # Piece 3 Part E — teardown budgets, ordered OUTER > INNER (the old
+    # inversion — caller 5.0s < adapter 6.0s — is what cancelled kills
+    # mid-flight into the force-drop leak):
+    #
+    # ADAPTER_STOP_TIMEOUT bounds adapter.stop() itself and must exceed the
+    # transport's real kill budget. The SDK path is the worst case: bg-task
+    # cancel wait (5s) + disconnect + kill_process_tree (SIGTERM grace +
+    # SIGKILL grace + parent reap ≈ 4s) — 6.0 was BELOW it, so any adapter
+    # with descendants timed out by construction (reproduced 3× in the
+    # piece-3 probes). On exceeding it we now ESCALATE to a direct
+    # snapshotted tree kill and confirm — never force-drop.
+    ADAPTER_STOP_TIMEOUT = 15.0
+    # Straggler escalation grace per phase (wait → terminate → wait → kill →
+    # wait) in _reap_stragglers.
+    STOP_CONFIRM_GRACE = 3.0
+    # How long stop() WAITS for the (shielded) teardown task. On expiry the
+    # caller returns; the kill keeps running to confirmation in the
+    # background — waiting is bounded, killing is not abandoned.
+    TEARDOWN_WAIT_BUDGET = 30.0
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
@@ -62,7 +74,11 @@ class SubAgentManager:
         # active sub-agents. Single-loop callers route through
         # ``DEFAULT_SESSION_ID`` via ``_resolve_session_id``.
         self._adapters: dict[SessionKey, dict[str, object]] = {}
-        self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
+        # Piece 3 Part E (keying fix): transcripts are SESSION-scoped —
+        # (project_id, session_id, handle) -> SubAgentTranscript. Two chat
+        # sessions running the same handle must not clobber each other's
+        # transcript reference.
+        self._transcripts: dict[tuple[str, str, str], object] = {}
         # Per-session lifecycle lock — concurrent sub-agent dispatch from
         # two sessions in the same project must not serialize behind a
         # single project-level lock.
@@ -244,7 +260,7 @@ class SubAgentManager:
                 from uuid import uuid4
                 from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
                 transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
-                self._transcripts[(project_id, handle)] = transcript
+                self._transcripts[(project_id, session_id, handle)] = transcript
 
         await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
@@ -369,6 +385,10 @@ class SubAgentManager:
         from agent_os.agent.transports.sdk_transport import SDKTransport
         try:
             if SDKTransport.resume_source_exists(workspace, record["session_id"]):
+                if record.get("background_loss"):
+                    # Part E loud-loss: the prior teardown destroyed live
+                    # background work — the resume clause must say so.
+                    return record, "resumed_after_loss", None
                 return record, "resumed", None
         except Exception:
             logger.exception(
@@ -387,6 +407,11 @@ class SubAgentManager:
         if status == "resumed":
             return ("resumed prior session — context from previous work "
                     "is available")
+        if status == "resumed_after_loss":
+            return ("resumed prior session — context is available, but "
+                    "background processes from the prior run were "
+                    "TERMINATED before completing; re-verify any work they "
+                    "were doing")
         if reason == "resume_failed":
             return ("fresh session — prior session could not be resumed; "
                     "re-brief any context it needs")
@@ -694,7 +719,7 @@ class SubAgentManager:
             from uuid import uuid4
             from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
             transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
-            self._transcripts[(project_id, handle)] = transcript
+            self._transcripts[(project_id, session_id, handle)] = transcript
 
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
@@ -771,7 +796,7 @@ class SubAgentManager:
             if adapter is None:
                 return f"Error: agent '{handle}' not running for project '{project_id}'"
 
-            transcript = self._transcripts.get((project_id, handle))
+            transcript = self._transcripts.get((project_id, session_id, handle))
             transcript_path = transcript.filepath if transcript else "unknown"
 
             await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
@@ -803,7 +828,7 @@ class SubAgentManager:
             return
 
         # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
-        transcript = self._transcripts.get((project_id, handle))
+        transcript = self._transcripts.get((project_id, session_id, handle))
 
         async def _background_send():
             from datetime import datetime, timezone
@@ -851,7 +876,8 @@ class SubAgentManager:
                         # The turn is accounted for — a later clean teardown's
                         # stream-end must not re-report it (these transports
                         # never emit turn_complete).
-                        self._process_manager.note_turn_closed(project_id, handle)
+                        self._process_manager.note_turn_closed(
+                            project_id, handle, session_id=session_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -920,56 +946,214 @@ class SubAgentManager:
 
     async def stop(self, project_id: str, handle: str, *,
                    session_id: str | None = None) -> str:
-        """Stop adapter, deregister from process_manager.
+        """Stop adapter with CONFIRMED death, then deregister the consumer.
 
-        ``session_id`` selects which session's adapter slate to stop in;
-        defaults to ``DEFAULT_SESSION_ID``.
+        Piece 3 Part E: no path pops the adapter and walks away while the
+        process may be alive — the old force-drop on timeout is what leaked
+        a live process with a stale resume record (the double-attach
+        precondition). The kill-to-confirmation runs in its OWN task and is
+        shielded from caller cancellation: an impatient caller stops
+        WAITING, never the KILL. The adapter slot is released only after
+        the snapshotted process tree is verified dead; an unkillable tree
+        keeps the slot (marked broken — dispatch refuses it) and logs
+        loudly.
+
+        ``session_id`` selects which session's adapter slate to stop in.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+        teardown = asyncio.create_task(
+            self._kill_confirm_and_release(project_id, session_id, handle),
+            name=f"teardown-{project_id}-{handle}",
+        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.shield(teardown), timeout=self.TEARDOWN_WAIT_BUDGET,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "stop: teardown of %s exceeded the %.0fs wait budget; the "
+                "kill CONTINUES in the background until confirmed dead "
+                "(adapter slot retained meanwhile — no force-drop)",
+                handle, self.TEARDOWN_WAIT_BUDGET,
+            )
+            return f"Stopping {handle} (kill continuing in background)"
+        except asyncio.CancelledError:
+            # Caller cancelled — the shielded teardown still runs to
+            # completion on its own; never abandon a kill mid-flight.
+            raise
+        if result == "not_running":
+            return f"Agent '{handle}' not running"
+        # NOTE (shutdown-ordering coupling, TASK-honest-completion fix 4 /
+        # trigger-fix piece 3): adapter.stop() inside the teardown cancels
+        # the SDK bg task, whose finally pushes a turn_complete tagged
+        # cause="stopped" that the still-alive consumer ingests during the
+        # SIGTERM grace window. ProcessManager routes cause="stopped" to NO
+        # lifecycle event — that tag is the only thing standing between a
+        # clean reap and a phantom "[Sub-agent] completed". The consumer is
+        # deregistered only AFTER the teardown completed.
+        await self._process_manager.stop(
+            project_id, handle, session_id=session_id,
+        )
+        if result == "unkillable":
+            return (f"Stop FAILED for {handle}: process not confirmed dead; "
+                    f"slot retained (broken)")
+        return f"Stopped {handle}"
+
+    @staticmethod
+    def _snapshot_kill_targets(adapter) -> list:
+        """psutil handles for the adapter's process tree, captured BEFORE
+        adapter.stop() (which clears the transport's proc references)."""
+        import psutil as _psutil
+        roots = []
+        transport = getattr(adapter, "_transport", None)
+        proc = getattr(transport, "_proc", None)  # SDK: psutil.Process
+        # Strict isinstance: partially-mocked adapters (tests) and foreign
+        # transports must not feed non-psutil objects into the kill path.
+        if isinstance(proc, _psutil.Process):
+            roots.append(proc)
+        for raw in (getattr(transport, "_process", None),
+                    getattr(adapter, "_process", None)):
+            pid = getattr(raw, "pid", None)
+            if isinstance(pid, int):
+                try:
+                    roots.append(_psutil.Process(pid))
+                except _psutil.Error:
+                    pass
+        victims = []
+        for r in roots:
+            victims.append(r)
+            try:
+                victims.extend(r.children(recursive=True))
+            except Exception:
+                pass
+        return victims
+
+    @staticmethod
+    def _reap_stragglers(victims: list, grace_s: float) -> bool:
+        """Blocking (run in a thread): escalate terminate→kill on whatever in
+        ``victims`` is still alive and CONFIRM death. True iff all dead."""
+        import psutil as _psutil
+        if not victims:
+            return True
+        _, alive = _psutil.wait_procs(victims, timeout=grace_s)
+        for p in alive:
+            try:
+                p.terminate()
+            except _psutil.Error:
+                pass
+        _, alive = _psutil.wait_procs(alive, timeout=grace_s)
+        for p in alive:
+            try:
+                p.kill()
+            except _psutil.Error:
+                pass
+        _, alive = _psutil.wait_procs(alive, timeout=grace_s)
+        return not alive
+
+    async def _kill_confirm_and_release(self, project_id: str,
+                                        session_id: str, handle: str) -> str:
+        """The teardown body: kill → confirm → release-or-retain.
+
+        Holds the per-session lifecycle lock across the whole sequence
+        (invariant 7: a concurrent dispatch cannot open a turn mid-kill).
+        Returns 'stopped' | 'unkillable' | 'not_running'.
+        """
+        sk = make_session_key(project_id, session_id)
         lock = self._get_lock(project_id, session_id=session_id)
-        # Invariant 7 (reap-vs-dispatch): hold the per-session lifecycle lock
-        # across the WHOLE teardown so a concurrent dispatch (which now also
-        # takes this lock in ``send``) cannot open a new turn on this adapter
-        # mid-kill — SIGKILL during a workspace write corrupts files.
-        # Invariant 6 (drop ordering): do NOT pop the adapter until termination
-        # is confirmed, or ``ADAPTER_STOP_TIMEOUT`` elapses. Popping first (the
-        # old behavior) orphaned the live process with no handle to retry the
-        # kill — the root of the leak.
         async with lock:
             adapters = self._adapters.get(sk, {})
             adapter = adapters.get(handle)
             if adapter is None:
-                return f"Agent '{handle}' not running"
+                return "not_running"
+
+            # Loud-loss accounting BEFORE the kill (Part E): live tracked
+            # background work that this teardown will destroy.
+            from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+            registry = getattr(self._process_manager, "background_work", None)
+            doomed: list[str] = []
+            if isinstance(registry, BackgroundWorkRegistry):
+                doomed = registry.live_commands(project_id, session_id, handle)
+
+            victims = self._snapshot_kill_targets(adapter)
             try:
                 await asyncio.wait_for(
                     adapter.stop(), timeout=self.ADAPTER_STOP_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                logger.error(
-                    "stop: adapter %s did not terminate within %.1fs; "
-                    "force-dropping (process may leak)",
-                    handle, self.ADAPTER_STOP_TIMEOUT,
+                logger.warning(
+                    "stop: adapter %s stop() exceeded %.0fs; escalating to "
+                    "direct tree kill", handle, self.ADAPTER_STOP_TIMEOUT,
                 )
             except Exception:
                 logger.exception(
-                    "stop: adapter %s stop() raised; force-dropping", handle,
+                    "stop: adapter %s stop() raised; escalating to direct "
+                    "tree kill", handle,
                 )
-            # Drop only after confirmed-dead-or-bounded-timeout (never unbounded).
-            adapters.pop(handle, None)
-            if not adapters:
-                self._adapters.pop(sk, None)
-        # NOTE (shutdown-ordering coupling, TASK-honest-completion fix 4 /
-        # trigger-fix piece 3): adapter.stop() above cancels the SDK bg task,
-        # whose finally pushes a turn_complete tagged cause="stopped" that the
-        # still-alive consumer ingests during the SIGTERM grace window.
-        # ProcessManager routes cause="stopped" to NO lifecycle event — that
-        # tag is the only thing standing between a clean reap and a phantom
-        # "[Sub-agent] completed" in the management session. If piece 3
-        # reorders this teardown, the tag contract must be preserved.
-        await self._process_manager.stop(project_id, handle)
+            confirmed = await asyncio.to_thread(
+                self._reap_stragglers, victims, self.STOP_CONFIRM_GRACE,
+            )
+            if confirmed:
+                adapters.pop(handle, None)
+                if not adapters:
+                    self._adapters.pop(sk, None)
+                if isinstance(registry, BackgroundWorkRegistry):
+                    registry.clear(project_id, session_id, handle)
+            else:
+                # NEVER pop-and-leak: keep the slot so the process stays
+                # addressable; broken refuses reuse; Part F's backstop
+                # protects resume.
+                adapter._broken = True
+                logger.error(
+                    "stop: adapter %s NOT confirmed dead after escalation; "
+                    "slot retained (broken) — pids may include %s",
+                    handle,
+                    [getattr(v, 'pid', '?') for v in victims][:8],
+                )
+                return "unkillable"
 
-        return f"Stopped {handle}"
+        # Outside the lock: loud loss reporting + resume-record note.
+        if doomed:
+            await self._report_background_loss(
+                project_id, session_id, handle, doomed,
+            )
+        return "stopped"
+
+    async def _report_background_loss(self, project_id: str, session_id: str,
+                                      handle: str, commands: list[str]) -> None:
+        """A teardown destroyed live background work — report LOUDLY (Part E):
+        management-session event + WS broadcast + a note on the resume record
+        so the next resume is briefed about the loss."""
+        if self._lifecycle_observer is not None:
+            try:
+                await self._lifecycle_observer.on_background_work_lost(
+                    project_id, handle, commands=commands,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.exception(
+                    "on_background_work_lost raised for %s/%s",
+                    project_id, handle,
+                )
+        # Flag the persisted thread record (cleared naturally by the next
+        # completed turn's on_thread_update overwrite).
+        try:
+            resolver = self._session_resolver
+            session = resolver(project_id, session_id) if resolver else None
+            record = (session.get_sub_agent_thread(handle)
+                      if session is not None else None)
+            if session is not None and record and record.get("session_id"):
+                session.set_sub_agent_thread(
+                    handle,
+                    session_id=record["session_id"],
+                    model=record.get("model"),
+                    background_loss=True,
+                )
+        except Exception:
+            logger.exception(
+                "failed to flag background loss on thread record for %s/%s",
+                project_id, handle,
+            )
 
     def _adapter_status(self, adapter, project_id: str, session_id: str,
                         handle: str) -> str:
@@ -1262,9 +1446,20 @@ class SubAgentManager:
                 continue
         return False
 
-    def get_transcript(self, project_id: str, handle: str):
-        """Return the transcript for a sub-agent, or None."""
-        return self._transcripts.get((project_id, handle))
+    def get_transcript(self, project_id: str, handle: str,
+                       session_id: str | None = None):
+        """Return the transcript for a sub-agent, or None.
+
+        Session-scoped key (Part E). A session-less caller (e.g. the
+        @mention REST path) gets the most recently created transcript for
+        (project, handle) across sessions.
+        """
+        if session_id is not None:
+            return self._transcripts.get((project_id, session_id, handle))
+        for (pid, _sid, h), transcript in reversed(list(self._transcripts.items())):
+            if pid == project_id and h == handle:
+                return transcript
+        return None
 
     def get_all_transcript_entries(self, project_id: str) -> list[dict]:
         """Read all sub-agent transcript entries for a project.
@@ -1297,7 +1492,7 @@ class SubAgentManager:
                         pass
 
         # 2. In-memory transcripts (covers cases where workspace lookup fails)
-        for (pid, handle), transcript in self._transcripts.items():
+        for (pid, _sid, handle), transcript in self._transcripts.items():
             if pid == project_id:
                 norm = os.path.normpath(transcript.filepath)
                 if norm not in seen_paths:

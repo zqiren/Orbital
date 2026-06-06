@@ -287,7 +287,7 @@ class TestCaptureRouting:
         await transport.stop()
         await pm.start("proj_x", "claude-code", adapter, transcript=transcript,
                        session_id="sess_x")
-        await asyncio.wait_for(pm._tasks["proj_x:claude-code"], timeout=5.0)
+        await asyncio.wait_for(pm._tasks["proj_x:sess_x:claude-code"], timeout=5.0)  # session-scoped key (Part E)
         return observer
 
     async def test_success_completion_records_thread(self):

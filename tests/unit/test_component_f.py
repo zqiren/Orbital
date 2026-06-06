@@ -509,7 +509,7 @@ class TestProcessManager:
         adapter.read_stream = mock_stream
 
         await pm.start("proj_1", "claudecode", adapter)
-        key = "proj_1:claudecode"
+        key = "proj_1::claudecode"  # session-scoped key, None session (Part E)
         assert key in pm._tasks
 
         # Let the consumer task run
@@ -540,7 +540,7 @@ class TestProcessManager:
 
         await pm.start("proj_1", "claudecode", adapter)
         await pm.stop("proj_1", "claudecode")
-        key = "proj_1:claudecode"
+        key = "proj_1::claudecode"  # session-scoped key, None session (Part E)
         assert key not in pm._tasks or pm._tasks[key].cancelled()
 
 

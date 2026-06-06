@@ -134,6 +134,27 @@ class LifecycleObserver:
             "session_id": session_id,
         })
 
+    async def on_background_work_lost(self, project_id: str, handle: str, *,
+                                      commands: list[str],
+                                      session_id: str | None = None) -> None:
+        """A teardown (eviction / project stop / shutdown) terminated live
+        tracked background work (Piece 3 Part E). LOUD by contract — silent
+        loss recreates the 'completed ≠ done' corruption."""
+        cmds = "; ".join(c[:80] for c in commands)
+        content = (
+            f"[Sub-agent] {handle} teardown terminated "
+            f"{len(commands)} live background process(es): {cmds}. "
+            f"This background work did NOT complete."
+        )
+        await self._inject(project_id, content, session_id=session_id)
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.background_lost",
+            "project_id": project_id,
+            "handle": handle,
+            "commands": commands,
+            "session_id": session_id,
+        })
+
     async def on_thread_update(self, project_id: str, handle: str,
                                *, claude_session_id: str,
                                model: str | None = None,

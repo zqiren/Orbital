@@ -452,7 +452,8 @@ class Session:
     # ------------------------------------------------------------------
 
     def set_sub_agent_thread(self, handle: str, *, session_id: str,
-                             model: str | None = None) -> None:
+                             model: str | None = None,
+                             background_loss: bool = False) -> None:
         """Record (or refresh) the resume identity of a sub-agent thread.
 
         Appends an ``event: sub_agent_thread`` meta row (the persistence) and
@@ -462,12 +463,19 @@ class Session:
         (model is thread-identity: it must be identical on resume; mandatory
         for Codex in piece 4). Governance settings resolve live at dispatch
         and are never snapshotted here.
+
+        ``background_loss`` (Piece 3 Part E): a teardown terminated this
+        thread's live background work — the next resume's honesty clause
+        briefs the orchestrator about the loss. The flag clears naturally on
+        the next completed turn's record overwrite.
         """
         record = {
             "session_id": session_id,
             "model": model,
             "last_used_at": _now(),
         }
+        if background_loss:
+            record["background_loss"] = True
         self.sub_agent_threads[handle] = record
         self.append_meta("sub_agent_thread", handle=handle, thread=record)
 
