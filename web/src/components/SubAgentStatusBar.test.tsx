@@ -72,7 +72,7 @@ describe('SubAgentStatusBar — three-state badge', () => {
 
 describe('SubAgentStatusBar — stop flow with honest warning', () => {
   it('background-running stop shows the commands AND the raw-detach warning, then POSTs', async () => {
-    apiMock.mockImplementation(async (path: string, options?: RequestInit) => {
+    apiMock.mockImplementation(async (_path: string, options?: RequestInit) => {
       if (options?.method === 'POST') {
         return {
           handle: 'claude-code', status: 'stopped',
