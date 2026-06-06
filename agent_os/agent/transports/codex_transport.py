@@ -158,8 +158,59 @@ class CodexTransport(AgentTransport):
         await self._on_notification(msg)
 
     async def _on_server_request(self, msg: dict) -> None:
-        # Approval surfaces — implemented in the lifecycle task.
-        pass
+        method = msg["method"]
+        rpc_id = msg["id"]
+        params = msg.get("params") or {}
+        tool_name = _APPROVAL_METHODS.get(method)
+        if tool_name is None:
+            # Unknown surface — answer with an error; an unanswered server
+            # request blocks codex forever (probe pump timeout finding).
+            await self._send_raw({"jsonrpc": "2.0", "id": rpc_id, "error": {
+                "code": -32601,
+                "message": f"orbital: unsupported approval surface {method}"}})
+            await self._event_queue.put(TransportEvent(
+                event_type="error",
+                data={"error": f"unsupported codex approval surface: {method}"},
+                raw_text=f"Error: codex requested unsupported approval surface {method}",
+            ))
+            return
+        if self._autonomy is not None and should_auto_approve(tool_name, self._autonomy):
+            # Parity with SDKTransport's autonomy filter. With
+            # approvalPolicy=never these never fire; defensive belt.
+            await self._send_raw({"jsonrpc": "2.0", "id": rpc_id,
+                                  "result": {"decision": "accept"}})
+            return
+        if tool_name == "commandExecution":
+            tool_input = {
+                "command": params.get("command"),
+                "cwd": params.get("cwd"),
+                "reason": params.get("reason"),
+                # String decisions only; amendment objects (e.g.
+                # acceptWithExecpolicyAmendment) are not offered in v1.
+                "availableDecisions": [
+                    d for d in (params.get("availableDecisions") or [])
+                    if isinstance(d, str)],
+            }
+        else:  # fileChange — params: {grantRoot, itemId, reason, threadId, turnId}
+            tool_input = {
+                "reason": params.get("reason"),
+                "grantRoot": params.get("grantRoot"),
+                # Schema-supported subset we implement (FileChangeApprovalDecision)
+                "availableDecisions": ["accept", "decline", "cancel"],
+            }
+        request_id = str(uuid.uuid4())
+        self._pending_approvals[request_id] = {"rpc_id": rpc_id, "method": method}
+        self._pending_approval_data[request_id] = {
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        }
+        await self._event_queue.put(TransportEvent(
+            event_type="permission_request",
+            data=dict(self._pending_approval_data[request_id]),
+            raw_text=("Permission requested: "
+                      f"{params.get('reason') or params.get('command') or tool_name}"),
+        ))
 
     async def _on_notification(self, msg: dict) -> None:
         method = msg.get("method", "")
@@ -277,15 +328,248 @@ class CodexTransport(AgentTransport):
             event_type="message", data=data, raw_text=text))
 
     # ------------------------------------------------------------------
-    # ABC stubs — completed in the lifecycle task
+    # wire I/O
     # ------------------------------------------------------------------
+
+    async def _send_raw(self, msg: dict) -> None:
+        if self._popen is None or self._popen.stdin is None:
+            raise RuntimeError("codex app-server not started")
+        self._popen.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
+        await self._popen.stdin.drain()
+
+    async def _request(self, method: str, params: dict | None = None,
+                       timeout: float = 30.0) -> dict:
+        self._next_id += 1
+        rid = self._next_id
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._response_futures[rid] = fut
+        try:
+            await self._send_raw({"jsonrpc": "2.0", "id": rid,
+                                  "method": method, "params": params or {}})
+            msg = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._response_futures.pop(rid, None)
+        if "error" in msg:
+            raise RuntimeError(f"codex {method} failed: {msg['error']}")
+        return msg.get("result") or {}
+
+    async def _notify(self, method: str, params: dict | None = None) -> None:
+        msg: dict = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        await self._send_raw(msg)
+
+    # ------------------------------------------------------------------
+    # start() + helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _argv_model(args: list[str]) -> str | None:
+        """Extract `-m <model>` injected by the config store's flag_template
+        ("-m {value}", sub_agent_config_store.py). app-server takes model
+        per-request, never on argv."""
+        for i, a in enumerate(args or []):
+            if a == "-m" and i + 1 < len(args):
+                return args[i + 1]
+        return None
+
+    def _check_version(self, init_result: dict) -> None:
+        ua = (init_result or {}).get("userAgent", "")
+        m = re.search(r"/(\d+\.\d+\.\d+)", ua)
+        found = m.group(1) if m else None
+        if found != SUPPORTED_CODEX_VERSION:
+            logger.warning(
+                "CodexTransport: codex %s != pinned %s — the app-server "
+                "protocol is version-pinned; re-run `codex app-server "
+                "generate-json-schema` and the codex test suite before "
+                "trusting this transport on the new version",
+                found, SUPPORTED_CODEX_VERSION,
+            )
 
     async def start(self, command: str, args: list[str], workspace: str,
                     env: dict | None = None) -> None:
-        raise NotImplementedError("CodexTransport.start lands in the lifecycle task")
+        self._workspace = workspace
+        merged_env = os.environ.copy()
+        if env:
+            merged_env.update(env)
+        # NEVER set CODEX_HOME / never write auth state: headless reuse of
+        # the on-disk ChatGPT-OAuth login is the auth path (FINDINGS Q7).
+        binary = command or "codex"
+        self._popen = await asyncio.create_subprocess_exec(
+            binary, "app-server",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=workspace, env=merged_env,
+        )
+        try:
+            self._proc = psutil.Process(self._popen.pid)
+        except psutil.Error:
+            logger.warning("CodexTransport: could not wrap pid=%s in psutil",
+                           self._popen.pid)
+        self._alive = True
+        self._reader_task = asyncio.create_task(
+            self._read_loop(), name=f"codex-read-{id(self)}")
+        self._stderr_task = asyncio.create_task(
+            self._drain_stderr(), name=f"codex-stderr-{id(self)}")
+
+        if self._model is None:
+            self._model = self._argv_model(args)
+
+        # clientInfo flows into the rollout `originator` (FINDINGS A6).
+        init = await self._request("initialize", {"clientInfo": {
+            "name": "orbital", "title": "Orbital", "version": "0.1.0"}})
+        self._check_version(init)
+        await self._notify("initialized")
+
+        approval_policy, sandbox = _POLICY_BY_AUTONOMY.get(
+            self._autonomy, _DEFAULT_POLICY)
+        params: dict = {"cwd": workspace, "approvalPolicy": approval_policy,
+                        "sandbox": sandbox}
+        if self._model:
+            params["model"] = self._model
+        if self._resume_session_id:
+            params["threadId"] = self._resume_session_id
+            result = await self._request("thread/resume", params)
+        else:
+            result = await self._request("thread/start", params)
+        thread = result.get("thread") or {}
+        self._thread_id = thread.get("id")
+        self._rollout_path = thread.get("path")
+        self._effective_model = result.get("model")
+        if not self._thread_id:
+            raise RuntimeError(
+                f"codex thread/start returned no thread id: {result}")
+
+    async def _drain_stderr(self) -> None:
+        try:
+            while self._popen is not None and self._popen.stderr is not None:
+                line = await self._popen.stderr.readline()
+                if not line:
+                    return
+                logger.debug("codex stderr: %s",
+                             line.decode("utf-8", errors="replace").rstrip())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+    async def _read_loop(self) -> None:
+        try:
+            while self._popen is not None and self._popen.stdout is not None:
+                line = await self._popen.stdout.readline()
+                if not line:
+                    break
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                except json.JSONDecodeError:
+                    logger.warning("CodexTransport: unparseable stdout: %.200s", line)
+                    continue
+                try:
+                    await self._route_server_message(msg)
+                except Exception:
+                    logger.exception("CodexTransport: routing failed: %.200s", msg)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            # EOF or cancel. An open turn at stream end (and not stopping)
+            # is an abnormal death — close it honestly so the adapter is
+            # not stuck busy forever (CLIAdapter flips idle only on the
+            # turn_complete chunk; its post-stream idle line is unreachable
+            # on the transport path).
+            if self._turn_open and not self._stopping:
+                await self._event_queue.put(TransportEvent(
+                    event_type="turn_complete", data=self._turn_meta("error")))
+                self._turn_open = False
+                if self._turn_done is not None:
+                    self._turn_done.set()
+            for fut in self._response_futures.values():
+                if not fut.done():
+                    fut.set_exception(RuntimeError("codex app-server stream ended"))
+            self._alive = False
+
+    # ------------------------------------------------------------------
+    # dispatch / send
+    # ------------------------------------------------------------------
+
+    async def dispatch(self, message: str) -> None:
+        """Fire-and-forget turn start; events flow via read_stream().
+        The manager prefers this over send() (hasattr check)."""
+        if not self._alive or self._thread_id is None:
+            raise RuntimeError("codex transport not started — call start() first")
+        self._begin_turn()
+        params: dict = {
+            "threadId": self._thread_id,
+            "input": [{"type": "text", "text": message}],
+        }
+        if self._external_sandbox:
+            # Constraint 7: Orbital's own sandbox wraps the process; Codex
+            # skips internal enforcement. Tagged-object form exists ONLY on
+            # turn/start (param asymmetry).
+            params["sandboxPolicy"] = {"type": "externalSandbox"}
+        try:
+            result = await self._request("turn/start", params)
+        except Exception as e:
+            await self._event_queue.put(TransportEvent(
+                event_type="error", data={"error": str(e)},
+                raw_text=f"Error: {e}"))
+            await self._event_queue.put(TransportEvent(
+                event_type="turn_complete", data=self._turn_meta("error")))
+            self._turn_open = False
+            if self._turn_done is not None:
+                self._turn_done.set()
+            raise
+        turn = (result.get("turn") or {})
+        # Guard: turn/started notification may set _turn_id BEFORE the
+        # turn/start response arrives; only update if the turn is still open
+        # (the notification hasn't already closed it via turn/completed).
+        if turn.get("id") and self._turn_open:
+            self._turn_id = turn["id"]
 
     async def send(self, message: str) -> str | None:
-        raise NotImplementedError("CodexTransport.send lands in the lifecycle task")
+        """Blocking ABC variant: dispatch + wait for the turn boundary."""
+        try:
+            await self.dispatch(message)
+        except Exception as e:
+            return f"Error: codex dispatch failed: {e}"
+        done = self._turn_done
+        try:
+            await asyncio.wait_for(done.wait(), timeout=600.0)
+        except asyncio.TimeoutError:
+            return "Error: codex turn did not complete within 600s"
+        return "\n".join(self._final_texts) or "(no response)"
+
+    # ------------------------------------------------------------------
+    # approval responses
+    # ------------------------------------------------------------------
+
+    async def respond_to_permission(self, permission_id: str, approved: bool) -> None:
+        """Boolean wire (existing /approve + /deny REST): True -> accept;
+        False -> decline — the turn CONTINUES and the agent adapts
+        (FINDINGS A4d). 'Deny & stop' is the explicit cancel path below."""
+        await self.respond_to_permission_decision(
+            permission_id, "accept" if approved else "decline")
+
+    async def respond_to_permission_decision(self, permission_id: str,
+                                             decision: str) -> None:
+        if decision not in _VALID_DECISIONS:
+            raise ValueError(f"unsupported codex approval decision: {decision}")
+        pending = self._pending_approvals.pop(permission_id, None)
+        self._pending_approval_data.pop(permission_id, None)
+        if pending is None:
+            return
+        await self._send_raw({"jsonrpc": "2.0", "id": pending["rpc_id"],
+                              "result": {"decision": decision}})
+
+    def update_autonomy(self, preset: Autonomy) -> None:
+        """Live preset update. Affects the auto-approve filter immediately;
+        thread-level approvalPolicy stays as set at thread/start (sub-agents
+        run HANDS_OFF today, so this is future-governance plumbing)."""
+        self._autonomy = preset
+
+    # ------------------------------------------------------------------
+    # stream / lifecycle
+    # ------------------------------------------------------------------
 
     async def read_stream(self) -> AsyncIterator[TransportEvent]:
         while self._alive:
@@ -297,6 +581,68 @@ class CodexTransport(AgentTransport):
 
     async def stop(self) -> None:
         self._stopping = True
+        # 1. Pending approvals: Stop while a question is open == the
+        #    "Deny & stop" semantic -> cancel (turn ends `interrupted`),
+        #    not decline (which would let the turn run on into the kill).
+        for request_id in list(self._pending_approvals):
+            try:
+                await self.respond_to_permission_decision(request_id, "cancel")
+            except Exception:
+                logger.debug("CodexTransport.stop: cancel of %s failed",
+                             request_id, exc_info=True)
+        # 2. Interrupt the open turn — requires threadId AND turnId. The
+        #    ~2 ms ack stops the model loop only; the in-flight exec keeps
+        #    running and is killed by the tree-walk below.
+        if self._turn_id is not None and self._thread_id is not None:
+            try:
+                await self._request("turn/interrupt",
+                                    {"threadId": self._thread_id,
+                                     "turnId": self._turn_id}, timeout=2.0)
+            except Exception:
+                logger.debug("CodexTransport.stop: interrupt best-effort failed",
+                             exc_info=True)
+        # 3. Unsubscribe (there is no shutdown RPC).
+        if self._thread_id is not None:
+            try:
+                await self._request("thread/unsubscribe",
+                                    {"threadId": self._thread_id}, timeout=2.0)
+            except Exception:
+                logger.debug("CodexTransport.stop: unsubscribe best-effort failed",
+                             exc_info=True)
+        # 4. Reader down BEFORE the kill so EOF handling cannot emit a
+        #    spurious error-turn_complete mid-teardown.
+        for task in (self._reader_task, self._stderr_task):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self._reader_task = None
+        self._stderr_task = None
+        # 5. Tree-walk kill: SIGTERM alone leaks in-flight execs (reparent
+        #    to pid 1). Reuses the Piece-3 reap — NOT a codex-specific one.
+        if self._proc is not None:
+            try:
+                from agent_os.agent.transports.process_kill import kill_process_tree
+                outcome = await kill_process_tree(self._proc, label="codex")
+                if not outcome.parent_dead:
+                    logger.error("CodexTransport.stop: codex app-server "
+                                 "survived kill; PID may leak")
+            except Exception:
+                logger.exception("CodexTransport.stop: kill_process_tree raised")
+        elif self._popen is not None and self._popen.returncode is None:
+            # psutil wrap failed at start() — no tree handle, but never
+            # leave the root process running. Direct kill is the floor.
+            try:
+                self._popen.kill()
+            except ProcessLookupError:
+                pass
+        # 6. Close stdio, drop refs.
+        if self._popen is not None and self._popen.stdin is not None:
+            try:
+                self._popen.stdin.close()
+            except Exception:
+                pass
+        self._popen = None
+        self._proc = None
         self._alive = False
 
     def is_alive(self) -> bool:
@@ -306,3 +652,24 @@ class CodexTransport(AgentTransport):
     @property
     def session_id(self) -> str | None:
         return self._thread_id
+
+    # ------------------------------------------------------------------
+    # resume pre-check
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def resume_source_exists(record: dict) -> bool:
+        """Pre-check the rollout file before resuming. Codex pruning policy
+        is unmeasured (R4 open) — never trust the resume call to fail
+        loudly; a fresh start must never look like a resume."""
+        path = record.get("rollout_path")
+        if path and os.path.isfile(path):
+            return True
+        thread_id = record.get("session_id")
+        if not thread_id:
+            return False
+        home = os.environ.get("CODEX_HOME") or os.path.join(
+            os.path.expanduser("~"), ".codex")
+        pattern = os.path.join(home, "sessions", "*", "*", "*",
+                               f"rollout-*-{thread_id}.jsonl")
+        return bool(_glob.glob(pattern))

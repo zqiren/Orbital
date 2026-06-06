@@ -12,6 +12,7 @@ process is spawned — _route_server_message is fed directly.
 import asyncio
 import json
 
+import psutil
 import pytest
 
 from agent_os.agent.prompt_builder import Autonomy
@@ -205,3 +206,245 @@ class TestErrors:
                                        "params": {"message": "boom"}})
         [event] = _drain(t)
         assert event.event_type == "error"
+
+
+class _FakeStdin:
+    """Captures JSON-RPC frames written by the transport."""
+    def __init__(self):
+        self.frames: list[dict] = []
+    def write(self, data: bytes) -> None:
+        self.frames.append(json.loads(data.decode("utf-8")))
+    async def drain(self) -> None:
+        pass
+    def close(self) -> None:
+        pass
+
+
+def _wired(**kwargs) -> tuple[CodexTransport, _FakeStdin]:
+    t = _transport(**kwargs)
+    stdin = _FakeStdin()
+
+    class _P:  # minimal Popen stand-in
+        pid = 4242
+        returncode = None
+        def kill(self):  # real asyncio.subprocess.Process has this
+            pass
+    p = _P()
+    p.stdin = stdin
+    t._popen = p
+    t._alive = True
+    return t, stdin
+
+
+class TestDispatch:
+    @pytest.mark.asyncio
+    async def test_dispatch_sends_turn_start_and_captures_turn_id(self):
+        t, stdin = _wired()
+
+        async def run():
+            await t.dispatch("do the thing")
+        task = asyncio.create_task(run())
+        await asyncio.sleep(0.05)
+        [frame] = stdin.frames
+        assert frame["method"] == "turn/start"
+        assert frame["params"] == {
+            "threadId": "T1",
+            "input": [{"type": "text", "text": "do the thing"}],
+        }
+        # turn/start response carries the ack + turn id (FINDINGS A1)
+        await t._route_server_message({"jsonrpc": "2.0", "id": frame["id"],
+            "result": {"turn": {"id": "U7", "status": "inProgress"}}})
+        await asyncio.wait_for(task, timeout=2.0)
+        assert t._turn_id == "U7"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_error_response_closes_turn_honestly(self):
+        t, stdin = _wired()
+        task = asyncio.create_task(t.dispatch("x"))
+        await asyncio.sleep(0.05)
+        await t._route_server_message({"jsonrpc": "2.0", "id": stdin.frames[0]["id"],
+            "error": {"code": -32600, "message": "Invalid request: missing field `x`"}})
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(task, timeout=2.0)
+        events = _drain(t)
+        assert [e.event_type for e in events] == ["error", "turn_complete"]
+        assert events[1].data["cause"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_external_sandbox_adds_turn_sandbox_policy(self):
+        # Constraint 7: the tagged object exists ONLY on turn/start.
+        t, stdin = _wired(external_sandbox=True)
+        task = asyncio.create_task(t.dispatch("x"))
+        await asyncio.sleep(0.05)
+        assert stdin.frames[0]["params"]["sandboxPolicy"] == {"type": "externalSandbox"}
+        await t._route_server_message({"jsonrpc": "2.0", "id": stdin.frames[0]["id"],
+            "result": {"turn": {"id": "U1"}}})
+        await asyncio.wait_for(task, timeout=2.0)
+
+
+class TestApprovals:
+    REQUEST = {"jsonrpc": "2.0", "id": 0,
+               "method": "item/commandExecution/requestApproval",
+               "params": {"threadId": "T1", "turnId": "U1", "itemId": "call_B",
+                          "reason": "Do you want to allow creating the file?",
+                          "command": "/bin/zsh -lc 'touch marker.txt'",
+                          "cwd": "/tmp/ws",
+                          "availableDecisions": [
+                              "accept",
+                              {"acceptWithExecpolicyAmendment": {
+                                  "execpolicy_amendment": ["touch", "marker.txt"]}},
+                              "cancel"]}}
+
+    @pytest.mark.asyncio
+    async def test_request_surfaces_permission_event_with_card_payload(self):
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)  # not auto-approved
+        await t._route_server_message(dict(self.REQUEST))
+        [event] = _drain(t)
+        assert event.event_type == "permission_request"
+        rid = event.data["request_id"]
+        assert rid in t._pending_approvals
+        assert t._pending_approval_data[rid]["tool_name"] == "commandExecution"
+        ti = t._pending_approval_data[rid]["tool_input"]
+        assert ti["command"] == "/bin/zsh -lc 'touch marker.txt'"
+        assert ti["reason"].startswith("Do you want")
+        # non-string decision variants (amendment objects) are filtered
+        assert ti["availableDecisions"] == ["accept", "cancel"]
+        assert stdin.frames == []  # no response until the user decides
+
+    @pytest.mark.asyncio
+    async def test_bool_deny_maps_to_decline_turn_continues(self):
+        # FINDINGS A4d: decline -> item declined, turn CONTINUES.
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        await t._route_server_message(dict(self.REQUEST))
+        rid = _drain(t)[0].data["request_id"]
+        await t.respond_to_permission(rid, approved=False)
+        assert stdin.frames[-1] == {"jsonrpc": "2.0", "id": 0,
+                                    "result": {"decision": "decline"}}
+        assert rid not in t._pending_approvals
+
+    @pytest.mark.asyncio
+    async def test_bool_approve_maps_to_accept(self):
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        await t._route_server_message(dict(self.REQUEST))
+        rid = _drain(t)[0].data["request_id"]
+        await t.respond_to_permission(rid, approved=True)
+        assert stdin.frames[-1]["result"] == {"decision": "accept"}
+
+    @pytest.mark.asyncio
+    async def test_explicit_cancel_decision(self):
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        await t._route_server_message(dict(self.REQUEST))
+        rid = _drain(t)[0].data["request_id"]
+        await t.respond_to_permission_decision(rid, "cancel")
+        assert stdin.frames[-1]["result"] == {"decision": "cancel"}
+
+    @pytest.mark.asyncio
+    async def test_hands_off_auto_accepts_without_surfacing(self):
+        t, stdin = _wired(autonomy=Autonomy.HANDS_OFF)
+        await t._route_server_message(dict(self.REQUEST))
+        assert _drain(t) == []
+        assert stdin.frames[-1]["result"] == {"decision": "accept"}
+
+    @pytest.mark.asyncio
+    async def test_file_change_surface_handled(self):
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        await t._route_server_message({"jsonrpc": "2.0", "id": 5,
+            "method": "item/fileChange/requestApproval",
+            "params": {"threadId": "T1", "turnId": "U1", "itemId": "call_F",
+                       "reason": "write outside workspace", "grantRoot": "/etc"}})
+        [event] = _drain(t)
+        rid = event.data["request_id"]
+        assert t._pending_approval_data[rid]["tool_name"] == "fileChange"
+        await t.respond_to_permission(rid, approved=False)
+        assert stdin.frames[-1] == {"jsonrpc": "2.0", "id": 5,
+                                    "result": {"decision": "decline"}}
+
+    @pytest.mark.asyncio
+    async def test_unknown_surface_answered_with_error_never_hangs(self):
+        # item/permissions/requestApproval has a non-decision response shape;
+        # an unanswered server request blocks codex forever.
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        await t._route_server_message({"jsonrpc": "2.0", "id": 9,
+            "method": "item/permissions/requestApproval",
+            "params": {"threadId": "T1", "turnId": "U1"}})
+        [event] = _drain(t)
+        assert event.event_type == "error"
+        assert stdin.frames[-1]["id"] == 9
+        assert "error" in stdin.frames[-1]
+
+
+class TestStop:
+    @pytest.mark.asyncio
+    async def test_stop_cancels_pending_approvals_then_interrupts(self, monkeypatch):
+        # Stop while a question is open == "Deny & stop": cancel, then
+        # turn/interrupt (threadId AND turnId), then unsubscribe, then
+        # tree-kill. We assert frame ORDER; the kill is patched out.
+        t, stdin = _wired(autonomy=Autonomy.CHECK_IN)
+        t._turn_id = "U1"
+        await t._route_server_message(dict(TestApprovals.REQUEST))
+        _drain(t)
+
+        async def fake_kill(proc, **kw):
+            from agent_os.agent.transports.process_kill import KillOutcome
+            return KillOutcome(parent_dead=True)
+        monkeypatch.setattr(
+            "agent_os.agent.transports.process_kill.kill_process_tree", fake_kill)
+        t._proc = psutil.Process()  # self — never signalled (kill patched)
+
+        async def answer_requests():
+            # resolve interrupt + unsubscribe requests as the reader would
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                for f in list(stdin.frames):
+                    rid = f.get("id")
+                    if f.get("method") in ("turn/interrupt", "thread/unsubscribe") \
+                            and rid in t._response_futures \
+                            and not t._response_futures[rid].done():
+                        await t._route_server_message(
+                            {"jsonrpc": "2.0", "id": rid, "result": {}})
+        answer = asyncio.create_task(answer_requests())
+        try:
+            await asyncio.wait_for(t.stop(), timeout=10.0)
+        finally:
+            answer.cancel()
+            await asyncio.gather(answer, return_exceptions=True)
+
+        methods = [f.get("method") or ("response" if "result" in f else "?")
+                   for f in stdin.frames]
+        # 1st frame: cancel response to the pending approval
+        assert stdin.frames[0] == {"jsonrpc": "2.0", "id": 0,
+                                   "result": {"decision": "cancel"}}
+        assert "turn/interrupt" in methods and "thread/unsubscribe" in methods
+        assert methods.index("turn/interrupt") < methods.index("thread/unsubscribe")
+        interrupt = next(f for f in stdin.frames if f.get("method") == "turn/interrupt")
+        assert interrupt["params"] == {"threadId": "T1", "turnId": "U1"}
+        assert t.is_alive() is False
+
+    @pytest.mark.asyncio
+    async def test_stop_without_open_turn_skips_interrupt(self, monkeypatch):
+        t, stdin = _wired()
+        t._turn_id = None
+
+        async def fake_kill(proc, **kw):
+            from agent_os.agent.transports.process_kill import KillOutcome
+            return KillOutcome(parent_dead=True)
+        monkeypatch.setattr(
+            "agent_os.agent.transports.process_kill.kill_process_tree", fake_kill)
+
+        async def answer():
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                for f in list(stdin.frames):
+                    rid = f.get("id")
+                    if f.get("method") == "thread/unsubscribe" \
+                            and rid in t._response_futures \
+                            and not t._response_futures[rid].done():
+                        await t._route_server_message(
+                            {"jsonrpc": "2.0", "id": rid, "result": {}})
+        ans = asyncio.create_task(answer())
+        try:
+            await asyncio.wait_for(t.stop(), timeout=10.0)
+        finally:
+            ans.cancel()
+            await asyncio.gather(ans, return_exceptions=True)
+        assert all(f.get("method") != "turn/interrupt" for f in stdin.frames)
