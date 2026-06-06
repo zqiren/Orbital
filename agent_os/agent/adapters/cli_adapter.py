@@ -218,9 +218,9 @@ class CLIAdapter(AgentAdapter):
                 if event.event_type == "turn_complete":
                     self._idle = True
                     # Thread event.data through: it carries the honest
-                    # completion cause ("success" | "error" | "stopped")
-                    # that ProcessManager routes on. Dropping it here was
-                    # how kills got reported as completions.
+                    # completion cause ("success" | "error" | "stopped" |
+                    # "interrupted") that ProcessManager routes on. Dropping
+                    # it here was how kills got reported as completions.
                     yield OutputChunk(
                         text="", chunk_type="turn_complete",
                         metadata=dict(event.data),

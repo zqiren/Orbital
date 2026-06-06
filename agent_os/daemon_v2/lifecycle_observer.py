@@ -134,6 +134,28 @@ class LifecycleObserver:
             "session_id": session_id,
         })
 
+    async def on_turn_interrupted(self, project_id: str, handle: str,
+                                  transcript_path: str = "unknown",
+                                  *, session_id: str | None = None) -> None:
+        """A sub-agent turn ended `interrupted` while the agent stays alive
+        (Codex `cancel` approval decision — no teardown ran). The management
+        session may be AWAITING the dispatch result; silence here is the
+        Piece-3 Part-C silent-hang class. Honest framing: stopped before
+        completing — NOT a completion (no result), NOT an error."""
+        content = (
+            f"[Sub-agent] {handle} was stopped before completing its current "
+            f"task (turn interrupted — e.g. an approval denied with stop). "
+            f"No result was produced. The agent remains available. "
+            f"Transcript: {transcript_path}"
+        )
+        await self._inject(project_id, content, session_id=session_id)
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.turn_interrupted",
+            "project_id": project_id,
+            "handle": handle,
+            "session_id": session_id,
+        })
+
     async def on_background_work_lost(self, project_id: str, handle: str, *,
                                       commands: list[str],
                                       session_id: str | None = None) -> None:

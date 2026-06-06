@@ -106,8 +106,10 @@ class ProcessManager:
                         # on disk even if injection fails. cause=stopped is
                         # skipped: the id was recorded at the last completed
                         # turn (TASK-resume-persistence).
+                        # interrupted: the turn was cancelled but the thread
+                        # is alive and resumable.
                         if (self._lifecycle and meta.get("session_id")
-                                and cause in ("success", "error")):
+                                and cause in ("success", "error", "interrupted")):
                             # Piece 3 Part F: persist the process identity
                             # (pid + create_time) alongside the resume
                             # record, so a later spawn can detect a
@@ -138,6 +140,17 @@ class ProcessManager:
                                 )
                             elif cause == "stopped":
                                 pass  # clean reap — a kill is not a completion
+                            elif cause == "interrupted":
+                                # Turn cancelled while the agent lives on
+                                # (Codex cancel decision; no teardown event
+                                # will speak). An awaiting management session
+                                # must be woken honestly — silence here is
+                                # the Part-C hang class.
+                                await self._lifecycle.on_turn_interrupted(
+                                    project_id, handle,
+                                    transcript_path=transcript.filepath,
+                                    session_id=session_id,
+                                )
                             else:
                                 await self._lifecycle.on_error(
                                     project_id, handle,
