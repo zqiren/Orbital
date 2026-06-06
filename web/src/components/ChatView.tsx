@@ -312,6 +312,7 @@ import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import SlotHeldNotice from './SlotHeldNotice';
+import SubAgentStatusBar from './SubAgentStatusBar';
 
 interface ChatViewProps {
   projectId: string;
@@ -1973,6 +1974,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           onDismiss={() => setClaudemdWarning(null)}
         />
       )}
+      {/* Piece 3 Part D: honest sub-agent status badge + user stop control */}
+      <SubAgentStatusBar projectId={projectId} sessionId={sessionId} />
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">

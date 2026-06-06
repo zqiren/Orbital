@@ -1155,6 +1155,57 @@ class SubAgentManager:
             self._adapters.pop(sk, None)
         return result
 
+    # User-facing honesty: what the stop button can and cannot reach
+    # (Piece 3 Part D; accepted limitation per
+    # REPORT-piece3-child-classification.md — raw `&`-detached work
+    # reparents away from the tree and equally escapes the reap kill).
+    RAW_DETACH_WARNING = (
+        "Stopping cancels the agent's current turn and terminates its "
+        "tracked background work. Work the agent detached via a raw shell "
+        "'&'/'nohup' runs outside the agent's process tree and cannot be "
+        "guaranteed stopped."
+    )
+
+    async def stop_for_user(self, project_id: str, handle: str, *,
+                            session_id: str | None = None) -> dict:
+        """User stop button (Piece 3 Part D): cancel the open turn, terminate
+        the agent's TRACKED background work (confirmed), stop the adapter
+        (tree kill), and report honestly what was terminated and what the
+        mechanism cannot reach."""
+        session_id = self._resolve_session_id(session_id)
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        terminated: list[str] = []
+        if isinstance(registry, BackgroundWorkRegistry):
+            try:
+                terminated = await registry.terminate_all(
+                    project_id, session_id, handle,
+                )
+            except Exception:
+                logger.exception(
+                    "stop_for_user: background-work termination raised for "
+                    "%s/%s/%s", project_id, session_id, handle,
+                )
+        # stop() cancels the in-flight send (the open turn) and tears the
+        # process tree down; Part E hardens it to confirmed-death.
+        stop_result = await self.stop(project_id, handle, session_id=session_id)
+        if self._lifecycle_observer is not None:
+            try:
+                await self._lifecycle_observer.on_user_stopped(
+                    project_id, handle,
+                    terminated=terminated, session_id=session_id,
+                )
+            except Exception:
+                logger.exception("on_user_stopped raised for %s/%s",
+                                 project_id, handle)
+        return {
+            "handle": handle,
+            "status": "stopped",
+            "stop_result": stop_result,
+            "background_terminated": terminated,
+            "warning": self.RAW_DETACH_WARNING,
+        }
+
     def seconds_since_background_activity(self, project_id: str, *,
                                           session_id: str | None = None) -> float | None:
         """Seconds since the most recent registered background-work activity

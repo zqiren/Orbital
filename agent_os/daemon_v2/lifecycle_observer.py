@@ -108,6 +108,32 @@ class LifecycleObserver:
             "session_id": session_id,
         })
 
+    async def on_user_stopped(self, project_id: str, handle: str, *,
+                              terminated: list[str] | None = None,
+                              session_id: str | None = None) -> None:
+        """User pressed the sub-agent stop button (Piece 3 Part D).
+
+        Injects an honest record into the management session — including
+        which tracked background work was terminated — and broadcasts so
+        every client updates its badge. Loud by design: a kill that
+        destroys background work must never be silent.
+        """
+        content = f"[Sub-agent] {handle} stopped by user."
+        if terminated:
+            cmds = "; ".join(c[:80] for c in terminated)
+            content += (
+                f" Terminated {len(terminated)} background process(es): "
+                f"{cmds}. This background work did NOT complete."
+            )
+        await self._inject(project_id, content, session_id=session_id)
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.stopped",
+            "project_id": project_id,
+            "handle": handle,
+            "background_terminated": terminated or [],
+            "session_id": session_id,
+        })
+
     async def on_thread_update(self, project_id: str, handle: str,
                                *, claude_session_id: str,
                                model: str | None = None,

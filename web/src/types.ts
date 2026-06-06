@@ -261,6 +261,33 @@ export interface SubAgentMessageEvent {
   timestamp: string;
 }
 
+/**
+ * Sub-agent lifecycle broadcasts (Piece 3 Part D). `sub_agent.stopped`
+ * carries the honest record of tracked background work the user stop
+ * terminated.
+ */
+export interface SubAgentLifecycleEvent {
+  type:
+    | 'sub_agent.started'
+    | 'sub_agent.completed'
+    | 'sub_agent.error'
+    | 'sub_agent.failed'
+    | 'sub_agent.stopped';
+  project_id: string;
+  session_id?: string | null;
+  handle: string;
+  initiator?: string;
+  summary?: string;
+  error?: string;
+  reason?: string;
+  background_terminated?: string[];
+}
+
+/** Sub-agent status as reported by GET /agents/{id}/sub-agents/status.
+ * 'background-running' = turn done but tracked background work is alive
+ * (SDK claude-code only; other transports report two-state). */
+export type SubAgentRunStatus = 'running' | 'background-running' | 'idle';
+
 export interface UserMessageEvent {
   type: 'chat.user_message';
   project_id: string;
@@ -391,6 +418,7 @@ export type WebSocketEvent =
   | ApprovalRequestEvent
   | ApprovalResolvedEvent
   | SubAgentMessageEvent
+  | SubAgentLifecycleEvent
   | UserMessageEvent
   | AgentNotifyEvent
   | DeviceStatusEvent

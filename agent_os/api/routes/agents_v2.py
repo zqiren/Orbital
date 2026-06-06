@@ -2124,6 +2124,55 @@ def _memory_md_path_for(workspace: str, agent_slug: str) -> str:
     )
 
 
+@router.get("/agents/{project_id}/sub-agents/status")
+async def sub_agents_status(project_id: str, session_id: str | None = None):
+    """Live sub-agent statuses for the badge (Piece 3 Part D).
+
+    Status vocabulary: 'running' (turn open) | 'background-running' (turn
+    done, tracked background work alive — SDK only) | 'idle'. Each entry
+    carries the live background commands so the stop dialog can warn
+    honestly. ``session_id`` defaults to the project's active-loop holder.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+    if sid is None:
+        return {"session_id": None, "agents": []}
+    agents = _sub_agent_manager.list_active(project_id, session_id=sid)
+    from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+    registry = getattr(
+        _sub_agent_manager._process_manager, "background_work", None)
+    for a in agents:
+        if isinstance(registry, BackgroundWorkRegistry):
+            a["background_commands"] = registry.live_commands(
+                project_id, sid, a["handle"])
+        else:
+            a["background_commands"] = []
+    return {"session_id": sid, "agents": agents}
+
+
+@router.post("/agents/{project_id}/sub-agents/{handle}/stop")
+async def stop_sub_agent(project_id: str, handle: str,
+                         session_id: str | None = None):
+    """User stop button (Piece 3 Part D): cancel turn + kill agent + tracked
+    children (confirmed), with an honest report of what was terminated and
+    the raw-detach limitation. ``session_id`` defaults to the holder."""
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    if not _AGENT_SLUG_RE.match(handle):
+        raise HTTPException(status_code=400, detail="Invalid agent handle")
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+    if sid is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active session for this project — nothing to stop",
+        )
+    result = await _sub_agent_manager.stop_for_user(
+        project_id, handle, session_id=sid)
+    result["session_id"] = sid
+    return result
+
+
 @router.get("/projects/{project_id}/sub-agent-memory")
 async def list_sub_agent_memory(project_id: str):
     """Return MEMORY.md status for each enabled sub-agent in this project.
