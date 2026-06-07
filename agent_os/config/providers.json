@@ -832,8 +832,8 @@
           "output_per_1m": 0.28
         },
         "deepseek-v4-pro": {
-          "input_per_1m": 1.74,
-          "output_per_1m": 3.48
+          "input_per_1m": 0.435,
+          "output_per_1m": 0.87
         }
       },
       "models": {
