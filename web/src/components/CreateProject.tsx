@@ -108,7 +108,10 @@ export default function CreateProject({
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setErrors((prev) => ({ ...prev, name: undefined }));
+            }}
             placeholder="e.g., Refactor Auth Module"
             autoFocus
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
@@ -147,7 +150,10 @@ export default function CreateProject({
             <input
               type="text"
               value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
+              onChange={(e) => {
+                setWorkspace(e.target.value);
+                setErrors((prev) => ({ ...prev, workspace: undefined }));
+              }}
               placeholder="Select a folder or type a path..."
               className="flex-1 text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
             />
@@ -164,7 +170,11 @@ export default function CreateProject({
           )}
           <FolderPickerModal
             open={pickerOpen}
-            onSelect={(path) => { setWorkspace(path); setPickerOpen(false); }}
+            onSelect={(path) => {
+              setWorkspace(path);
+              setErrors((prev) => ({ ...prev, workspace: undefined }));
+              setPickerOpen(false);
+            }}
             onClose={() => setPickerOpen(false)}
           />
         </div>
