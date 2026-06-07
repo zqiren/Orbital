@@ -72,3 +72,34 @@ Also planned mid-drain: one pause/resume cycle on a RUNNING item (hot-resume pat
   REST API), so their access pattern differs; still, treat artifact claims as
   research leads, not verified facts, until the synthesis caveats section and a
   human pass over the cited URLs.
+
+### B3 — pause/resume permanently kills the dispatcher drain loop (the big one)
+- Symptom: after a single POST /queue/stop + POST /queue/resume cycle mid-item,
+  the resumed item completed but the queue then stopped advancing — items 3-6
+  stuck queued/0-attempts, queue.state="running", agent idle, for 29+ min. A
+  manual resume "kick" (_idle_event.set) did nothing => main _run task was DEAD.
+- Root cause: pause -> terminate() -> task.cancel() on the agent-loop task.
+  _wait_for_loop_done awaits asyncio.shield(task); cancelling the shielded task
+  raises CancelledError, which re-raises up through _await_and_handle's wait_for
+  (skipping the line-793 _stop_generation pause guard, never reached), through
+  _dispatch_one, into _run's `except CancelledError: return` -> drain loop dies
+  permanently. resume() only spawned a separate task for the parked item, never
+  restarting _run.
+- Fix (commit 9e5fa9e): Layer 1 — _await_and_handle catches CancelledError,
+  re-raises only on genuine _shutting_down; on a pause (gen bumped) it takes the
+  clean pause-guard early-return so _run survives. Layer 2 — idempotent
+  _ensure_run_task() recreates a dead _run, called from start()/resume() as a
+  self-heal safety net. 4 new regression tests (RED before, GREEN after).
+- Live proof (snapshots in /tmp/b3-evidence/): pause 03:38:11 -> resume 03:38:41
+  -> item 3 done 03:42:47 AND item 4 auto-dispatched (running/1 attempt). Single
+  resume sufficed, no manual kick. Daemon log clean throughout.
+- Note: this is a real product bug — ANY user who pauses then resumes a queue
+  would have it silently stop advancing after the current item. Found only
+  because the stress test exercised pause/resume against a multi-item queue.
+
+## Timeline (cont.)
+- 02:41 item 2 done; pause/resume from the mid-drain exercise had already killed _run
+- 03:10 heartbeat: discovered wedge (item 3 never dispatched in 29 min)
+- 03:3x B3 fixed (9e5fa9e) + daemon restarted; items 3+ resumed draining
+- 03:38 live pause/resume re-run on item 3 to PROVE the fix
+- 03:42 item 3 done -> item 4 auto-advanced (PROOF); drain continues
