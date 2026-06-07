@@ -118,3 +118,31 @@ class TestSdkResumeModelSource:
         )
         assert transport._model is None, \
             "no override -> omit; the CLI serves the session's last-used model"
+
+
+class TestStartupResolutionScope:
+    """Resolution fills ONLY the unset fresh-start case. Override always
+    wins (resolver must not run); resume keeps omit-when-no-override (the
+    amendment — provider serves the thread's own last-used model)."""
+
+    @pytest.mark.asyncio
+    async def test_override_wins_resolver_never_runs(self, monkeypatch):
+        t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
+        async def sentinel():
+            raise AssertionError("resolver must not run when override is set")
+        monkeypatch.setattr(t, "_resolve_startup_model", sentinel)
+        t._model = t._argv_model(["-m", "gpt-5.4-mini"])
+        method, params = t._thread_open_request("/tmp/ws")
+        assert params["model"] == "gpt-5.4-mini"
+
+    @pytest.mark.asyncio
+    async def test_resume_without_override_still_omits_model(self, monkeypatch):
+        t = CodexTransport(autonomy=Autonomy.HANDS_OFF,
+                           resume_record={"session_id": "T9"})
+        async def sentinel():
+            raise AssertionError("resolver must not run on resume")
+        monkeypatch.setattr(t, "_resolve_startup_model", sentinel)
+        t._model = t._argv_model([])
+        method, params = t._thread_open_request("/tmp/ws")
+        assert method == "thread/resume"
+        assert "model" not in params

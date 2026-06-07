@@ -51,6 +51,13 @@ _POLICY_BY_AUTONOMY: dict[Autonomy, tuple[str, str]] = {
 }
 _DEFAULT_POLICY = ("on-request", "workspace-write")
 
+# Cold-start model resolution (TASK-codex-startup-model): the server default
+# (gpt-5.x-codex) 400s on ChatGPT-account auth, and OpenAI's guidance marks
+# gpt-5.4-mini as the subagent recommendation. Preference order over the
+# account's LIVE model/list — a hardcoded single model would re-plant the
+# trap on the next model churn.
+_PREFERRED_STARTUP_MODELS: tuple[str, ...] = ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5")
+
 # Server->client approval surfaces we answer with {"decision": ...}.
 # item/permissions/requestApproval exists in the schema with a different,
 # non-decision response shape and never fired in the probe — it (and any
@@ -398,6 +405,43 @@ class CodexTransport(AgentTransport):
             return "thread/resume", params
         return "thread/start", params
 
+    async def _resolve_startup_model(self) -> str:
+        """Pick a known-good startup model from the account's live
+        model/list. Fills ONLY the unset fresh-start case — a user override
+        wins upstream, and resume omits the model so the provider serves the
+        thread's own last-used (the model-is-config amendment). Never
+        returns None: a degraded fallback still beats the unqualified
+        server default (the cold-start 400)."""
+        try:
+            result = await self._request("model/list", {"includeHidden": False},
+                                         timeout=15.0)
+            available = [m.get("id") for m in (result.get("data") or [])
+                         if m.get("id")]
+        except Exception as e:
+            logger.warning(
+                "CodexTransport: model/list failed (%s) — degraded startup "
+                "fallback to %s", e, _PREFERRED_STARTUP_MODELS[0])
+            return _PREFERRED_STARTUP_MODELS[0]
+        for preferred in _PREFERRED_STARTUP_MODELS:
+            if preferred in available:
+                if preferred != _PREFERRED_STARTUP_MODELS[0]:
+                    logger.info("CodexTransport: startup model %s (preferred "
+                                "%s unavailable)", preferred,
+                                _PREFERRED_STARTUP_MODELS[0])
+                return preferred
+        # Churn fallback: every preference entry retired. Avoid the
+        # codex-class ids (the known-rejected class on ChatGPT auth).
+        for model_id in available:
+            if "codex" not in model_id:
+                logger.info("CodexTransport: startup model %s (no preference-"
+                            "order entry available)", model_id)
+                return model_id
+        logger.warning(
+            "CodexTransport: model/list offered nothing suitable (%s) — "
+            "degraded startup fallback to %s", available,
+            _PREFERRED_STARTUP_MODELS[0])
+        return _PREFERRED_STARTUP_MODELS[0]
+
     def _check_version(self, init_result: dict) -> None:
         ua = (init_result or {}).get("userAgent", "")
         m = re.search(r"/(\d+\.\d+\.\d+)", ua)
@@ -445,6 +489,13 @@ class CodexTransport(AgentTransport):
             "name": "orbital", "title": "Orbital", "version": "0.1.0"}})
         self._check_version(init)
         await self._notify("initialized")
+
+        if self._model is None and not self._resume_session_id:
+            # Never open a FRESH thread on the unqualified server default
+            # (cold-start 400 on ChatGPT auth). Resume stays omit-when-no-
+            # override: the thread inherits its OWN last-used model, which
+            # is qualified — not the server default this guards against.
+            self._model = await self._resolve_startup_model()
 
         method, params = self._thread_open_request(workspace)
         result = await self._request(method, params)

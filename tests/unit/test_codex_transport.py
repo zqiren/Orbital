@@ -598,3 +598,57 @@ class TestDenyAndStopWire:
         await mgr.resolve_sub_agent_approval("p1", "req-1", approved=False,
                                              session_id="s1")
         transport.respond_to_permission.assert_awaited_once_with("req-1", False)
+
+
+class TestStartupModelResolution:
+    """Cold-start 400 killed at the source (TASK-codex-startup-model):
+    a FRESH thread never opens on the unqualified server default. The
+    preference order over the live model/list is the point — a hardcoded
+    single model would re-plant the trap on the next OpenAI model churn."""
+
+    def _stub_list(self, t, ids):
+        async def fake_request(method, params=None, timeout=30.0):
+            assert method == "model/list"
+            return {"data": [{"id": i} for i in ids]}
+        t._request = fake_request
+
+    @pytest.mark.asyncio
+    async def test_picks_first_preference_when_present(self):
+        t = _transport()
+        self._stub_list(t, ["gpt-5.3-codex", "gpt-5.5", "gpt-5.2",
+                            "gpt-5.4", "gpt-5.4-mini"])
+        assert await t._resolve_startup_model() == "gpt-5.4-mini"
+
+    @pytest.mark.asyncio
+    async def test_skips_to_next_available_on_churn(self):
+        # THE churn-robustness case — the reason for querying vs hardcoding.
+        t = _transport()
+        self._stub_list(t, ["gpt-5.3-codex", "gpt-5.5", "gpt-5.4"])
+        assert await t._resolve_startup_model() == "gpt-5.4"
+        self._stub_list(t, ["gpt-5.3-codex", "gpt-5.5"])
+        assert await t._resolve_startup_model() == "gpt-5.5"
+
+    @pytest.mark.asyncio
+    async def test_non_codex_fallback_when_preferences_all_retired(self):
+        # codex-class ids are the known-rejected class on ChatGPT auth.
+        t = _transport()
+        self._stub_list(t, ["gpt-9.9-codex", "gpt-9.9"])
+        assert await t._resolve_startup_model() == "gpt-9.9"
+
+    @pytest.mark.asyncio
+    async def test_hard_fallback_when_list_empty(self):
+        t = _transport()
+        self._stub_list(t, [])
+        assert await t._resolve_startup_model() == "gpt-5.4-mini"
+
+    @pytest.mark.asyncio
+    async def test_model_list_failure_degrades_loudly_never_blocks(self, caplog):
+        import logging as _logging
+        t = _transport()
+        async def boom(method, params=None, timeout=30.0):
+            raise RuntimeError("network down")
+        t._request = boom
+        with caplog.at_level(_logging.WARNING):
+            assert await t._resolve_startup_model() == "gpt-5.4-mini"
+        assert any("model/list" in r.message for r in caplog.records), \
+            "degradation must be surfaced, not silent"

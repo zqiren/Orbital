@@ -55,18 +55,9 @@ async def _cheapest_model(transport) -> str | None:
 
 async def _start(tmp_path, autonomy=Autonomy.HANDS_OFF, resume_record=None,
                  model: str | None = None):
-    # On a FRESH start (no resume), pin the cheapest MINI model via argv.
-    # The server-default `gpt-5.x-codex` is rejected with HTTP 400 ("not
-    # supported when using Codex with a ChatGPT account"), so leaving the
-    # model unset errors the very first turn. Model is CONFIG (AMENDS piece 2):
-    # passed as [-m, model] argv — never smuggled through resume_record.
-    if resume_record is None and model is None:
-        probe = CodexTransport(autonomy=autonomy)
-        await probe.start(CODEX, [], str(tmp_path))
-        try:
-            model = await _cheapest_model(probe)
-        finally:
-            await probe.stop()
+    # Fresh starts self-resolve a startup model from model/list
+    # (TASK-codex-startup-model) — no probe dance needed. Pass `model` to
+    # pin one explicitly; resume omits unless pinned (amendment semantics).
     t = CodexTransport(autonomy=autonomy, resume_record=resume_record)
     await t.start(CODEX, ["-m", model] if model else [], str(tmp_path))
     return t
@@ -75,15 +66,9 @@ async def _start(tmp_path, autonomy=Autonomy.HANDS_OFF, resume_record=None,
 @requires_codex
 @pytest.mark.asyncio
 async def test_round_trip_command_filechange_final_answer(tmp_path):
-    # Probe a throwaway transport for the cheapest model, then run the real
-    # journey on it (fresh start with model passed via argv).
-    probe = await _start(tmp_path)
-    try:
-        model = await _cheapest_model(probe)
-    finally:
-        await probe.stop()
-    t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
-    await t.start(CODEX, ["-m", model] if model else [], str(tmp_path))
+    # Fresh start self-resolves a startup model from model/list
+    # (TASK-codex-startup-model) — no probe dance needed.
+    t = await _start(tmp_path)
     try:
         await t.dispatch(
             "Do exactly these two things using your tools, then stop. "
@@ -268,17 +253,22 @@ async def test_version_is_pinned(tmp_path):
 @pytest.mark.asyncio
 async def test_rejected_model_heals_on_resume_with_override(tmp_path):
     """THE trap (model-is-config amendment, DONE-WHEN): a thread whose first
-    turn 400'd on the ChatGPT-rejected server-default model must heal on
-    resume once a working override exists — the SAME thread, not a fresh one."""
-    # 1. Fresh thread, NO model -> server default (gpt-5.x-codex) -> 400.
+    turn 400'd on a ChatGPT-rejected model must heal on resume once a working
+    override exists — the SAME thread, not a fresh one.
+
+    The resolver (TASK-codex-startup-model) prevents accidental bad starts,
+    so the trap is reproduced deliberately via an explicit bad override
+    ("-m gpt-5.3-codex"). The heal invariant (override beats record on the
+    same thread) is unchanged."""
+    # 1. Fresh thread, EXPLICIT bad model -> 400.
     t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
-    await t.start(CODEX, [], str(tmp_path))
+    await t.start(CODEX, ["-m", "gpt-5.3-codex"], str(tmp_path))
     try:
         await t.dispatch("Say OK. Do not use any tools.")
         events = await _events_until_turn_complete(t)
         tc = events[-1]
         assert tc.data["cause"] == "error", \
-            "expected the ChatGPT-account model rejection on the default model"
+            "expected the ChatGPT-account model rejection on gpt-5.3-codex"
         record = {"session_id": tc.data["session_id"],
                   "model": tc.data["model"],          # the rejected model
                   "rollout_path": tc.data["rollout_path"]}
