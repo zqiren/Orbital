@@ -525,6 +525,33 @@ class QueueDispatcher:
             await self._wait_idle()
             return
 
+        # Busy-slot guard: a project has exactly one active-loop slot. If
+        # another session already holds it (e.g. a long-running onboarding /
+        # research turn the user kicked off, or a still-draining attempt),
+        # minting a fresh session and injecting would race that turn and
+        # inject_message would reject — burning an attempt and (pre-fix)
+        # wedging the head item as a zombie RUNNING. Back off WITHOUT minting
+        # a session/attempt; the main loop re-polls every IDLE_WAIT_TIMEOUT_SEC
+        # and will dispatch once the slot is free. (Reuses the existing
+        # current_holder_session_id accessor — no new machinery.)
+        #
+        # getattr-guarded: the real AgentManager always defines this accessor;
+        # only lightweight test doubles that model a single ready session omit
+        # it. For those, "no holder" (slot free) is the correct semantic, so we
+        # default to a lambda returning None rather than crashing the dispatch.
+        _holder_fn = getattr(
+            self._agent_manager, "current_holder_session_id", lambda _pid: None,
+        )
+        holder = _holder_fn(self._project_id)
+        if holder is not None:
+            logger.info(
+                "dispatcher(%s): loop slot held by session %s; deferring "
+                "dispatch of item %s (no attempt minted)",
+                self._project_id, holder, item.id,
+            )
+            await self._wait_idle()
+            return
+
         # Each queue item runs in its OWN fresh session — the same new_session
         # the user gets from "+ new session", then an inject. No rotation, no
         # reuse of a prior session, no action on whatever finished before.
@@ -594,14 +621,53 @@ class QueueDispatcher:
                 "dispatcher(%s): inject failed for item %s",
                 self._project_id, item.id,
             )
+            # Do NOT leave the item RUNNING — that strands the queue head as a
+            # zombie (RUNNING with no live attempt), wedging the dispatcher
+            # until daemon restart (observed live on item_cb75800b6b18 during
+            # the 2026-06-08 queue stress run). Close the attempt INTERRUPTED
+            # and reclaim it with the SAME poison-pill convention
+            # reclaim_on_startup uses: bump interrupted_count, re-queue at head
+            # under the cap, BLOCKED at the cap.
             self._store.close_latest_attempt(
                 item.id,
                 outcome=AttemptOutcome.INTERRUPTED,
                 block_reason="inject failed",
             )
+            self._reclaim_interrupted_item(item.id)
+            self._idle_event.set()
             return
 
         await self._await_and_handle(item, session_id)
+
+    # Poison-pill threshold for reclaiming an interrupted item. interrupted
+    # attempts >= this → BLOCKED instead of re-queued. Mirrors the constant
+    # baked into reclaim_on_startup so a runtime inject failure and a
+    # restart-time interruption are treated identically.
+    INTERRUPTED_REQUEUE_CAP = 2
+
+    def _reclaim_interrupted_item(self, item_id: str) -> None:
+        """Re-queue or BLOCK an item whose latest attempt was INTERRUPTED.
+
+        Shared by the inject-failure path in _dispatch_one and (in spirit) the
+        startup reconciler: increment interrupted_count, re-queue at head with
+        priority while under INTERRUPTED_REQUEUE_CAP, mark BLOCKED at the cap.
+        The attempt records are left intact for diagnosis.
+        """
+        new_count = self._store.increment_interrupted(item_id)
+        if new_count >= self.INTERRUPTED_REQUEUE_CAP:
+            self._store.set_item_state(item_id, ItemState.BLOCKED)
+            logger.warning(
+                "dispatcher(%s): item %s blocked after %d interruptions",
+                self._project_id, item_id, new_count,
+            )
+        else:
+            self._store.set_item_state(item_id, ItemState.QUEUED)
+            self._store.move_to_head(item_id)
+            logger.info(
+                "dispatcher(%s): item %s requeued at head after inject failure "
+                "(interruptions=%d)",
+                self._project_id, item_id, new_count,
+            )
 
     # ------------------------------------------------------------------
     # Contract delivery: header + corrective turn
