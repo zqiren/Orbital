@@ -197,6 +197,67 @@ def _build_reasoning_off_switch(model: str, reasoning) -> dict | None:
     return None
 
 
+def _content_is_blank(content) -> bool:
+    """True when a message's content is empty/whitespace-only.
+
+    A list (multimodal) with any block is treated as non-blank — image-only
+    turns are legitimate. None and "" / "   " are blank.
+    """
+    if content is None:
+        return True
+    if isinstance(content, list):
+        return len(content) == 0
+    if isinstance(content, str):
+        return content.strip() == ""
+    return False
+
+
+# Sent when an OpenAI-compatible request would otherwise carry zero non-system
+# turns. The onboarding flow is driven entirely by the system prompt (see
+# PromptBuilder._onboarding_or_directive), so a fresh agent's very first request
+# is system-only. Lenient providers answer that; strict ones (MiniMax
+# api.minimaxi.com → 400 "chat content is empty (2013)") require at least one
+# user/assistant message with real content. A minimal user kickoff gives them a
+# turn to respond to without changing the persisted session history.
+_KICKOFF_CONTENT = "Begin."
+
+
+def _ensure_chat_content(messages: list) -> list:
+    """Guarantee the outbound OpenAI-style chat array is acceptable to strict
+    providers (e.g. MiniMax) that reject empty content.
+
+    Two defects are repaired, both at the provider boundary only (the persisted
+    session is never mutated):
+
+    1. A user/system message whose content is blank ("" / whitespace / None)
+       gets a single-space placeholder. Assistant messages are left alone —
+       an assistant turn carrying only ``tool_calls`` legitimately has
+       content None/"" and must stay that way.
+    2. If, after step 1, there is no user OR assistant message at all (the
+       system-prompt-only onboarding kickoff), a minimal user turn is
+       appended so the provider has a conversational turn to answer.
+    """
+    if not messages:
+        return [{"role": "user", "content": _KICKOFF_CONTENT}]
+
+    repaired: list = []
+    has_chat_turn = False
+    for msg in messages:
+        role = msg.get("role")
+        if role in ("user", "assistant"):
+            has_chat_turn = True
+        if role in ("system", "user") and _content_is_blank(msg.get("content")):
+            # Must be genuinely non-blank: MiniMax strips whitespace before its
+            # emptiness check, so a single space would still trip error 2013.
+            msg = dict(msg)
+            msg["content"] = "(no content)"
+        repaired.append(msg)
+
+    if not has_chat_turn:
+        repaired.append({"role": "user", "content": _KICKOFF_CONTENT})
+    return repaired
+
+
 def _apply_reasoning_policy(message: dict, reasoning) -> dict:
     """Enforce per-model echo_back contract on outbound assistant messages.
 
@@ -290,7 +351,10 @@ class LLMProvider:
                 msg["content"] = _flatten_multimodal_content(content)
             stripped = _strip_to_spec(msg)
             result.append(_apply_reasoning_policy(stripped, getattr(self, "reasoning", None)))
-        return result
+        # Final pass: strict OpenAI-compatible providers (MiniMax) reject any
+        # message with empty content and reject system-only requests. Repair
+        # both here, at the wire boundary, so the persisted session is untouched.
+        return _ensure_chat_content(result)
 
     async def stream(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Stream completion, yielding StreamChunk objects.
