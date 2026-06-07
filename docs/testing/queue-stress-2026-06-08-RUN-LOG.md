@@ -56,3 +56,19 @@ Also planned mid-drain: one pause/resume cycle on a RUNNING item (hot-resume pat
 - 02:16 queue/start -> B2 surfaced immediately (inject failed, zombie item)
 - 02:29 B2 fixed + daemon restarted; reclaim re-dispatched item 1; healthy attempt live
 - 02:3x item 6 (synthesis) enqueued while item 1 RUNNING (enqueue-while-busy test)
+
+## Mid-drain exercises (all PASS)
+- 02:34 enqueue-while-busy: synthesis item_3cefdd1cfdd7 accepted while item 1 RUNNING; appended in order.
+- 02:37 rotation: item 1 -> done/completed, item 2 auto-dispatched immediately (fresh session d708c48e).
+- 02:38 pause: POST /queue/stop -> {"status":"paused"}; item 2 parked (state=running, attempt outcome=None preserved), live turn cancelled (run-status idle, holder released).
+- 02:39 resume: POST /queue/resume -> {"status":"running","resumed_item_id":"item_78bf078ce3b9"}; HOT-RESUME on the SAME session d708c48e, attempts count still 1 (no double-dispatch).
+
+## Deliverable accuracy caveats (for the synthesis consumer)
+- Item 1 artifact (competitors.md) claims verified repos for multica/openclaw/paperclip.
+  Independent spot-check from the coordinator shell hit GitHub unauthenticated
+  rate limits (403) for all but paperclip-ui/paperclip (real, 123 stars — but it
+  is a UI templating project; the artifact's "AI orchestration platform"
+  description is suspect). Queue agents use the in-product browser tool (not the
+  REST API), so their access pattern differs; still, treat artifact claims as
+  research leads, not verified facts, until the synthesis caveats section and a
+  human pass over the cited URLs.
