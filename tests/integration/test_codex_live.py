@@ -53,22 +53,22 @@ async def _cheapest_model(transport) -> str | None:
     return None
 
 
-async def _start(tmp_path, autonomy=Autonomy.HANDS_OFF, resume_record=None):
-    # On a FRESH start (no resume), pin the cheapest MINI model. The
-    # server-default `gpt-5.x-codex` is rejected with HTTP 400 ("not
+async def _start(tmp_path, autonomy=Autonomy.HANDS_OFF, resume_record=None,
+                 model: str | None = None):
+    # On a FRESH start (no resume), pin the cheapest MINI model via argv.
+    # The server-default `gpt-5.x-codex` is rejected with HTTP 400 ("not
     # supported when using Codex with a ChatGPT account"), so leaving the
-    # model unset errors the very first turn. A resume_record carries its
-    # own (already account-compatible) model, so honor it untouched.
-    if resume_record is None:
+    # model unset errors the very first turn. Model is CONFIG (AMENDS piece 2):
+    # passed as [-m, model] argv — never smuggled through resume_record.
+    if resume_record is None and model is None:
         probe = CodexTransport(autonomy=autonomy)
         await probe.start(CODEX, [], str(tmp_path))
         try:
             model = await _cheapest_model(probe)
         finally:
             await probe.stop()
-        resume_record = {"model": model} if model else None
     t = CodexTransport(autonomy=autonomy, resume_record=resume_record)
-    await t.start(CODEX, [], str(tmp_path))
+    await t.start(CODEX, ["-m", model] if model else [], str(tmp_path))
     return t
 
 
@@ -76,15 +76,14 @@ async def _start(tmp_path, autonomy=Autonomy.HANDS_OFF, resume_record=None):
 @pytest.mark.asyncio
 async def test_round_trip_command_filechange_final_answer(tmp_path):
     # Probe a throwaway transport for the cheapest model, then run the real
-    # journey on it (resume_record with no session_id = fresh start + model).
+    # journey on it (fresh start with model passed via argv).
     probe = await _start(tmp_path)
     try:
         model = await _cheapest_model(probe)
     finally:
         await probe.stop()
-    t = CodexTransport(autonomy=Autonomy.HANDS_OFF,
-                       resume_record={"model": model} if model else None)
-    await t.start(CODEX, [], str(tmp_path))
+    t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
+    await t.start(CODEX, ["-m", model] if model else [], str(tmp_path))
     try:
         await t.dispatch(
             "Do exactly these two things using your tools, then stop. "

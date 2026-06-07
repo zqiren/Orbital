@@ -81,9 +81,13 @@ class CodexTransport(AgentTransport):
         # Same attribute name as SDKTransport: the manager's honesty
         # downgrade (sub_agent_manager.py ~731) compares it to the record.
         self._resume_session_id: str | None = record.get("session_id")
-        # Thread identity: persisted model wins; for fresh starts the
-        # config-store `-m <model>` argv is parsed at start() time.
-        self._model: str | None = record.get("model")
+        # Model is CONFIG, not thread identity (AMENDS piece 2 — see
+        # INVESTIGATION-resume-semantics): the record's model is display
+        # metadata and is NEVER consulted here. start() resolves the model
+        # from the current config-store argv; when none is set the param is
+        # omitted and the provider serves the thread's last-used model
+        # (wire-verified on both transports).
+        self._model: str | None = None
         self._autonomy: Autonomy | None = autonomy
         self._external_sandbox = external_sandbox
         self._alive = False
@@ -373,6 +377,27 @@ class CodexTransport(AgentTransport):
                 return args[i + 1]
         return None
 
+    def _thread_open_request(self, workspace: str) -> tuple[str, dict]:
+        """(method, params) opening the thread — fresh or resume.
+
+        Governance params (cwd/approvalPolicy/sandbox) are ALWAYS present in
+        BOTH branches: thread/resume applies its own defaults for omitted
+        params (observed drift: approvalPolicy never -> on-request), so
+        omission silently loosens governance. Only the MODEL is conditional
+        (model-is-config): passed when a current override exists, omitted
+        otherwise so the provider serves the thread's last-used model.
+        """
+        approval_policy, sandbox = _POLICY_BY_AUTONOMY.get(
+            self._autonomy, _DEFAULT_POLICY)
+        params: dict = {"cwd": workspace, "approvalPolicy": approval_policy,
+                        "sandbox": sandbox}
+        if self._model:
+            params["model"] = self._model
+        if self._resume_session_id:
+            params["threadId"] = self._resume_session_id
+            return "thread/resume", params
+        return "thread/start", params
+
     def _check_version(self, init_result: dict) -> None:
         ua = (init_result or {}).get("userAgent", "")
         m = re.search(r"/(\d+\.\d+\.\d+)", ua)
@@ -413,8 +438,7 @@ class CodexTransport(AgentTransport):
         self._stderr_task = asyncio.create_task(
             self._drain_stderr(), name=f"codex-stderr-{id(self)}")
 
-        if self._model is None:
-            self._model = self._argv_model(args)
+        self._model = self._argv_model(args)
 
         # clientInfo flows into the rollout `originator` (FINDINGS A6).
         init = await self._request("initialize", {"clientInfo": {
@@ -422,17 +446,8 @@ class CodexTransport(AgentTransport):
         self._check_version(init)
         await self._notify("initialized")
 
-        approval_policy, sandbox = _POLICY_BY_AUTONOMY.get(
-            self._autonomy, _DEFAULT_POLICY)
-        params: dict = {"cwd": workspace, "approvalPolicy": approval_policy,
-                        "sandbox": sandbox}
-        if self._model:
-            params["model"] = self._model
-        if self._resume_session_id:
-            params["threadId"] = self._resume_session_id
-            result = await self._request("thread/resume", params)
-        else:
-            result = await self._request("thread/start", params)
+        method, params = self._thread_open_request(workspace)
+        result = await self._request(method, params)
         thread = result.get("thread") or {}
         self._thread_id = thread.get("id")
         self._rollout_path = thread.get("path")

@@ -462,11 +462,11 @@ class Session:
         Appends an ``event: sub_agent_thread`` meta row (the persistence) and
         updates the in-memory map. Called on each sub-agent completion that
         carries a thread id, so ``last_used_at`` stays current. The record
-        carries thread-identity only — resume ``session_id`` and ``model``
-        (model is thread-identity — passed on Codex thread/start|resume to
-        avoid resume-time model-switch surprises; protocol-optional,
-        FINDINGS D1). Governance settings resolve live at dispatch
-        and are never snapshotted here.
+        carries thread-identity only — resume ``session_id`` and
+        ``model`` (``model`` is display/debug metadata: which model last
+        served the thread — NEVER consulted to drive resume; model resolves
+        live from config at dispatch; AMENDS piece 2). Governance settings
+        resolve live at dispatch and are never snapshotted here.
 
         ``background_loss`` (Piece 3 Part E): a teardown terminated this
         thread's live background work — the next resume's honesty clause

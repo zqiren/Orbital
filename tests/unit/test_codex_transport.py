@@ -473,7 +473,9 @@ class TestManagerResolution:
         assert isinstance(transport, CodexTransport)
         # the manager's honesty downgrade reads this attribute by name
         assert transport._resume_session_id == "T9"
-        assert transport._model == "gpt-5.4-mini"
+        # Model is config (AMENDS piece 2): the record's model must NOT be
+        # consulted — it resolves from argv at start().
+        assert transport._model is None
 
     def test_codex_manifest_declares_appserver_transport(self):
         import os

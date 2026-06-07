@@ -56,7 +56,9 @@ class SDKTransport(AgentTransport):
         # Resume identity (TASK-resume-persistence): when set, start() passes
         # ClaudeAgentOptions(resume=..., model=...) so the spawned claude
         # session continues the persisted thread instead of starting fresh.
-        # ``model`` is thread-identity — it must match the original thread.
+        # Model is config — the caller passes the current override or None
+        # (CLI serves the session's last-used model when omitted;
+        # mid-thread switch wire-verified coherent; AMENDS piece 2).
         self._resume_session_id: str | None = resume_session_id
         self._model: str | None = model
         # Last model observed on an AssistantMessage this turn — captured so

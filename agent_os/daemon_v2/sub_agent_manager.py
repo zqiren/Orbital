@@ -270,6 +270,16 @@ class SubAgentManager:
 
         return f"Started {handle}"
 
+    @staticmethod
+    def _argv_value(args, flag: str) -> str | None:
+        """Value following ``flag`` in an argv list (config-store flag
+        templates render e.g. ["--model", "sonnet"]), or None."""
+        args = args or []
+        for i, a in enumerate(args):
+            if a == flag and i + 1 < len(args):
+                return args[i + 1]
+        return None
+
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
                            resume_record: dict | None = None):
         """Resolve the appropriate transport for a manifest.
@@ -327,14 +337,15 @@ class SubAgentManager:
             try:
                 from agent_os.agent.transports.sdk_transport import SDKTransport, HAS_SDK
                 if HAS_SDK:
-                    # Resume identity (TASK-resume-persistence): when a
-                    # pre-checked record exists, the spawned session resumes
-                    # the persisted thread. model is thread-identity and
-                    # must match the original.
                     return SDKTransport(
                         autonomy=autonomy, system_prompt=system_prompt,
                         resume_session_id=(resume_record or {}).get("session_id"),
-                        model=(resume_record or {}).get("model"),
+                        # Model is CONFIG (AMENDS piece 2): resolved live from
+                        # the current config-store override — never from the
+                        # record. No override -> None -> the CLI serves the
+                        # session's last-used model (wire-verified).
+                        model=self._argv_value(
+                            (config_dict or {}).get("args"), "--model"),
                     )
             except ImportError:
                 pass
@@ -358,9 +369,11 @@ class SubAgentManager:
             return PTYTransport(approval_patterns=approval_patterns)
         elif transport_type == "codex-appserver":
             from agent_os.agent.transports.codex_transport import CodexTransport
-            # Resume identity: threadId + model (thread identity) from the
-            # pre-checked record; rollout pre-check happened in
-            # _determine_resume. system_prompt is NOT forwarded — the
+            # Resume identity: threadId from the pre-checked record; the
+            # record's model is display metadata only — the transport
+            # resolves the model from current config argv at start()
+            # (model-is-config, AMENDS piece 2). Rollout pre-check happened
+            # in _determine_resume. system_prompt is NOT forwarded — the
             # protocol's developerInstructions param is live-untested.
             return CodexTransport(
                 autonomy=autonomy,
