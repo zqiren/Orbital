@@ -297,3 +297,27 @@ async def test_rejected_model_heals_on_resume_with_override(tmp_path):
         assert tc.data["model"] == mini
     finally:
         await t2.stop()
+
+
+@requires_codex
+@pytest.mark.asyncio
+async def test_cold_start_resolves_model_no_400(tmp_path):
+    """DONE-WHEN (TASK-codex-startup-model): fresh Codex, NO override, on
+    ChatGPT-account auth — Orbital resolves from model/list and the first
+    turn completes. The path the probe never ran; proves the resolution
+    PREVENTS the failure rather than assuming it."""
+    t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
+    await t.start(CODEX, [], str(tmp_path))  # no override anywhere
+    try:
+        assert t._model in ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"), \
+            f"resolved {t._model!r} — expected a preference-order pick"
+        assert t._effective_model == t._model, \
+            "server must confirm the resolved model"
+        await t.dispatch("Say OK. Do not use any tools.")
+        events = await _events_until_turn_complete(t)
+        tc = events[-1]
+        assert tc.data["cause"] == "success", \
+            "cold start must complete — the 400 class is dead"
+        assert not any(e.event_type == "error" for e in events)
+    finally:
+        await t.stop()
