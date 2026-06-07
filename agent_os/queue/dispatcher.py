@@ -100,8 +100,21 @@ class QueueDispatcher:
         if self._task is not None and not self._task.done():
             return
         self._shutting_down = False
-        self._task = asyncio.create_task(self._run())
+        self._ensure_run_task()
         logger.info("dispatcher(%s): started", self._project_id)
+
+    def _ensure_run_task(self) -> None:
+        """Idempotently (re)create the main drain task.
+
+        Safety net for B3: if the ``_run`` loop ever dies (e.g. some
+        CancelledError path the layer-1 guard didn't anticipate), the queue
+        would stay RUNNING with no task pulling items. Any transition back to
+        RUNNING (start / resume) calls this to self-heal a dead loop. A no-op
+        when the task is already live so we never double-spawn — two ``_run``
+        loops would race on the single agent slot.
+        """
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
 
     def reclaim_on_startup(self) -> dict:
         """Reconcile queue state with on-disk records at daemon startup.
@@ -252,6 +265,13 @@ class QueueDispatcher:
         """
         self._stalled_item_id = None
         self._store.set_queue_state(QueueRunState.RUNNING)
+
+        # B3 safety net: ensure the main drain loop is alive before we resume.
+        # If a prior pause cancellation killed _run (the layer-1 guard is the
+        # primary defense, but belt-and-suspenders), resume alone must bring
+        # the queue back to life — re-create the task here so that after the
+        # parked item finishes, the loop is there to pull the next queued item.
+        self._ensure_run_task()
 
         # Find a parked attempt: head item in RUNNING with an attempts list.
         head = self._store.head()
@@ -753,6 +773,37 @@ class QueueDispatcher:
                     self._wait_for_loop_done(session_id),
                     timeout=self._max_runtime_seconds,
                 )
+            except asyncio.CancelledError:
+                # B3: pause() halts the live attempt by calling terminate(),
+                # which does task.cancel() on the agent-loop task. That
+                # cancellation surfaces in _wait_for_loop_done (it awaits
+                # asyncio.shield(task)) as CancelledError and is re-raised; it
+                # then lands HERE. This is NOT a cancellation of the dispatcher
+                # task itself — _run / the dispatcher task is only ever
+                # cancelled via self._task.cancel() under self._shutting_down
+                # (see shutdown()). So if we are not shutting down, treat this
+                # exactly like the pause guard below: clean return, attempt
+                # preserved (no close, no advance, no rotation), letting _run
+                # continue and idle on PAUSED. Swallowing CancelledError is
+                # safe here precisely because the cancel target was the child
+                # loop task, not the _run task.
+                #
+                # Only a genuine dispatcher shutdown (self._shutting_down) — or
+                # a cancellation that arrived without a corresponding pause
+                # (no _stop_generation bump) — should propagate to kill _run.
+                if self._shutting_down:
+                    raise
+                if self._stop_generation != gen_at_start:
+                    logger.info(
+                        "dispatcher(%s): item %s loop cancelled by pause; "
+                        "attempt preserved (no close, no advance, no rotation)",
+                        self._project_id, item.id,
+                    )
+                    return
+                # A cancellation with no pause and no shutdown is unexpected —
+                # re-raise so it isn't silently swallowed (preserves asyncio
+                # cancellation semantics for any path we didn't anticipate).
+                raise
             except asyncio.TimeoutError:
                 logger.warning(
                     "dispatcher(%s): item %s exceeded runtime cap %ds; terminating",
