@@ -262,3 +262,48 @@ async def test_version_is_pinned(tmp_path):
         f"{SUPPORTED_CODEX_VERSION} — re-run "
         "`codex app-server generate-json-schema` + this suite, update the "
         "pin, and re-verify the FINDINGS constraints before shipping")
+
+
+@requires_codex
+@pytest.mark.asyncio
+async def test_rejected_model_heals_on_resume_with_override(tmp_path):
+    """THE trap (model-is-config amendment, DONE-WHEN): a thread whose first
+    turn 400'd on the ChatGPT-rejected server-default model must heal on
+    resume once a working override exists — the SAME thread, not a fresh one."""
+    # 1. Fresh thread, NO model -> server default (gpt-5.x-codex) -> 400.
+    t = CodexTransport(autonomy=Autonomy.HANDS_OFF)
+    await t.start(CODEX, [], str(tmp_path))
+    try:
+        await t.dispatch("Say OK. Do not use any tools.")
+        events = await _events_until_turn_complete(t)
+        tc = events[-1]
+        assert tc.data["cause"] == "error", \
+            "expected the ChatGPT-account model rejection on the default model"
+        record = {"session_id": tc.data["session_id"],
+                  "model": tc.data["model"],          # the rejected model
+                  "rollout_path": tc.data["rollout_path"]}
+        thread_id = tc.data["session_id"]
+        assert thread_id and record["rollout_path"]
+    finally:
+        await t.stop()
+
+    # 2. The user sets a working override (config-store -> "-m" argv) and the
+    #    EXISTING thread resumes on it — record's rejected model ignored.
+    probe = await _start(tmp_path)
+    try:
+        mini = await _cheapest_model(probe)
+    finally:
+        await probe.stop()
+    assert mini, "account must expose a mini model for the heal leg"
+    t2 = CodexTransport(autonomy=Autonomy.HANDS_OFF, resume_record=record)
+    await t2.start(CODEX, ["-m", mini], str(tmp_path))
+    try:
+        assert t2._thread_id == thread_id, "must heal the SAME thread"
+        await t2.dispatch("Say OK. Do not use any tools.")
+        events = await _events_until_turn_complete(t2)
+        tc = events[-1]
+        assert tc.data["cause"] == "success", \
+            "override must heal the previously rejected thread"
+        assert tc.data["model"] == mini
+    finally:
+        await t2.stop()
