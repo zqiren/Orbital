@@ -138,6 +138,8 @@ export default function LLMProviderSettings({
     if (providersLoading || !globalLoaded) return;
 
     const providerKeys = Object.keys(providers);
+    // Track the provider we resolve to so we can seed the model picker below.
+    let resolvedProvider = '';
 
     if (mode === 'global') {
       // Populate from global settings
@@ -145,6 +147,7 @@ export default function LLMProviderSettings({
         const gp = globalSettings.provider || '';
         if (gp && providers[gp]) {
           setProvider(gp);
+          resolvedProvider = gp;
           setSdk(providers[gp].sdk);
           // Detect region
           const info = providers[gp];
@@ -153,9 +156,11 @@ export default function LLMProviderSettings({
           }
         } else if (gp && !providers[gp]) {
           setProvider(CUSTOM_PROVIDER_KEY);
+          resolvedProvider = CUSTOM_PROVIDER_KEY;
           setShowAdvanced(true);
         } else if (providerKeys.length > 0) {
           setProvider(providerKeys[0]);
+          resolvedProvider = providerKeys[0];
           setSdk(providers[providerKeys[0]].sdk);
         }
         setModel(globalSettings.model || '');
@@ -164,6 +169,7 @@ export default function LLMProviderSettings({
         if (globalSettings.sdk) setSdk(globalSettings.sdk as 'openai' | 'anthropic');
       } else if (providerKeys.length > 0) {
         setProvider(providerKeys[0]);
+        resolvedProvider = providerKeys[0];
         setSdk(providers[providerKeys[0]].sdk);
         setBaseUrl(resolveBaseUrl(providers[providerKeys[0]], 'global'));
       }
@@ -172,6 +178,7 @@ export default function LLMProviderSettings({
       const pv = projectValues;
       if (pv?.provider && providers[pv.provider]) {
         setProvider(pv.provider);
+        resolvedProvider = pv.provider;
         setSdk(providers[pv.provider].sdk);
         const info = providers[pv.provider];
         if (info.china_base_url && pv.base_url === info.china_base_url) {
@@ -179,9 +186,11 @@ export default function LLMProviderSettings({
         }
       } else if (pv?.provider && !providers[pv.provider]) {
         setProvider(CUSTOM_PROVIDER_KEY);
+        resolvedProvider = CUSTOM_PROVIDER_KEY;
         setShowAdvanced(true);
       } else if (providerKeys.length > 0) {
         setProvider(providerKeys[0]);
+        resolvedProvider = providerKeys[0];
         setSdk(providers[providerKeys[0]].sdk);
       }
       setModel(pv?.model || '');
@@ -190,6 +199,9 @@ export default function LLMProviderSettings({
       if (pv?.sdk) setSdk(pv.sdk as 'openai' | 'anthropic');
     }
     // wizard mode: no fields to initialize
+
+    // Seed the model dropdown from the catalog so it's populated before any key.
+    if (resolvedProvider) seedModelsFromCatalog(resolvedProvider);
 
     setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,6 +227,26 @@ export default function LLMProviderSettings({
     return info.base_url || '';
   }
 
+  // Seed the model picker from the catalog's suggested_models so a dropdown is
+  // available immediately, with no network call and before any API key. A live
+  // /models fetch upgrades this to modelSource='api' when it succeeds. Providers
+  // with no catalog (custom) fall back to free-text entry.
+  function seedModelsFromCatalog(key: string) {
+    if (key === CUSTOM_PROVIDER_KEY) {
+      setModelOptions([]);
+      setModelSource('freetext');
+      return;
+    }
+    const info: ProviderInfo | undefined = providers[key];
+    if (info && info.suggested_models.length > 0) {
+      setModelOptions(info.suggested_models);
+      setModelSource('suggested');
+    } else {
+      setModelOptions([]);
+      setModelSource('freetext');
+    }
+  }
+
   const currentProviderHasChinaUrl =
     provider !== CUSTOM_PROVIDER_KEY && !!providers[provider]?.china_base_url;
 
@@ -222,11 +254,11 @@ export default function LLMProviderSettings({
     setProvider(key);
     setModel('');
     setModelInputValue('');
-    setModelOptions([]);
-    setModelSource('none');
     setTestStatus('idle');
     setTestMessage('');
     setRegion('global');
+    // Seed the dropdown from the catalog immediately (no key required).
+    seedModelsFromCatalog(key);
     if (key === CUSTOM_PROVIDER_KEY) {
       setBaseUrl('');
       setSdk('openai');
@@ -254,6 +286,9 @@ export default function LLMProviderSettings({
   useEffect(() => {
     if (!initialized) return;
     if (!provider || provider === CUSTOM_PROVIDER_KEY) return;
+    // Respect an explicit free-text choice (escape hatch / empty catalog):
+    // don't yank the user back into a dropdown by a background fetch.
+    if (modelSource === 'freetext') return;
 
     // Need either a new key typed in, or existing key (global or project)
     const hasKey = apiKey.trim() || globalSettings?.api_key_set || (mode === 'project' && projectValues?.api_key);
@@ -262,10 +297,11 @@ export default function LLMProviderSettings({
     const info = providers[provider];
     if (!info) return;
 
+    // Do NOT clear the catalog-seeded options here — keep the suggested dropdown
+    // usable while the live fetch is in flight. A success upgrades to 'api'; a
+    // failure re-seeds the suggested list (or free-text for empty catalogs).
     let cancelled = false;
     setModelsLoading(true);
-    setModelSource('none');
-    setModelOptions([]);
 
     async function fetchModels() {
       try {
@@ -276,26 +312,22 @@ export default function LLMProviderSettings({
         if (apiKey.trim()) {
           body.api_key = apiKey.trim();
         }
-        const result = await api<string[]>('/api/v2/providers/models', {
+        // Backend returns { models: string[] }.
+        const result = await api<{ models?: string[] }>('/api/v2/providers/models', {
           method: 'POST',
           body: JSON.stringify(body),
         });
-        if (!cancelled && result && result.length > 0) {
-          setModelOptions(result);
+        const models = result?.models ?? [];
+        if (!cancelled && models.length > 0) {
+          setModelOptions(models);
           setModelSource('api');
         } else {
           throw new Error('empty');
         }
       } catch {
         if (cancelled) return;
-        const info = providers[provider];
-        if (info && info.suggested_models.length > 0) {
-          setModelOptions(info.suggested_models);
-          setModelSource('suggested');
-        } else {
-          setModelOptions([]);
-          setModelSource('freetext');
-        }
+        // Fall back to the catalog's suggested models (free-text if none).
+        seedModelsFromCatalog(provider);
       } finally {
         if (!cancelled) setModelsLoading(false);
       }
@@ -338,6 +370,21 @@ export default function LLMProviderSettings({
     setShowModelDropdown(true);
     setTestStatus('idle');
     setTestMessage('');
+  }
+
+  // Escape hatch: switch the picker to free-text entry for a custom model name.
+  function enterCustomModel() {
+    setModelSource('freetext');
+    setModelOptions([]);
+    setModel('');
+    setModelInputValue('');
+    setShowModelDropdown(false);
+    setTestStatus('idle');
+    setTestMessage('');
+    // Focus the (now plain) model input so the user can type immediately.
+    requestAnimationFrame(() => {
+      modelComboRef.current?.querySelector('input')?.focus();
+    });
   }
 
   // Test connection
@@ -651,7 +698,9 @@ export default function LLMProviderSettings({
               }
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
             />
-            {showModelDropdown && filteredModels.length > 0 && (
+            {showModelDropdown &&
+              modelSource !== 'freetext' &&
+              (filteredModels.length > 0 || modelOptions.length > 0) && (
               <ul className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto bg-sidebar border border-border rounded-lg shadow-lg">
                 {filteredModels.map((m) => (
                   <li key={m}>
@@ -666,8 +715,7 @@ export default function LLMProviderSettings({
                     </button>
                   </li>
                 ))}
-                {modelSource === 'suggested' &&
-                  modelInputValue &&
+                {modelInputValue &&
                   !modelOptions.includes(modelInputValue) && (
                     <li>
                       <button
@@ -679,11 +727,26 @@ export default function LLMProviderSettings({
                       </button>
                     </li>
                   )}
+                {/* Escape hatch: always offer free-text entry as the last option. */}
+                <li className="border-t border-border">
+                  <button
+                    type="button"
+                    onClick={enterCustomModel}
+                    className="w-full text-left text-sm px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
+                  >
+                    Enter custom model name&hellip;
+                  </button>
+                </li>
               </ul>
+            )}
+            {modelSource === 'api' && (
+              <p className="text-xs text-secondary mt-1">
+                Live models from this provider. You can also enter a custom model name.
+              </p>
             )}
             {modelSource === 'suggested' && (
               <p className="text-xs text-secondary mt-1">
-                Could not fetch live models. Showing suggested models for this provider. You can also type a custom model name.
+                Showing suggested models for this provider. You can also enter a custom model name.
               </p>
             )}
             {modelSource === 'freetext' && (
