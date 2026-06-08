@@ -1158,10 +1158,82 @@ async def edit_queue_item(project_id: str, item_id: str, req: QueueEditItemReque
 
 @router.delete("/projects/{project_id}/queue/items/{item_id}")
 async def delete_queue_item(project_id: str, item_id: str) -> dict:
+    """Delete a queue item. IDLE-ONLY — a RUNNING item is rejected (409).
+
+    Per ACTIVE-session-and-queue-model.md, delete is idle-only. The route is
+    the liveness gate because the store has no agent_manager reference:
+
+    - REJECT-RUNNING: the item is "running" iff its latest attempt's session is
+      the live slot-holder (``current_holder_session_id``), NOT the stored
+      ``item.state`` flag (which can be stale). A running item is rejected with
+      409 and ZERO mutation — no remove, no CANCELLED stamp, the session is left
+      untouched. Mirrors the session-delete reject convention.
+    - IDLE DELETE: remove the store record FIRST, then clean up each DISTINCT
+      bound session JSONL via ``delete_session`` (best-effort). An item with no
+      attempts (never dispatched) skips session cleanup.
+
+    Ordering matters for concurrency safety: the liveness gate and
+    ``remove_item`` run with NO ``await`` between them, so they are atomic on the
+    event loop. Removing the record before the first ``await`` (the session
+    cleanup) means the dispatcher's ``next_queued()`` can never pick this item
+    into the gap — closing the TOCTOU where a QUEUED-with-attempts
+    (interrupted-requeued) item could be re-dispatched mid-delete and orphaned.
+
+    Sub-agent JSONLs are intentionally NOT deleted (handle-keyed, shared on
+    disk, no per-session mapping survives restart) — ``delete_session`` leaves
+    them in place, which is the chosen behavior.
+    """
+    # Fail-closed: the route is the liveness gate, which needs the manager. If
+    # it is unwired, refuse rather than silently degrade to "allow a running
+    # delete" (mirrors the sibling queue routes' 503).
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+
     store = _resolve_queue_store(project_id)
+
+    # Resolve the item by id so we can inspect its attempts / liveness.
+    item = next((it for it in store.load().items if it.id == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Liveness gate (NOT item.state): the item is running iff its latest-attempt
+    # session currently holds the project's active-loop slot. No ``await`` between
+    # this check and ``remove_item`` below — the pair is atomic on the loop.
+    if item.attempts and item.attempts[-1].session_id == (
+        _agent_manager.current_holder_session_id(project_id)
+    ):
+        # ZERO mutation: do not remove, do not stamp CANCELLED, do not touch the
+        # session. The caller must stop/pause it first.
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a running queue item. "
+                   "Stop or pause it first, then delete.",
+        )
+
+    # Remove the store record FIRST (sync, no await since the gate) so the
+    # dispatcher cannot dispatch a record that is being deleted.
     removed = store.remove_item(item_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    # Best-effort: clean up each distinct bound session JSONL. The record is
+    # already gone, so any failure here only leaves an orphaned JSONL (acceptable
+    # — sub-agent transcripts are likewise left) and never a half-removed record.
+    seen: set[str] = set()
+    for attempt in item.attempts:
+        sid = attempt.session_id
+        if sid in seen:
+            continue
+        seen.add(sid)
+        try:
+            await _agent_manager.delete_session(project_id, sid)
+        except Exception:
+            logger.warning(
+                "delete_queue_item(%s): session JSONL cleanup for %s failed; "
+                "store record already removed",
+                project_id, sid, exc_info=True,
+            )
+
     if _ws_manager is not None:
         _ws_manager.broadcast(project_id, {
             "type": "queue.item_removed",

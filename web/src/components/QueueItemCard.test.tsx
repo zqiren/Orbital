@@ -194,9 +194,26 @@ describe('QueueItemCard — existing item rendering unchanged', () => {
     expect(onRemove).toHaveBeenCalledWith('u-4');
   });
 
-  it('remove button is NOT shown when item is running', () => {
+  // LOCKED BEHAVIOR: a running item's delete control is rendered but DISABLED
+  // until the item idles (not hidden, not a stop-first popup — just disabled).
+  it('remove button is present but DISABLED when item is running', () => {
+    const onRemove = vi.fn();
     const item = makeItem({ id: 'u-5', state: 'running', source: 'user' });
-    render(<QueueItemCard item={item} onRemove={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: /remove item/i })).toBeNull();
+    render(<QueueItemCard item={item} onRemove={onRemove} />);
+    const btn = screen.getByRole('button', { name: /remove item/i });
+    expect(btn).toBeInTheDocument();
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('running remove button does NOT fire onRemove when clicked', async () => {
+    const onRemove = vi.fn();
+    const item = makeItem({ id: 'u-6', state: 'running', source: 'user' });
+    render(<QueueItemCard item={item} onRemove={onRemove} />);
+    const btn = screen.getByRole('button', { name: /remove item/i });
+    // A disabled button never dispatches its click handler, so onRemove must
+    // not fire even though onClick is wired unconditionally.
+    await userEvent.click(btn);
+    expect(onRemove).not.toHaveBeenCalled();
   });
 });

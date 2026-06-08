@@ -88,12 +88,24 @@ function RemoveButton({
   item: QueueItem;
   onRemove?: (itemId: string) => void;
 }) {
-  if (!onRemove || item.state === 'running') return null;
+  if (!onRemove) return null;
+  // LOCKED BEHAVIOR: a running item's delete control stays rendered but
+  // DISABLED until the item idles — it is not a stop-first popup, just a
+  // disabled button. The user can only remove an item once it is no longer
+  // running (queued / blocked / done).
+  const running = item.state === 'running';
   return (
     <button
       onClick={() => onRemove(item.id)}
+      disabled={running}
+      aria-disabled={running}
       aria-label="Remove item"
-      className="text-secondary hover:text-error shrink-0 p-1 -m-1 rounded transition-colors"
+      title={running ? 'Stop the item before removing it' : undefined}
+      className={
+        running
+          ? 'text-secondary/40 shrink-0 p-1 -m-1 rounded cursor-not-allowed'
+          : 'text-secondary hover:text-error shrink-0 p-1 -m-1 rounded transition-colors'
+      }
     >
       <X className="w-3.5 h-3.5" />
     </button>
@@ -118,7 +130,13 @@ function Shell({
 }
 
 /** Running — accent-railed card with a live pulse, started-at, and source chip. */
-function RunningCard({ item }: { item: QueueItem }) {
+function RunningCard({
+  item,
+  onRemove,
+}: {
+  item: QueueItem;
+  onRemove?: (itemId: string) => void;
+}) {
   const startedAt = item.attempts.length ? item.attempts[item.attempts.length - 1].started_at : null;
   const started = formatTime(startedAt);
   return (
@@ -137,6 +155,8 @@ function RunningCard({ item }: { item: QueueItem }) {
         {started && <span className="text-[11px] text-muted font-mono">· started {started}</span>}
         <div className="flex-1" />
         <SourceChip source={item.source} />
+        {/* Disabled until the item idles — see RemoveButton's LOCKED BEHAVIOR note. */}
+        <RemoveButton item={item} onRemove={onRemove} />
       </div>
       <p className="text-[13px] font-medium text-primary whitespace-pre-wrap break-words">
         {item.content}
@@ -244,7 +264,7 @@ function DoneRow({
 export default function QueueItemCard({ item, index, onRemove }: QueueItemCardProps) {
   switch (item.state) {
     case 'running':
-      return <RunningCard item={item} />;
+      return <RunningCard item={item} onRemove={onRemove} />;
     case 'done':
       return <DoneRow item={item} onRemove={onRemove} />;
     case 'blocked':

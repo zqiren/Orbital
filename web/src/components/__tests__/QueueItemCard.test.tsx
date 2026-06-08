@@ -38,14 +38,19 @@ describe('QueueItemCard', () => {
     expect(onRemove).toHaveBeenCalledWith('item_test');
   });
 
-  it('renders running variant WITHOUT a remove button', () => {
+  it('renders running variant with a DISABLED remove button (locked behavior)', () => {
+    const onRemove = vi.fn();
     render(
       <QueueItemCard
         item={makeItem({ state: 'running' })}
-        onRemove={() => {}}
+        onRemove={onRemove}
       />,
     );
-    expect(screen.queryByLabelText('Remove item')).toBeNull();
+    const removeBtn = screen.getByLabelText('Remove item');
+    expect(removeBtn).toBeTruthy();
+    expect(removeBtn).toBeDisabled();
+    fireEvent.click(removeBtn);
+    expect(onRemove).not.toHaveBeenCalled();
   });
 
   it('renders done variant with summary', () => {

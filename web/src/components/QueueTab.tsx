@@ -78,6 +78,7 @@ export default function QueueTab({ projectId }: QueueTabProps) {
         <Section
           title="Now Running"
           items={grouped.running}
+          onRemove={removeItem}
           emptyHint={
             isPaused
               ? 'Queue is paused. Resume to continue.'
