@@ -729,6 +729,36 @@ async def start_agent(req: StartAgentRequest):
     return {"status": "started"}
 
 
+@router.post("/agents/{project_id}/cold-start-scan", status_code=201)
+async def cold_start_scan(project_id: str):
+    """Mint the project's first session and start the agent in cold-start mode.
+
+    Runs the deterministic skeleton walk synchronously (so a walker failure
+    surfaces as an HTTP error), then starts a content-less loop whose prompt
+    drives the 3-stage scan. No user message is fabricated.
+    """
+    from agent_os.agent.workspace_scan import scan_workspace
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    workspace = project.get("workspace", "")
+    if not workspace or not os.path.isdir(workspace):
+        raise HTTPException(status_code=400, detail="workspace missing")
+
+    skeleton = scan_workspace(workspace)
+    config = _agent_manager._build_agent_config_from_project(project_id)
+    minted = await _agent_manager.new_session(project_id)
+    session_id = minted["session_id"]
+    await _agent_manager.start_agent(
+        project_id, config,
+        initial_message=None,
+        session_id=session_id,
+        cold_start=True,
+        cold_start_skeleton=skeleton,
+    )
+    return {"status": "started", "session_id": session_id}
+
+
 @router.post("/agents/{project_id}/inject")
 async def inject_message(project_id: str, req: InjectRequest):
     # Verify project exists before attempting inject
