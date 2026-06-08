@@ -16,28 +16,28 @@ interface ColdStartCardProps {
  */
 export function ColdStartCard({ folderName, onScan, onSkip, busy }: ColdStartCardProps) {
   return (
-    <div className="border border-accent/30 border-l-[3px] border-l-accent rounded-lg bg-background">
-      <div className="px-4 py-1.5 border-b border-accent/20 text-accent/80 text-xs uppercase tracking-[0.6px] font-semibold">
-        Scan this workspace?
+    <div className="mb-3 rounded-lg border border-border bg-white overflow-hidden">
+      <div className="bg-accent/10 px-4 py-2 border-b border-border">
+        <span className="text-accent font-semibold text-sm">Scan this workspace?</span>
       </div>
-      <div className="px-4 py-3 space-y-3 text-sm">
-        <p className="text-secondary">
-          <span className="font-medium text-primary">{folderName}</span> has existing files.
-          I can scan it to understand the project and propose a summary for you to confirm —
-          nothing is written until you approve.
+      <div className="px-4 py-3.5 space-y-3.5">
+        <p className="text-sm text-secondary leading-relaxed">
+          <span className="font-mono text-[13px] text-primary">{folderName}</span> already has files in it.
+          I can scan it to understand the project and propose a summary for you to review —
+          nothing is saved until you approve.
         </p>
         <div className="flex gap-2">
           <button
             onClick={onScan}
             disabled={busy}
-            className="bg-primary text-white px-4 py-1.5 rounded max-md:min-h-[44px] disabled:opacity-50"
+            className="bg-accent text-white text-sm font-medium rounded-lg px-4 py-1.5 hover:opacity-90 transition-opacity duration-150 max-md:min-h-[44px] disabled:opacity-50"
           >
             {busy ? 'Scanning…' : 'Scan'}
           </button>
           <button
             onClick={onSkip}
             disabled={busy}
-            className="bg-background text-secondary border border-border px-4 py-1.5 rounded max-md:min-h-[44px]"
+            className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:bg-card-hover transition-colors duration-150 max-md:min-h-[44px] disabled:opacity-50"
           >
             Skip
           </button>
