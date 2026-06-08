@@ -144,7 +144,8 @@ vi.mock('../hooks/useQueue', () => ({
   }),
 }));
 
-import ChatView from './ChatView';
+import ChatView, { appendLiveReasoning } from './ChatView';
+import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
 
 const project: Project = {
@@ -1120,5 +1121,52 @@ describe('FE-1 ChatView: transform-once pairs tool results across page seams', (
     // The paired result content is now surfaced — proving the seam tool result
     // was paired (received), not dropped as an orphan.
     expect(container.textContent ?? '').toContain('SEAM-RESULT-CONTENT');
+  });
+});
+
+// Live-reasoning anchoring: the live stream must emit an agent header before a
+// fresh reasoning capsule (parity with chatTransform FE-A3), so live "thinking"
+// shows the agent avatar instead of floating under the user message — and, in
+// cold-start (no preceding user message), is attributed to the management agent.
+describe('appendLiveReasoning — agent header anchor', () => {
+  it('cold-start (empty list): inserts a management header before the capsule', () => {
+    const out = appendLiveReasoning([], 'thinking…', '2026-06-08T00:00:00Z', 'management');
+    expect(out).toHaveLength(2);
+    const header = out[0];
+    expect(header.type).toBe('agent_message');
+    if (header.type === 'agent_message') {
+      expect(header.isHeaderOnly).toBe(true);
+      expect(header.source).toBe('management');
+    }
+    expect(out[1].type).toBe('agent_run');
+  });
+
+  it('normal turn: reasoning after a user message inserts an agent header (not glued to the user message)', () => {
+    const prev: DisplayItem[] = [
+      { type: 'user_message', content: 'hi', timestamp: '2026-06-08T00:00:00Z' },
+    ];
+    const out = appendLiveReasoning(prev, 'thinking…', '2026-06-08T00:00:01Z', 'management');
+    expect(out).toHaveLength(3);
+    expect(out[0].type).toBe('user_message');
+    expect(out[1].type).toBe('agent_message');
+    if (out[1].type === 'agent_message') expect(out[1].isHeaderOnly).toBe(true);
+    expect(out[2].type).toBe('agent_run');
+  });
+
+  it('extending the running capsule does NOT emit a second header', () => {
+    const first = appendLiveReasoning([], 'think a', '2026-06-08T00:00:00Z', 'management');
+    const second = appendLiveReasoning(first, ' think b', '2026-06-08T00:00:01Z', 'management');
+    expect(second.filter((i) => i.type === 'agent_message' && i.isHeaderOnly).length).toBe(1);
+    expect(second.filter((i) => i.type === 'agent_run').length).toBe(1);
+    const cap = second.find((i) => i.type === 'agent_run');
+    expect(cap?.type).toBe('agent_run');
+    if (cap && cap.type === 'agent_run') {
+      expect(cap.items).toHaveLength(1);
+      const block = cap.items[0];
+      expect(block.type).toBe('reasoning_block');
+      if (block.type === 'reasoning_block') {
+        expect(block.content).toBe('think a think b');
+      }
+    }
   });
 });

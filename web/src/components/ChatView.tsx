@@ -136,10 +136,11 @@ function appendToLiveCapsule(
  * delta). This mirrors how persisted reasoning is rendered (a reasoning_block
  * within the capsule) so the live and persisted views stay consistent.
  */
-function appendLiveReasoning(
+export function appendLiveReasoning(
   prev: DisplayItem[],
   reasoning: string,
   timestamp: string,
+  source: string,
 ): DisplayItem[] {
   const live = getLiveRunningCapsule(prev);
   // Find a trailing reasoning_block in the running capsule to extend.
@@ -164,15 +165,39 @@ function appendLiveReasoning(
       return next;
     }
   }
-  // No running capsule yet, or no trailing reasoning block — start a new block.
-  return appendToLiveCapsule(
-    prev,
-    {
-      type: 'reasoning_block',
-      content: reasoning,
+  // Live capsule exists but has no trailing reasoning_block (e.g. a tool row
+  // was last) — append a new reasoning_block to that SAME capsule. It is
+  // already anchored under its agent header, so no new header is needed.
+  if (live) {
+    return appendToLiveCapsule(
+      prev,
+      { type: 'reasoning_block', content: reasoning, timestamp, turn_id: timestamp },
       timestamp,
-      turn_id: timestamp,
-    },
+    );
+  }
+
+  // No running capsule — this reasoning starts a fresh agent turn. Anchor it
+  // with a header-only agent_message (mirrors chatTransform's FE-A3) so the
+  // capsule renders the agent avatar and does NOT visually attach to the
+  // preceding user message. The agent_run capsule draws no avatar of its own
+  // (it is indented to sit under a header); without this anchor the live
+  // thinking floats unattributed — and in cold-start (no preceding user
+  // message) it is not attributed to the management agent at all.
+  const lastItem = prev[prev.length - 1];
+  const anchored =
+    !!lastItem &&
+    (lastItem.type === 'agent_message' ||
+      lastItem.type === 'sub_agent_message' ||
+      lastItem.type === 'agent_run');
+  const base: DisplayItem[] = anchored
+    ? prev
+    : [
+        ...prev,
+        { type: 'agent_message', content: '', source, timestamp, isHeaderOnly: true },
+      ];
+  return appendToLiveCapsule(
+    base,
+    { type: 'reasoning_block', content: reasoning, timestamp, turn_id: timestamp },
     timestamp,
   );
 }
@@ -1094,14 +1119,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // live capsule. Do NOT clear the spinner — that only happens once visible
       // answer text begins (below) or the turn completes (is_final, above).
       if (reasoning && !hasVisibleText) {
-        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString()));
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString(), e.source));
         scrollToBottom();
         return;
       }
 
       // If this delta also carried reasoning alongside visible text, capture it.
       if (reasoning) {
-        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString()));
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString(), e.source));
       }
 
       // Visible answer text has begun — transition out of the thinking phase.
