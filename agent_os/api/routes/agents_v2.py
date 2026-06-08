@@ -334,6 +334,22 @@ def _get_or_create_session(project_id: str, workspace: str):
 
 # ---- Helpers ----
 
+def _workspace_is_empty(workspace: str) -> bool:
+    """True if the workspace has no user content (ignoring the orbital/ scaffold
+    and dotfiles). Used by the frontend to decide whether to offer a cold-start scan.
+    """
+    if not workspace or not os.path.isdir(workspace):
+        return True
+    try:
+        for name in os.listdir(workspace):
+            if name == "orbital" or name.startswith("."):
+                continue
+            return False
+    except OSError:
+        return True
+    return True
+
+
 def _redact_project(project: dict) -> dict:
     """Return project dict with api_key masked."""
     from agent_os.daemon_v2.project_store import DEFAULT_NOTIFICATION_PREFS
@@ -345,6 +361,7 @@ def _redact_project(project: dict) -> dict:
         result["api_key"] = "****"
     prefs = result.get("notification_prefs", {})
     result["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
+    result["is_empty_workspace"] = _workspace_is_empty(result.get("workspace", ""))
     return result
 
 
