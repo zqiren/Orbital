@@ -177,3 +177,20 @@ describe('ChatMessage — configured agent name', () => {
     expect(screen.queryByText('Research Bot')).not.toBeInTheDocument();
   });
 });
+
+describe('ChatMessage — turn continuation (hideHeader)', () => {
+  it('renders the answer body with NO avatar/sender header when hideHeader is set', () => {
+    const { container } = render(<ChatMessage message={agentMsg('the answer body')} hideHeader />);
+    expect(screen.getByText('the answer body')).toBeInTheDocument();
+    // No sender label: the answer continues the turn under the capsule's header.
+    expect(screen.queryByText('agent')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-testid="agent-continuation"]')).not.toBeNull();
+  });
+
+  it('renders the full avatar + sender header when hideHeader is not set', () => {
+    const { container } = render(<ChatMessage message={agentMsg('hello')} agentName="Quick Tasks" />);
+    expect(screen.getByText('Quick Tasks')).toBeInTheDocument();
+    expect(screen.getByText('hello')).toBeInTheDocument();
+    expect(container.querySelector('[data-testid="agent-continuation"]')).toBeNull();
+  });
+});

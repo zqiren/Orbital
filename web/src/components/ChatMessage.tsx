@@ -22,6 +22,13 @@ interface ChatMessageProps {
    * Falls back to "agent" when empty/undefined.
    */
   agentName?: string;
+  /**
+   * Render the answer as a continuation of the current turn: no avatar/header,
+   * indented to align under the turn's avatar. Set when this management answer
+   * directly follows its own thinking/tools capsule, so one agent loop round
+   * (think → answer) reads as ONE turn under a single header rather than two.
+   */
+  hideHeader?: boolean;
 }
 
 function basename(path: string): string {
@@ -69,7 +76,7 @@ function userInitials(source?: string): string {
  * bubble background, border, or rounding. User and agent rows share the same
  * left-aligned layout.
  */
-export default function ChatMessage({ message, agentName }: ChatMessageProps) {
+export default function ChatMessage({ message, agentName, hideHeader }: ChatMessageProps) {
   const time = formatTime(message.timestamp);
 
   if (message.type === 'user_message') {
@@ -120,6 +127,22 @@ export default function ChatMessage({ message, agentName }: ChatMessageProps) {
   // and does not visually attach to the preceding user message.
   const isHeaderOnly =
     message.type === 'agent_message' && message.isHeaderOnly === true;
+
+  // Turn continuation: a management answer that directly follows its own
+  // thinking/tools capsule renders WITHOUT its own avatar/header, indented to
+  // align under the turn's avatar (matching the capsule's ml-9). This makes a
+  // single agent loop round (think → answer) one turn with one header.
+  if (hideHeader && message.type === 'agent_message' && !isHeaderOnly) {
+    return (
+      <div
+        className="ml-9 text-[13px] leading-[1.55] text-primary break-words overflow-x-auto"
+        title={message.timestamp}
+        data-testid="agent-continuation"
+      >
+        <MarkdownContent content={message.content} />
+      </div>
+    );
+  }
 
   return (
     <div
