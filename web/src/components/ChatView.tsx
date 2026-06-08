@@ -312,6 +312,7 @@ import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import SlotHeldNotice from './SlotHeldNotice';
+import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
 
 interface ChatViewProps {
@@ -383,6 +384,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
+  // Cold-start consent card (imported non-empty workspace, first session).
+  const [coldStartBusy, setColdStartBusy] = useState(false);
+  const [coldStartDismissed, setColdStartDismissed] = useState(false);
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
@@ -438,7 +442,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, cancelMessage, newSession } = useAgent();
+  const { injectMessage, cancelMessage, newSession, coldStartScan } = useAgent();
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
@@ -1996,9 +2000,31 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         )}
 
         {!loading && items.length === 0 && !stream && (
-          <div className="text-secondary text-sm text-center mt-12">
-            No messages yet. Send a message to get started.
-          </div>
+          project?.is_empty_workspace === false &&
+          sessionId === undefined &&
+          !coldStartDismissed ? (
+            <div className="mt-8">
+              <ColdStartCard
+                folderName={(project.workspace || '').split('/').filter(Boolean).pop() || 'this folder'}
+                busy={coldStartBusy}
+                onScan={async () => {
+                  setColdStartBusy(true);
+                  try {
+                    // Navigation to the new session is WS-driven, like /new.
+                    await coldStartScan(project.project_id);
+                  } catch (err) {
+                    console.error('[ChatView] cold-start scan failed:', err);
+                    setColdStartBusy(false);
+                  }
+                }}
+                onSkip={() => setColdStartDismissed(true)}
+              />
+            </div>
+          ) : (
+            <div className="text-secondary text-sm text-center mt-12">
+              No messages yet. Send a message to get started.
+            </div>
+          )
         )}
 
         {!loading &&
