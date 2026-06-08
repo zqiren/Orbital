@@ -20,18 +20,16 @@ no safe per-session mapping — decided with the user).
 - Playwright `web/e2e/queue-delete-idle-only.spec.ts` (375×667): asserts the running item's delete control is disabled and an idle item's is enabled. Compiles/loads under Playwright; **skips at runtime** in this environment (the packaged Orbital.app holds the singleton `~/orbital/daemon.pid`, so the harness's isolated daemon can't boot — same documented skip path as the existing `sub-agent-status-stop.spec.ts`).
 - Broader suite: 78 pre-existing regression failures (shared `agent_manager.py:1919` fixture KeyError cluster + v5/nonblocking/subagent-limits) — confirmed identical with the change stashed. **Zero new failures from this change.**
 
-## Part 4 — live smoke test: DEFERRED (with rationale)
-The live smoke test needs a dev daemon on port 8000, but the user's **installed Orbital.app**
-currently owns port 8000 and the singleton `~/orbital/daemon.pid`, and the user explicitly
-asked to keep that field clear. Starting a second daemon would re-create the documented
-mutual-exclusion conflict and disrupt their running app. The in-process integration
-journey test (`test_delete_idle_only_journey.py`) exercises the same step sequence the
-smoke test would (running-delete rejected → pause → idle delete cleans JSONL+record →
-resume drains, no orphan/stall) against a real dispatcher, route, store, and filesystem.
+## Part 4 — live smoke test: RAN 2026-06-08 (after the user quit the installed app) — ALL PASS
 
-To run the live smoke test later (when the installed app is closed):
-1. Quit Orbital.app (frees port 8000 + `~/orbital/daemon.pid`).
-2. `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring AGENT_OS_API_KEY=<key> bash scripts/restart-daemon.sh` (prepend `.venv/bin` to PATH — the script calls bare `python`).
-3. Create a project, start a short task; while RUNNING, DELETE the queue item → expect 409 + clear message, session keeps running, slot stays held, daemon log shows no mutation (step-2 evidence).
-4. Stop/pause → idle; delete → session JSONL gone from `{workspace}/orbital/sessions/`, queue record gone, an unrelated session's JSONL still present, sub-agent transcripts under `{workspace}/orbital/sub_agents/{handle}/` left in place (step-4 evidence).
-5. Multi-item queue: confirm a running item can't be deleted but the queue keeps draining; no `reclaim` WARNING during normal operation.
+Setup: isolated dev daemon on :8000 (`PYTHON_KEYRING_BACKEND=null`, `AGENT_OS_API_KEY`=live MiniMax key), project `proj_4daccc2f3871` / workspace `/tmp/smoke-delete-ws`, provider minimax/MiniMax-M2.5, hands_off. Onboarding wrote PROJECT_STATE.md (needed a one-message nudge — the model's first turn only greeted; not a delete-path issue). Driver: `/tmp/smoke_driver.py`; evidence: `/tmp/smoke-evidence/summary.json`. Queue: item A = `sleep 25` (long RUNNING window), B/C = quick `echo` tasks. The onboarding session `smoke-delete_2b7964f6.jsonl` served as the unrelated session.
+
+**Step 2 — reject deleting a RUNNING item (evidence):** caught A running with `holder == A.attempts[-1].session_id` (smoke-delete_08fbad82). `DELETE` → **HTTP 409** `{"detail":"Cannot delete a running queue item. Stop or pause it first, then delete."}`. ZERO mutation confirmed: item still present, attempt outcome unchanged (`null`, not CANCELLED), holder unchanged (still A's session). Daemon log line 19: `DELETE ... 409 Conflict`.
+
+**Step 3 — pause → idle:** `queue/stop` → run-status idle, holder `None`; A's stored `item.state` stayed `"running"` (stale flag) — exercising the liveness-vs-stored-flag distinction live.
+
+**Step 4 — idle delete cleans, scoped (evidence):** `DELETE` the paused item → **HTTP 200** `{"status":"removed"}`. Bound session JSONL `smoke-delete_08fbad82.jsonl` GONE; queue record gone; unrelated `smoke-delete_2b7964f6.jsonl` SURVIVED; no `sub_agents/` dir (none spawned). Daemon log line 24: `DELETE ... 200 OK`. (This is the stale-RUNNING-flag-but-not-holder case: delete correctly allowed by liveness.)
+
+**Step 5 — resume drains, no orphan/stall (evidence):** `queue/resume` → B and C both reached `done`, queue auto-idled, final run-status idle / holder `None`. No `reclaim` WARNING in the daemon log; no ERROR/Traceback/500; no leaked `sleep 25` process (item A's shell was cleaned up on pause).
+
+Result: `step2(reject-running)=PASS step4(idle-clean)=PASS step5(drain)=PASS`. Daemon torn down afterward (port 8000 + `~/orbital/daemon.pid` freed for the installed app).
