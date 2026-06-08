@@ -355,7 +355,9 @@ class AgentManager:
                           initial_nonce: str | None = None,
                           session_id: str | None = None,
                           queue_state: str = "chat",
-                          session: "Session | None" = None) -> None:
+                          session: "Session | None" = None,
+                          cold_start: bool = False,
+                          cold_start_skeleton: str | None = None) -> None:
         """Wire all components and start the loop.
 
         ``session_id`` is the canonical session id (seam 3 / D1+D2: id == uuid
@@ -491,6 +493,7 @@ class AgentManager:
             trigger_name=trigger_name,
             vision_enabled=model_info.capabilities.vision,
             project_id=project_id,
+            cold_start=cold_start,
         )
 
         # 4b. Reconcile default skills for legacy projects that never had them
@@ -530,7 +533,10 @@ class AgentManager:
                 model=config.model,
                 sdk=config.sdk,
                 fallback_models=[fb.model for fb in config.llm_fallback_models],
-                origin=("queue" if queue_state == "running" else "chat"),
+                origin=(
+                    "cold_start" if cold_start
+                    else ("queue" if queue_state == "running" else "chat")
+                ),
             )
 
         # 6-7. Observers
@@ -717,6 +723,12 @@ class AgentManager:
             started_at=datetime.now(timezone.utc).isoformat(),
         )
         self._handles[sk] = project_handle
+
+        # 10b. Cold-start: inject the Stage-1 skeleton inventory as system
+        # context so the agent plans Stage-2 reads against measured sizes.
+        # Persisted in the session JSONL; it becomes the loop's first context.
+        if cold_start and cold_start_skeleton:
+            session.append_system(cold_start_skeleton)
 
         # 11. Start loop task
         task = asyncio.create_task(loop.run(initial_message, initial_nonce=initial_nonce))
