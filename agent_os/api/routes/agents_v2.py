@@ -398,6 +398,23 @@ def _write_workspace_file(workspace: str, filename: str, content: str) -> None:
         f.write(content)
 
 
+def _maybe_sync_instructions_to_goals(workspace: str, *, goals_content: str | None,
+                                      instructions: str | None) -> None:
+    """Sync the legacy `instructions` field to project_goals.md, guarded.
+
+    Explicit goals_content always wins. Otherwise the legacy field only seeds
+    project_goals.md when it does NOT already exist — so a scan- or onboarding-
+    authored file is never clobbered by a later unrelated Settings save.
+    """
+    effective = goals_content
+    if effective is None and instructions is not None:
+        if os.path.exists(ProjectPaths(workspace).project_goals):
+            return  # disk is canonical; do not clobber
+        effective = instructions
+    if effective is not None:
+        _write_workspace_file(workspace, "project_goals.md", effective)
+
+
 # ---- Project Endpoints ----
 
 @router.post("/projects", status_code=201)
@@ -515,15 +532,12 @@ async def update_project(project_id: str, body: ProjectUpdate):
     workspace = project.get("workspace", "")
     goals_content = updates.pop("project_goals_content", None)
     rules_content = updates.pop("user_directives_content", None)
-    # The Settings UI writes to the `instructions` field. Sync it to
-    # instructions/project_goals.md so the prompt builder (which reads from
-    # disk) sees it. If project_goals_content is also present, the explicit
-    # field wins. The `instructions` key itself stays in `updates` so it is
-    # still persisted in projects.json for backward compatibility.
-    if goals_content is None and updates.get("instructions") is not None:
-        goals_content = updates["instructions"]
-    if goals_content is not None:
-        _write_workspace_file(workspace, "project_goals.md", goals_content)
+    # Sync the legacy `instructions` field to project_goals.md, but guarded so
+    # a later Settings save cannot clobber scan-/onboarding-authored goals. The
+    # `instructions` key itself stays in `updates` for projects.json back-compat.
+    _maybe_sync_instructions_to_goals(
+        workspace, goals_content=goals_content, instructions=updates.get("instructions"),
+    )
     if rules_content is not None:
         _write_workspace_file(workspace, "user_directives.md", rules_content)
     # If api_key matches the current global key, store empty string so the
