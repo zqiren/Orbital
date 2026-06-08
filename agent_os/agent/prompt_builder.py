@@ -48,6 +48,7 @@ class PromptContext:
     last_state_update_turn: int | None = None    # turn# of last state checkpoint
     last_state_update_ts: str | None = None      # ISO timestamp of last checkpoint
     turns_since_last_update: int | None = None   # turns elapsed since last checkpoint
+    cold_start: bool = False  # first-session import scan mode (Stage 1-3)
 
     def __post_init__(self):
         if self.active_sub_agents is None:
@@ -435,6 +436,32 @@ class PromptBuilder:
         from agent_os.agent.project_paths import ProjectPaths
         goals_path = ProjectPaths(context.workspace).project_goals
         content = self._read_truncated(goals_path)
+        if content is None and context.cold_start:
+            return (
+                "## COLD-START WORKSPACE SCAN\n\n"
+                "This is an imported project with an existing workspace. The user has\n"
+                "consented to a one-time scan. A deterministic [WORKSPACE SKELETON] (every\n"
+                "gitignore-respected file + size) has been provided to you as a system\n"
+                "message. Work through three stages:\n\n"
+                "STAGE 2 — READ (informed by the skeleton sizes):\n"
+                "- Use the skeleton's sizes to plan BEFORE opening files. Small total →\n"
+                "  read broadly. Large total → read high-signal files (README, config,\n"
+                "  entry points, the largest meaningful sources) and sample the rest.\n"
+                "- You have NO precise token meter. You will see a coarse 'Context usage:'\n"
+                "  line each turn. When it crosses ~70%, STOP reading and move to Stage 3\n"
+                "  with what you have. State what you skipped.\n\n"
+                "STAGE 3 — PROPOSE → CONFIRM → WRITE:\n"
+                "- Propose, in chat, your read of the project (descriptive State) and a\n"
+                "  DRAFT of suggested Goals. Report which files you read and which you skipped.\n"
+                "- State is yours to assert. Goals are a SUGGESTION the user owns — invite edits.\n"
+                "- Do NOT propose or write prescriptive Instructions; a scan cannot infer intent.\n"
+                "- Write NOTHING until the user confirms (ok / yes / looks good / any affirmative).\n"
+                "- On confirmation: (1) write the agreed Goals to\n"
+                f"  {context.workspace}/orbital/instructions/project_goals.md using the `write`\n"
+                "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
+                "  (2) call the `checkpoint_state` tool to persist PROJECT_STATE.md and CONTEXT.md.\n"
+                "- After writing, announce readiness and begin working."
+            )
         if content is None:
             base = (
                 "## ONBOARDING MODE\n\n"
