@@ -77,6 +77,13 @@ export function useAgent() {
     );
   }, []);
 
+  const coldStartScan = useCallback(async (projectId: string) => {
+    return api<{ status: string; session_id?: string }>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/cold-start-scan`,
+      { method: 'POST' },
+    );
+  }, []);
+
   const injectMessage = useCallback(
     async (
       projectId: string,
@@ -145,5 +152,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, approveToolCall, denyToolCall };
 }
