@@ -76,6 +76,20 @@ body {
   box-sizing: border-box;
 }
 
+/* Form controls (input, textarea, select, button) do NOT inherit font-family
+   from their ancestors — browsers render them in a UA default font instead.
+   The settings screens are dense with these controls, so without this rule
+   they fall back off Geist while the rest of the app (plain text) stays on it.
+   `font: inherit` pulls family, size, and weight from the styled ancestor so
+   Tailwind's text-*/font-* utilities and the body font-sans token apply. */
+input,
+textarea,
+select,
+button,
+optgroup {
+  font: inherit;
+}
+
 @keyframes slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
