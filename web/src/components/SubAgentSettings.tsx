@@ -25,6 +25,10 @@ interface SubAgentEntry {
   missing_dependencies: string[];
   credentials_configured: boolean;
   missing_credentials: string[];
+  /** True when the agent exposes an interactive login (OAuth) flow. When
+   *  false, the agent only accepts an API key — hide the Login button so it
+   *  can't 400. Optional for backward-compat with older daemon payloads. */
+  supports_login?: boolean;
   setup_actions: Array<{ action: string; label: string; command: string | null; blocking: boolean }>;
   config: Record<string, string>;
   param_schema: Record<string, ParamSchemaEntry>;
@@ -95,6 +99,14 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
     }
   }, []);
 
+  // This daemon-level screen lists ONLY installed sub-agents. Agents whose
+  // CLI isn't on the machine are hidden; the helper line tells the user how to
+  // surface one. (The /settings/sub-agents payload still includes them — other
+  // screens consume the full list — so we filter here in the frontend.)
+  const installedEntries = entries === null
+    ? null
+    : entries.filter(e => e.installed === true);
+
   const inner = (
     <>
       <div className="flex items-center justify-between mb-3">
@@ -125,6 +137,9 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         </div>
       </div>
 
+      <p className="text-xs text-secondary mb-1">
+        Don't see an agent? Install its CLI, then Refresh.
+      </p>
       <p className="text-xs text-secondary mb-4 italic">
         Sub-agent credentials are stored by the sub-agent itself, not by Orbital.
       </p>
@@ -139,15 +154,15 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         <div className="text-sm text-secondary">Loading sub-agents...</div>
       )}
 
-      {entries !== null && entries.length === 0 && (
+      {installedEntries !== null && installedEntries.length === 0 && (
         <div className="text-sm text-secondary">
-          No sub-agents found in the registry.
+          No installed sub-agents. Install a sub-agent CLI, then Refresh.
         </div>
       )}
 
-      {entries !== null && entries.length > 0 && (
+      {installedEntries !== null && installedEntries.length > 0 && (
         <div className="flex flex-col gap-4">
-          {entries.map(entry => (
+          {installedEntries.map(entry => (
             <SubAgentCard
               key={entry.slug}
               entry={entry}
@@ -193,6 +208,11 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
 
   const paramKeys = Object.keys(entry.param_schema);
   const isApiKeyFlow = API_KEY_LOGIN_SLUGS.has(entry.slug);
+  // Hide the Login button when the daemon reports the agent has no interactive
+  // login flow (API-key-only agents). Treat undefined as "supported" so older
+  // daemon payloads keep the previous behavior. The API-key flow has its own
+  // "Set API Key" button below, so it's never affected by this gate.
+  const supportsLogin = entry.supports_login !== false;
 
   const handleChange = (paramKey: string, value: string) => {
     setSaved(false);
@@ -306,7 +326,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
 
       {/* Login / Logout */}
       <div className="flex flex-wrap items-center gap-2 mt-3 mb-3">
-        {!entry.credentials_configured && !isApiKeyFlow && (
+        {!entry.credentials_configured && !isApiKeyFlow && supportsLogin && (
           <button
             onClick={handleLogin}
             disabled={loginBusy || !entry.installed}

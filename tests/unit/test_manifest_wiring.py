@@ -525,6 +525,68 @@ class TestAgentConfigNewFields:
 # ---------------------------------------------------------------------------
 
 
+class TestCodexManifestLoginWiring:
+    """Codex manifest exposes a login setup_command and the short display name.
+
+    Regression for: the Login button called _resolve_setup_command('codex',
+    'login') which returned None (codex declared only an API-key credential),
+    yielding a 400 "does not expose a login subcommand". After adding an
+    oauth_cli credential with setup_command 'codex login', resolution must
+    return a non-empty command. Also asserts the display rename to "Codex".
+    """
+
+    def _load_codex_manifest(self):
+        from agent_os.agents.manifest import ManifestLoader
+
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "agent_os", "agents", "manifests", "codex.yaml",
+        )
+        return ManifestLoader.load(os.path.abspath(path))
+
+    def test_codex_exposes_login_setup_command(self):
+        """At least one codex credential carries a non-empty setup_command, so
+        _resolve_setup_command('codex', 'login') returns a usable command."""
+        manifest = self._load_codex_manifest()
+        setup_commands = [
+            c.setup_command
+            for c in manifest.setup.credentials
+            if c.setup_command
+        ]
+        assert setup_commands, (
+            "codex manifest has no credential with a setup_command — the Login "
+            "button will 400"
+        )
+        # The resolved command should invoke the codex login subcommand.
+        assert any("login" in cmd for cmd in setup_commands)
+
+    def test_resolve_setup_command_returns_codex_login(self):
+        """End-to-end: _resolve_setup_command('codex', 'login') is non-empty."""
+        from agent_os.agents.registry import AgentRegistry
+        from agent_os.agents.setup_engine import SetupEngine
+        from agent_os.api.routes import settings as settings_routes
+
+        registry = AgentRegistry()
+        registry.register(self._load_codex_manifest())
+        engine = SetupEngine(registry)
+
+        # Temporarily wire the module-level engine the resolver reads from.
+        prev = settings_routes._setup_engine
+        settings_routes._setup_engine = engine
+        try:
+            cmd = settings_routes._resolve_setup_command("codex", "login")
+        finally:
+            settings_routes._setup_engine = prev
+
+        assert cmd, "_resolve_setup_command('codex', 'login') returned None/empty"
+        assert "login" in cmd
+
+    def test_codex_display_name_is_codex(self):
+        """Manifest name renamed from 'OpenAI Codex CLI' to 'Codex'."""
+        manifest = self._load_codex_manifest()
+        assert manifest.name == "Codex"
+
+
 class TestPromptBuilderSubAgentsSection:
     """PromptBuilder._sub_agents() should produce explicit agent_message instructions."""
 
