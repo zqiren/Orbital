@@ -76,20 +76,6 @@ body {
   box-sizing: border-box;
 }
 
-/* Make form controls inherit the app font (Geist, via the body font-sans
-   token) instead of the browser UA default. Tailwind preflight already does
-   this; this rule is an explicit safeguard so the control-dense settings
-   screens never regress. Tailwind size and weight utilities still win on
-   these controls via their higher class specificity. (Keep this comment free
-   of a slash-star sequence so it cannot terminate early and break the rule.) */
-input,
-textarea,
-select,
-button,
-optgroup {
-  font: inherit;
-}
-
 @keyframes slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
