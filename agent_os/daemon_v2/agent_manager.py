@@ -29,6 +29,7 @@ from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end
 from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
+from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
     AgentConfig,
     SessionKey,
@@ -449,15 +450,17 @@ class AgentManager:
         prompt_builder = PromptBuilder(workspace=config.workspace)
 
         # 4. Build prompt context
-        # Prefer enabled_sub_agents (new) with registry lookup, fallback to enabled_agents (legacy)
-        # Auto-detect from registry if neither is set
-        sub_agent_slugs = config.enabled_sub_agents or config.enabled_agents
-        if not sub_agent_slugs and self._setup_engine is not None:
-            available = self._setup_engine.check_all()
-            sub_agent_slugs = [
-                a.slug for a in available
-                if a.installed and a.slug != "built-in"
-            ]
+        # Prefer enabled_sub_agents (new), fall back to enabled_agents (legacy),
+        # else auto-detect installed sub-agents — then subtract the project's
+        # disabled_sub_agents denylist so a disabled sub-agent never appears in
+        # the orchestrator's prompt (the auto-detect branch previously ignored
+        # the denylist on the /agents/start path).
+        sub_agent_slugs = resolve_visible_sub_agent_slugs(
+            enabled_sub_agents=config.enabled_sub_agents,
+            disabled_sub_agents=config.disabled_sub_agents,
+            setup_engine=self._setup_engine,
+            enabled_agents_legacy=config.enabled_agents,
+        )
         enabled_agents_detail = []
         for slug in sub_agent_slugs:
             if self._registry is not None:

@@ -46,6 +46,8 @@ export interface Project {
   budget_limit_usd?: number | null;
   budget_action?: 'stop' | 'ask';
   budget_spent_usd?: number;
+  /** Sub-agent slugs hidden from the management agent for this project. */
+  disabled_sub_agents?: string[];
 }
 
 export interface ProjectCreateRequest {
@@ -78,6 +80,8 @@ export interface ProjectUpdateRequest {
   llm_fallback_models?: FallbackModelEntry[];
   budget_limit_usd?: number | null;
   budget_spent_usd?: number;
+  /** Sub-agent slugs hidden from the management agent for this project. */
+  disabled_sub_agents?: string[];
 }
 
 export interface ToolCallFunction {

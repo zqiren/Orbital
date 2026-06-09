@@ -17,6 +17,9 @@ import FallbackModelsEditor from './FallbackModelsEditor';
 import SubAgentMemoryCard, {
   type SubAgentMemoryEntry,
 } from './SubAgentMemoryCard';
+import SubAgentToggleList, {
+  type InstalledSubAgent,
+} from './SubAgentToggleList';
 
 interface SkillMeta {
   name: string;
@@ -79,6 +82,13 @@ export default function SettingsView({
   // Sub-agent MEMORY.md state
   const [memoryEntries, setMemoryEntries] = useState<SubAgentMemoryEntry[]>([]);
   const [memoryError, setMemoryError] = useState('');
+
+  // Sub-agent enable/disable state. The list of installed sub-agents is
+  // global (one daemon-level binary check); the denylist is per-project.
+  const [installedSubAgents, setInstalledSubAgents] = useState<InstalledSubAgent[]>([]);
+  const [disabledSubAgents, setDisabledSubAgents] = useState<string[]>(
+    project.disabled_sub_agents ?? [],
+  );
 
   // Budget state
   const [budgetLimit, setBudgetLimit] = useState<string>(
@@ -160,6 +170,37 @@ export default function SettingsView({
     fetchMemories();
   }, [fetchMemories]);
 
+  // Load the installed sub-agents (global, daemon-level binary check) so the
+  // user can enable/disable each for THIS project. Scratch projects don't
+  // delegate to sub-agents, so skip.
+  useEffect(() => {
+    if (project.is_scratch) return;
+    let cancelled = false;
+    api<Array<{ slug: string; name: string; installed: boolean }>>(
+      '/api/v2/settings/sub-agents',
+    )
+      .then((data) => {
+        if (cancelled) return;
+        setInstalledSubAgents(
+          data
+            .filter((s) => s.installed && s.slug !== 'built-in')
+            .map((s) => ({ slug: s.slug, name: s.name })),
+        );
+      })
+      .catch(() => {
+        // Non-fatal — the section just shows its empty state.
+      });
+    return () => { cancelled = true; };
+  }, [project.is_scratch]);
+
+  const handleToggleSubAgent = useCallback((slug: string, enabled: boolean) => {
+    setDisabledSubAgents((prev) =>
+      enabled
+        ? prev.filter((s) => s !== slug)
+        : prev.includes(slug) ? prev : [...prev, slug],
+    );
+  }, []);
+
   async function handleDeleteSkill(dirName: string) {
     setSkillError('');
     try {
@@ -233,6 +274,7 @@ export default function SettingsView({
       sdk: llm.sdk,
       llm_fallback_models: fallbackModelsRef.current,
       budget_limit_usd: budgetLimit ? parseFloat(budgetLimit) : null,
+      disabled_sub_agents: disabledSubAgents,
     };
     if (llm.api_key) {
       data.api_key = llm.api_key;
@@ -312,6 +354,28 @@ export default function SettingsView({
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
           />
         </div>
+
+        {/* Sub-Agents (enable/disable per project) */}
+        {!project.is_scratch && (
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1.5">
+              Sub-Agents
+              <span className="text-secondary font-normal"> — which delegation targets this project can use</span>
+            </label>
+            <p className="text-xs text-secondary mb-2">
+              Uncheck a sub-agent to hide it from the management agent for this project — it won&apos;t be
+              suggested or dispatched here. Install &amp; sign-in live in global Settings → Sub-Agents.
+            </p>
+            <SubAgentToggleList
+              agents={installedSubAgents}
+              disabled={disabledSubAgents}
+              onToggle={handleToggleSubAgent}
+            />
+            <p className="text-[11px] text-secondary/60 mt-1.5 italic">
+              Remember to Save changes below.
+            </p>
+          </div>
+        )}
 
         {/* Sub-Agent Memories */}
         {!project.is_scratch && (

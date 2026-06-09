@@ -14,6 +14,7 @@ import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
+from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
     SessionKey,
     make_session_key,
@@ -668,17 +669,14 @@ class SubAgentManager:
                     render_sub_agent_prompt,
                 )
 
-                # Determine peer slugs (other enabled sub-agents in the project)
-                enabled_sub_agents = project.get("enabled_sub_agents", None) if project else None
-                if not enabled_sub_agents and self._setup_engine is not None:
-                    try:
-                        available = self._setup_engine.check_all()
-                        enabled_sub_agents = [
-                            a.slug for a in available
-                            if getattr(a, "installed", False) and a.slug != "built-in"
-                        ]
-                    except Exception:
-                        enabled_sub_agents = [handle]
+                # Determine peer slugs (other enabled sub-agents in the project),
+                # honouring the project's disabled_sub_agents denylist so a
+                # disabled sub-agent is never listed as a peer either.
+                enabled_sub_agents = resolve_visible_sub_agent_slugs(
+                    enabled_sub_agents=(project.get("enabled_sub_agents") if project else None),
+                    disabled_sub_agents=(project.get("disabled_sub_agents") if project else None),
+                    setup_engine=self._setup_engine,
+                )
                 if not enabled_sub_agents:
                     enabled_sub_agents = [handle]
 
