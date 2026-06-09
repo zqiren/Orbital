@@ -1077,29 +1077,3 @@ describe('mergeRecoveredAssistantMessage — REST recovery resolves identity lik
     expect(out[2].type).toBe('user_message');
   });
 });
-
-describe('transformChatHistory — per-round grouping (think → answer is one turn)', () => {
-  it('a single reasoning+text round (no tools) emits anchor, reasoning capsule, then answer', () => {
-    const messages: ChatMessage[] = [
-      user('you there?', TS),
-      asst({ content: "Yes, I'm here.", reasoning_content: 'considering the question', timestamp: TS2 }),
-    ];
-    const items = transformChatHistory(messages);
-    expect(items.map(i => i.type)).toEqual([
-      'user_message',
-      'agent_message', // header anchor (avatar + sender) — the turn's single header
-      'agent_run',     // reasoning capsule, indented under the anchor
-      'agent_message', // answer (rendered header-less as a continuation at the render layer)
-    ]);
-    const anchor = items[1];
-    expect(anchor.type === 'agent_message' && anchor.isHeaderOnly).toBe(true);
-    const cap = items[2];
-    expect(cap.type).toBe('agent_run');
-    if (cap.type === 'agent_run') expect(cap.has_thinking).toBe(true);
-    const answer = items[3];
-    if (answer.type === 'agent_message') {
-      expect(answer.content).toBe("Yes, I'm here.");
-      expect(answer.isHeaderOnly).toBeFalsy();
-    }
-  });
-});

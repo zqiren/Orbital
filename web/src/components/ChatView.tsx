@@ -2060,25 +2060,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             if (item.type === 'user_message') {
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              // Turn grouping: a management answer that directly follows its own
-              // thinking/tools capsule is the same loop round — render it as a
-              // header-less continuation under the turn's single avatar (one
-              // round = one turn). Scoped to management messages so sub-agent
-              // rows keep their own handle headers.
-              const prevItem = index > 0 ? items[index - 1] : undefined;
-              const continuesTurn =
-                item.type === 'agent_message' &&
-                !item.isHeaderOnly &&
-                item.source === 'management' &&
-                prevItem?.type === 'agent_run';
-              rendered = (
-                <ChatMessage
-                  key={`msg-${index}`}
-                  message={item}
-                  agentName={project.agent_name}
-                  hideHeader={continuesTurn}
-                />
-              );
+              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} />;
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               const label =

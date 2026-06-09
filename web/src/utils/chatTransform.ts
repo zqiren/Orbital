@@ -513,41 +513,6 @@ export function transformChatHistory(
       const hasTools = !!(msg.tool_calls && msg.tool_calls.length > 0);
       const msTime = tsToMs(msg.timestamp);
 
-      // Per-round turn grouping: a single round that thinks then answers (no
-      // tool calls) renders as ONE turn — a header anchor, the reasoning
-      // capsule, then the answer as a header-less continuation (suppressed at
-      // render: management agent_message after its own agent_run). This matches
-      // the live stream order (think → answer) and stops one loop round from
-      // splitting into two "Assistant" headers. Tool-using rounds keep the
-      // existing capsule (its open lifetime is needed to pair tool results).
-      if (reasoning && text && !hasTools) {
-        finalizeCapsule();
-        items.push({
-          type: 'agent_message',
-          content: '',
-          source: msg.source,
-          timestamp: msg.timestamp,
-          isHeaderOnly: true,
-        });
-        currentCapsule = openCapsuleAt(msg.timestamp, false);
-        currentCapsule.items.push({
-          type: 'reasoning_block',
-          content: reasoning,
-          timestamp: msg.timestamp,
-          turn_id: msg.timestamp,
-        });
-        currentCapsule.endedAtMs = msTime;
-        finalizeCapsule();
-        items.push({
-          type: 'agent_message',
-          content: text,
-          source: msg.source,
-          timestamp: msg.timestamp,
-        });
-        i++;
-        continue;
-      }
-
       if (text) {
         // Visible text closes any open capsule, then emits inline.
         finalizeCapsule();
