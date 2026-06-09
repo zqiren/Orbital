@@ -2311,13 +2311,39 @@ async def stop_sub_agent(project_id: str, handle: str,
     return result
 
 
+def _installed_sub_agents() -> list[dict]:
+    """Compute the list of ALL installed (non-built-in) sub-agents.
+
+    Mirrors the installed/built-in filter of ``_resolve_available_sub_agents``
+    but WITHOUT subtracting the project's ``disabled_sub_agents`` denylist.
+    The merged Project-Settings card shows a disabled-but-installed agent's
+    card too (dimmed) and its memory body must stay reachable, so the memory
+    listing is keyed on "installed" rather than "available". Real dispatch
+    gating still goes through ``_resolve_available_sub_agents`` (unchanged).
+    """
+    if _setup_engine is None:
+        return []
+    statuses = _setup_engine.check_all()
+    out: list[dict] = []
+    for s in statuses:
+        if s.slug == "built-in":
+            continue
+        if not s.installed:
+            continue
+        out.append({"slug": s.slug, "name": s.name})
+    return out
+
+
 @router.get("/projects/{project_id}/sub-agent-memory")
 async def list_sub_agent_memory(project_id: str):
-    """Return MEMORY.md status for each enabled sub-agent in this project.
+    """Return MEMORY.md status for each INSTALLED sub-agent in this project.
 
     Each entry: {agent_slug, agent_name, exists, content, last_modified, size_bytes}.
-    `exists: false` for sub-agents enabled but never dispatched (MEMORY.md
-    not yet lazily created on disk).
+    Lists ALL installed (non-built-in) sub-agents regardless of the project's
+    disabled denylist — the merged Project-Settings card renders a card per
+    installed agent (a disabled one is dimmed but still expandable to edit its
+    memory). `exists: false` for sub-agents never dispatched (MEMORY.md not
+    yet lazily created on disk).
     """
     project = _project_store.get_project(project_id)
     if not project:
@@ -2325,7 +2351,7 @@ async def list_sub_agent_memory(project_id: str):
     workspace = project.get("workspace", "")
     if not workspace:
         return []
-    available = _resolve_available_sub_agents(project)
+    available = _installed_sub_agents()
     out: list[dict] = []
     for entry in available:
         slug = entry["slug"]

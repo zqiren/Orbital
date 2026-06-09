@@ -169,9 +169,10 @@ class TestMemoryViewerFullFlow:
 class TestMemoryPersistsAcrossDisableReEnable:
 
     def test_memory_persists_across_disable_re_enable(self, client, tmp_path):
-        """Per spec design: previously-enabled sub-agents' memory
-        persists on disk; just hidden from the UI when disabled.
-        Re-enabling re-surfaces the existing content."""
+        """Per merged-settings design: the memory listing is keyed on INSTALLED
+        sub-agents, so a disabled-but-installed agent stays in the list (the
+        merged Project-Settings card renders it dimmed) with its content intact,
+        and its MEMORY.md persists on disk across denylist toggles."""
         ws = str(tmp_path / "ws_persist")
         os.makedirs(ws, exist_ok=True)
         pid = _create_project(client, ws, disabled=[])
@@ -190,10 +191,13 @@ class TestMemoryPersistsAcrossDisableReEnable:
         )
         assert resp.status_code == 200
 
-        # 3. GET memory: claude-code is absent from the list.
+        # 3. GET memory: claude-code is still listed (installed-keyed), with its
+        #    content intact — the merged UI shows the disabled card dimmed.
         resp = client.get(f"/api/v2/projects/{pid}/sub-agent-memory")
-        slugs = [e["agent_slug"] for e in resp.json()]
-        assert "claude-code" not in slugs
+        data = resp.json()
+        cc = next((e for e in data if e["agent_slug"] == "claude-code"), None)
+        assert cc is not None, "disabled-but-installed agent must stay listed"
+        assert "should-survive-disable" in cc["content"]
 
         # 4. The file MUST still exist on disk.
         path = os.path.join(

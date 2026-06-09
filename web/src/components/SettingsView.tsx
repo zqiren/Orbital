@@ -14,12 +14,9 @@ import type {
 import { api, BASE_URL, isRelayMode, ApiError } from '../config';
 import LLMProviderSettings, { type LLMValues } from './LLMProviderSettings';
 import FallbackModelsEditor from './FallbackModelsEditor';
-import SubAgentMemoryCard, {
-  type SubAgentMemoryEntry,
-} from './SubAgentMemoryCard';
-import SubAgentToggleList, {
-  type InstalledSubAgent,
-} from './SubAgentToggleList';
+import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
+import { type InstalledSubAgent } from './SubAgentToggleList';
+import SubAgentCard from './SubAgentCard';
 
 interface SkillMeta {
   name: string;
@@ -176,7 +173,7 @@ export default function SettingsView({
   useEffect(() => {
     if (project.is_scratch) return;
     let cancelled = false;
-    api<Array<{ slug: string; name: string; installed: boolean }>>(
+    api<Array<{ slug: string; name: string; installed: boolean; ready: boolean }>>(
       '/api/v2/settings/sub-agents',
     )
       .then((data) => {
@@ -184,7 +181,7 @@ export default function SettingsView({
         setInstalledSubAgents(
           data
             .filter((s) => s.installed && s.slug !== 'built-in')
-            .map((s) => ({ slug: s.slug, name: s.name })),
+            .map((s) => ({ slug: s.slug, name: s.name, ready: s.ready })),
         );
       })
       .catch(() => {
@@ -302,6 +299,12 @@ export default function SettingsView({
     onDelete();
   }
 
+  // Index the per-project memory entries by slug so the merged sub-agent
+  // cards can look up each agent's MEMORY.md state in O(1).
+  const memoryBySlug = new Map(
+    memoryEntries.map((e) => [e.agent_slug, e]),
+  );
+
   return (
     <div className="h-full overflow-y-auto">
     <div className="max-w-[720px] mx-auto py-8 px-6 max-md:px-4">
@@ -355,58 +358,55 @@ export default function SettingsView({
           />
         </div>
 
-        {/* Sub-Agents (enable/disable per project) */}
+        {/* Sub-Agents — merged per-agent card: enable toggle + auth badge +
+            memory summary in the header, MEMORY.md editor as the expandable
+            body. One card per installed sub-agent (a disabled one is dimmed
+            but still expandable). */}
         {!project.is_scratch && (
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
               Sub-Agents
-              <span className="text-secondary font-normal"> — which delegation targets this project can use</span>
+              <span className="text-secondary font-normal"> — delegation targets &amp; their memory for this project</span>
             </label>
             <p className="text-xs text-secondary mb-2">
-              Uncheck a sub-agent to hide it from the management agent for this project — it won&apos;t be
-              suggested or dispatched here. Install &amp; sign-in live in global Settings → Sub-Agents.
-            </p>
-            <SubAgentToggleList
-              agents={installedSubAgents}
-              disabled={disabledSubAgents}
-              onToggle={handleToggleSubAgent}
-            />
-            <p className="text-[11px] text-secondary/60 mt-1.5 italic">
-              Remember to Save changes below.
-            </p>
-          </div>
-        )}
-
-        {/* Sub-Agent Memories */}
-        {!project.is_scratch && (
-          <div>
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              Sub-Agent Memories
-              <span className="text-secondary font-normal"> — long-term memory per sub-agent for this project</span>
-            </label>
-            <p className="text-xs text-secondary mb-2">
-              Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.
+              Toggle a sub-agent on/off for this project, and edit the long-term
+              memory it reads on every dispatch. Disabled agents stay listed
+              (dimmed) so you can still curate their memory.
             </p>
 
             {memoryError && (
               <p className="text-xs text-error mb-2">{memoryError}</p>
             )}
 
-            {memoryEntries.length === 0 ? (
+            {installedSubAgents.length === 0 ? (
               <p className="text-xs text-secondary/60 italic">
-                No sub-agents enabled for this project.
+                Install an agent&apos;s CLI on your machine to use it here.
               </p>
             ) : (
-              <div className="flex flex-col gap-2">
-                {memoryEntries.map((entry) => (
-                  <SubAgentMemoryCard
-                    key={entry.agent_slug}
-                    projectId={pid}
-                    entry={entry}
-                    onSaved={fetchMemories}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="flex flex-col gap-2">
+                  {installedSubAgents.map((agent) => (
+                    <SubAgentCard
+                      key={agent.slug}
+                      projectId={pid}
+                      agentName={agent.name}
+                      slug={agent.slug}
+                      enabled={!disabledSubAgents.includes(agent.slug)}
+                      ready={agent.ready ?? true}
+                      memory={memoryBySlug.get(agent.slug)}
+                      onToggle={handleToggleSubAgent}
+                      onMemorySaved={fetchMemories}
+                    />
+                  ))}
+                </div>
+                <p className="text-[11px] text-secondary/60 mt-1.5 italic">
+                  Remember to Save toggle changes below. Memory edits save
+                  immediately.
+                </p>
+                <p className="text-[11px] text-secondary/60 mt-1 italic">
+                  Install an agent&apos;s CLI on your machine to use it here.
+                </p>
+              </>
             )}
           </div>
         )}

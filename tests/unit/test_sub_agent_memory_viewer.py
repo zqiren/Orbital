@@ -7,11 +7,14 @@
 Covers the GET /projects/{pid}/sub-agent-memory listing endpoint and the
 PUT /projects/{pid}/sub-agent-memory/{slug} editor endpoint:
 
-- GET returns one entry per available (installed - disabled) sub-agent.
+- GET returns one entry per INSTALLED sub-agent (regardless of the
+  disabled denylist) so the merged Project-Settings card can show a
+  disabled-but-installed agent's memory body too.
 - GET reflects exists=true once MEMORY.md has been created.
-- GET marks exists=false for available sub-agents that have never been
+- GET marks exists=false for listed sub-agents that have never been
   dispatched (no MEMORY.md on disk).
-- GET excludes sub-agents on the project's disabled denylist.
+- GET still excludes uninstalled agents and the 'built-in' management
+  agent.
 - PUT writes raw content (no canonical header) to the sub-agent's
   MEMORY.md, creating parent directories on the way.
 - PUT enforces the hard 10 KB cap with a 400 response.
@@ -144,11 +147,17 @@ class TestGetSubAgentMemory:
         slugs = sorted(e["agent_slug"] for e in data)
         assert slugs == ["claude-code", "codex"]
 
-    def test_get_sub_agent_memory_excludes_disabled(
+    def test_get_sub_agent_memory_includes_disabled_but_installed(
         self, app_state, tmp_path,
     ):
-        """Project with disabled_sub_agents=['codex'] returns only
-        claude-code."""
+        """Project with disabled_sub_agents=['codex'] STILL lists codex.
+
+        The merged Project-Settings sub-agent card shows a disabled agent's
+        card too (dimmed, but its memory body must still be reachable), so
+        the listing endpoint now enumerates ALL installed sub-agents
+        regardless of the disabled denylist. (Real dispatch gating still
+        runs through `_resolve_available_sub_agents`, which is unchanged.)
+        """
         client = _make_client_with_installed(
             app_state, installed_slugs=["claude-code", "codex"],
         )
@@ -159,8 +168,43 @@ class TestGetSubAgentMemory:
         resp = client.get(f"/api/v2/projects/{pid}/sub-agent-memory")
         assert resp.status_code == 200
         data = resp.json()
+        slugs = sorted(e["agent_slug"] for e in data)
+        assert slugs == ["claude-code", "codex"]
+
+    def test_get_sub_agent_memory_excludes_uninstalled_even_if_not_disabled(
+        self, app_state, tmp_path,
+    ):
+        """An uninstalled agent (codex absent) is NOT listed, even though it
+        is not on the disabled denylist. Listing is installed-keyed."""
+        client = _make_client_with_installed(
+            app_state, installed_slugs=["claude-code"],
+        )
+        ws = str(tmp_path / "ws_uninstalled")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws, disabled=[])
+
+        resp = client.get(f"/api/v2/projects/{pid}/sub-agent-memory")
+        assert resp.status_code == 200
+        data = resp.json()
         slugs = [e["agent_slug"] for e in data]
         assert slugs == ["claude-code"]
+
+    def test_get_sub_agent_memory_excludes_built_in(
+        self, app_state, tmp_path,
+    ):
+        """The 'built-in' management agent is never listed as a memory card."""
+        client = _make_client_with_installed(
+            app_state, installed_slugs=["claude-code"],
+        )
+        ws = str(tmp_path / "ws_no_builtin")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws, disabled=[])
+
+        resp = client.get(f"/api/v2/projects/{pid}/sub-agent-memory")
+        assert resp.status_code == 200
+        data = resp.json()
+        slugs = [e["agent_slug"] for e in data]
+        assert "built-in" not in slugs
 
     def test_get_sub_agent_memory_includes_exists_false_for_uninitialized(
         self, app_state, tmp_path,

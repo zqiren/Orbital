@@ -5,6 +5,10 @@
 export interface InstalledSubAgent {
   slug: string;
   name: string;
+  /** Authenticated / ready to dispatch. Installed-but-not-ready agents get a
+   *  "Sign in" badge in the merged Project-Settings card. Optional so older
+   *  callers that only pass {slug, name} still type-check. */
+  ready?: boolean;
 }
 
 interface Props {
