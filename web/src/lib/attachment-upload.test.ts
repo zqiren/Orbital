@@ -150,8 +150,10 @@ describe('uploadFile', () => {
 
     expect(result).toEqual({ path: 'uploads/x.txt', size: 5 });
     expect(capture.method).toBe('POST');
+    // notify=false: composer attachments are delivered inline in the chat
+    // message, so the upload must NOT spawn a standalone queue item.
     expect(capture.url).toBe(
-      'http://localhost:8000/api/v2/projects/proj_1/files/upload?path=/uploads/',
+      'http://localhost:8000/api/v2/projects/proj_1/files/upload?path=/uploads/&notify=false',
     );
     // FormData should carry a file with the timestamped name.
     expect(capture.formFilename).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-hello\.txt$/);

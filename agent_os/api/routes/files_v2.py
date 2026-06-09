@@ -153,7 +153,12 @@ async def get_file_content(project_id: str, path: str):
 
 
 @router.post("/projects/{project_id}/files/upload")
-async def upload_file(project_id: str, file: UploadFile, path: str = "/uploads/"):
+async def upload_file(
+    project_id: str,
+    file: UploadFile,
+    path: str = "/uploads/",
+    notify: bool = True,
+):
     workspace, target_dir = _resolve_path(project_id, path.lstrip("/"))
 
     # Read file content with size limit
@@ -183,7 +188,15 @@ async def upload_file(project_id: str, file: UploadFile, path: str = "/uploads/"
     # Notify the agent of the upload via a queue item (best-effort). The file
     # write above is the authoritative result — queue failures must never fail
     # the upload, so this is wrapped and swallowed with a warning.
-    _notify_upload(project_id, rel_path, safe_name, len(data))
+    #
+    # ``notify`` lets the caller opt out: the chat composer passes
+    # notify=false because the attachment is already delivered inline in the
+    # outgoing message, so a standalone "read this file" queue item would
+    # double-process it (and orphans a task if the user never sends). The file
+    # explorer / drag-to-project keep the default (notify=true) — there the
+    # queue item IS the intent.
+    if notify:
+        _notify_upload(project_id, rel_path, safe_name, len(data))
 
     return {"path": rel_path, "size": len(data)}
 

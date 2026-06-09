@@ -72,6 +72,23 @@ def test_reupload_same_file_does_not_duplicate(client, project):
     assert len(upload_items) == 1, "idempotency_key should dedup the re-upload"
 
 
+def test_upload_with_notify_false_writes_file_but_no_queue_item(client, project):
+    """Composer attachments pass notify=false: the file lands on disk but no
+    standalone 'upload' queue item is created (the file is delivered inline in
+    the chat message, so a separate queue task would double-process it)."""
+    resp = client.post(
+        f"/api/v2/projects/{project}/files/upload?notify=false",
+        files={"file": ("attach.txt", b"inline attachment", "text/plain")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "attach.txt" in resp.json()["path"]
+
+    q = client.get(f"/api/v2/projects/{project}/queue")
+    items = q.json()["items"]
+    upload_items = [it for it in items if it.get("source") == "upload"]
+    assert upload_items == [], "notify=false must not enqueue an upload item"
+
+
 def test_upload_still_succeeds_when_file_written(client, project, tmp_path):
     """The file must land on disk regardless of queue wiring."""
     resp = _upload(client, project, name="report.md", body=b"# Report\nbody")
