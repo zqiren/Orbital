@@ -4,6 +4,7 @@
 
 import type { AgentRunStatus } from '../types';
 import { useT } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
 
 type BadgeStatus = AgentRunStatus | 'needs_input';
 
@@ -12,7 +13,7 @@ interface StatusBadgeProps {
   size?: 'sm' | 'md';
 }
 
-const STATUS_CONFIG: Record<BadgeStatus, { color: string; labelKey: string }> = {
+const STATUS_CONFIG: Record<BadgeStatus, { color: string; labelKey: StringKey }> = {
   running: { color: 'bg-success', labelKey: 'status.active' },
   waiting: { color: 'bg-success', labelKey: 'status.waiting' },
   idle: { color: 'bg-idle', labelKey: 'status.idle' },

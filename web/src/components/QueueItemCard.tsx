@@ -5,6 +5,7 @@
 import { AlertCircle, CheckCheck, Paperclip, User, X, Zap } from 'lucide-react';
 import type { QueueItem } from '../types';
 import { useT } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
 
 interface QueueItemCardProps {
   item: QueueItem;
@@ -34,7 +35,7 @@ function isTriggerItem(item: QueueItem): boolean {
  * reserved for a future "low" tier. Purely a display mapping — the stored
  * value is untouched.
  */
-function priorityMeta(priority: number): { labelKey: string; cls: string } {
+function priorityMeta(priority: number): { labelKey: StringKey; cls: string } {
   if (priority > 0) return { labelKey: 'queue.item.priority.high', cls: 'text-warning' };
   if (priority < 0) return { labelKey: 'queue.item.priority.low', cls: 'text-muted' };
   return { labelKey: 'queue.item.priority.normal', cls: 'text-secondary' };

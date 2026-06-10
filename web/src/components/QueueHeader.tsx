@@ -5,8 +5,9 @@
 import { Pause, Play } from 'lucide-react';
 import type { QueueRunState, QueueSnapshot } from '../types';
 import { useT } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
 
-const QUEUE_STATE_LABEL_KEY: Record<QueueRunState, string> = {
+const QUEUE_STATE_LABEL_KEY: Record<QueueRunState, StringKey> = {
   running: 'queue.header.running',
   paused: 'queue.header.paused',
   idle: 'queue.header.idle',
