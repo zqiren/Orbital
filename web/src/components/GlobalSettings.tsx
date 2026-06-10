@@ -78,7 +78,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         {/* Language */}
         <div className="mb-6">
           <label className="block text-sm font-medium text-primary mb-1.5">
-            Language
+            {t('global.language')}
           </label>
           <select
             value={locale}

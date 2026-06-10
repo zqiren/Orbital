@@ -127,6 +127,7 @@ subAgentMemory.saving,Saving...,status,SubAgentMemoryCard.tsx; many,Button label
 subAgentMemory.saveFailed,Save failed,message_error,SubAgentMemoryCard.tsx,Generic save failure,保存失败,
 subAgentToggle.empty,No sub-agents installed. Install them from global Settings → Sub-Agents.,empty_state,SubAgentToggleList.tsx,Shown when no sub-agents installed,尚未安装子Agent。请从全局 设置 → 子Agent 安装。,Keep arrow → .
 global.title,Global Settings,heading,GlobalSettings.tsx,Page title for global settings,全局设置,
+global.language,Language,label,GlobalSettings.tsx,Label for the UI language dropdown,语言,
 global.back,Back,button,GlobalSettings.tsx; SubAgentSettings.tsx,Back button in global settings,返回,Dedupe target.
 global.intro,"Configure default LLM settings. These are used as fallback when a project does not specify its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,配置默认 LLM 设置。当项目空间未指定自己的 API 密钥、模型或 Base URL 时，将使用这些默认值作为回退。,"Keep LLM, API, Base URL."
 global.aboutYou.label,About You,label,GlobalSettings.tsx,Field label for user preferences,你的偏好,

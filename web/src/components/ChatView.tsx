@@ -21,6 +21,7 @@ import { buildAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
+import type { StringKey } from '../i18n/strings';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -54,10 +55,15 @@ function formatToolBreakdown(counts: Record<string, number>): string {
   return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
 }
 
-function formatDuration(startedAt: number, endedAt: number | null): string {
-  if (!endedAt || endedAt <= startedAt) return '<1s';
+// Locale-aware translator for capsule summaries; defaults to English so any
+// caller that omits it (and any non-localized path) gets identical output.
+type CapsuleTr = (key: StringKey, vars?: Record<string, string | number>) => string;
+const EN_CAPSULE: CapsuleTr = (k, v) => translate('en', k, v);
+
+function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr = EN_CAPSULE): string {
+  if (!endedAt || endedAt <= startedAt) return tr('duration.lessThan1s');
   const ms = endedAt - startedAt;
-  if (ms < 1000) return '<1s';
+  if (ms < 1000) return tr('duration.lessThan1s');
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -65,13 +71,13 @@ function formatDuration(startedAt: number, endedAt: number | null): string {
   return rs ? `${m}m ${rs}s` : `${m}m`;
 }
 
-function capsuleSummaryText(capsule: AgentRunItem): string {
+function capsuleSummaryText(capsule: AgentRunItem, tr: CapsuleTr = EN_CAPSULE): string {
   const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
-  const dur = formatDuration(capsule.started_at, capsule.ended_at);
-  const head = breakdown || (capsule.has_thinking ? 'thinking' : 'agent step');
+  const dur = formatDuration(capsule.started_at, capsule.ended_at, tr);
+  const head = breakdown || (capsule.has_thinking ? tr('chat.capsule.thinking') : tr('chat.capsule.agentStep'));
   let line = `${head} · ${dur}`;
   if (capsule.status === 'error' || capsule.status === 'stopped') {
-    line += ' · stopped at error';
+    line += ` ${tr('chat.capsule.stoppedAtError')}`;
   }
   return line;
 }
@@ -2116,7 +2122,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 derivedStatus === 'running' ||
                 expandedCapsules.has(item.capsule_id);
               const isLocked = derivedStatus === 'running';
-              const summary = capsuleSummaryText({ ...item, status: derivedStatus });
+              const summary = capsuleSummaryText({ ...item, status: derivedStatus }, t);
               const Chevron = isExpanded ? ChevronDown : ChevronRight;
               rendered = (
                 <div

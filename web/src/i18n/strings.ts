@@ -256,6 +256,7 @@ export const STRINGS = {
   "global.credentials.hint": { en: "Website passwords stored in your system keychain. Agents always ask permission before using them.", zh: "存储在系统keyring中的网站密码。Agent在使用前会请求许可。" },
   "global.credentials.label": { en: "Saved Credentials", zh: "已保存的密钥" },
   "global.intro": { en: "Configure default LLM settings. These are used as fallback when a project does not specify its own API key, model, or base URL.", zh: "配置默认 LLM 设置。当项目空间未指定自己的 API 密钥、模型或 Base URL 时，将使用这些默认值作为回退。" },
+  "global.language": { en: "Language", zh: "语言" },
   "global.scratch.hint": { en: "Where Quick Tasks stores files", zh: "快速任务存储文件的位置" },
   "global.scratch.label": { en: "Quick Tasks Workspace", zh: "快速任务工作目录" },
   "global.scratch.placeholder": { en: "Default: ~/orbital/scratch/", zh: "默认：~/orbital/scratch/" },
