@@ -1,157 +1,157 @@
-key,english,category,location,context,proposed_zh_hans,notes
+﻿key,english,category,location,context,proposed_zh_hans,notes
 app.loading,Loading...,status,App.tsx,Full-screen loading state while setup/wizard status resolves on first mount,加载中…,"Also appears in many other components; dedupe target. Variants: ""Loading…"" with ellipsis char in some files."
 app.mobileBack,Back,button,App.tsx — mobile content header,Mobile-only back button that returns from content pane to sidebar,返回,
-app.sandboxWarning.title,⚠ Agent sandbox is not configured.,message_error,App.tsx — top warning banner,Warning shown when platform sandbox is not set up; agents run unsandboxed,⚠ 代理沙箱尚未配置。,Keep the ⚠ symbol. ""Agent"" = AI 代理.
-app.sandboxWarning.body,"Agents will run with your full system permissions. Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.",description,App.tsx — top warning banner,Explains the risk and remediation for missing sandbox,代理将以你的完整系统权限运行。请重新安装 Orbital 以配置沙箱，或以管理员身份运行 Orbital.exe --setup-sandbox。,"Do not translate ""Orbital"", ""Orbital.exe"", ""--setup-sandbox""."
-app.list.empty,No projects yet. Create your first one.,empty_state,App.tsx — main empty list view,Shown in the content area when there are zero projects,还没有项目。创建你的第一个项目吧。,
-app.list.selectPrompt,Select a project from the sidebar.,empty_state,App.tsx — main list view,Shown when projects exist but none is selected,从侧边栏选择一个项目。,
-app.newProject,+ New Project,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),+ 新建项目,Keep leading ""+ "".
-app.notify.approval,Orbital: {name} needs your approval,message_error,App.tsx — browser Notification,Desktop browser notification when a project needs approval and tab is unfocused,Orbital：{name} 需要你的批准,"{name} is a project name placeholder; keep it. Do not translate ""Orbital""."
-app.notify.fallbackName,A project,misc,App.tsx — notification fallback,Fallback project name used in the approval notification when name is missing,某个项目,
+app.sandboxWarning.title,⚠ Agent sandbox is not configured.,message_error,App.tsx — top warning banner,Warning shown when platform sandbox is not set up; agents run unsandboxed,⚠ 尚未配置Agent沙箱。,"Keep the ⚠ symbol. """"Agent"""" = AI Agent."
+app.sandboxWarning.body,"Agents will run with your full system permissions. Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.",description,App.tsx — top warning banner,Explains the risk and remediation for missing sandbox,Agent将有你的全部系统权限。请重新安装 Orbital 以配置沙箱，或以管理员身份运行 Orbital.exe --setup-sandbox。,"Do not translate ""Orbital"", ""Orbital.exe"", ""--setup-sandbox""."
+app.list.empty,No projects yet. Create your first one.,empty_state,App.tsx — main empty list view,Shown in the content area when there are zero projects,尚未创建项目空间,
+app.list.selectPrompt,Select a project from the sidebar.,empty_state,App.tsx — main list view,Shown when projects exist but none is selected,左侧选择项目空间,
+app.newProject,#NAME?,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),#NAME?,"Keep leading """"+ """"."
+app.notify.approval,Orbital: {name} needs your approval,message_error,App.tsx — browser Notification,Desktop browser notification when a project needs approval and tab is unfocused,Orbital：{name} 需要批准,"{name} is a project name placeholder; keep it. Do not translate ""Orbital""."
+app.notify.fallbackName,A project,misc,App.tsx — notification fallback,Fallback project name used in the approval notification when name is missing,某个项目空间,
 sidebar.wordmark,Orbital,heading,Sidebar.tsx — wordmark,App brand wordmark at top of sidebar,Orbital,DO NOT TRANSLATE — brand name.
-sidebar.allProjects,All projects,nav,Sidebar.tsx,Nav row that clears project selection and shows the all-projects view,所有项目,
-sidebar.projects,Projects,heading,Sidebar.tsx — section header,Uppercase section header above the project list,项目,Rendered uppercase; Chinese has no case so just 项目.
+sidebar.allProjects,All projects,nav,Sidebar.tsx,Nav row that clears project selection and shows the all-projects view,所有项目空间,
+sidebar.projects,Projects,heading,Sidebar.tsx — section header,Uppercase section header above the project list,项目空间,Rendered uppercase; Chinese has no case so just 项目空间.
 sidebar.blocked,Blocked,nav,Sidebar.tsx (BlockedBadge.tsx),Cross-project nav row showing count of sessions awaiting approval,待处理,"Per code, pending_approval is labeled ""Blocked"" everywhere. Could also be 已阻塞/受阻. Keep consistent with status.pendingApproval."
 sidebar.settings,Settings,nav,Sidebar.tsx,Settings nav row at bottom of sidebar,设置,
 sidebar.conn.connected,Connected,status,Sidebar.tsx — connection indicator,WebSocket connected and daemon online,已连接,
 sidebar.conn.reconnecting,Reconnecting…,status,Sidebar.tsx — connection indicator,WebSocket reconnecting,重新连接中…,
-sidebar.conn.daemonOffline,Desktop offline,status,Sidebar.tsx — connection indicator,Relay connected but the desktop daemon tunnel is down,桌面端离线,"""Desktop"" = the desktop app/daemon."
-sidebar.conn.disconnected,Disconnected,status,Sidebar.tsx — connection indicator,WebSocket disconnected,已断开连接,
-blocked.aria,{n} session(s) blocked across all projects,tooltip,BlockedBadge.tsx — aria-label,Accessible label announcing total blocked sessions,"所有项目中有 {n} 个会话被阻塞",Pluralization handled in code; translate generically. session = 会话.
-projectDetail.tab.queue,Queue,tab,ProjectDetail.tsx,Project tab: the task queue,队列,
-projectDetail.tab.chat,Chat,tab,ProjectDetail.tsx,Project tab: the chat conversation,对话,Could be 聊天; 对话 fits agent context better.
+sidebar.conn.daemonOffline,Desktop offline,status,Sidebar.tsx — connection indicator,Relay connected but the desktop daemon tunnel is down,离线,"""Desktop"" = the desktop app/daemon."
+sidebar.conn.disconnected,Disconnected,status,Sidebar.tsx — connection indicator,WebSocket disconnected,断开连接,
+blocked.aria,{n} session(s) blocked across all projects,tooltip,BlockedBadge.tsx — aria-label,Accessible label announcing total blocked sessions,有 {n} 个会话被阻塞,Pluralization handled in code; translate generically. session = 会话.
+projectDetail.tab.queue,Queue,tab,ProjectDetail.tsx,Project tab: the task queue,任务,
+projectDetail.tab.chat,Chat,tab,ProjectDetail.tsx,Project tab: the chat conversation,会话,Could be 聊天; 对话 fits agent context better.
 projectDetail.tab.files,Files,tab,ProjectDetail.tsx,Project tab: the workspace file explorer,文件,
 projectDetail.statusSummary,(dynamic),misc,ProjectDetail.tsx — status summary line,One-line agent status summary text from the backend; not a fixed string,（动态内容）,Content comes from backend; do not translate placeholder.
 status.active,Active,status,StatusBadge.tsx,Agent badge: running,运行中,
-status.waiting,Waiting for sub-agents...,status,StatusBadge.tsx,Agent badge: waiting on sub-agents to finish,等待子代理…,sub-agents = 子代理.
+status.waiting,Waiting for sub-agents...,status,StatusBadge.tsx,Agent badge: waiting on sub-agents to finish,等待子agent,sub-agents = 子Agent.
 status.idle,Idle,status,StatusBadge.tsx; QueueHeader.tsx,Agent/queue badge: idle,空闲,
 status.error,Error,status,StatusBadge.tsx; sessionStatus.ts,Agent badge: error state,错误,
-status.needsInput,Needs Input,status,StatusBadge.tsx,Agent badge: needs user input,需要输入,
-status.awaitingApproval,Awaiting Approval,status,StatusBadge.tsx,Agent badge: pending_approval,等待批准,
+status.needsInput,Needs Input,status,StatusBadge.tsx,Agent badge: needs user input,需要用户输入,
+status.awaitingApproval,Awaiting Approval,status,StatusBadge.tsx,Agent badge: pending_approval,待批准,
 sessionStatus.running,Running,status,sessionStatus.ts; QueueHeader.tsx,Session glyph label: running,运行中,
 sessionStatus.waiting,Waiting,status,sessionStatus.ts,Session glyph label: waiting,等待中,
 sessionStatus.blocked,Blocked,status,sessionStatus.ts,Session glyph label for pending_approval (spec: render as Blocked),待处理,Keep consistent with sidebar.blocked.
 sessionStatus.idle,Idle,status,sessionStatus.ts,Session glyph label: idle,空闲,
 sessionStatus.starting,Starting,status,sessionStatus.ts,Session glyph label: new_session/starting,启动中,
 sessionStatus.error,Error,status,sessionStatus.ts,Session glyph label: error,错误,
-sessionGlyph.errored.withDetails,Session errored: {details},tooltip,SessionStatusGlyph.tsx,Hover title on amber error glyph with backend detail,会话出错：{details},
-sessionGlyph.errored,Session errored,tooltip,SessionStatusGlyph.tsx,aria-label / title for a session that errored,会话出错,
-createProject.title,New Project,heading,CreateProject.tsx,Page heading for the create-project form,新建项目,
+sessionGlyph.errored.withDetails,Session errored: {details},tooltip,SessionStatusGlyph.tsx,Hover title on amber error glyph with backend detail,会话错误：{details},
+sessionGlyph.errored,Session errored,tooltip,SessionStatusGlyph.tsx,aria-label / title for a session that errored,会话错误,
+createProject.title,New Project,heading,CreateProject.tsx,Page heading for the create-project form,新建项目空间,
 createProject.cancel,Cancel,button,CreateProject.tsx; many,Cancel button on create form,取消,Dedupe target — appears in many forms.
 createProject.name.label,Project Name,label,CreateProject.tsx,Field label for the project name,项目名称,
-createProject.name.placeholder,"e.g., Refactor Auth Module",placeholder,CreateProject.tsx,Example placeholder for project name,例如：重构认证模块,Keep example feel; can localize the example text.
-createProject.name.hint,"Use letters, numbers, hyphens, and underscores only.",description,CreateProject.tsx,Validation hint for project name,仅可使用字母、数字、连字符和下划线。,
-createProject.name.required,Project name is required.,message_error,CreateProject.tsx,Validation error when name is empty,项目名称为必填项。,
-createProject.agentName.label,Agent Name,label,CreateProject.tsx; SettingsView.tsx,Field label for the agent's display name,代理名称,
+createProject.name.placeholder,"e.g., Refactor Auth Module",placeholder,CreateProject.tsx,Example placeholder for project name,例如：认证模块重构,Keep example feel; can localize the example text.
+createProject.name.hint,"Use letters, numbers, hyphens, and underscores only.",description,CreateProject.tsx,Validation hint for project name,仅可使用字母、数字、字符和下划线。,
+createProject.name.required,Project name is required.,message_error,CreateProject.tsx,Validation error when name is empty,名称为必填项。,
+createProject.agentName.label,Agent Name,label,CreateProject.tsx; SettingsView.tsx,Field label for the agent's display name,Agent名称,
 createProject.agentName.optional,(optional),misc,CreateProject.tsx,Suffix marking the agent-name field as optional,（可选）,Dedupe target.
 createProject.agentName.placeholder,"e.g., CodeBot",placeholder,CreateProject.tsx,Example placeholder for agent name,例如：CodeBot,Keep example; CodeBot is illustrative.
-createProject.agentName.hint,A friendly name for your agent. Defaults to project name.,description,CreateProject.tsx,Helper text for agent name,给你的代理起一个易记的名字。默认使用项目名称。,
-createProject.workspace.label,Workspace,label,CreateProject.tsx,Field label for the workspace folder path,工作区,
+createProject.agentName.hint,A friendly name for your agent. Defaults to project name.,description,CreateProject.tsx,Helper text for agent name,给你的Agent起一个名字。,
+createProject.workspace.label,Workspace,label,CreateProject.tsx,Field label for the workspace folder path,工作目录,
 createProject.workspace.placeholder,Select a folder or type a path...,placeholder,CreateProject.tsx,Placeholder for the workspace path input,选择文件夹或输入路径…,
-createProject.workspace.required,Workspace path is required.,message_error,CreateProject.tsx,Validation error when workspace empty,工作区路径为必填项。,
-createProject.workspace.absolute,Workspace must be an absolute path.,message_error,CreateProject.tsx,Validation error when workspace not absolute,工作区必须是绝对路径。,
+createProject.workspace.required,Workspace path is required.,message_error,CreateProject.tsx,Validation error when workspace empty,工作目录为必填项,
+createProject.workspace.absolute,Workspace must be an absolute path.,message_error,CreateProject.tsx,Validation error when workspace not absolute,工作目录必须是绝对文件夹路径,
 createProject.browse,Browse,button,CreateProject.tsx,Opens the folder picker modal,浏览,
-createProject.instructions.label,Instructions,label,CreateProject.tsx,Field label for initial agent instructions,指令,
-createProject.instructions.placeholder,Describe what the agent should do...,placeholder,CreateProject.tsx,Placeholder for the instructions textarea,描述代理应该做什么…,
+createProject.instructions.label,Instructions,label,CreateProject.tsx,Field label for initial agent instructions,项目指示,
+createProject.instructions.placeholder,Describe what the agent should do...,placeholder,CreateProject.tsx,Placeholder for the instructions textarea,描述Agent的行为准则…,
 createProject.budget.label,Budget Limit (USD),label,CreateProject.tsx; SettingsView.tsx,Field label for the spend cap in USD,预算上限（美元）,Keep USD as 美元.
 createProject.budget.placeholder,e.g. 5.00,placeholder,CreateProject.tsx; SettingsView.tsx,Example budget amount,例如 5.00,
-createProject.budget.hint,Leave empty for no limit. Agent pauses when spend reaches the limit.,description,CreateProject.tsx,Helper text for budget limit,留空表示无上限。当花费达到上限时代理将暂停。,
-createProject.deploy,Deploy Agent,button,CreateProject.tsx,Submit button that creates the project / deploys the agent,部署代理,
-autonomy.level.label,Autonomy Level,label,CreateProject.tsx; SettingsView.tsx,Section label for autonomy mode selection,自主级别,
-autonomy.handsOff.title,Hands-off,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: agent works freely,放手模式,
-autonomy.handsOff.desc,Agent works freely. Asks only for new access.,description,CreateProject.tsx; SettingsView.tsx,Description of hands-off autonomy,代理自由工作，仅在需要新权限时询问。,
-autonomy.checkIn.title,Check-in,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: pauses for shell/file writes,签到模式,Could be 确认模式; 签到 is literal. Consider 适度确认.
-autonomy.checkIn.desc,Pauses for shell commands and file writes.,description,CreateProject.tsx; SettingsView.tsx,Description of check-in autonomy,在执行 shell 命令和写入文件前暂停。,Keep ""shell"" as shell or 终端命令.
+createProject.budget.hint,Leave empty for no limit. Agent pauses when spend reaches the limit.,description,CreateProject.tsx,Helper text for budget limit,当API消耗达到预算上限时将暂停。,
+createProject.deploy,Deploy Agent,button,CreateProject.tsx,Submit button that creates the project / deploys the agent,部署,
+autonomy.level.label,Autonomy Level,label,CreateProject.tsx; SettingsView.tsx,Section label for autonomy mode selection,Agent权限级别,
+autonomy.handsOff.title,Hands-off,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: agent works freely,全自动,
+autonomy.handsOff.desc,Agent works freely. Asks only for new access.,description,CreateProject.tsx; SettingsView.tsx,Description of hands-off autonomy,Agent自主工作，仅在重要权限申请时询问用户。,
+autonomy.checkIn.title,Check-in,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: pauses for shell/file writes,半自动,Could be 确认模式; 签到 is literal. Consider 适度确认.
+autonomy.checkIn.desc,Pauses for shell commands and file writes.,description,CreateProject.tsx; SettingsView.tsx,Description of check-in autonomy,在执行 shell 命令和写入文件前请求用户审批。,"Keep """"shell"""" as shell or 终端命令."
 autonomy.supervised.title,Supervised,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: pauses for most actions,监督模式,
-autonomy.supervised.desc,Pauses for most actions. Safe mode.,description,CreateProject.tsx; SettingsView.tsx,Description of supervised autonomy,在大多数操作前暂停。安全模式。,
+autonomy.supervised.desc,Pauses for most actions. Safe mode.,description,CreateProject.tsx; SettingsView.tsx,Description of supervised autonomy,在工具调用前暂停请求用户审批。安全模式。,
 settingsModal.back,Back to {project},button,SettingsModalPage.tsx,Back link in project settings header to the project,返回 {project},{project} is the project name; keep placeholder.
-settingsModal.title,Project settings — {project},heading,SettingsModalPage.tsx,Project settings page title,项目设置 — {project},Keep em dash or use ：.
-settingsModal.subtitle,"Configure agent behaviour, LLM provider, autonomy, and more for this project.",description,SettingsModalPage.tsx,Subtitle under the project settings header,配置该项目的代理行为、LLM 提供方、自主级别等。,"Keep ""LLM"". behaviour (British) → 行为."
-settings.agentName.placeholder,Display name for this agent,placeholder,SettingsView.tsx,Placeholder for agent name in project settings,该代理的显示名称,
+settingsModal.title,Project settings — {project},heading,SettingsModalPage.tsx,Project settings page title,项目空间设置 — {project},Keep em dash or use ：.
+settingsModal.subtitle,"Configure agent behaviour, LLM provider, autonomy, and more for this project.",description,SettingsModalPage.tsx,Subtitle under the project settings header,配置该项目空间的Agent行为模式、模型商、权限级别等。,"Keep ""LLM"". behaviour (British) → 行为."
+settings.agentName.placeholder,Display name for this agent,placeholder,SettingsView.tsx,Placeholder for agent name in project settings,Agent显示名称,
 settings.projectGoals.label,Project Goals,label,SettingsView.tsx,Field label for project goals,项目目标,
-settings.projectGoals.placeholder,"Define the agent's mission, scope, and rules...",placeholder,SettingsView.tsx,Placeholder for project goals textarea,定义代理的使命、范围和规则…,
+settings.projectGoals.placeholder,"Define the agent's mission, scope, and rules...",placeholder,SettingsView.tsx,Placeholder for project goals textarea,定义Agent的任务、权职和行为准则…,
 settings.loading,Loading…,placeholder,SettingsView.tsx,Placeholder shown while project detail loads,加载中…,Dedupe with app.loading.
-settings.projectInstructions.label,Project Instructions,label,SettingsView.tsx,Field label for persistent instructions,项目指令,
-settings.projectInstructions.hint,"Persistent instructions the agent always follows. E.g., ""always write tests"", ""use PostgreSQL""",description,SettingsView.tsx,Helper text describing standing rules,代理始终遵循的常驻指令。例如：""始终编写测试""、""使用 PostgreSQL""。,Keep PostgreSQL as-is.
+settings.projectInstructions.label,Project Instructions,label,SettingsView.tsx,Field label for persistent instructions,Agent指示,
+settings.projectInstructions.hint,"Persistent instructions the agent always follows. E.g., ""always write tests"", ""use PostgreSQL""",description,SettingsView.tsx,Helper text describing standing rules,"影响Agent行为的常驻指示。例如：""""每个功能必须有测试用例""""、""""数据库使用 PostgreSQL""""。",Keep PostgreSQL as-is.
 settings.projectInstructions.placeholder,One rule per line...,placeholder,SettingsView.tsx,Placeholder for standing rules textarea,每行一条规则…,
-settings.subAgents.label,Sub-Agents,label,SettingsView.tsx,Section label for per-project sub-agent enable/disable,子代理,
-settings.subAgents.labelSuffix,— which delegation targets this project can use,label,SettingsView.tsx,Inline secondary label after Sub-Agents heading,— 本项目可使用哪些委派目标,
-settings.subAgents.hint,"Uncheck a sub-agent to hide it from the management agent for this project — it won't be suggested or dispatched here. Install & sign-in live in global Settings → Sub-Agents.",description,SettingsView.tsx,Explains the per-project sub-agent toggles,取消勾选某个子代理可将其从本项目的管理代理中隐藏——它不会在此被建议或派发。安装与登录请前往全局 设置 → 子代理。,"""management agent"" = 管理代理. Keep arrow → ."
-settings.subAgents.saveReminder,Remember to Save changes below.,description,SettingsView.tsx,Italic reminder to save toggles,记得在下方保存更改。,
-settings.subAgentMemories.label,Sub-Agent Memories,label,SettingsView.tsx,Section label for per-sub-agent memory,子代理记忆,
-settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目中每个子代理的长期记忆,
-settings.subAgentMemories.hint,Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.,description,SettingsView.tsx,Explains sub-agent memory,每个子代理在多次派发间维护自己的记忆。在此编辑以管理它们记住的内容。,
-settings.subAgentMemories.loadError,Failed to load sub-agent memories,message_error,SettingsView.tsx,Error when memory list fails to load,加载子代理记忆失败,
-settings.subAgentMemories.empty,No sub-agents enabled for this project.,empty_state,SettingsView.tsx,Shown when no sub-agents are enabled,本项目未启用任何子代理。,
+settings.subAgents.label,Sub-Agents,label,SettingsView.tsx,Section label for per-project sub-agent enable/disable,子Agent,
+settings.subAgents.labelSuffix,— which delegation targets this project can use,label,SettingsView.tsx,Inline secondary label after Sub-Agents heading,— 可用子Agent,
+settings.subAgents.hint,Uncheck a sub-agent to hide it from the management agent for this project — it won't be suggested or dispatched here. Install & sign-in live in global Settings → Sub-Agents.,description,SettingsView.tsx,Explains the per-project sub-agent toggles,取消勾选将在此空间内屏蔽该子Agent，不会给该agent派发任务。安装与登录请前往全局 设置 → 子Agent。,"""management agent"" = 管理Agent. Keep arrow → ."
+settings.subAgents.saveReminder,Remember to Save changes below.,description,SettingsView.tsx,Italic reminder to save toggles,在下方保存更改。,
+settings.subAgentMemories.label,Sub-Agent Memories,label,SettingsView.tsx,Section label for per-sub-agent memory,子Agent记忆,
+settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目空间中每个子Agent的长期记忆,
+settings.subAgentMemories.hint,Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.,description,SettingsView.tsx,Explains sub-agent memory,每个子Agent将自动维护自己的项目记忆。在此编辑以管理它们记住的内容。,
+settings.subAgentMemories.loadError,Failed to load sub-agent memories,message_error,SettingsView.tsx,Error when memory list fails to load,项目记忆加载失败,
+settings.subAgentMemories.empty,No sub-agents enabled for this project.,empty_state,SettingsView.tsx,Shown when no sub-agents are enabled,本项目空间未启用任何子Agent。,
 settings.skills.label,Skills,label,SettingsView.tsx,Section label for skills,技能,
-settings.skills.hint,Operational patterns the agent follows. Skills are read before each task.,description,SettingsView.tsx,Explains skills,代理遵循的操作模式。每次任务前都会读取技能。,
+settings.skills.hint,Operational patterns the agent follows. Skills are read before each task.,description,SettingsView.tsx,Explains skills,Agent执行任务的标准流程。每次任务前都会读取技能。,
 settings.skills.deleteError,Failed to delete skill,message_error,SettingsView.tsx,Error deleting a skill,删除技能失败,
 settings.skills.added,Skill added,message_success,SettingsView.tsx,Toast after a skill upload succeeds,技能已添加,
 settings.skills.uploadError,Upload failed,message_error,SettingsView.tsx; FileExplorer.tsx,Generic upload failure message,上传失败,Dedupe target.
 settings.skills.deleteTitle,Delete {name},tooltip,SettingsView.tsx,Title on the delete-skill button,删除 {name},{name} is the skill name.
-settings.skills.empty,No skills installed. Add a SKILL.md file or zip below.,empty_state,SettingsView.tsx,Shown when no skills exist,尚未安装技能。请在下方添加 SKILL.md 文件或压缩包。,Keep SKILL.md.
+settings.skills.empty,No skills installed. Add a SKILL.md file or zip below.,empty_state,SettingsView.tsx,Shown when no skills exist,尚未安装技能。请在下方添加 SKILL.md 文件或zip压缩包。,Keep SKILL.md.
 settings.skills.uploadCta,Add Skill (.md or .zip),button,SettingsView.tsx,Drop-zone label to add a skill,添加技能（.md 或 .zip）,
 settings.skills.uploading,Uploading...,status,SettingsView.tsx; FileExplorer.tsx,Label while a skill/file uploads,上传中…,Dedupe target.
 settings.notifications.label,Notifications,label,SettingsView.tsx,Section label for per-project push notifications (remote mode),通知,
-settings.notifications.hint,Push notifications for this project when the app is backgrounded.,description,SettingsView.tsx,Explains notification prefs,当应用处于后台时，为本项目发送推送通知。,
+settings.notifications.hint,Push notifications for this project when the app is backgrounded.,description,SettingsView.tsx,Explains notification prefs,当应用处于后台时，发送推送通知。,
 settings.notifications.taskCompleted,Task completed,label,SettingsView.tsx,Notification toggle: task completed,任务完成,
-settings.notifications.errors,Errors & crashes,label,SettingsView.tsx,Notification toggle: errors and crashes,错误与崩溃,
-settings.notifications.agentMessages,Agent messages,label,SettingsView.tsx,Notification toggle: agent messages,代理消息,
-settings.notifications.triggerStarted,Scheduled run started,label,SettingsView.tsx,Notification toggle: a scheduled trigger started,定时运行已开始,
-settings.notifications.approvalNote,Approvals always notify — agents are waiting on you.,description,SettingsView.tsx,Italic note that approvals always notify,批准请求始终会通知你——代理正在等待你的回应。,
+settings.notifications.errors,Errors & crashes,label,SettingsView.tsx,Notification toggle: errors and crashes,错误,
+settings.notifications.agentMessages,Agent messages,label,SettingsView.tsx,Notification toggle: agent messages,Agent消息,
+settings.notifications.triggerStarted,Scheduled run started,label,SettingsView.tsx,Notification toggle: a scheduled trigger started,定时任务已开始,
+settings.notifications.approvalNote,Approvals always notify — agents are waiting on you.,description,SettingsView.tsx,Italic note that approvals always notify,批准请求始终会通知你——Agent正在等待你的回应。,
 settings.budget.label,Budget,label,SettingsView.tsx,Section label for budget,预算,
 settings.budget.limitHint,Leave empty for no limit,description,SettingsView.tsx,Helper under budget limit input,留空表示无上限,
 settings.budget.spent,Spent:,label,SettingsView.tsx,Label for accumulated spend amount,已花费：,Followed by a dollar amount.
 settings.budget.overBudget,Over budget,status,SettingsView.tsx,Warning when spend exceeds limit,已超预算,
-settings.budget.nearingLimit,Nearing limit,status,SettingsView.tsx,Warning when spend near limit,接近上限,
+settings.budget.nearingLimit,Nearing limit,status,SettingsView.tsx,Warning when spend near limit,接近预算,
 settings.budget.reset,Reset,button,SettingsView.tsx,Resets accumulated spend to zero,重置,
 settings.budget.resetConfirm,Reset accumulated spend to $0?,confirm,SettingsView.tsx,Confirm dialog (window.confirm) for resetting spend,将累计花费重置为 $0？,Keep $0.
 settings.save,Save,button,SettingsView.tsx; GlobalSettings.tsx; LLMProviderSettings.tsx; many,Generic save button,保存,Dedupe target — appears widely.
 settings.saved,Saved,message_success,SettingsView.tsx; GlobalSettings.tsx; many,Inline success indicator after save,已保存,Dedupe target.
 settings.danger.title,Danger Zone,heading,SettingsView.tsx,Heading for destructive actions,危险区域,
-settings.danger.body,"Delete this project? Orbital data (sessions, screenshots, logs) will be removed. Files you saved in your workspace folder will be kept.",description,SettingsView.tsx,Explains what deleting a project removes,删除此项目？Orbital 数据（会话、截图、日志）将被移除。你保存在工作区文件夹中的文件会保留。,Do not translate Orbital.
-settings.danger.delete,Delete Project,button,SettingsView.tsx,Delete-project button (first state),删除项目,
+settings.danger.body,"Delete this project? Orbital data (sessions, screenshots, logs) will be removed. Files you saved in your workspace folder will be kept.",description,SettingsView.tsx,Explains what deleting a project removes,删除此项目空间？Orbital 数据（会话、截图、日志）将被移除。保存在工作目录文件夹中的文件会保留。,Do not translate Orbital.
+settings.danger.delete,Delete Project,button,SettingsView.tsx,Delete-project button (first state),删除项目空间,
 settings.danger.confirmDelete,Confirm Delete,button,SettingsView.tsx,Confirm destructive delete,确认删除,
 settings.danger.cancel,Cancel,button,SettingsView.tsx,Cancel the delete confirmation,取消,Dedupe target.
-subAgentMemory.timestamp.never,never written,status,SubAgentMemoryCard.tsx,Shown when a sub-agent memory has never been saved,从未写入,
+subAgentMemory.timestamp.never,never written,status,SubAgentMemoryCard.tsx,Shown when a sub-agent memory has never been saved,未写入,
 subAgentMemory.timestamp.lastEdit,last edit {datetime},status,SubAgentMemoryCard.tsx,Last-modified label for a memory file,最后编辑 {datetime},{datetime} is a locale date string.
 subAgentMemory.timestamp.unknown,unknown,status,SubAgentMemoryCard.tsx,Fallback when timestamp can't be parsed,未知,
-subAgentMemory.sizeTarget,{size} / {target} target,status,SubAgentMemoryCard.tsx,Byte-size meter vs soft target,{size} / {target}（目标）,Keep size/target tokens (e.g. ""1.2 KB"").
-subAgentMemory.overCap, — over hard cap,status,SubAgentMemoryCard.tsx,Appended when over the hard byte cap,—超出硬上限,Leading space + em dash in source.
-subAgentMemory.notInitialized,memory not yet initialized — saving will create it,empty_state,SubAgentMemoryCard.tsx,Italic note before first save,记忆尚未初始化——保存后将创建,
-subAgentMemory.placeholder,Free-form markdown. Sub-agents read this every dispatch — keep it concise.,placeholder,SubAgentMemoryCard.tsx,Placeholder for the memory textarea,自由格式 Markdown。子代理在每次派发时都会读取——请保持简洁。,Keep ""Markdown"".
-subAgentMemory.overCapError,Content exceeds the {n} byte hard cap.,message_error,SubAgentMemoryCard.tsx,Error when content exceeds hard cap,内容超出 {n} 字节硬上限。,
+subAgentMemory.sizeTarget,{size} / {target} target,status,SubAgentMemoryCard.tsx,Byte-size meter vs soft target,{size} / {target}（目标）,"Keep size/target tokens (e.g. """"1.2 KB"""")."
+subAgentMemory.overCap, — over hard cap,status,SubAgentMemoryCard.tsx,Appended when over the hard byte cap,—已超上限,Leading space + em dash in source.
+subAgentMemory.notInitialized,memory not yet initialized — saving will create it,empty_state,SubAgentMemoryCard.tsx,Italic note before first save,记忆尚未初始化,
+subAgentMemory.placeholder,Free-form markdown. Sub-agents read this every dispatch — keep it concise.,placeholder,SubAgentMemoryCard.tsx,Placeholder for the memory textarea,自由格式 Markdown。子Agent在每次派发时都会读取——请保持简洁。,"Keep """"Markdown""""."
+subAgentMemory.overCapError,Content exceeds the {n} byte hard cap.,message_error,SubAgentMemoryCard.tsx,Error when content exceeds hard cap,内容超出 {n} 大小上限。,
 subAgentMemory.reset,Reset,button,SubAgentMemoryCard.tsx,Resets memory to empty (does not delete file),重置,Dedupe target.
 subAgentMemory.saving,Saving...,status,SubAgentMemoryCard.tsx; many,Button label while saving,保存中…,Dedupe target.
 subAgentMemory.saveFailed,Save failed,message_error,SubAgentMemoryCard.tsx,Generic save failure,保存失败,
-subAgentToggle.empty,No sub-agents installed. Install them from global Settings → Sub-Agents.,empty_state,SubAgentToggleList.tsx,Shown when no sub-agents installed,尚未安装子代理。请从全局 设置 → 子代理 安装。,Keep arrow → .
+subAgentToggle.empty,No sub-agents installed. Install them from global Settings → Sub-Agents.,empty_state,SubAgentToggleList.tsx,Shown when no sub-agents installed,尚未安装子Agent。请从全局 设置 → 子Agent 安装。,Keep arrow → .
 global.title,Global Settings,heading,GlobalSettings.tsx,Page title for global settings,全局设置,
 global.back,Back,button,GlobalSettings.tsx; SubAgentSettings.tsx,Back button in global settings,返回,Dedupe target.
-global.intro,"Configure default LLM settings. These are used as fallback when a project does not specify its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,配置默认 LLM 设置。当项目未指定自己的 API 密钥、模型或 Base URL 时，将使用这些默认值作为回退。,"Keep LLM, API, Base URL."
-global.aboutYou.label,About You,label,GlobalSettings.tsx,Field label for user preferences,关于你,
-global.aboutYou.hint,"Preferences that apply across all projects. E.g., ""I'm a senior Python developer"", ""I prefer concise responses""",description,GlobalSettings.tsx,Helper text for the About You field,适用于所有项目的偏好。例如：""我是一名资深 Python 开发者""、""我喜欢简洁的回复""。,Keep Python.
-global.aboutYou.placeholder,Tell your agents about yourself...,placeholder,GlobalSettings.tsx,Placeholder for the About You textarea,向你的代理介绍一下你自己…,
-global.scratch.label,Quick Tasks Workspace,label,GlobalSettings.tsx,Field label for the scratch workspace path,快速任务工作区,
+global.intro,"Configure default LLM settings. These are used as fallback when a project does not specify its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,配置默认 LLM 设置。当项目空间未指定自己的 API 密钥、模型或 Base URL 时，将使用这些默认值作为回退。,"Keep LLM, API, Base URL."
+global.aboutYou.label,About You,label,GlobalSettings.tsx,Field label for user preferences,你的偏好,
+global.aboutYou.hint,"Preferences that apply across all projects. E.g., ""I'm a senior Python developer"", ""I prefer concise responses""",description,GlobalSettings.tsx,Helper text for the About You field,"适用于所有项目空间。例如：""""我是一名资深 Python 开发者""""、""""我喜欢简洁的回复""""。",Keep Python.
+global.aboutYou.placeholder,Tell your agents about yourself...,placeholder,GlobalSettings.tsx,Placeholder for the About You textarea,向你的Agent介绍一下你自己…,
+global.scratch.label,Quick Tasks Workspace,label,GlobalSettings.tsx,Field label for the scratch workspace path,快速任务工作目录,
 global.scratch.hint,Where Quick Tasks stores files,description,GlobalSettings.tsx,Helper for scratch workspace,快速任务存储文件的位置,
 global.scratch.placeholder,Default: ~/orbital/scratch/,placeholder,GlobalSettings.tsx,Default scratch path placeholder,默认：~/orbital/scratch/,Keep the path literal.
-global.credentials.label,Saved Credentials,label,GlobalSettings.tsx,Section label for saved credentials,已保存的凭据,
-global.credentials.hint,Website passwords stored in your system keychain. Agents always ask permission before using them.,description,GlobalSettings.tsx,Explains credential storage,存储在系统钥匙串中的网站密码。代理在使用前始终会请求许可。,keychain = 钥匙串/系统钥匙串.
-global.subAgents.heading,Sub-agents,heading,GlobalSettings.tsx; SubAgentSettings.tsx,Section heading for sub-agent settings,子代理,
+global.credentials.label,Saved Credentials,label,GlobalSettings.tsx,Section label for saved credentials,已保存的密钥,
+global.credentials.hint,Website passwords stored in your system keychain. Agents always ask permission before using them.,description,GlobalSettings.tsx,Explains credential storage,存储在系统keyring中的网站密码。Agent在使用前会请求许可。,keychain = 钥匙串/系统钥匙串.
+global.subAgents.heading,Sub-agents,heading,GlobalSettings.tsx; SubAgentSettings.tsx,Section heading for sub-agent settings,子Agent,
 llm.checking,Checking LLM configuration...,status,LLMProviderSettings.tsx — wizard mode,Loading text while checking LLM config,正在检查 LLM 配置…,
-llm.provider.heading,LLM Provider,heading,LLMProviderSettings.tsx,Collapsible/section header for LLM provider,LLM 提供方,Keep LLM.
+llm.provider.heading,LLM Provider,heading,LLMProviderSettings.tsx,Collapsible/section header for LLM provider,模型提供方,Keep LLM.
 llm.wizard.usingDefaults,Using global defaults: {provider} / {model},description,LLMProviderSettings.tsx — wizard,Shows configured provider/model in create flow,使用全局默认值：{provider} / {model},Placeholders are provider/model names.
-llm.wizard.changeIn,Change defaults in Global Settings.,description,LLMProviderSettings.tsx — wizard,Hint pointing to Global Settings,在全局设置中更改默认值。,""Global Settings"" links to global.title — keep consistent.
-llm.wizard.notConfigured,No LLM provider configured yet. Set up your API key and model in Global Settings before creating a project.,description,LLMProviderSettings.tsx — wizard,Warning when no provider configured,尚未配置 LLM 提供方。请在创建项目前于全局设置中配置 API 密钥和模型。,
+llm.wizard.changeIn,Change defaults in Global Settings.,description,LLMProviderSettings.tsx — wizard,Hint pointing to Global Settings,在全局设置中更改默认值。,"Global Settings"""" links to global.title — keep consistent."
+llm.wizard.notConfigured,No LLM provider configured yet. Set up your API key and model in Global Settings before creating a project.,description,LLMProviderSettings.tsx — wizard,Warning when no provider configured,尚未配置大模型。请在创建项目空间前于全局设置中配置 API 密钥和模型。,
 llm.wizard.notSet,not set,status,LLMProviderSettings.tsx,Shown when model is unset in wizard summary,未设置,
-llm.loading,Loading LLM settings...,status,LLMProviderSettings.tsx,Loading state for the settings panel,正在加载 LLM 设置…,
-llm.project.usingDefault,(using {provider} default),misc,LLMProviderSettings.tsx — project collapsed header,Collapsed header note showing inherited provider,（使用 {provider} 默认值）,{provider} may be a display name or ""global"".
+llm.loading,Loading LLM settings...,status,LLMProviderSettings.tsx,Loading state for the settings panel,正在加载大模型配置…,
+llm.project.usingDefault,(using {provider} default),misc,LLMProviderSettings.tsx — project collapsed header,Collapsed header note showing inherited provider,（使用 {provider} 默认值）,"{provider} may be a display name or """"global""""."
 llm.project.globalFallback,global,misc,LLMProviderSettings.tsx,Fallback word when no specific provider name,全局,
-llm.global.heading,Default LLM Settings,heading,LLMProviderSettings.tsx — global header,Header for global default LLM section,默认 LLM 设置,
-llm.global.subhead,Used by all projects unless overridden in project settings.,description,LLMProviderSettings.tsx,Subhead under default LLM settings,除非在项目设置中覆盖，否则所有项目都使用这些设置。,
-llm.project.overrideHint,Leave blank to use global defaults. Only fill in to override for this project.,description,LLMProviderSettings.tsx — project mode,Hint above project LLM fields,留空以使用全局默认值。仅在需要为本项目覆盖时填写。,
-llm.field.provider,Provider,label,LLMProviderSettings.tsx; FallbackModelsEditor.tsx,Field label for the LLM provider dropdown,提供方,
-llm.provider.custom,Custom / Self-Hosted,menu,LLMProviderSettings.tsx,Provider dropdown option for custom endpoints,自定义 / 自托管,
-llm.field.region,Region,label,LLMProviderSettings.tsx,Region toggle label (global/china base URL),区域,
+llm.global.heading,Default LLM Settings,heading,LLMProviderSettings.tsx — global header,Header for global default LLM section,默认大模型设置,
+llm.global.subhead,Used by all projects unless overridden in project settings.,description,LLMProviderSettings.tsx,Subhead under default LLM settings,除非在项目空间中额外配置，否则所有项目空间都将使用这些设置。,
+llm.project.overrideHint,Leave blank to use global defaults. Only fill in to override for this project.,description,LLMProviderSettings.tsx — project mode,Hint above project LLM fields,留空以使用全局默认值。仅在需要为本项目空间覆盖时填写。,
+llm.field.provider,Provider,label,LLMProviderSettings.tsx; FallbackModelsEditor.tsx,Field label for the LLM provider dropdown,模型厂商,
+llm.provider.custom,Custom / Self-Hosted,menu,LLMProviderSettings.tsx,Provider dropdown option for custom endpoints,自定义 / 本地模型,
+llm.field.region,Region,label,LLMProviderSettings.tsx,Region toggle label (global/china base URL),API所属地域,
 llm.region.global,Global,button,LLMProviderSettings.tsx,Region toggle option: global endpoint,全球,
 llm.region.china,China,button,LLMProviderSettings.tsx,Region toggle option: china endpoint,中国,
 llm.field.apiKey,API Key,label,LLMProviderSettings.tsx; SubAgentSettings.tsx; FallbackModelsEditor.tsx,Field label for API key,API 密钥,Keep API.
@@ -163,149 +163,149 @@ llm.apiKey.deleteConfirm,Remove the stored API key?,confirm,LLMProviderSettings.
 llm.apiKey.deleteError,Failed to delete API key.,message_error,LLMProviderSettings.tsx,Error deleting API key,删除 API 密钥失败。,
 llm.field.model,Model,label,LLMProviderSettings.tsx; FallbackModelsEditor.tsx,Field label for model selection,模型,
 llm.model.fetching,Fetching available models...,status,LLMProviderSettings.tsx,Loading state while fetching model list,正在获取可用模型…,
-llm.model.freetextPlaceholder,"Type model name, e.g. gpt-4o",placeholder,LLMProviderSettings.tsx,Free-text model input placeholder,"输入模型名称，例如 gpt-4o",Keep gpt-4o.
+llm.model.freetextPlaceholder,"Type model name, e.g. gpt-4o",placeholder,LLMProviderSettings.tsx,Free-text model input placeholder,输入模型名称，例如 gpt-4o,Keep gpt-4o.
 llm.model.selectPlaceholder,Select or type a model name,placeholder,LLMProviderSettings.tsx,Combobox placeholder when options exist,选择或输入模型名称,
 llm.model.useCustom,"Use ""{value}""",menu,LLMProviderSettings.tsx,Dropdown option to use a typed custom model,"使用 ""{value}""",{value} is the typed text.
 llm.model.enterCustom,Enter custom model name…,menu,LLMProviderSettings.tsx,Dropdown escape-hatch to free-text entry,输入自定义模型名称…,
-llm.model.source.api,Live models from this provider. You can also enter a custom model name.,description,LLMProviderSettings.tsx,Note when model list came from a live API,来自该提供方的实时模型。你也可以输入自定义模型名称。,
-llm.model.source.suggested,Showing suggested models for this provider. You can also enter a custom model name.,description,LLMProviderSettings.tsx,Note when showing catalog suggestions,显示该提供方的建议模型。你也可以输入自定义模型名称。,
-llm.model.source.freetext,Enter the model identifier to use with this provider.,description,LLMProviderSettings.tsx,Note for free-text model entry,输入要用于该提供方的模型标识符。,
+llm.model.source.api,Live models from this provider. You can also enter a custom model name.,description,LLMProviderSettings.tsx,Note when model list came from a live API,来自该提供方的模型。你也可以输入自定义模型名称。,
+llm.model.source.suggested,Showing suggested models for this provider. You can also enter a custom model name.,description,LLMProviderSettings.tsx,Note when showing catalog suggestions,建议模型。你也可以输入自定义模型名称。,
+llm.model.source.freetext,Enter the model identifier to use with this provider.,description,LLMProviderSettings.tsx,Note for free-text model entry,输入模型名称。,
 llm.advanced,Advanced,button,LLMProviderSettings.tsx,Toggle to reveal advanced fields,高级,Prefixed by a ▸/▾ glyph in source.
-llm.field.baseUrl,Base URL,label,LLMProviderSettings.tsx,Field label for the API base URL,Base URL,Could keep ""Base URL"" or translate as 基础 URL.
+llm.field.baseUrl,Base URL,label,LLMProviderSettings.tsx,Field label for the API base URL,Base URL,"Could keep """"Base URL"""" or translate as 基础 URL."
 llm.baseUrl.placeholder,https://api.openai.com/v1,placeholder,LLMProviderSettings.tsx,Example base URL,https://api.openai.com/v1,Keep literal URL.
 llm.field.sdk,SDK,label,LLMProviderSettings.tsx,Field label for SDK selection (custom provider),SDK,Keep SDK.
 llm.sdk.openai,OpenAI-compatible,menu,LLMProviderSettings.tsx,SDK option: OpenAI-compatible,OpenAI 兼容,Keep OpenAI.
 llm.sdk.anthropic,Anthropic,menu,LLMProviderSettings.tsx,SDK option: Anthropic,Anthropic,DO NOT TRANSLATE — brand.
 llm.test,Test Connection,button,LLMProviderSettings.tsx,Tests the provider connection,测试连接,
 llm.testing,Testing...,status,LLMProviderSettings.tsx,Button label while testing,测试中…,
-llm.test.success,Connected to {provider} using {model},message_success,LLMProviderSettings.tsx,Success message after a connection test,已使用 {model} 连接到 {provider},Placeholders are provider/model.
-llm.test.customProvider,custom provider,misc,LLMProviderSettings.tsx,Name used for custom provider in the success message,自定义提供方,
+llm.test.success,Connected to {provider} using {model},message_success,LLMProviderSettings.tsx,Success message after a connection test,已连接到 {provider}，使用 {model},Placeholders are provider/model.
+llm.test.customProvider,custom provider,misc,LLMProviderSettings.tsx,Name used for custom provider in the success message,自定义模型,
 llm.test.failed,Connection failed.,message_error,LLMProviderSettings.tsx,Generic connection failure,连接失败。,
 llm.test.failedAlt,Connection test failed.,message_error,LLMProviderSettings.tsx,Alternate connection-test failure,连接测试失败。,
 llm.saving,Saving...,status,LLMProviderSettings.tsx,Save button label while saving,保存中…,Dedupe target.
 llm.saveError,Failed to save settings.,message_error,LLMProviderSettings.tsx,Error saving LLM settings,保存设置失败。,
-fallback.heading,Fallback Models,heading,FallbackModelsEditor.tsx,Collapsible header for fallback models,回退模型,
+fallback.heading,Fallback Models,heading,FallbackModelsEditor.tsx,Collapsible header for fallback models,备用模型,
 fallback.configuredCount,({n} configured),misc,FallbackModelsEditor.tsx,Collapsed-header count of configured fallbacks,（已配置 {n} 个）,
-fallback.intro,"When the primary model fails with transient errors (rate limits, outages), the agent rotates through these fallback models. Leave empty to use default retry behavior.",description,FallbackModelsEditor.tsx,Explains fallback model behavior,当主模型因临时错误（限流、宕机）失败时，代理会依次切换这些回退模型。留空则使用默认重试行为。,
+fallback.intro,"When the primary model fails with transient errors (rate limits, outages), the agent rotates through these fallback models. Leave empty to use default retry behavior.",description,FallbackModelsEditor.tsx,Explains fallback model behavior,当主模型因临时错误（限流、宕机）失败时，Agent会切换备用模型。留空则默认重试。,
 fallback.customKey,(custom key),misc,FallbackModelsEditor.tsx,Tag shown when an entry uses its own API key,（自定义密钥）,
-fallback.remove,Remove fallback,tooltip,FallbackModelsEditor.tsx,Title on the remove-fallback button,移除回退,
-fallback.model.placeholder,"e.g. gpt-4o, claude-sonnet-4-20250514",placeholder,FallbackModelsEditor.tsx,Example model names placeholder,"例如 gpt-4o、claude-sonnet-4-20250514",Keep model id examples.
-fallback.apiKey.optional,"(optional, inherits primary if blank)",misc,FallbackModelsEditor.tsx,Suffix on the optional fallback API key label,（可选，留空则继承主密钥）,
+fallback.remove,Remove fallback,tooltip,FallbackModelsEditor.tsx,Title on the remove-fallback button,移除,
+fallback.model.placeholder,"e.g. gpt-4o, claude-sonnet-4-20250514",placeholder,FallbackModelsEditor.tsx,Example model names placeholder,例如 gpt-4o、claude-sonnet-4-20250514,Keep model id examples.
+fallback.apiKey.optional,"(optional, inherits primary if blank)",misc,FallbackModelsEditor.tsx,Suffix on the optional fallback API key label,（可选，留空则默认使用主密钥）,
 fallback.apiKey.placeholder,Leave blank to use primary key,placeholder,FallbackModelsEditor.tsx,Placeholder for fallback API key,留空以使用主密钥,
 fallback.add,Add,button,FallbackModelsEditor.tsx,Confirms adding a fallback entry,添加,Dedupe target with other Add buttons.
 fallback.cancel,Cancel,button,FallbackModelsEditor.tsx,Cancels the add-fallback form,取消,Dedupe target.
-fallback.addCta,Add fallback model,button,FallbackModelsEditor.tsx,Opens the add-fallback form,添加回退模型,
-credStore.loading,Loading credentials...,status,CredentialStore.tsx,Loading state for credential list,正在加载凭据…,
-credStore.empty,"No saved credentials. When an agent needs to log into a website, it will request credentials through a secure modal.",empty_state,CredentialStore.tsx,Shown when no credentials saved,尚无已保存的凭据。当代理需要登录网站时，它会通过安全弹窗请求凭据。,
-credStore.addButton,Add credential,button,CredentialStore.tsx,Opens the new-credential form,添加凭据,
-credStore.form.title,New Credential,heading,CredentialStore.tsx,Title of the add-credential form,新建凭据,
+fallback.addCta,Add fallback model,button,FallbackModelsEditor.tsx,Opens the add-fallback form,添加备份模型,
+credStore.loading,Loading credentials...,status,CredentialStore.tsx,Loading state for credential list,正在加载密钥…,
+credStore.empty,"No saved credentials. When an agent needs to log into a website, it will request credentials through a secure modal.",empty_state,CredentialStore.tsx,Shown when no credentials saved,尚无已保存的密钥。Agent登录网站时，将会通过弹窗请求密钥。,
+credStore.addButton,Add credential,button,CredentialStore.tsx,Opens the new-credential form,添加密钥,
+credStore.form.title,New Credential,heading,CredentialStore.tsx,Title of the add-credential form,新建密钥,
 credStore.form.name.placeholder,Name (e.g. GitHub),placeholder,CredentialStore.tsx,Placeholder for credential name,名称（例如 GitHub）,Keep GitHub.
 credStore.form.domain.placeholder,Domain (e.g. github.com),placeholder,CredentialStore.tsx,Placeholder for credential domain,域名（例如 github.com）,Keep github.com.
 credStore.form.fieldName.placeholder,Field name,placeholder,CredentialStore.tsx,Placeholder for a custom field key,字段名,
 credStore.form.value.placeholder,Value,placeholder,CredentialStore.tsx,Placeholder for a field value,值,
-credStore.form.addField,+ Add field,button,CredentialStore.tsx,Adds another credential field row,+ 添加字段,
+credStore.form.addField,#NAME?,button,CredentialStore.tsx,Adds another credential field row,#NAME?,
 credStore.form.nameDomainRequired,Name and domain are required.,message_error,CredentialStore.tsx,Validation error,名称和域名为必填项。,
-credStore.form.fieldRequired,At least one field with a value is required.,message_error,CredentialStore.tsx,Validation error,至少需要一个带值的字段。,
-credStore.form.storeError,Failed to store credential,message_error,CredentialStore.tsx,Error saving a credential,保存凭据失败,
-credStore.revokeTitle,Revoke browser session,tooltip,CredentialStore.tsx,Title on the revoke button,撤销浏览器会话,
-credStore.deleteTitle,Delete credential,tooltip,CredentialStore.tsx,Title on the delete button,删除凭据,
+credStore.form.fieldRequired,At least one field with a value is required.,message_error,CredentialStore.tsx,Validation error,至少需要填入一个字段。,
+credStore.form.storeError,Failed to store credential,message_error,CredentialStore.tsx,Error saving a credential,保存密钥失败,
+credStore.revokeTitle,Revoke browser session,tooltip,CredentialStore.tsx,Title on the revoke button,取消当前浏览器访问,
+credStore.deleteTitle,Delete credential,tooltip,CredentialStore.tsx,Title on the delete button,删除密钥,
 credStore.age.justNow,just now,status,CredentialStore.tsx,Relative time: <1 minute,刚刚,
-credStore.age.minutes,{n}m ago,status,CredentialStore.tsx,Relative time in minutes,{n} 分钟前,Keep {n}; ""m"" → 分钟.
+credStore.age.minutes,{n}m ago,status,CredentialStore.tsx,Relative time in minutes,{n} 分钟前,"Keep {n}; """"m"""" → 分钟."
 credStore.age.hours,{n}h ago,status,CredentialStore.tsx,Relative time in hours,{n} 小时前,
 credStore.age.days,{n}d ago,status,CredentialStore.tsx,Relative time in days,{n} 天前,
 credStore.usedTimes,Used {n} time(s),status,CredentialStore.tsx,How many times a credential was used,已使用 {n} 次,
 credStore.neverUsed,Never used,status,CredentialStore.tsx,Credential never used,从未使用,
-credStore.last,Last: {age},status,CredentialStore.tsx,Last-used relative time,最近：{age},
-credCard.providedHeader,✓ Credentials provided,message_success,CredentialCard.tsx,Resolved-state header after credentials submitted,✓ 已提供凭据,Keep ✓.
+credStore.last,Last: {age},status,CredentialStore.tsx,Last-used relative time,最近访问：{age},
+credCard.providedHeader,✓ Credentials provided,message_success,CredentialCard.tsx,Resolved-state header after credentials submitted,✓ 已提供密钥,Keep ✓.
 credCard.providedFor,for {domain},misc,CredentialCard.tsx,Suffix after credentials-provided header,用于 {domain},
-credCard.header,CREDENTIALS NEEDED,heading,CredentialCard.tsx,Banner header on the credential request card,需要凭据,Rendered uppercase.
-credCard.storedNote,Credentials are stored securely and never sent through chat.,description,CredentialCard.tsx,Reassurance note under the fields,凭据会被安全存储，绝不会通过聊天发送。,
+credCard.header,CREDENTIALS NEEDED,heading,CredentialCard.tsx,Banner header on the credential request card,需要密钥,Rendered uppercase.
+credCard.storedNote,Credentials are stored securely and never sent through chat.,description,CredentialCard.tsx,Reassurance note under the fields,密钥会被安全存储，绝不会通过聊天发送。,
 credCard.deny,Deny,button,CredentialCard.tsx; ApprovalCard.tsx,Declines the credential/approval request,拒绝,Dedupe target.
-credCard.provide,Provide Credentials,button,CredentialCard.tsx,Submits the entered credentials,提供凭据,
+credCard.provide,Provide Credentials,button,CredentialCard.tsx,Submits the entered credentials,提供密钥,
 credCard.submitting,Submitting...,status,CredentialCard.tsx,Button label while submitting,提交中…,
-approval.header,Approval,heading,ApprovalCard.tsx,Header on the approval request card,批准请求,Rendered uppercase.
+approval.header,Approval,heading,ApprovalCard.tsx,Header on the approval request card,审批请求,Rendered uppercase.
 approval.why,Why:,label,ApprovalCard.tsx,Label before the agent's reasoning,原因：,
 approval.showMore,Show more,button,ApprovalCard.tsx,Expands long reasoning (mobile),展开,
 approval.showLess,Show less,button,ApprovalCard.tsx,Collapses reasoning (mobile),收起,
-approval.actionDetails,Action details,label,ApprovalCard.tsx,Summary toggle for tool-call args,操作详情,
-approval.recentContext,Recent context,label,ApprovalCard.tsx,Summary toggle for recent conversation lines,最近上下文,
+approval.actionDetails,Action details,label,ApprovalCard.tsx,Summary toggle for tool-call args,详情,
+approval.recentContext,Recent context,label,ApprovalCard.tsx,Summary toggle for recent conversation lines,上下文,
 approval.you,You:,label,ApprovalCard.tsx,Speaker label for user lines in recent context,你：,
-approval.agent,Agent:,label,ApprovalCard.tsx,Speaker label for agent lines in recent context,代理：,
+approval.agent,Agent:,label,ApprovalCard.tsx,Speaker label for agent lines in recent context,Agent：,
 approval.showContent,Show content,label,ApprovalCard.tsx,Toggle to reveal write/edit content,显示内容,
-approval.guidance.placeholder,Optional guidance for the agent...,placeholder,ApprovalCard.tsx,Optional guidance input on approval,给代理的可选指引…,
-approval.denyReason.placeholder,Why are you denying? (optional),placeholder,ApprovalCard.tsx,Optional deny reason input,为什么拒绝？（可选）,
+approval.guidance.placeholder,Optional guidance for the agent...,placeholder,ApprovalCard.tsx,Optional guidance input on approval,额外指示（可选）,
+approval.denyReason.placeholder,Why are you denying? (optional),placeholder,ApprovalCard.tsx,Optional deny reason input,拒绝原因（可选）,
 approval.confirmDeny,Confirm Deny,button,ApprovalCard.tsx,Confirms a denial,确认拒绝,
 approval.cancel,Cancel,button,ApprovalCard.tsx; many,Cancels the deny sub-flow,取消,Dedupe target.
 approval.denyAndStop,Deny & stop,button,ApprovalCard.tsx,Denies and ends the agent's turn (Codex),拒绝并停止,Keep & as 并/与.
-approval.denyAndStop.title,Deny and end the agent's current turn immediately,tooltip,ApprovalCard.tsx,Title on the deny-and-stop button,拒绝并立即结束代理当前回合,turn = 回合.
-approval.autoApprove,Auto-approve 10 min,button,ApprovalCard.tsx,Approves and auto-approves for 10 minutes,自动批准 10 分钟,
+approval.denyAndStop.title,Deny and end the agent's current turn immediately,tooltip,ApprovalCard.tsx,Title on the deny-and-stop button,拒绝并立即结束Agent当前回合,turn = 回合.
+approval.autoApprove,Auto-approve 10 min,button,ApprovalCard.tsx,Approves and auto-approves for 10 minutes,自动批准（10min）,
 approval.autoApprove.title,Approve and auto-approve all actions for 10 minutes,tooltip,ApprovalCard.tsx,Title on the auto-approve button,批准，并在 10 分钟内自动批准所有操作,
 approval.approve,Approve,button,ApprovalCard.tsx,Approves the action,批准,
 approval.approved,✓ Approved,status,ApprovalCard.tsx,Resolved label after approval,✓ 已批准,Keep ✓.
 approval.denied,✗ Denied,status,ApprovalCard.tsx,Resolved label after denial,✗ 已拒绝,Keep ✗.
 approval.submitError,Failed to submit. Please try again.,message_error,ApprovalCard.tsx,Error when approve/deny POST fails,提交失败。请重试。,
-approval.declinedCredsReason,User declined to provide credentials,message_error,CredentialCard.tsx,Deny reason sent when user declines credentials,用户拒绝提供凭据,Sent to backend; user may see it echoed.
+approval.declinedCredsReason,User declined to provide credentials,message_error,CredentialCard.tsx,Deny reason sent when user declines credentials,用户拒绝提供密钥,Sent to backend; user may see it echoed.
 approval.deniedByUser,Denied by user,misc,ApprovalCard.tsx,Default deny reason when none typed,用户拒绝,Sent to backend.
 queue.header.running,Running,status,QueueHeader.tsx,Queue state pill: running,运行中,
 queue.header.paused,Paused,status,QueueHeader.tsx,Queue state pill: paused,已暂停,
 queue.header.idle,Idle,status,QueueHeader.tsx,Queue state pill: idle,空闲,
 queue.count.running,{n} running,status,QueueHeader.tsx,Count of running items,{n} 个运行中,
 queue.count.queued,{n} queued,status,QueueHeader.tsx,Count of queued items,{n} 个排队中,
-queue.count.blocked,{n} blocked,status,QueueHeader.tsx,Count of blocked items,{n} 个受阻,
+queue.count.blocked,{n} blocked,status,QueueHeader.tsx,Count of blocked items,{n} 个待处理,
 queue.count.done,{n} done,status,QueueHeader.tsx,Count of completed items,{n} 个已完成,
-queue.resume,Resume,button,QueueHeader.tsx,Resumes a paused queue,恢复,
+queue.resume,Resume,button,QueueHeader.tsx,Resumes a paused queue,继续,
 queue.stop,Stop,button,QueueHeader.tsx,Stops/pauses the queue,停止,
 queue.section.nowRunning,Now Running,heading,QueueTab.tsx,Section header for the running item,正在运行,
 queue.section.needsAttention,Needs Attention,heading,QueueTab.tsx,Section header for blocked items,需要关注,
 queue.section.queued,Queued,heading,QueueTab.tsx,Section header for queued items,排队中,
 queue.section.completed,Completed,heading,QueueTab.tsx,Section header for done items,已完成,
-queue.section.automations,Automations,heading,QueueTab.tsx,Section header for automations list,自动化,
-queue.empty.paused,Queue is paused. Resume to continue.,empty_state,QueueTab.tsx,Empty hint when queue is paused,队列已暂停。恢复以继续。,
+queue.section.automations,Automations,heading,QueueTab.tsx,Section header for automations list,自动任务,
+queue.empty.paused,Queue is paused. Resume to continue.,empty_state,QueueTab.tsx,Empty hint when queue is paused,队列已暂停。,
 queue.empty.idle,Idle — add a task below.,empty_state,QueueTab.tsx,Empty hint when nothing running/queued,空闲——在下方添加任务。,
 queue.composer.hint.paused,Chat freely — queue is paused,description,QueueTab.tsx; QueueComposer.tsx,Composer hint when queue is paused,可自由聊天——队列已暂停,
-queue.composer.hint.active,Steer the agent or queue a new task,description,QueueTab.tsx; QueueComposer.tsx,Composer hint when queue is active,引导代理或排入新任务,
-queue.composer.placeholder,Add to queue — describe a task or paste a brief,placeholder,QueueComposer.tsx,Placeholder for the queue composer textarea,加入队列——描述任务或粘贴简要说明,
-queue.composer.submit,Queue,button,QueueComposer.tsx; ChatView.tsx,Submit button to enqueue an item,排入队列,Also the send button label in ChatView while agent is running.
-queue.composer.submit.aria,Add to queue,tooltip,QueueComposer.tsx,aria-label for the queue submit button,加入队列,
+queue.composer.hint.active,Steer the agent or queue a new task,description,QueueTab.tsx; QueueComposer.tsx,Composer hint when queue is active,指导Agent或排入新任务,
+queue.composer.placeholder,Add to queue — describe a task or paste a brief,placeholder,QueueComposer.tsx,Placeholder for the queue composer textarea,加入任务——描述任务,
+queue.composer.submit,Queue,button,QueueComposer.tsx; ChatView.tsx,Submit button to enqueue an item,添加,Also the send button label in ChatView while agent is running.
+queue.composer.submit.aria,Add to queue,tooltip,QueueComposer.tsx,aria-label for the queue submit button,加入任务,
 queue.composer.pinToTop,Pin to top,label,QueueComposer.tsx,Checkbox to prioritize the item,置顶,
-queue.composer.reviewBeforeAdvance,Review before advance,label,QueueComposer.tsx,Checkbox to pause for review before next item,推进前先审阅,
+queue.composer.reviewBeforeAdvance,Review before advance,label,QueueComposer.tsx,Checkbox to pause for review before next item,审批后推进,
 queue.item.running,Running,status,QueueItemCard.tsx,Running card status label,运行中,
 queue.item.started,· started {time},status,QueueItemCard.tsx,Started-at note on running card,· 开始于 {time},
 queue.item.priority.high,high,status,QueueItemCard.tsx,Priority label for pinned items,高,
-queue.item.priority.normal,normal,status,QueueItemCard.tsx,Priority label for normal items,普通,
+queue.item.priority.normal,normal,status,QueueItemCard.tsx,Priority label for normal items,中,
 queue.item.priority.low,low,status,QueueItemCard.tsx,Priority label for low items (reserved),低,
-queue.item.source.agent,agent,status,QueueItemCard.tsx,Source chip: item from a trigger/agent,代理,
+queue.item.source.agent,agent,status,QueueItemCard.tsx,Source chip: item from a trigger/agent,Agent,
 queue.item.source.attached,attached,status,QueueItemCard.tsx,Source chip: item from an upload,附件,
 queue.item.source.you,you,status,QueueItemCard.tsx,Source chip: item from the user,你,
 queue.item.from,from: {name},status,QueueItemCard.tsx,Trigger-origin line on a queue item,来自：{name},
-queue.item.automation,automation,misc,QueueItemCard.tsx,Fallback trigger name,自动化,
+queue.item.automation,automation,misc,QueueItemCard.tsx,Fallback trigger name,自动任务,
 queue.item.interrupted,Interrupted {n}×,status,QueueItemCard.tsx,Note showing interrupt count,已中断 {n} 次,Keep × or use 次.
-queue.item.needsYou,needs you,status,QueueItemCard.tsx,Pill on a blocked item needing user,需要你,
-queue.item.removeAria,Remove item,tooltip,QueueItemCard.tsx,aria-label on the remove button,移除项目,
-queue.item.removeBlockedTitle,Stop the item before removing it,tooltip,QueueItemCard.tsx,Title on disabled remove button (running item),移除前请先停止该项目,
+queue.item.needsYou,needs you,status,QueueItemCard.tsx,Pill on a blocked item needing user,需要介入,
+queue.item.removeAria,Remove item,tooltip,QueueItemCard.tsx,aria-label on the remove button,移除任务,
+queue.item.removeBlockedTitle,Stop the item before removing it,tooltip,QueueItemCard.tsx,Title on disabled remove button (running item),移除前请先停止任务,
 automations.loading,Loading…,status,AutomationsList.tsx,Loading state,加载中…,Dedupe with app.loading.
-automations.empty,No automations configured.,empty_state,AutomationsList.tsx,Empty state for automations,尚未配置自动化。,
-automations.on,on,status,AutomationsList.tsx,Trigger enabled pill,开,
-automations.off,off,status,AutomationsList.tsx,Trigger disabled pill,关,
-automations.condition.cron,cron,label,AutomationsList.tsx,Label for a schedule trigger's cron expression,cron,Keep ""cron"".
+automations.empty,No automations configured.,empty_state,AutomationsList.tsx,Empty state for automations,尚未配置自动任务。,
+automations.on,on,status,AutomationsList.tsx,Trigger enabled pill,开启,
+automations.off,off,status,AutomationsList.tsx,Trigger disabled pill,关闭,
+automations.condition.cron,cron,label,AutomationsList.tsx,Label for a schedule trigger's cron expression,定时任务,"Keep """"cron""""."
 automations.condition.path,path,label,AutomationsList.tsx,Label for a file-watch trigger's path,路径,
 automations.lastFired,last fired,label,AutomationsList.tsx,Label for the last-fired time,上次触发,
 automations.lastFired.dash,—,misc,AutomationsList.tsx; TriggerStrip.tsx,Em dash placeholder when never fired,—,Do-not-translate punctuation.
-trigger.icon.fileWatch,File watch trigger,tooltip,TriggerStrip.tsx,aria-label for the file-watch icon,文件监视触发器,
-trigger.icon.schedule,Schedule trigger,tooltip,TriggerStrip.tsx,aria-label for the schedule icon,定时触发器,
+trigger.icon.fileWatch,File watch trigger,tooltip,TriggerStrip.tsx,aria-label for the file-watch icon,新文件触发,
+trigger.icon.schedule,Schedule trigger,tooltip,TriggerStrip.tsx,aria-label for the schedule icon,定时触发,
 trigger.task,Task,heading,TriggerStrip.tsx,Section header for a trigger's task,任务,
 trigger.schedule,Schedule,label,TriggerStrip.tsx,Label for a trigger's human schedule,计划,
-trigger.watching,Watching,label,TriggerStrip.tsx,Label for the watched path,监视,
-trigger.watchingPrefix,Watching {path},status,TriggerStrip.tsx,Inline trigger line label for file-watch,监视 {path},
+trigger.watching,Watching,label,TriggerStrip.tsx,Label for the watched path,监听,
+trigger.watchingPrefix,Watching {path},status,TriggerStrip.tsx,Inline trigger line label for file-watch,监听 {path},
 trigger.patterns,Patterns,label,TriggerStrip.tsx,Label for file-watch glob patterns,匹配模式,
 trigger.recursive,Recursive,label,TriggerStrip.tsx,Label for recursive watch,递归,
 trigger.recursive.yes,Yes,misc,TriggerStrip.tsx,Value when recursive is true,是,
 trigger.lastFired,Last fired,label,TriggerStrip.tsx,Label for last-fired time in detail,上次触发,
 trigger.never,never,status,TriggerStrip.tsx,Value when a trigger never fired,从未,
 trigger.runs,Runs,label,TriggerStrip.tsx,Label for total run count,运行次数,
-trigger.editHint,"To edit, tell the agent below ↓",description,TriggerStrip.tsx,Hint that editing happens via chat,如需编辑，请告诉下方的代理 ↓,Keep ↓ arrow.
-trigger.delete,Delete trigger,button,TriggerStrip.tsx,Initiates trigger deletion,删除触发器,
-trigger.deleteAria,Delete trigger,tooltip,TriggerStrip.tsx,aria-label on mobile delete button,删除触发器,
+trigger.editHint,"To edit, tell the agent below ↓",description,TriggerStrip.tsx,Hint that editing happens via chat,如需编辑，请告诉下方的Agent ↓,Keep ↓ arrow.
+trigger.delete,Delete trigger,button,TriggerStrip.tsx,Initiates trigger deletion,删除,
+trigger.deleteAria,Delete trigger,tooltip,TriggerStrip.tsx,aria-label on mobile delete button,删除,
 trigger.deleteConfirm,Delete? Cannot be undone.,confirm,TriggerStrip.tsx,Inline confirm before deleting a trigger,删除？此操作无法撤销。,
 trigger.deleting,Deleting...,status,TriggerStrip.tsx,Button label while deleting,删除中…,
 trigger.delete.confirmBtn,Delete,button,TriggerStrip.tsx; SessionListItem.tsx,Confirms deletion,删除,Dedupe target.
@@ -318,12 +318,12 @@ trigger.showLess,Show less,button,TriggerStrip.tsx,Collapses the trigger list,�
 sessionSidebar.header,Sessions,heading,SessionSidebar.tsx,Uppercase section header for sessions,会话,
 sessionSidebar.loading,Loading…,status,SessionSidebar.tsx,Loading state for session list,加载中…,Dedupe with app.loading.
 sessionSidebar.empty,No sessions,empty_state,SessionSidebar.tsx,Empty state when no sessions,暂无会话,
-sessionSidebar.newSession,+ new session,button,SessionSidebar.tsx,Creates a new chat session,+ 新建会话,
+sessionSidebar.newSession,#NAME?,button,SessionSidebar.tsx,Creates a new chat session,#NAME?,
 sessionItem.aria,Session {label},tooltip,SessionListItem.tsx,aria-label for a session row,会话 {label},
 sessionItem.optionsAria,Options for session {label},tooltip,SessionListItem.tsx,aria-label for the three-dot trigger,会话 {label} 的选项,
 sessionItem.rename,Rename,menu,SessionListItem.tsx,Rename action in session menu,重命名,
 sessionItem.delete,Delete,menu,SessionListItem.tsx,Delete action in session menu,删除,Dedupe target.
-sessionItem.deleteConfirm.aria,Delete session confirmation,tooltip,SessionListItem.tsx,aria-label for the delete confirm dialog,删除会话确认,
+sessionItem.deleteConfirm.aria,Delete session confirmation,tooltip,SessionListItem.tsx,aria-label for the delete confirm dialog,确认删除会话,
 sessionItem.deleteConfirm.title,Delete this session?,confirm,SessionListItem.tsx,Confirm dialog title,删除此会话？,
 sessionItem.deleteConfirm.body,This action cannot be undone. The conversation history will be permanently removed.,confirm,SessionListItem.tsx,Confirm dialog body,此操作无法撤销。对话历史将被永久删除。,
 sessionItem.deleteConfirm.cancel,Cancel,button,SessionListItem.tsx,Cancels session deletion,取消,Dedupe target.
@@ -335,7 +335,7 @@ sessionThreeDot.batch4,Coming in Batch 4,tooltip,SessionThreeDotMenu.tsx,Disable
 sessionThreeDot.rename,Rename,menu,SessionThreeDotMenu.tsx,Disabled rename action,重命名,
 sessionThreeDot.delete,Delete,menu,SessionThreeDotMenu.tsx,Disabled delete action,删除,
 sessionThreeDot.optionsAria,Session options,tooltip,SessionThreeDotMenu.tsx,Default aria-label for the menu trigger,会话选项,
-folderPicker.title,Choose Workspace Folder,heading,FolderPickerModal.tsx,Modal title for the folder picker,选择工作区文件夹,
+folderPicker.title,Choose Workspace Folder,heading,FolderPickerModal.tsx,Modal title for the folder picker,选择工作目录,
 folderPicker.shortcuts,Shortcuts,heading,FolderPickerModal.tsx,Shortcuts panel header,快捷方式,
 folderPicker.shortcut.home,Home,nav,FolderPickerModal.tsx,Home shortcut (from backend folder name),主目录,Backend supplies display_name; may not be translatable client-side.
 folderPicker.shortcut.desktop,Desktop,nav,FolderPickerModal.tsx,Desktop shortcut,桌面,Same caveat — backend-supplied name.
@@ -351,44 +351,44 @@ folderPicker.cancel,Cancel,button,FolderPickerModal.tsx,Closes the folder picker
 folderPicker.select,Select,button,FolderPickerModal.tsx,Confirms the selected folder,选择,
 setupGate.wordmark,Orbital,heading,SetupGate.tsx; SetupWizard.tsx,Brand wordmark above the gate/wizard card,Orbital,DO NOT TRANSLATE — brand.
 setupGate.welcome,Welcome to Orbital,heading,SetupGate.tsx; SetupWizard.tsx,Welcome heading,欢迎使用 Orbital,Do not translate Orbital.
-setupGate.intro,A secure sandbox environment needs to be configured before you can create and manage agents. This requires administrator permissions and may take a moment.,description,SetupGate.tsx,Explains the sandbox setup requirement,在你创建和管理代理之前，需要先配置一个安全沙箱环境。这需要管理员权限，可能需要片刻时间。,
+setupGate.intro,A secure sandbox environment needs to be configured before you can create and manage agents. This requires administrator permissions and may take a moment.,description,SetupGate.tsx,Explains the sandbox setup requirement,在你创建和管理Agent之前，需要先配置一个安全沙箱环境。这需要管理员权限，可能需要片刻时间。,
 setupGate.setupError,Setup failed. Please try again.,message_error,SetupGate.tsx,Error when sandbox setup fails,配置失败。请重试。,
 setupGate.settingUp,Setting up sandbox environment. This may take up to 30 seconds...,status,SetupGate.tsx,Progress text during sandbox setup,正在配置沙箱环境。这可能需要长达 30 秒…,
-setupGate.retry,Retry Setup,button,SetupGate.tsx; SetupWizard.tsx,Retries the sandbox setup,重试配置,
+setupGate.retry,Retry Setup,button,SetupGate.tsx; SetupWizard.tsx,Retries the sandbox setup,重试,
 setupGate.setup,Set Up Sandbox,button,SetupGate.tsx,Starts the sandbox setup,配置沙箱,
 wizard.welcome,Welcome to Orbital,heading,SetupWizard.tsx,Heading for the API-key step,欢迎使用 Orbital,Do not translate Orbital.
-wizard.intro,Let's set up your LLM provider to get started.,description,SetupWizard.tsx,Intro for the first wizard step,让我们先设置你的 LLM 提供方以开始使用。,Keep LLM.
+wizard.intro,Let's set up your LLM provider to get started.,description,SetupWizard.tsx,Intro for the first wizard step,设置你的大模型提供方以开始使用。,Keep LLM.
 wizard.checking,Checking...,status,SetupWizard.tsx,Button label while validating API key,检查中…,
 wizard.next,Next →,button,SetupWizard.tsx,Advances to the next wizard step,下一步 →,Keep arrow →.
-wizard.sandboxComplete.title,Your Agents Are Sandboxed,heading,SetupWizard.tsx,Heading when sandbox is configured,你的代理已沙箱隔离,
+wizard.sandboxComplete.title,Your Agents Are Sandboxed,heading,SetupWizard.tsx,Heading when sandbox is configured,你的Agent已沙箱隔离,
 wizard.sandboxComplete.item1,Isolated user account created,description,SetupWizard.tsx,Checklist item: isolated account,已创建隔离用户账户,
-wizard.sandboxComplete.item2,Agents cannot access your personal files,description,SetupWizard.tsx,Checklist item: file isolation,代理无法访问你的个人文件,
+wizard.sandboxComplete.item2,Agents cannot access your personal files,description,SetupWizard.tsx,Checklist item: file isolation,Agent无法访问你的个人文件,
 wizard.sandboxComplete.item3,Network traffic is filtered,description,SetupWizard.tsx,Checklist item: network filtering,网络流量已过滤,
-wizard.sandboxComplete.body,AI agents run in a restricted environment separate from your personal data. They can only access project files you explicitly grant.,description,SetupWizard.tsx,Explains sandbox benefits,AI 代理在与你的个人数据隔离的受限环境中运行。它们只能访问你明确授权的项目文件。,
+wizard.sandboxComplete.body,AI agents run in a restricted environment separate from your personal data. They can only access project files you explicitly grant.,description,SetupWizard.tsx,Explains sandbox benefits,AI Agent在与你的个人数据隔离的受限环境中运行。它们只能访问你明确授权的项目空间文件。,
 wizard.sandboxIncomplete.title,Sandbox Not Configured,heading,SetupWizard.tsx,Heading when sandbox setup failed,沙箱未配置,
-wizard.sandboxIncomplete.body,Agent sandbox setup did not complete during installation. Agents will run with your full system permissions.,description,SetupWizard.tsx,Explains the incomplete sandbox,安装期间未完成代理沙箱配置。代理将以你的完整系统权限运行。,
+wizard.sandboxIncomplete.body,Agent sandbox setup did not complete during installation. Agents will run with your full system permissions.,description,SetupWizard.tsx,Explains the incomplete sandbox,安装期间未完成Agent沙箱配置。Agent将有你的完整系统权限。,
 wizard.sandboxIncomplete.howto,To set up the sandbox later:,description,SetupWizard.tsx,Intro to the manual setup steps,稍后配置沙箱：,
 wizard.sandboxIncomplete.step1,Open Command Prompt as Administrator,description,SetupWizard.tsx,Manual setup step 1,以管理员身份打开命令提示符,
 wizard.sandboxIncomplete.step2,Run: Orbital.exe --setup-sandbox,description,SetupWizard.tsx,Manual setup step 2,运行：Orbital.exe --setup-sandbox,Do not translate the command.
 wizard.sandboxIncomplete.adminError,Requires administrator privileges. Please run Orbital.exe --setup-sandbox from an elevated Command Prompt.,message_error,SetupWizard.tsx,Error when setup needs elevation,需要管理员权限。请在以管理员身份运行的命令提示符中执行 Orbital.exe --setup-sandbox。,Do not translate the command.
 wizard.setupFailed,Setup failed,message_error,SetupWizard.tsx,Generic setup failure fallback,配置失败,
-wizard.continueNoSandbox,Continue Without Sandbox,button,SetupWizard.tsx,Skips the sandbox and continues,在无沙箱的情况下继续,
+wizard.continueNoSandbox,Continue Without Sandbox,button,SetupWizard.tsx,Skips the sandbox and continues,仍要继续,
 wizard.retrying,Retrying...,status,SetupWizard.tsx,Button label while retrying setup,重试中…,
-wizard.browser.title,Set Up Browser Access,heading,SetupWizard.tsx,Heading for the browser warmup step,设置浏览器访问,
-wizard.browser.body1,Sign in to your Google account so your agents can browse websites without being blocked by CAPTCHAs. This is a one-time setup.,description,SetupWizard.tsx,Explains the browser sign-in,登录你的 Google 账户，让代理可以浏览网站而不被验证码拦截。这是一次性设置。,Keep Google; CAPTCHA → 验证码.
-wizard.browser.body2,"A browser window will open. Sign in to Google, then close the browser when you're done. You can also visit other sites your agents will need.",description,SetupWizard.tsx,Tells the user what to do,将打开一个浏览器窗口。登录 Google，完成后关闭浏览器。你也可以访问代理将需要的其他网站。,Keep Google.
+wizard.browser.title,Set Up Browser Access,heading,SetupWizard.tsx,Heading for the browser warmup step,浏览器设置,
+wizard.browser.body1,Sign in to your Google account so your agents can browse websites without being blocked by CAPTCHAs. This is a one-time setup.,description,SetupWizard.tsx,Explains the browser sign-in,登录你的 Google 账户，让Agent访问网页时不被用户认证拦截。这是一次性设置。,Keep Google; CAPTCHA → 验证码.
+wizard.browser.body2,"A browser window will open. Sign in to Google, then close the browser when you're done. You can also visit other sites your agents will need.",description,SetupWizard.tsx,Tells the user what to do,将打开一个浏览器窗口。登录 Google，完成后关闭浏览器。你也可以访问Agent将需要的其他网站。,Keep Google.
 wizard.browser.openFailed,Failed to open browser,message_error,SetupWizard.tsx,Error when browser warmup fails to launch,打开浏览器失败,
 wizard.skip,Skip,button,SetupWizard.tsx,Skips the browser warmup step,跳过,
 wizard.getStarted,Get Started →,button,SetupWizard.tsx,Finishes the wizard,开始使用 →,Keep arrow →.
-wizard.browser.opening,Browser open — sign in and close it...,status,SetupWizard.tsx,Button/status while warmup browser is open,浏览器已打开——请登录并关闭它…,
+wizard.browser.opening,Browser open — sign in and close it...,status,SetupWizard.tsx,Button/status while warmup browser is open,浏览器已打开——请登录需要agent访问的帐号并关闭…,
 wizard.openBrowser,Open Browser,button,SetupWizard.tsx,Launches the warmup browser,打开浏览器,
-subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page title,子代理,
-subAgentSettings.intro,Configure how Orbital invokes each sub-agent CLI. Settings here are daemon-level — they apply to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),配置 Orbital 如何调用每个子代理 CLI。此处的设置为守护进程级别——对每个项目都生效。,Do not translate Orbital; CLI as-is.
+subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page title,子Agent,
+subAgentSettings.intro,Configure how Orbital invokes each sub-agent CLI. Settings here are daemon-level — they apply to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),配置 Orbital 调用子Agent方式。全局生效。,Do not translate Orbital; CLI as-is.
 subAgentSettings.refreshing,Refreshing...,status,SubAgentSettings.tsx,Button label while refreshing,刷新中…,
 subAgentSettings.refresh,Refresh,button,SubAgentSettings.tsx,Refreshes the sub-agent list,刷新,
-subAgentSettings.credNote,"Sub-agent credentials are stored by the sub-agent itself, not by Orbital.",description,SubAgentSettings.tsx,Italic note about credential storage,子代理凭据由子代理自身存储，而非 Orbital。,Do not translate Orbital.
-subAgentSettings.loading,Loading sub-agents...,status,SubAgentSettings.tsx,Loading state,正在加载子代理…,
-subAgentSettings.empty,No sub-agents found in the registry.,empty_state,SubAgentSettings.tsx,Empty state when registry has none,注册表中未找到子代理。,
+subAgentSettings.credNote,"Sub-agent credentials are stored by the sub-agent itself, not by Orbital.",description,SubAgentSettings.tsx,Italic note about credential storage,子Agent密钥由子Agent自身存储。,Do not translate Orbital.
+subAgentSettings.loading,Loading sub-agents...,status,SubAgentSettings.tsx,Loading state,正在加载子Agent…,
+subAgentSettings.empty,No sub-agents found in the registry.,empty_state,SubAgentSettings.tsx,Empty state when registry has none,未找到子Agent。,
 subAgentCard.installed,Installed,status,SubAgentSettings.tsx,Status pill: sub-agent installed,已安装,
 subAgentCard.notInstalled,Not installed,status,SubAgentSettings.tsx,Status pill: not installed,未安装,
 subAgentCard.loggedIn,Logged in,status,SubAgentSettings.tsx,Status pill: credentials configured,已登录,
@@ -399,27 +399,27 @@ subAgentCard.login,Login,button,SubAgentSettings.tsx,Starts the OAuth login flow
 subAgentCard.setApiKey,Set API Key,button,SubAgentSettings.tsx,Opens the API-key entry form,设置 API 密钥,
 subAgentCard.loggingOut,Logging out...,status,SubAgentSettings.tsx,Button label while logging out,正在退出登录…,
 subAgentCard.logout,Logout,button,SubAgentSettings.tsx,Logs the sub-agent out,退出登录,
-subAgentCard.apiKeyHint,Paste your API key. It will be handed to {slug} via stdin and stored wherever {slug} keeps its own credentials.,description,SubAgentSettings.tsx,Explains how the API key is handled,粘贴你的 API 密钥。它将通过标准输入传递给 {slug}，并存储在 {slug} 自身保存凭据的位置。,{slug} is the sub-agent id; keep. stdin → 标准输入.
+subAgentCard.apiKeyHint,Paste your API key. It will be handed to {slug} via stdin and stored wherever {slug} keeps its own credentials.,description,SubAgentSettings.tsx,Explains how the API key is handled,粘贴你的 API 密钥。它将通过stdin传递给 {slug}，并存储在 {slug} 自身保存密钥的位置。,{slug} is the sub-agent id; keep. stdin → 标准输入.
 subAgentCard.sending,Sending...,status,SubAgentSettings.tsx,Button label while submitting API key,发送中…,
 subAgentCard.submit,Submit,button,SubAgentSettings.tsx,Submits the API key,提交,
 subAgentCard.cancel,Cancel,button,SubAgentSettings.tsx,Cancels the API-key form,取消,Dedupe target.
 subAgentCard.param.model,Model,label,SubAgentSettings.tsx,Friendly label for the model param,模型,
 subAgentCard.param.effort,Thinking level,label,SubAgentSettings.tsx,Friendly label for the effort param,思考强度,
 subAgentCard.param.permissionMode,Permission mode,label,SubAgentSettings.tsx,Friendly label for permission-mode param,权限模式,
-subAgentCard.param.approvalMode,Approval mode,label,SubAgentSettings.tsx,Friendly label for approval-mode param,批准模式,
+subAgentCard.param.approvalMode,Approval mode,label,SubAgentSettings.tsx,Friendly label for approval-mode param,审批模式,
 subAgentCard.param.default,(default),menu,SubAgentSettings.tsx,Select option for unset param,（默认）,
 subAgentCard.param.cliDefault,(use CLI default),placeholder,SubAgentSettings.tsx,Placeholder for free-text param,（使用 CLI 默认值）,Keep CLI.
 subAgentCard.saving,Saving...,status,SubAgentSettings.tsx,Button label while saving config,保存中…,
 subAgentCard.save,Save,button,SubAgentSettings.tsx,Saves the sub-agent config,保存,Dedupe target.
 subAgentCard.saved,Saved,message_success,SubAgentSettings.tsx,Inline saved indicator,已保存,Dedupe target.
-subAgentCard.noParams,No daemon-level parameters available for this sub-agent.,empty_state,SubAgentSettings.tsx,Shown when a sub-agent has no params,该子代理没有可用的守护进程级参数。,
+subAgentCard.noParams,No daemon-level parameters available for this sub-agent.,empty_state,SubAgentSettings.tsx,Shown when a sub-agent has no params,该子Agent没有可用的参数。,
 pairPhone.lan.header,Mobile Access,heading,PairPhone.tsx — LAN mode,Section header for LAN-based mobile access,移动端访问,
 pairPhone.lan.subhead,Open Orbital on your phone via local network,description,PairPhone.tsx,Subhead under Mobile Access,通过本地网络在手机上打开 Orbital,Do not translate Orbital.
 pairPhone.lan.detecting,Detecting LAN address...,status,PairPhone.tsx,Loading state while detecting LAN IP,正在检测局域网地址…,LAN → 局域网.
 pairPhone.lan.scanTitle,Scan to open Orbital on your phone,heading,PairPhone.tsx,Card heading above LAN QR code,扫码在手机上打开 Orbital,Do not translate Orbital.
 pairPhone.lan.step1,Connect your phone to the same Wi-Fi network,description,PairPhone.tsx,LAN setup step 1,将手机连接到同一 Wi-Fi 网络,Keep Wi-Fi.
-pairPhone.lan.step2,Open your phone's camera or QR scanner,description,PairPhone.tsx,LAN setup step 2,打开手机的相机或二维码扫描器,
-pairPhone.lan.step3,Point it at this QR code to open,description,PairPhone.tsx,LAN setup step 3,对准此二维码即可打开,QR code → 二维码.
+pairPhone.lan.step2,Open your phone's camera or QR scanner,description,PairPhone.tsx,LAN setup step 2,打开手机的相机,
+pairPhone.lan.step3,Point it at this QR code to open,description,PairPhone.tsx,LAN setup step 3,扫描此二维码即可打开,QR code → 二维码.
 pairPhone.lan.localNetwork,Local network,status,PairPhone.tsx,Label by the refresh control,本地网络,
 pairPhone.refresh,Refresh,button,PairPhone.tsx,Re-detects the LAN address,刷新,Dedupe target.
 pairPhone.lan.detectFailed,Failed to detect LAN address,message_error,PairPhone.tsx,Error detecting LAN IP,检测局域网地址失败,
@@ -435,8 +435,8 @@ pairPhone.relay.step3,Confirm the connection on your phone,description,PairPhone
 pairPhone.relay.expiresIn,Expires in {time},status,PairPhone.tsx,Countdown until the pairing code expires,{time} 后过期,
 pairPhone.relay.newCode,New code,button,PairPhone.tsx,Generates a new pairing code,新建配对码,
 pairPhone.relay.useTitle,Use Orbital on your phone,heading,PairPhone.tsx,Idle-state heading,在手机上使用 Orbital,Do not translate Orbital.
-pairPhone.relay.useBody,"Pair your phone to monitor agents, approve actions, and send messages remotely. Your phone connects through a secure cloud relay.",description,PairPhone.tsx,Idle-state body,配对手机以远程监控代理、批准操作和发送消息。你的手机通过安全的云中继连接。,cloud relay → 云中继.
-pairPhone.relay.noRelayError,Cloud relay is not configured. Set the AGENT_OS_RELAY_URL environment variable and restart the daemon to enable remote pairing.,message_error,PairPhone.tsx,Error when relay not configured (503),云中继尚未配置。请设置 AGENT_OS_RELAY_URL 环境变量并重启守护进程以启用远程配对。,Do not translate AGENT_OS_RELAY_URL.
+pairPhone.relay.useBody,"Pair your phone to monitor agents, approve actions, and send messages remotely. Your phone connects through a secure cloud relay.",description,PairPhone.tsx,Idle-state body,配对手机以远程监控Agent、批准操作和发送消息。你的手机通过安全的云中继连接。,cloud relay → 云中继.
+pairPhone.relay.noRelayError,Cloud relay is not configured. Set the AGENT_OS_RELAY_URL environment variable and restart the daemon to enable remote pairing.,message_error,PairPhone.tsx,Error when relay not configured (503),未配置服务器。请设置 AGENT_OS_RELAY_URL 环境变量并重启进程以启用远程配对。,Do not translate AGENT_OS_RELAY_URL.
 pairPhone.relay.genCodeFailed,Failed to generate pairing code,message_error,PairPhone.tsx,Generic pairing-code failure,生成配对码失败,
 pairPhone.relay.generating,Generating...,status,PairPhone.tsx,Button label while generating code,生成中…,
 pairPhone.relay.linkDevice,Link a Device,button,PairPhone.tsx,Starts the pairing flow,链接设备,
@@ -449,12 +449,12 @@ pairPhone.relay.linkedAt,Linked {date} at {time},status,PairPhone.tsx,When a dev
 pairPhone.relay.unlink,Unlink,button,PairPhone.tsx,Removes a paired device,解除链接,
 pairPhone.relay.unlinkTitle,Unlink this device,tooltip,PairPhone.tsx,Title on the unlink button,解除此设备的链接,
 pairPhone.cancelResend.error,Failed to cancel and resend.,message_error,SlotHeldNotice.tsx,Error from the cancel-and-send flow,取消并重发失败。,
-claudemd.banner,"Your workspace CLAUDE.md may conflict with Orbital's project-state inheritance. Sub-agents may behave unexpectedly.",message_error,ClaudemdWarningBanner.tsx,Warning banner about CLAUDE.md conflicts,你工作区中的 CLAUDE.md 可能与 Orbital 的项目状态继承冲突。子代理可能表现异常。,Do not translate CLAUDE.md or Orbital.
+claudemd.banner,Your workspace CLAUDE.md may conflict with Orbital's project-state inheritance. Sub-agents may behave unexpectedly.,message_error,ClaudemdWarningBanner.tsx,Warning banner about CLAUDE.md conflicts,工作目录中的 CLAUDE.md 可能与 Orbital 的项目空间子agent记忆冲突。子Agent可能表现异常。,Do not translate CLAUDE.md or Orbital.
 claudemd.viewFile,view CLAUDE.md,button,ClaudemdWarningBanner.tsx,Link to open the CLAUDE.md file,查看 CLAUDE.md,Keep CLAUDE.md.
 claudemd.dismiss,dismiss,button,ClaudemdWarningBanner.tsx,Dismisses the warning banner,忽略,
-claudemd.matched,(matched: ""{token}""),misc,ClaudemdWarningBanner.tsx,Shows which token triggered the warning,（匹配到：""{token}""）,
-coldStart.header,Scan this workspace?,heading,ColdStartCard.tsx,Header on the cold-start consent card,扫描此工作区？,
-coldStart.body,{folder} already has files in it. I can scan it to understand the project and propose a summary for you to review — nothing is saved until you approve.,description,ColdStartCard.tsx,Explains the cold-start scan,{folder} 中已有文件。我可以扫描它以了解该项目，并提出一份摘要供你审阅——在你批准前不会保存任何内容。,{folder} is the workspace folder name.
+claudemd.matched,"(matched: """"{token}"""")",misc,ClaudemdWarningBanner.tsx,Shows which token triggered the warning,"（匹配到：""""{token}""""）",
+coldStart.header,Scan this workspace?,heading,ColdStartCard.tsx,Header on the cold-start consent card,扫描此工作目录？,
+coldStart.body,{folder} already has files in it. I can scan it to understand the project and propose a summary for you to review — nothing is saved until you approve.,description,ColdStartCard.tsx,Explains the cold-start scan,{folder} 中已有文件。我将扫描并阅读来了解该项目，并初始化项目空间。,{folder} is the workspace folder name.
 coldStart.folderFallback,this folder,misc,ChatView.tsx,Fallback folder name in the cold-start card,此文件夹,
 coldStart.scanning,Scanning…,status,ColdStartCard.tsx,Scan button label while busy,扫描中…,
 coldStart.scan,Scan,button,ColdStartCard.tsx,Starts the cold-start scan,扫描,
@@ -463,7 +463,7 @@ composerDisabled.aria,Composer unavailable — queue is active,tooltip,ComposerD
 composerDisabled.prompt,Pause queue to start chatting.,description,ComposerDisabledPrompt.tsx,Notice when queue blocks the composer,暂停队列以开始聊天。,
 composerDisabled.pausing,Pausing…,status,ComposerDisabledPrompt.tsx,Button label while pausing the queue,暂停中…,
 composerDisabled.pauseQueue,Pause queue,button,ComposerDisabledPrompt.tsx,Pauses the queue to enable chat,暂停队列,
-slotHeld.body,"Session {id} is currently running. Wait for it to finish, or cancel it to send this message now.",description,SlotHeldNotice.tsx,Notice when another session holds the slot,会话 {id} 正在运行。等待它完成，或取消它以立即发送此消息。,{id} is a session id.
+slotHeld.body,"Session {id} is currently running. Wait for it to finish, or cancel it to send this message now.",description,SlotHeldNotice.tsx,Notice when another session holds the slot,会话 {id} 正在运行。等待它完成，或取消并立即发送此消息。,{id} is a session id.
 slotHeld.wait,Wait,button,SlotHeldNotice.tsx,Dismisses the slot-held notice,等待,
 slotHeld.cancelling,Cancelling…,status,SlotHeldNotice.tsx,Button label while cancelling,取消中…,
 slotHeld.cancelAndSend,Cancel running session and send,button,SlotHeldNotice.tsx,Cancels the running session and sends now,取消正在运行的会话并发送,
@@ -474,21 +474,21 @@ subAgentBar.stopTitle,Stop {name},tooltip,SubAgentStatusBar.tsx,Title/aria on th
 subAgentBar.stopped,Stopped {handle},status,SubAgentStatusBar.tsx,Result text after stopping a sub-agent,已停止 {handle},{handle} is the sub-agent id.
 subAgentBar.bgTerminated,— {n} background process(es) terminated,status,SubAgentStatusBar.tsx,Appended when background processes were killed,—已终止 {n} 个后台进程,
 subAgentBar.confirm.title,Stop {name}?,confirm,SubAgentStatusBar.tsx,Confirm dialog title,停止 {name}？,
-subAgentBar.confirm.running,This cancels its current turn and terminates the agent.,confirm,SubAgentStatusBar.tsx,Confirm body when agent is running,这将取消其当前回合并终止该代理。,turn → 回合.
+subAgentBar.confirm.running,This cancels its current turn and terminates the agent.,confirm,SubAgentStatusBar.tsx,Confirm body when agent is running,这将取消其当前回合并终止该Agent。,turn → 回合.
 subAgentBar.confirm.background,"The turn is finished, but tracked background work is still running and WILL be terminated:",confirm,SubAgentStatusBar.tsx,Confirm body when background work is alive,该回合已结束，但被跟踪的后台工作仍在运行，将被终止：,
-subAgentBar.confirm.warning,Work the agent detached via a raw shell '&'/'nohup' runs outside its process tree and cannot be guaranteed stopped.,description,SubAgentStatusBar.tsx,Warning about detached background work,代理通过原始 shell 的 '&'/'nohup' 分离出的工作运行在其进程树之外，无法保证被停止。,Keep '&'/'nohup' literal.
+subAgentBar.confirm.warning,Work the agent detached via a raw shell '&'/'nohup' runs outside its process tree and cannot be guaranteed stopped.,description,SubAgentStatusBar.tsx,Warning about detached background work,Agent通过原始 shell 的 '&'/'nohup' 分离出的工作运行在其进程树之外，无法保证被停止。,Keep '&'/'nohup' literal.
 subAgentBar.confirm.cancel,Cancel,button,SubAgentStatusBar.tsx,Cancels the stop confirmation,取消,Dedupe target.
 subAgentBar.confirm.stop,Stop,button,SubAgentStatusBar.tsx,Confirms stopping the sub-agent,停止,
-refreshTurn.inProgress,Checkpointing project state…,status,RefreshTurnStatus.tsx,State-refresh indicator: in progress,正在检查点保存项目状态…,Checkpoint → 检查点/存档. Consider 正在保存项目状态存档.
+refreshTurn.inProgress,Checkpointing project state…,status,RefreshTurnStatus.tsx,State-refresh indicator: in progress,检查点 - 保存项目状态中…,Checkpoint → 检查点/存档. Consider 正在保存项目空间状态存档.
 refreshTurn.done,Project state saved,status,RefreshTurnStatus.tsx,State-refresh indicator: done,项目状态已保存,
 refreshTurn.failed,Checkpoint failed,status,RefreshTurnStatus.tsx,State-refresh indicator: failed,检查点保存失败,
 refreshTurn.skipped,Checkpoint skipped,status,RefreshTurnStatus.tsx,State-refresh indicator: skipped,已跳过检查点,
 refreshTurn.trigger.turnCount,turn-count,misc,RefreshTurnStatus.tsx,Trigger label shown in parentheses,回合数,Technical label; could keep English.
-refreshTurn.trigger.agentDecided,agent-decided,misc,RefreshTurnStatus.tsx,Trigger label,代理决定,
-refreshTurn.trigger.tokenPressure,token-pressure,misc,RefreshTurnStatus.tsx,Trigger label,令牌压力,token → 令牌.
+refreshTurn.trigger.agentDecided,agent-decided,misc,RefreshTurnStatus.tsx,Trigger label,Agent发起,
+refreshTurn.trigger.tokenPressure,token-pressure,misc,RefreshTurnStatus.tsx,Trigger label,上下文受限,token → 令牌.
 attachmentChip.uploadingAria,Uploading,tooltip,AttachmentChip.tsx,aria-label for the uploading spinner,上传中,
 attachmentChip.uploadedAria,Uploaded,tooltip,AttachmentChip.tsx,aria-label for the uploaded check,已上传,
-attachmentChip.retryAria,Retry upload,tooltip,AttachmentChip.tsx,aria-label for the retry button,重试上传,
+attachmentChip.retryAria,Retry upload,tooltip,AttachmentChip.tsx,aria-label for the retry button,重试,
 attachmentChip.removeAria,Remove attachment,tooltip,AttachmentChip.tsx,aria-label for the remove button,移除附件,
 fileExplorer.noFiles,No files found,empty_state,FileExplorer.tsx,Empty state for the file tree,未找到文件,
 fileExplorer.emptyDir,Empty directory,empty_state,FileExplorer.tsx,Shown for an empty expanded directory,空目录,
@@ -497,7 +497,7 @@ fileExplorer.uploadFile,Upload File,button,FileExplorer.tsx,Uploads a file into 
 fileExplorer.tooLarge,File too large ({size}). Maximum is 10 MB.,message_error,FileExplorer.tsx,Error when a file exceeds 10 MB,文件过大（{size}）。最大为 10 MB。,
 fileExplorer.uploadFailed,Upload failed,message_error,FileExplorer.tsx,Generic file-upload failure,上传失败,Dedupe target.
 fileExplorer.backToFiles,Back to files,button,FileExplorer.tsx,Mobile back button from preview to tree,返回文件列表,
-fileExplorer.selectFile,Select a file to preview,empty_state,FileExplorer.tsx,Preview pane empty state,选择文件以预览,
+fileExplorer.selectFile,Select a file to preview,empty_state,FileExplorer.tsx,Preview pane empty state,选择文件预览,
 fileExplorer.unableToLoad,Unable to load file,message_error,FileExplorer.tsx,Shown when file content fails to load,无法加载文件,
 fileExplorer.copy,Copy,button,FileExplorer.tsx,Copies the file's text content,复制,
 fileExplorer.copied,Copied,message_success,FileExplorer.tsx,Confirmation after copying,已复制,
@@ -505,15 +505,15 @@ fileExplorer.download,Download,button,FileExplorer.tsx,Downloads a binary file,�
 fileExplorer.truncated,File truncated -- showing first 500KB,status,FileExplorer.tsx,Note when a file preview is truncated,文件已截断——仅显示前 500KB,Keep 500KB.
 chat.message.you,you,label,ChatMessage.tsx,Sender label for the user's own messages,你,
 chat.message.youTo,you → @{target},label,ChatMessage.tsx,Sender label when user targets a sub-agent,你 → @{target},Keep @ and {target}.
-chat.message.agent,agent,label,ChatMessage.tsx; StreamingMessage.tsx,Fallback sender label for the management agent,代理,Falls back when agent_name is empty.
-chat.avatar.me,ME,misc,MessageAvatar.tsx; ChatMessage.tsx,User avatar initials fallback,ME,Two-letter avatar monogram; keep short. Could use 我.
+chat.message.agent,agent,label,ChatMessage.tsx; StreamingMessage.tsx,Fallback sender label for the management agent,Agent,Falls back when agent_name is empty.
+chat.avatar.me,ME,misc,MessageAvatar.tsx; ChatMessage.tsx,User avatar initials fallback,我,Two-letter avatar monogram; keep short. Could use 我.
 chat.loadEarlier,Load earlier messages ({n} more),button,ChatView.tsx,Loads older chat history pages,加载更早的消息（还有 {n} 条）,
 chat.loadingMore,Loading...,status,ChatView.tsx,Button label while loading more,加载中…,Dedupe with app.loading.
-chat.empty,No messages yet. Send a message to get started.,empty_state,ChatView.tsx,Empty chat state,还没有消息。发送一条消息开始吧。,
-chat.dropFiles,Drop files to attach,status,ChatView.tsx,Drag-and-drop overlay text,拖放文件以添加附件,
+chat.empty,No messages yet. Send a message to get started.,empty_state,ChatView.tsx,Empty chat state,发送消息，开启工作。,
+chat.dropFiles,Drop files to attach,status,ChatView.tsx,Drag-and-drop overlay text,拖至此处上传,
 chat.thinking,Thinking...,status,ChatView.tsx,Indicator while the agent is thinking,思考中…,
 chat.previousSession,Previous session,misc,ChatView.tsx,Separator label between sessions in history,上一个会话,
-chat.noAgents,No agents available,empty_state,ChatView.tsx,@-mention dropdown empty state,没有可用的代理,
+chat.noAgents,No agents available,empty_state,ChatView.tsx,@-mention dropdown empty state,没有可用的Agent,
 chat.attachFiles,Attach files,tooltip,ChatView.tsx,aria-label for the attach (+) button,添加附件,
 chat.composer.placeholder,Send a message...,placeholder,ChatView.tsx,Main chat composer placeholder,发送消息…,
 chat.stop,Stop,tooltip,ChatView.tsx,aria-label for the stop button (agent running),停止,
@@ -530,14 +530,14 @@ chat.fileTooLarge,File exceeds 10 MB limit,message_error,ChatView.tsx,Attachment
 chat.cancelTimeout,Cancel took longer than expected — try again if needed.,message_error,ChatView.tsx,Notice when cancel takes too long,取消耗时超出预期——如有需要请重试。,
 chat.cancelFailed,Cancel request failed — try again if needed.,message_error,ChatView.tsx,Notice when cancel POST fails,取消请求失败——如有需要请重试。,
 chat.slash.new,/new,menu,ChatView.tsx,Slash command name to start a fresh session,/new,Keep the command literal.
-chat.slash.new.desc,Start a fresh session,menu,ChatView.tsx,Description of the /new slash command,开始一个新会话,
+chat.slash.new.desc,Start a fresh session,menu,ChatView.tsx,Description of the /new slash command,开始新会话,
 chat.notify.newSession.title,New session started,message_success,ChatView.tsx,agent_notify card after starting a new session,新会话已开始,
-chat.notify.newSession.body,Workspace memory preserved. The agent remembers your project.,description,ChatView.tsx,Body of the new-session notify card,工作区记忆已保留。代理记得你的项目。,
-chat.notify.noSession.title,No active session,message_error,ChatView.tsx,Notify card when /new has no active session,没有活动会话,
-chat.notify.noSession.body,"Start the agent first, then use /new to reset the session.",description,ChatView.tsx,Body when /new can't reset,请先启动代理，然后使用 /new 重置会话。,Keep /new.
-chat.toolRow.noResult,no result content,empty_state,ChatView.tsx,Shown when a tool call has empty result,无结果内容,
-chat.capsule.thinking,thinking,status,ChatView.tsx,Capsule summary head when only reasoning,思考,
-chat.capsule.agentStep,agent step,status,ChatView.tsx,Capsule summary head fallback,代理步骤,
+chat.notify.newSession.body,Workspace memory preserved. The agent remembers your project.,description,ChatView.tsx,Body of the new-session notify card,项目记忆已保留。,
+chat.notify.noSession.title,No active session,message_error,ChatView.tsx,Notify card when /new has no active session,没有活跃会话,
+chat.notify.noSession.body,"Start the agent first, then use /new to reset the session.",description,ChatView.tsx,Body when /new can't reset,请先启动Agent，然后使用 /new 重置会话。,Keep /new.
+chat.toolRow.noResult,no result content,empty_state,ChatView.tsx,Shown when a tool call has empty result,无内容,
+chat.capsule.thinking,thinking,status,ChatView.tsx,Capsule summary head when only reasoning,思考中…,
+chat.capsule.agentStep,agent step,status,ChatView.tsx,Capsule summary head fallback,Agent步骤,
 chat.capsule.stoppedAtError,· stopped at error,status,ChatView.tsx,Appended to capsule summary on error/stop,· 出错停止,
 chat.subActivity.started,started,status,ChatView.tsx,Sub-agent lifecycle marker: started,已开始,
 chat.subActivity.sent,sent: {preview},status,ChatView.tsx,Sub-agent lifecycle marker: message sent,已发送：{preview},
@@ -553,36 +553,36 @@ activity.searchingFor,"Searching for ""{pattern}""{in path}",status,chatTransfor
 activity.ranRestricted,Ran: shell command (access restricted),status,chatTransform.ts,Activity label: restricted shell command,运行：shell 命令（访问受限）,Keep shell.
 activity.ran,Ran: {command},status,chatTransform.ts,Activity label: shell command,运行：{command},
 activity.searched,Searched: {query},status,chatTransform.ts,Activity label: web search,已搜索：{query},
-activity.fetched,Fetched: {url},status,chatTransform.ts,Activity label: web fetch,已获取：{url},
+activity.fetched,Fetched: {url},status,chatTransform.ts,Activity label: web fetch,已浏览：{url},
 activity.requestedAccess,Requested access to {path},status,chatTransform.ts,Activity label: access request,已请求访问 {path},
-activity.messaged,Messaged: @{handle},status,chatTransform.ts,Activity label: messaged a sub-agent,已发消息：@{handle},Keep @.
-activity.browser.navigate,Navigating to {url},status,chatTransform.ts,Browser action: navigate,正在导航到 {url},
-activity.browser.search,Searching web for '{query}',status,chatTransform.ts,Browser action: web search,正在搜索网页 '{query}',
-activity.browser.click,Clicking element {ref},status,chatTransform.ts,Browser action: click,正在点击元素 {ref},
+activity.messaged,Messaged: @{handle},status,chatTransform.ts,Activity label: messaged a sub-agent,已发送：@{handle},Keep @.
+activity.browser.navigate,Navigating to {url},status,chatTransform.ts,Browser action: navigate,导航到 {url},
+activity.browser.search,Searching web for '{query}',status,chatTransform.ts,Browser action: web search,搜索网页 '{query}',
+activity.browser.click,Clicking element {ref},status,chatTransform.ts,Browser action: click,点击元素 {ref},
 activity.browser.screenshot,Taking screenshot,status,chatTransform.ts,Browser action: screenshot,正在截图,
 activity.browser.scroll,Scrolling {direction},status,chatTransform.ts,Browser action: scroll,正在滚动 {direction},
 activity.browser.snapshot,Reading page content,status,chatTransform.ts,Browser action: snapshot,正在读取页面内容,
-activity.browser.type,Typing into element {ref},status,chatTransform.ts,Browser action: type,正在向元素 {ref} 输入,
+activity.browser.type,Typing into element {ref},status,chatTransform.ts,Browser action: type,正在输入元素 {ref} ,
 activity.browser.fill,Filling form fields,status,chatTransform.ts,Browser action: fill,正在填写表单字段,
 activity.browser.searchPage,Searching page for '{text}',status,chatTransform.ts,Browser action: search page,正在页面内搜索 '{text}',
 activity.browser.fetch,Fetching {url},status,chatTransform.ts,Browser action: fetch,正在获取 {url},
 activity.browser.done,Browser task complete,status,chatTransform.ts,Browser action: done,浏览器任务完成,
 activity.browser.unknown,Browser: {action},status,chatTransform.ts,Browser action fallback,浏览器：{action},
 activity.usedTool,Used tool: {name},status,chatTransform.ts,Fallback activity label for unknown tools,使用了工具：{name},
-activityGroup.filesRead,files read,status,activityGroup.ts,Summary count label: files read,个文件已读取,Used as ""{n} files read""; in zh becomes ""{n} 个文件已读取"".
-activityGroup.filesCreated,files created,status,activityGroup.ts,Summary count label: files created,个文件已创建,
-activityGroup.filesEdited,files edited,status,activityGroup.ts,Summary count label: files edited,个文件已编辑,
-activityGroup.fileSearches,file searches,status,activityGroup.ts,Summary count label: file searches,次文件搜索,
-activityGroup.contentSearches,content searches,status,activityGroup.ts,Summary count label: content searches,次内容搜索,
-activityGroup.commandsRun,commands run,status,activityGroup.ts,Summary count label: commands run,条命令已运行,
-activityGroup.searches,searches,status,activityGroup.ts,Summary count label: web searches,次搜索,
-activityGroup.pagesFetched,pages fetched,status,activityGroup.ts,Summary count label: pages fetched,个页面已获取,
-activityGroup.accessRequests,access requests,status,activityGroup.ts,Summary count label: access requests,次访问请求,
-activityGroup.messagesSent,messages sent,status,activityGroup.ts,Summary count label: messages sent,条消息已发送,
-activityGroup.requestsBlocked,requests blocked,status,activityGroup.ts,Summary count label: requests blocked,个请求已拦截,
-activityGroup.toolCalls,tool calls,status,activityGroup.ts,Summary count label: generic tool calls,次工具调用,
+activityGroup.filesRead,{n} files read,status,activityGroup.ts,Summary count label: files read,已读取 {n} 个文件,"Used as """"{n} files read""""; in zh becomes """"{n} 个文件已读取""""."
+activityGroup.filesCreated,{n} files created,status,activityGroup.ts,Summary count label: files created,已创建 {n} 个文件,
+activityGroup.filesEdited,{n} files edited,status,activityGroup.ts,Summary count label: files edited,已编辑 {n} 个文件,
+activityGroup.fileSearches,{n} file searches,status,activityGroup.ts,Summary count label: file searches,{n} 次文件搜索,
+activityGroup.contentSearches,{n} content searches,status,activityGroup.ts,Summary count label: content searches,{n} 次内容搜索,
+activityGroup.commandsRun,{n} commands run,status,activityGroup.ts,Summary count label: commands run,已运行 {n} 条命令,
+activityGroup.searches,{n} searches,status,activityGroup.ts,Summary count label: web searches,{n} 次搜索,
+activityGroup.pagesFetched,{n} pages fetched,status,activityGroup.ts,Summary count label: pages fetched,已获取 {n} 个页面,
+activityGroup.accessRequests,{n} access requests,status,activityGroup.ts,Summary count label: access requests,{n} 次访问请求,
+activityGroup.messagesSent,{n} messages sent,status,activityGroup.ts,Summary count label: messages sent,已发送 {n} 条消息,
+activityGroup.requestsBlocked,{n} requests blocked,status,activityGroup.ts,Summary count label: requests blocked,已拦截 {n} 个请求,
+activityGroup.toolCalls,{n} tool calls,status,activityGroup.ts,Summary count label: generic tool calls,{n} 次工具调用,
 duration.lessThan1s,<1s,misc,activityGroup.ts; ChatView.tsx,Duration shown when under one second,<1秒,
-errorBoundary.message,Something went wrong displaying this project.,message_error,ErrorBoundary.tsx,Fallback shown when a project view crashes,显示该项目时出错。,
+errorBoundary.message,Something went wrong displaying this project.,message_error,ErrorBoundary.tsx,Fallback shown when a project view crashes,显示该项目空间时出错。,
 errorBoundary.retry,Try again,button,ErrorBoundary.tsx,Re-mounts the crashed subtree,重试,
-settingsIcon.aria,Project settings,tooltip,SettingsIcon.tsx,aria-label/title for the gear icon,项目设置,
+settingsIcon.aria,Project settings,tooltip,SettingsIcon.tsx,aria-label/title for the gear icon,项目空间设置,
 api.invalidJson,Invalid JSON response ({n} bytes),message_error,config.ts,Error surfaced when the API returns non-JSON,无效的 JSON 响应（{n} 字节）,Rarely user-visible; technical. Keep JSON.

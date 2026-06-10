@@ -9,6 +9,8 @@ import FallbackModelsEditor from './FallbackModelsEditor';
 import CredentialStore from './CredentialStore';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
+import { useLocale } from '../i18n/LocaleContext';
+import { LOCALES } from '../i18n/locales';
 
 interface GlobalSettingsProps {
   onBack: () => void;
@@ -23,6 +25,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [providers, setProviders] = useState<ProviderRegistry>({});
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const { locale, setLocale } = useLocale();
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v2/settings`)
@@ -68,6 +71,22 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
           >
             Back
           </button>
+        </div>
+
+        {/* Language */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-primary mb-1.5">
+            Language
+          </label>
+          <select
+            value={locale}
+            onChange={(e) => setLocale(e.target.value as typeof locale)}
+            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+          >
+            {LOCALES.map((l) => (
+              <option key={l.code} value={l.code}>{l.label}</option>
+            ))}
+          </select>
         </div>
 
         <p className="text-sm text-secondary mb-6">
