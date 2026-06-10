@@ -550,7 +550,8 @@ activity.read,Read {path},status,chatTransform.ts,Activity capsule label: file r
 activity.created,Created {path},status,chatTransform.ts,Activity capsule label: file created,创建 {path},
 activity.edited,Edited {path},status,chatTransform.ts,Activity capsule label: file edited,编辑 {path},
 activity.searchingFiles,Searching files: {pattern},status,chatTransform.ts,Activity label: file search,搜索文件：{pattern},
-activity.searchingFor,"Searching for ""{pattern}""{in path}",status,chatTransform.ts,Activity label: content search,"搜索 ""{pattern}""{ 于 path}",
+activity.searchingFor,"Searching for ""{pattern}""",status,chatTransform.ts,Activity label: content search (no path),"搜索 ""{pattern}""",Split from the old {in path} form; suffix handled by activity.searchingForIn.
+activity.searchingForIn,"Searching for ""{pattern}"" in {path}",status,chatTransform.ts,Activity label: content search within a path,"在 {path} 中搜索 ""{pattern}""",
 activity.ranRestricted,Ran: shell command (access restricted),status,chatTransform.ts,Activity label: restricted shell command,运行：shell 命令（访问受限）,Keep shell.
 activity.ran,Ran: {command},status,chatTransform.ts,Activity label: shell command,运行：{command},
 activity.searched,Searched: {query},status,chatTransform.ts,Activity label: web search,已搜索：{query},

@@ -19,7 +19,8 @@ import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
-import { useT } from '../i18n/useT';
+import { useT, translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -396,6 +397,7 @@ interface PendingApproval {
 
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
   const t = useT();
+  const { locale } = useLocale();
   // FE-1 (transform-once): loaded chat history is stored as RAW messages
   // across all paginated pages (initial page + each "Load earlier" prepend),
   // then transformed in a SINGLE pass via the useMemo below. This eliminates
@@ -522,8 +524,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // do NOT trigger a re-seed. The result seeds `items` only when history
   // (re)loads; live WS events then mutate `items` on top of this baseline.
   const historyItems = useMemo(
-    () => transformChatHistory(rawMessages, project.workspace),
-    [rawMessages, project.workspace],
+    () => transformChatHistory(rawMessages, project.workspace, (k, v) => translate(locale, k, v)),
+    [rawMessages, project.workspace, locale],
   );
 
   // Seed the render/live `items` from the transform-once history whenever that

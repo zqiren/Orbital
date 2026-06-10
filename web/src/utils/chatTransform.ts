@@ -3,6 +3,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { ChatMessage, ToolCall, ActivityCategory } from '../types';
+import { translate } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
+
+/**
+ * Locale-aware translator for activity descriptions. Defaults to English so
+ * callers (and unit tests) that omit it get the original English strings,
+ * keeping output byte-identical when no locale is threaded in.
+ */
+export type ActivityTranslate = (
+  key: StringKey,
+  vars?: Record<string, string | number>,
+) => string;
+const EN_ACTIVITY: ActivityTranslate = (key, vars) => translate('en', key, vars);
 
 export interface Activity {
   id: string;
@@ -149,8 +162,15 @@ const TOOL_NAME_TO_CATEGORY: Record<string, ActivityCategory> = {
   browser: 'browser_automation',
 };
 
-function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessage, workspace?: string): Activity {
-  // Check for persisted description first (from JSONL _activity_descriptions)
+function toolCallToActivity(
+  tc: ToolCall,
+  timestamp: string,
+  message?: ChatMessage,
+  workspace?: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
+): Activity {
+  // Check for persisted description first (from JSONL _activity_descriptions).
+  // These are backend-authored English strings; surfaced verbatim.
   const persisted = message?._activity_descriptions?.[tc.id];
   if (persisted) {
     const name = tc.function.name;
@@ -170,59 +190,61 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
   let description: string;
   switch (category) {
     case 'file_read':
-      description = `Read ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.read', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_write':
-      description = `Created ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.created', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_edit':
-      description = `Edited ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.edited', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_search':
-      description = `Searching files: ${args.pattern ?? '?'}`;
+      description = tr('activity.searchingFiles', { pattern: String(args.pattern ?? '?') });
       break;
     case 'content_search':
-      description = `Searching for "${args.pattern ?? '?'}"${args.path ? ` in ${args.path}` : ''}`;
+      description = args.path
+        ? tr('activity.searchingForIn', { pattern: String(args.pattern ?? '?'), path: String(args.path) })
+        : tr('activity.searchingFor', { pattern: String(args.pattern ?? '?') });
       break;
     case 'command_exec':
       if (workspace && typeof args.command === 'string' && containsExternalPaths(args.command, workspace)) {
-        description = 'Ran: shell command (access restricted)';
+        description = tr('activity.ranRestricted');
       } else {
-        description = `Ran: ${args.command ?? name}`;
+        description = tr('activity.ran', { command: String(args.command ?? name) });
       }
       break;
     case 'web_search':
-      description = `Searched: ${args.query ?? name}`;
+      description = tr('activity.searched', { query: String(args.query ?? name) });
       break;
     case 'web_fetch':
-      description = `Fetched: ${args.url ?? name}`;
+      description = tr('activity.fetched', { url: String(args.url ?? name) });
       break;
     case 'request_access':
-      description = `Requested access to ${args.path ?? name}`;
+      description = tr('activity.requestedAccess', { path: String(args.path ?? name) });
       break;
     case 'agent_message':
-      description = `Messaged: @${args.handle ?? args.target ?? name}`;
+      description = tr('activity.messaged', { handle: String(args.handle ?? args.target ?? name) });
       break;
     case 'browser_automation': {
       const action = args.action as string | undefined;
       switch (action) {
-        case 'navigate': description = `Navigating to ${args.url ?? 'page'}`; break;
-        case 'search': description = `Searching web for '${String(args.query ?? '?').slice(0, 50)}'`; break;
-        case 'click': description = `Clicking element ${args.ref ?? args.selector ?? '?'}`; break;
-        case 'screenshot': description = 'Taking screenshot'; break;
-        case 'scroll': description = `Scrolling ${args.direction ?? 'down'}`; break;
-        case 'snapshot': description = 'Reading page content'; break;
-        case 'type': description = `Typing into element ${args.ref ?? '?'}`; break;
-        case 'fill': description = 'Filling form fields'; break;
-        case 'search_page': description = `Searching page for '${String(args.text ?? '?').slice(0, 30)}'`; break;
-        case 'fetch': description = `Fetching ${String(args.url ?? '?').slice(0, 60)}`; break;
-        case 'done': description = 'Browser task complete'; break;
-        default: description = `Browser: ${action ?? 'unknown'}`; break;
+        case 'navigate': description = tr('activity.browser.navigate', { url: String(args.url ?? 'page') }); break;
+        case 'search': description = tr('activity.browser.search', { query: String(args.query ?? '?').slice(0, 50) }); break;
+        case 'click': description = tr('activity.browser.click', { ref: String(args.ref ?? args.selector ?? '?') }); break;
+        case 'screenshot': description = tr('activity.browser.screenshot'); break;
+        case 'scroll': description = tr('activity.browser.scroll', { direction: String(args.direction ?? 'down') }); break;
+        case 'snapshot': description = tr('activity.browser.snapshot'); break;
+        case 'type': description = tr('activity.browser.type', { ref: String(args.ref ?? '?') }); break;
+        case 'fill': description = tr('activity.browser.fill'); break;
+        case 'search_page': description = tr('activity.browser.searchPage', { text: String(args.text ?? '?').slice(0, 30) }); break;
+        case 'fetch': description = tr('activity.browser.fetch', { url: String(args.url ?? '?').slice(0, 60) }); break;
+        case 'done': description = tr('activity.browser.done'); break;
+        default: description = tr('activity.browser.unknown', { action: String(action ?? 'unknown') }); break;
       }
       break;
     }
     default:
-      description = `Used tool: ${name}`;
+      description = tr('activity.usedTool', { name });
   }
 
   return {
@@ -300,6 +322,7 @@ function parseSubAgentSystemMessage(
 export function transformChatHistory(
   messages: ChatMessage[],
   workspace?: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
@@ -590,7 +613,7 @@ export function transformChatHistory(
         }
         if (hasTools) {
           for (const tc of msg.tool_calls!) {
-            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
+            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
             currentCapsule.items.push({
               type: 'tool_call_row',
               tool_name: activity.toolName,
