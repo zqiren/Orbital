@@ -94,6 +94,13 @@ def _find_ripgrep() -> str | None:
     return fallback
 
 
+# Public alias so other modules (e.g. workspace_scan) can reuse the vendored
+# ripgrep resolution logic without importing a private symbol.
+def find_ripgrep() -> str | None:
+    """Public wrapper around the vendored-ripgrep resolver."""
+    return _find_ripgrep()
+
+
 class GrepTool(Tool):
     """Search for text content across workspace files using ripgrep."""
 

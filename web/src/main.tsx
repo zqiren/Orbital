@@ -7,11 +7,14 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { WebSocketProvider } from './hooks/useWebSocket'
+import { LocaleProvider } from './i18n/LocaleContext'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <WebSocketProvider>
-      <App />
-    </WebSocketProvider>
+    <LocaleProvider>
+      <WebSocketProvider>
+        <App />
+      </WebSocketProvider>
+    </LocaleProvider>
   </StrictMode>,
 )

@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
+import { useT } from '../i18n/useT';
 
 interface FallbackModelsEditorProps {
   models: FallbackModelEntry[];
@@ -26,6 +27,7 @@ export default function FallbackModelsEditor({
   const [expanded, setExpanded] = useState(models.length > 0);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<FallbackModelEntry>({ ...EMPTY_ENTRY });
+  const t = useT();
 
   function handleAdd() {
     if (!draft.model.trim()) return;
@@ -66,10 +68,10 @@ export default function FallbackModelsEditor({
         ) : (
           <ChevronRight className="w-4 h-4" />
         )}
-        <span>Fallback Models</span>
+        <span>{t('fallback.heading')}</span>
         {!expanded && models.length > 0 && (
           <span className="text-secondary font-normal ml-1">
-            ({models.length} configured)
+            {t('fallback.configuredCount', { n: models.length })}
           </span>
         )}
       </button>
@@ -77,9 +79,7 @@ export default function FallbackModelsEditor({
       {expanded && (
         <div className="space-y-3 ml-6">
           <p className="text-xs text-secondary">
-            When the primary model fails with transient errors (rate limits, outages), the
-            agent rotates through these fallback models. Leave empty to use default retry
-            behavior.
+            {t('fallback.intro')}
           </p>
 
           {/* Existing entries */}
@@ -97,14 +97,14 @@ export default function FallbackModelsEditor({
                   </span>
                   <span className="text-xs text-secondary block truncate">
                     {displayProvider}
-                    {entry.api_key ? ' (custom key)' : ''}
+                    {entry.api_key ? ` ${t('fallback.customKey')}` : ''}
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={() => handleRemove(idx)}
                   className="shrink-0 text-secondary hover:text-error transition-colors p-1 max-md:min-w-[44px] max-md:min-h-[44px] flex items-center justify-center"
-                  title="Remove fallback"
+                  title={t('fallback.remove')}
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -118,7 +118,7 @@ export default function FallbackModelsEditor({
               {/* Provider */}
               <div>
                 <label className="block text-xs font-medium text-primary mb-1">
-                  Provider
+                  {t('llm.field.provider')}
                 </label>
                 <select
                   value={draft.provider}
@@ -136,7 +136,7 @@ export default function FallbackModelsEditor({
               {/* Model */}
               <div>
                 <label className="block text-xs font-medium text-primary mb-1">
-                  Model
+                  {t('llm.field.model')}
                 </label>
                 <input
                   type="text"
@@ -144,7 +144,7 @@ export default function FallbackModelsEditor({
                   onChange={(e) =>
                     setDraft({ ...draft, model: e.target.value })
                   }
-                  placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+                  placeholder={t('fallback.model.placeholder')}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
                 />
               </div>
@@ -152,9 +152,9 @@ export default function FallbackModelsEditor({
               {/* API Key (optional) */}
               <div>
                 <label className="block text-xs font-medium text-primary mb-1">
-                  API Key{' '}
+                  {t('llm.field.apiKey')}{' '}
                   <span className="text-secondary font-normal">
-                    (optional, inherits primary if blank)
+                    {t('fallback.apiKey.optional')}
                   </span>
                 </label>
                 <input
@@ -163,7 +163,7 @@ export default function FallbackModelsEditor({
                   onChange={(e) =>
                     setDraft({ ...draft, api_key: e.target.value })
                   }
-                  placeholder="Leave blank to use primary key"
+                  placeholder={t('fallback.apiKey.placeholder')}
                   className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
                 />
               </div>
@@ -176,7 +176,7 @@ export default function FallbackModelsEditor({
                   disabled={!draft.model.trim()}
                   className="text-sm font-medium text-white bg-accent rounded-lg px-4 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
                 >
-                  Add
+                  {t('fallback.add')}
                 </button>
                 <button
                   type="button"
@@ -186,7 +186,7 @@ export default function FallbackModelsEditor({
                   }}
                   className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:text-primary transition-all duration-150"
                 >
-                  Cancel
+                  {t('fallback.cancel')}
                 </button>
               </div>
             </div>
@@ -197,7 +197,7 @@ export default function FallbackModelsEditor({
               className="flex items-center gap-1.5 text-sm text-secondary hover:text-accent transition-all duration-150"
             >
               <Plus className="w-4 h-4" />
-              Add fallback model
+              {t('fallback.addCta')}
             </button>
           )}
         </div>

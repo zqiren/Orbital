@@ -325,6 +325,25 @@ class TestSubAgentSettingsRoutes:
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
+    def test_status_entry_exposes_supports_login(self, client):
+        """Each entry carries a boolean supports_login derived from the
+        manifest: true when a credential has a login/setup_command, false
+        otherwise. The frontend uses this to hide the dead Login button."""
+        resp = client.get("/api/v2/settings/sub-agents")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data, "expected at least one sub-agent entry"
+        for entry in data:
+            assert "supports_login" in entry
+            assert isinstance(entry["supports_login"], bool)
+
+        # claude-code and codex both ship a login setup_command -> True.
+        by_slug = {e["slug"]: e for e in data}
+        if "claude-code" in by_slug:
+            assert by_slug["claude-code"]["supports_login"] is True
+        if "codex" in by_slug:
+            assert by_slug["codex"]["supports_login"] is True
+
     def test_login_endpoint_does_not_store_tokens(self, client, tmp_path):
         """POST /login starts the CLI's own subprocess; orbital never sees
         a token. Verifies that ~/.orbital/credentials.* never contains

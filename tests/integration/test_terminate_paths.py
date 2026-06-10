@@ -200,9 +200,13 @@ def _read_session_messages(filepath):
 
 @pytest.mark.asyncio
 async def test_stop_agent_terminates_via_loop(caplog):
-    """POST /api/v2/agents/{pid}/stop with an in-flight slow LLM stream
+    """stop_agent (internal teardown) with an in-flight slow LLM stream
     must terminate the loop within 5s and produce no
     'loop did not stop gracefully' warning.
+
+    The user-facing /stop HTTP route has been removed; full teardown is now
+    an internal AgentManager.stop_agent(...) call (idle eviction, daemon
+    shutdown, project deletion). This test drives that method directly.
     """
     with tempfile.TemporaryDirectory() as workspace:
         project_id = "proj_stop_terminate"
@@ -213,9 +217,7 @@ async def test_stop_agent_terminates_via_loop(caplog):
             workspace, project_id, project_name, provider=provider,
         )
 
-        # Start the loop running in the test's event loop. The TestClient's
-        # synchronous .post() call below is dispatched from a worker thread,
-        # so its handler runs on the same anyio event loop the test owns.
+        # Start the loop running in the test's event loop.
         loop_obj = handle.loop
         run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
         handle.task = run_task
@@ -229,38 +231,29 @@ async def test_stop_agent_terminates_via_loop(caplog):
             "loop did not start as expected"
         )
 
-        # Hit the HTTP /stop endpoint via TestClient.
-        client, saved = _build_test_client(mgr, project_store)
+        # Call the internal teardown method directly (no HTTP route anymore).
         try:
             with caplog.at_level(logging.WARNING,
                                   logger="agent_os.daemon_v2.agent_manager"):
                 started = time.monotonic()
-                # Run the synchronous client.post in a thread so we don't
-                # block the event loop.
-                response = await asyncio.to_thread(
-                    client.post,
-                    f"/api/v2/agents/{project_id}/stop",
-                )
+                await asyncio.wait_for(mgr.stop_agent(project_id), timeout=5.0)
                 elapsed = time.monotonic() - started
 
-            assert response.status_code == 200, (
-                f"Expected HTTP 200, got {response.status_code}: {response.text}"
-            )
-            assert response.json().get("status") == "stopping"
             assert elapsed < 5.0, (
-                f"/stop must return within 5s, took {elapsed:.2f}s"
+                f"stop_agent must return within 5s, took {elapsed:.2f}s"
             )
 
-            # The "stopped" agent.status WS broadcast must have fired.
-            stopped_calls = [
+            # The "idle" agent.status WS broadcast must have fired (stop folds
+            # into idle; the 'stopped' fact is recorded in last_terminal_event).
+            idle_calls = [
                 call for call in ws.broadcast.call_args_list
                 if (call.args
                     and isinstance(call.args[1], dict)
                     and call.args[1].get("type") == "agent.status"
-                    and call.args[1].get("status") == "stopped")
+                    and call.args[1].get("status") == "idle")
             ]
-            assert len(stopped_calls) >= 1, (
-                f"Expected agent.status:stopped broadcast, got: "
+            assert len(idle_calls) >= 1, (
+                f"Expected agent.status:idle broadcast, got: "
                 f"{[c.args for c in ws.broadcast.call_args_list]}"
             )
 
@@ -282,11 +275,9 @@ async def test_stop_agent_terminates_via_loop(caplog):
             except asyncio.CancelledError:
                 pass
             assert run_task.done(), (
-                "Loop task must be done after /stop"
+                "Loop task must be done after stop_agent"
             )
         finally:
-            client.close()
-            _restore_agents_v2(saved)
             if not run_task.done():
                 run_task.cancel()
                 try:

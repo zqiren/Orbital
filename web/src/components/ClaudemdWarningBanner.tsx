@@ -14,6 +14,7 @@
 
 import { AlertTriangle } from 'lucide-react';
 import { api } from '../config';
+import { useT } from '../i18n/useT';
 
 export interface ClaudemdWarning {
   project_id: string;
@@ -29,6 +30,8 @@ interface Props {
 }
 
 export default function ClaudemdWarningBanner({ projectId, warning, onDismiss }: Props) {
+  const t = useT();
+
   function handleDismiss() {
     // Optimistically dismiss locally; tell the daemon to suppress
     // re-emission for the rest of the session.
@@ -54,8 +57,7 @@ export default function ClaudemdWarningBanner({ projectId, warning, onDismiss }:
       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" aria-hidden />
       <div className="flex-1 min-w-0">
         <div className="leading-snug">
-          Your workspace CLAUDE.md may conflict with Orbital&apos;s
-          project-state inheritance. Sub-agents may behave unexpectedly.
+          {t('claudemd.banner')}
         </div>
         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs">
           <a
@@ -65,17 +67,17 @@ export default function ClaudemdWarningBanner({ projectId, warning, onDismiss }:
             className="underline hover:text-amber-50"
             title={warning.claudemd_path}
           >
-            view CLAUDE.md
+            {t('claudemd.viewFile')}
           </a>
           <button
             type="button"
             onClick={handleDismiss}
             className="underline hover:text-amber-50"
           >
-            dismiss
+            {t('claudemd.dismiss')}
           </button>
           <span className="opacity-70 truncate">
-            (matched: &quot;{warning.matched_token}&quot;)
+            {t('claudemd.matched', { token: warning.matched_token })}
           </span>
         </div>
       </div>

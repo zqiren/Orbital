@@ -21,6 +21,8 @@
  */
 
 import { useState } from 'react';
+import { AlertCircle } from 'lucide-react';
+import { useT } from '../i18n/useT';
 
 export interface SlotHeldNoticeProps {
   holdingSessionId: string;
@@ -43,6 +45,7 @@ export default function SlotHeldNotice({
 }: SlotHeldNoticeProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   async function handleCancelAndSend() {
     setBusy(true);
@@ -50,7 +53,7 @@ export default function SlotHeldNotice({
     try {
       await onCancelAndSend();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to cancel and resend.');
+      setError(e instanceof Error ? e.message : t('pairPhone.cancelResend.error'));
       setBusy(false);
     }
     // On success, the parent will unmount this notice (replacing it with
@@ -60,21 +63,19 @@ export default function SlotHeldNotice({
   return (
     <div
       data-testid="slot-held-notice"
-      className="mb-3 rounded-lg border border-secondary/30 bg-secondary/5 px-4 py-3"
+      className="mb-3 rounded-[6px] border border-border bg-background px-4 py-3 shadow-lg"
       role="status"
       aria-live="polite"
     >
-      <p className="text-sm text-secondary">
-        Session{' '}
-        <span
+      <div className="flex items-start gap-2">
+        <AlertCircle size={14} className="mt-0.5 shrink-0 text-secondary" />
+        <p
+          className="text-sm text-secondary"
           data-testid="slot-held-notice-holder"
-          className="font-semibold text-primary"
         >
-          {holdingSessionId}
-        </span>{' '}
-        is currently running. Wait for it to finish, or cancel it to send
-        this message now.
-      </p>
+          {t('slotHeld.body', { id: holdingSessionId })}
+        </p>
+      </div>
       {error && (
         <p
           className="text-sm text-error mt-2"
@@ -89,18 +90,18 @@ export default function SlotHeldNotice({
           data-testid="slot-held-notice-wait"
           onClick={onWait}
           disabled={busy}
-          className="rounded-md bg-accent/20 px-3 py-1.5 text-sm font-medium text-primary hover:bg-accent/30 disabled:opacity-50"
+          className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
         >
-          Wait
+          {t('slotHeld.wait')}
         </button>
         <button
           type="button"
           data-testid="slot-held-notice-cancel-and-send"
           onClick={handleCancelAndSend}
           disabled={busy}
-          className="rounded-md border border-secondary/40 px-3 py-1.5 text-sm font-medium text-secondary hover:text-primary hover:border-secondary/60 disabled:opacity-50"
+          className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide border border-border bg-background text-secondary hover:bg-card-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
         >
-          {busy ? 'Cancelling…' : 'Cancel running session and send'}
+          {busy ? t('slotHeld.cancelling') : t('slotHeld.cancelAndSend')}
         </button>
       </div>
     </div>

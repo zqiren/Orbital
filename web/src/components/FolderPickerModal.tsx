@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, ChevronRight, Folder, Home, Monitor, FileText, Download, Clock, Loader2 } from 'lucide-react';
 import { api, ApiError } from '../config';
+import { useT } from '../i18n/useT';
 
 interface BrowseEntry {
   name: string;
@@ -45,6 +46,7 @@ const SHORTCUT_ICONS: Record<string, typeof Home> = {
 };
 
 export default function FolderPickerModal({ open, onSelect, onClose }: FolderPickerModalProps) {
+  const t = useT();
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [shortcuts, setShortcuts] = useState<FolderInfo[]>([]);
@@ -66,12 +68,12 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
       if (e instanceof ApiError) {
         setError(e.detail);
       } else {
-        setError('Failed to browse directory');
+        setError(t('folderPicker.browseError'));
       }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!open) return;
@@ -127,7 +129,7 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
     const crumbs: { label: string; path: string }[] = [];
 
     // Add root entry for navigating to filesystem root / drive listing
-    crumbs.push({ label: isWindows ? 'This PC' : '/', path: '/' });
+    crumbs.push({ label: isWindows ? t('folderPicker.thisPc') : '/', path: '/' });
 
     for (let i = 0; i < parts.length; i++) {
       const seg = parts.slice(0, i + 1);
@@ -155,7 +157,7 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
       <div className="bg-background rounded-xl shadow-xl border border-border w-full max-w-[680px] max-h-[80vh] flex flex-col mx-4 animate-slide-up max-md:max-h-[95vh] max-md:max-w-full max-md:mx-2">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
-          <h2 className="text-sm font-semibold text-primary">Choose Workspace Folder</h2>
+          <h2 className="text-sm font-semibold text-primary">{t('folderPicker.title')}</h2>
           <button
             onClick={onClose}
             className="text-secondary hover:text-primary transition-all duration-150 p-1 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
@@ -169,7 +171,7 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
           {/* Shortcuts panel */}
           <div className="w-[180px] border-r border-border p-3 overflow-y-auto shrink-0 max-md:w-full max-md:border-r-0 max-md:border-b max-md:p-2 max-md:overflow-x-auto max-md:overflow-y-hidden max-md:flex max-md:gap-1.5 max-md:shrink-0">
             <p className="text-[11px] font-medium text-secondary uppercase tracking-wider mb-2 max-md:hidden">
-              Shortcuts
+              {t('folderPicker.shortcuts')}
             </p>
             {shortcuts.map((folder) => {
               const Icon = SHORTCUT_ICONS[folder.display_name] || Folder;
@@ -198,13 +200,13 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
               }`}
             >
               <Monitor size={14} className="shrink-0" />
-              <span className="truncate">{/^[A-Za-z]:/.test(currentPath) ? 'This PC' : 'Root /'}</span>
+              <span className="truncate">{/^[A-Za-z]:/.test(currentPath) ? t('folderPicker.thisPc') : t('folderPicker.root')}</span>
             </button>
             {recentPaths.length > 0 && (
               <>
                 <div className="border-t border-border my-2 max-md:hidden" />
                 <p className="text-[11px] font-medium text-secondary uppercase tracking-wider mb-2 max-md:hidden">
-                  Recent
+                  {t('folderPicker.recent')}
                 </p>
                 {recentPaths.map((rp) => {
                   const label = rp.split(/[\\/]/).filter(Boolean).pop() || rp;
@@ -253,7 +255,7 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
                 <p className="text-xs text-error px-2 py-4">{error}</p>
               )}
               {!loading && !error && entries.length === 0 && (
-                <p className="text-xs text-secondary px-2 py-4">No folders here.</p>
+                <p className="text-xs text-secondary px-2 py-4">{t('folderPicker.empty')}</p>
               )}
               {!loading && !error && entries.map((entry) => (
                 <button
@@ -280,7 +282,7 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
               type="text"
               value={manualInput}
               onChange={(e) => setManualInput(e.target.value)}
-              placeholder="Type a path and press Enter..."
+              placeholder={t('folderPicker.manualPath.placeholder')}
               className="flex-1 text-xs font-mono bg-sidebar border border-border rounded-lg px-3 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
             />
           </form>
@@ -291,14 +293,14 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
               onClick={onClose}
               className="text-sm text-secondary hover:text-primary transition-all duration-150 px-4 py-2 max-md:w-full max-md:min-h-[44px]"
             >
-              Cancel
+              {t('folderPicker.cancel')}
             </button>
             <button
               onClick={handleSelect}
               disabled={!currentPath}
               className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40 max-md:w-full max-md:min-h-[44px]"
             >
-              Select
+              {t('folderPicker.select')}
             </button>
           </div>
         </div>

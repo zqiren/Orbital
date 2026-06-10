@@ -2,16 +2,26 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
-import { transformChatHistory, truncateResult } from '../utils/chatTransform';
+import { useQueue } from '../hooks/useQueue';
+import {
+  transformChatHistory,
+  truncateResult,
+  mergeRecoveredAssistantMessage,
+} from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+import type { ChatMessage as ChatMessageRow } from '../types';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock } from '../lib/attachment-parsing';
+import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import { useT, translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import type { StringKey } from '../i18n/strings';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -45,10 +55,15 @@ function formatToolBreakdown(counts: Record<string, number>): string {
   return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
 }
 
-function formatDuration(startedAt: number, endedAt: number | null): string {
-  if (!endedAt || endedAt <= startedAt) return '<1s';
+// Locale-aware translator for capsule summaries; defaults to English so any
+// caller that omits it (and any non-localized path) gets identical output.
+type CapsuleTr = (key: StringKey, vars?: Record<string, string | number>) => string;
+const EN_CAPSULE: CapsuleTr = (k, v) => translate('en', k, v);
+
+function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr = EN_CAPSULE): string {
+  if (!endedAt || endedAt <= startedAt) return tr('duration.lessThan1s');
   const ms = endedAt - startedAt;
-  if (ms < 1000) return '<1s';
+  if (ms < 1000) return tr('duration.lessThan1s');
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -56,13 +71,13 @@ function formatDuration(startedAt: number, endedAt: number | null): string {
   return rs ? `${m}m ${rs}s` : `${m}m`;
 }
 
-function capsuleSummaryText(capsule: AgentRunItem): string {
+function capsuleSummaryText(capsule: AgentRunItem, tr: CapsuleTr = EN_CAPSULE): string {
   const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
-  const dur = formatDuration(capsule.started_at, capsule.ended_at);
-  const head = breakdown || (capsule.has_thinking ? 'thinking' : 'agent step');
+  const dur = formatDuration(capsule.started_at, capsule.ended_at, tr);
+  const head = breakdown || (capsule.has_thinking ? tr('chat.capsule.thinking') : tr('chat.capsule.agentStep'));
   let line = `${head} · ${dur}`;
   if (capsule.status === 'error' || capsule.status === 'stopped') {
-    line += ' · stopped at error';
+    line += ` ${tr('chat.capsule.stoppedAtError')}`;
   }
   return line;
 }
@@ -121,6 +136,80 @@ function appendToLiveCapsule(
   return next;
 }
 
+/**
+ * Live reasoning accumulation. During the model's <think> phase the WS
+ * stream_delta event carries `reasoning_content` with EMPTY `text`. We render
+ * it as a single reasoning_block inside the running live capsule, accumulating
+ * successive deltas into that one block (rather than emitting one block per
+ * delta). This mirrors how persisted reasoning is rendered (a reasoning_block
+ * within the capsule) so the live and persisted views stay consistent.
+ */
+export function appendLiveReasoning(
+  prev: DisplayItem[],
+  reasoning: string,
+  timestamp: string,
+  source: string,
+): DisplayItem[] {
+  const live = getLiveRunningCapsule(prev);
+  // Find a trailing reasoning_block in the running capsule to extend.
+  if (live) {
+    const items = live.capsule.items;
+    const lastChild = items[items.length - 1];
+    if (lastChild && lastChild.type === 'reasoning_block') {
+      const merged: CapsuleChild = {
+        ...lastChild,
+        content: lastChild.content + reasoning,
+      };
+      const newItems = [...items];
+      newItems[newItems.length - 1] = merged;
+      const updated: AgentRunItem = {
+        ...live.capsule,
+        items: newItems,
+        has_thinking: true,
+        ended_at: Date.parse(timestamp),
+      };
+      const next = [...prev];
+      next[live.idx] = updated;
+      return next;
+    }
+  }
+  // Live capsule exists but has no trailing reasoning_block (e.g. a tool row
+  // was last) — append a new reasoning_block to that SAME capsule. It is
+  // already anchored under its agent header, so no new header is needed.
+  if (live) {
+    return appendToLiveCapsule(
+      prev,
+      { type: 'reasoning_block', content: reasoning, timestamp, turn_id: timestamp },
+      timestamp,
+    );
+  }
+
+  // No running capsule — this reasoning starts a fresh agent turn. Anchor it
+  // with a header-only agent_message (mirrors chatTransform's FE-A3) so the
+  // capsule renders the agent avatar and does NOT visually attach to the
+  // preceding user message. The agent_run capsule draws no avatar of its own
+  // (it is indented to sit under a header); without this anchor the live
+  // thinking floats unattributed — and in cold-start (no preceding user
+  // message) it is not attributed to the management agent at all.
+  const lastItem = prev[prev.length - 1];
+  const anchored =
+    !!lastItem &&
+    (lastItem.type === 'agent_message' ||
+      lastItem.type === 'sub_agent_message' ||
+      lastItem.type === 'agent_run');
+  const base: DisplayItem[] = anchored
+    ? prev
+    : [
+        ...prev,
+        { type: 'agent_message', content: '', source, timestamp, isHeaderOnly: true },
+      ];
+  return appendToLiveCapsule(
+    base,
+    { type: 'reasoning_block', content: reasoning, timestamp, turn_id: timestamp },
+    timestamp,
+  );
+}
+
 function finalizeLiveCapsule(
   prev: DisplayItem[],
   status: 'completed' | 'error' | 'stopped',
@@ -145,12 +234,13 @@ function finalizeLiveCapsule(
 type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
 
 function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const expandable = row.result_status !== 'pending';
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="mb-1 text-[13px] text-secondary">
+    <div className="mb-1 font-mono text-[11.5px] text-secondary">
       <button
         type="button"
         onClick={expandable ? () => setExpanded(e => !e) : undefined}
@@ -162,8 +252,8 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         ) : (
           <span className="shrink-0 w-3" aria-hidden />
         )}
-        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
-        <span className="font-mono text-primary">{row.tool_name}</span>
+        <span className="text-primary font-medium">{row.tool_name}</span>
+        <span className="text-muted" aria-hidden>·</span>
         <span className="truncate">{row.target_description}</span>
       </button>
       {expanded && expandable && (() => {
@@ -171,7 +261,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         if (raw === null || raw === '') {
           return (
             <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-[12px] italic text-secondary/70">
-              no result content
+              {t('chat.toolRow.noResult')}
             </div>
           );
         }
@@ -217,23 +307,18 @@ function markLatestLiveCallResultReceived(
   return prev;
 }
 
-// chatTransform emits status:'running' for each chunk's tail capsule —
-// fine when the chunk truly is the live tail, but on pagination earlier
-// chunks' tails end up mid-history and stay incorrectly running. Sweep
-// any non-trailing 'running' capsule down to 'completed'. The last item
-// is left alone so a genuinely live capsule keeps its running status.
-function reconcileTrailingRunning(items: DisplayItem[]): DisplayItem[] {
-  let changed = false;
-  const next: DisplayItem[] = items.map((it, idx) => {
-    if (it.type !== 'agent_run' || it.status !== 'running') return it;
-    if (idx === items.length - 1) return it;
-    changed = true;
-    return { ...it, status: 'completed' as const };
-  });
-  return changed ? next : items;
-}
+// FE-1/FE-3: the legacy `reconcileTrailingRunning` sweep is gone. With the
+// transform-once approach (full raw history in one pass) there are no
+// non-trailing 'running' capsules to sweep, and the trailing capsule's status
+// is now decided at source by `transformChatHistory`'s `isActivelyRunning`
+// flag — so no post-pass reconciliation is needed.
 
-const CHAT_PAGE_SIZE = 50;
+// Messages (raw JSONL lines) fetched per page on initial load and per
+// "Load earlier" click. Larger page → fewer paginations; sessions at or under
+// this size load fully with no "Load earlier" button. Render cost is modest:
+// tool activity collapses into capsules, so 100 raw messages render ~30
+// markdown bubbles, well within the already-reachable full-session ceiling.
+const CHAT_PAGE_SIZE = 100;
 const REST_FALLBACK_DELAY_MS = 500;
 const SLASH_COMMANDS = [
   { name: '/new', description: 'Start a fresh session' },
@@ -255,11 +340,14 @@ import type {
 } from '../types';
 import ChatMessage from './ChatMessage';
 import StreamingMessage from './StreamingMessage';
+import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';
 import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import SlotHeldNotice from './SlotHeldNotice';
+import { ColdStartCard } from './ColdStartCard';
+import SubAgentStatusBar from './SubAgentStatusBar';
 
 interface ChatViewProps {
   projectId: string;
@@ -274,6 +362,27 @@ interface ChatViewProps {
    * keystrokes that follow re-evaluate against the populated list.
    */
   mentionAgents: Array<{ slug: string; name: string }>;
+  /**
+   * The F1 session_id currently being viewed (the active session for this
+   * project). The conversation, history fetch, draft, and inject target are
+   * all scoped to this session. `undefined` while the active session is
+   * still being resolved by the parent (ChatTab) — ChatView renders an empty
+   * state and skips history load until a sessionId arrives.
+   *
+   * Single active-loop slot model: only ONE session in a project executes at
+   * a time. Live WS events (stream/activity/approvals) carry only project_id,
+   * not session_id, so they always belong to the slot holder. ChatView
+   * appends those live events to the viewed conversation ONLY when the viewed
+   * `sessionId` matches the holder (resolved via run-status
+   * `current_holder_session_id`). See §5 of the T5 task brief.
+   */
+  sessionId?: string;
+  /**
+   * Re-fetch this project's runtime fields (e.g. `budget_spent_usd`) and merge
+   * them into the App-level projects list. Called on the running→idle
+   * transition so the header's budget/cost reflects the just-finished turn.
+   */
+  onRefreshProject?: (id: string) => void;
 }
 
 interface StreamState {
@@ -292,16 +401,41 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
+  const t = useT();
+  const { locale } = useLocale();
+  // FE-1 (transform-once): loaded chat history is stored as RAW messages
+  // across all paginated pages (initial page + each "Load earlier" prepend),
+  // then transformed in a SINGLE pass via the useMemo below. This eliminates
+  // the per-page transform's page-boundary tool-result drops and stranded
+  // pending tool-calls — the transform always sees the complete conversation.
+  //
+  // `items` remains the render/live state: it is seeded from the memoized
+  // history transform whenever history (re)loads, and live WS handlers
+  // continue to mutate it incrementally (live capsule appends, optimistic
+  // user messages, sub-agent messages, finalize-on-idle, etc.). The live tail
+  // therefore layers on top of the transform-once history.
+  const [rawMessages, setRawMessages] = useState<ChatMessageType[]>([]);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
+  // Cold-start consent card (imported non-empty workspace, first session).
+  const [coldStartBusy, setColdStartBusy] = useState(false);
+  const [coldStartDismissed, setColdStartDismissed] = useState(false);
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
   const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
   const [inputText, setInputText] = useState('');
+  // Slot holder: the F1 session_id currently holding the project's
+  // active-loop slot (from run-status `current_holder_session_id`), or null
+  // if no session is running. Single-slot model — only ONE session runs at a
+  // time. Live WS events carry only project_id, so they belong to this
+  // holder. ChatView appends them to the viewed conversation ONLY when the
+  // viewed session IS the holder (viewing a non-holder session shows its
+  // static history; live events for the holder are dropped here).
+  const [holderSessionId, setHolderSessionId] = useState<string | null>(null);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
@@ -344,67 +478,208 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, startAgent, cancelMessage, newSession } = useAgent();
-  const autoStarted = useRef(false);
+  const { injectMessage, cancelMessage, newSession, coldStartScan } = useAgent();
+  // Queue-active gating: when the queue is running (actively dispatching a
+  // task), the chat composer is replaced by ComposerDisabledPrompt — the user
+  // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
+  const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
+  const queueActive = queueSnapshot?.state === 'running';
+  // Per-session composer drafts. Keyed by F1 sessionId so switching to
+  // another session and back restores the original session's unsent text.
+  // In-memory only (drafts don't survive a full reload — acceptable).
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  // Live mirror of inputText, read synchronously when persisting a draft on
+  // session switch (the effect closes over a stale inputText otherwise).
+  const inputTextRef = useRef('');
+  // Latest sessionId, readable synchronously inside WS handlers (which close
+  // over the value at registration time otherwise). The holder-comparison
+  // and inject-target paths read this ref to stay current.
+  const sessionIdRef = useRef<string | undefined>(sessionId);
+  sessionIdRef.current = sessionId;
+  // Latest holder, readable synchronously inside WS handlers.
+  const holderSessionIdRef = useRef<string | null>(holderSessionId);
+  holderSessionIdRef.current = holderSessionId;
+  // Seam 3 / Phase 3: live WS events are routed STRICTLY by session_id. Every
+  // live event now carries the canonical session_id (Phases 1+2), so a handler
+  // renders an event into the viewed conversation iff
+  // ``event.session_id === sessionIdRef.current``. The old ``viewingHolder``
+  // heuristic (with its lenient null-holder "presume the viewed session is the
+  // holder" fallback) is gone: it defaulted to SHOW, which leaked events across
+  // sessions whenever the holder was momentarily unresolved. There is no
+  // default-to-show path anymore — an event with no/other session_id is dropped.
+  //
+  // ``holderSessionId`` is retained, but ONLY as a fact (which session holds the
+  // project's active-loop slot), never as an event-routing gate. It drives:
+  //   - the cancel target (Stop cancels the RUNNING session, not the viewed one),
+  //   - child props that need the live session, and
+  //   - ``isActivelyRunning`` below (a RENDER concern: is the VIEWED session the
+  //     one currently executing — used to keep the trailing capsule spinning).
+
+  // FE-3 / FE-A1: the trailing open capsule is only genuinely "running" when
+  // the viewed session is the one actively executing — i.e. the viewed session
+  // IS the holder and the project is running. Applied at RENDER time below (the
+  // agent_run case), NOT fed into the transform, so a status flip never
+  // invalidates the memo (FE-A1).
+  const isActivelyRunning =
+    sessionId !== undefined &&
+    sessionId === holderSessionId &&
+    agentStatus === 'running';
+
+  // FE-1 / FE-A1: single-pass transform of the FULL accumulated raw history.
+  // Deps are purely the source data (rawMessages + workspace) — status flips
+  // do NOT trigger a re-seed. The result seeds `items` only when history
+  // (re)loads; live WS events then mutate `items` on top of this baseline.
+  const historyItems = useMemo(
+    () => transformChatHistory(rawMessages, project.workspace, (k, v) => translate(locale, k, v)),
+    [rawMessages, project.workspace, locale],
+  );
+
+  // Seed the render/live `items` from the transform-once history whenever that
+  // baseline changes (initial load, session switch, "Load earlier" prepend, or
+  // an isActivelyRunning flip). Live handlers mutate `items` afterward; the
+  // catch-up fetch on idle recovers any tail not yet persisted to history.
+  //
+  // Gate on a non-empty history: when there is no loaded history (empty
+  // session, or the post-/new reset), `items` is owned entirely by the live
+  // overlay (e.g. the "New session started" notice). Clearing `items` for an
+  // empty session is handled explicitly in the load effect, so the seed here
+  // must not stomp a live-only overlay back to [].
+  // Seed the expanded-capsules Set with every capsule the transform marked
+  // `defaultExpanded` (content-null turns whose opening reasoning should be
+  // visible without a click). Membership in this Set is the SOLE source of
+  // truth for whether a capsule is expanded — so a user chevron-click that
+  // removes the id can actually collapse it. (Previously `defaultExpanded`
+  // was OR'd into the render-time check, which made the toggle a no-op.)
+  // Seeded in the SAME effect as setItems so a default-expanded capsule never
+  // flashes collapsed for a frame before a follow-up effect expands it.
+  useEffect(() => {
+    if (historyItems.length === 0) return;
+    setItems(historyItems);
+    setExpandedCapsules((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const item of historyItems) {
+        if (item.type === 'agent_run' && item.defaultExpanded && !next.has(item.capsule_id)) {
+          next.add(item.capsule_id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [historyItems]);
 
   /**
    * REST fallback: fetch the latest assistant message from the REST API.
    * Used when streaming deltas are missed (tunnel drop, late subscribe, etc.)
-   * to recover the agent's response.
+   * to recover the agent's response. Scoped to the viewed session so a
+   * recovered message lands in the right conversation.
    */
   const fetchLatestMessage = useCallback(() => {
+    const sid = sessionIdRef.current;
+    if (sid === undefined) return;
+    const sessionParam = `&session_id=${encodeURIComponent(sid)}`;
     setTimeout(() => {
-      api<Array<{ role: string; content: string; timestamp?: string }>>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1`,
+      // Typed as the SAME row shape normal ingest consumes (ChatMessage):
+      // the old inline type omitted `source`, which is how a hardcoded
+      // source: 'assistant' crept in and split one management turn into
+      // two speakers (INVESTIGATION-two-speakers).
+      api<ChatMessageRow[]>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=1${sessionParam}`,
       )
         .then((messages) => {
           if (!messages || messages.length === 0) return;
           const latest = messages[messages.length - 1];
-          if (latest.role !== 'assistant' || !latest.content) return;
-          const restText = latest.content;
-          setItems((prevItems) => {
-            // Check if the message is already present (by content match on last item)
-            const last = prevItems[prevItems.length - 1];
-            if (
-              last &&
-              last.type === 'agent_message' &&
-              'content' in last &&
-              last.content === restText
-            ) {
-              return prevItems;
-            }
-            // Also check if the last agent_message has shorter content (stream was truncated)
-            if (
-              last &&
-              last.type === 'agent_message' &&
-              'content' in last &&
-              restText.length > last.content.length
-            ) {
-              const updated = [...prevItems];
-              updated[prevItems.length - 1] = { ...last, content: restText };
-              return updated;
-            }
-            // Message not present at all — insert before any trailing user messages
-            // so recovered agent responses appear before follow-up questions
-            const newMsg = {
-              type: 'agent_message' as const,
-              content: restText,
-              source: 'assistant',
-              timestamp: latest.timestamp ?? new Date().toISOString(),
-            };
-            let insertIdx = prevItems.length;
-            while (insertIdx > 0 && prevItems[insertIdx - 1].type === 'user_message') {
-              insertIdx--;
-            }
-            const updated = [...prevItems];
-            updated.splice(insertIdx, 0, newMsg);
-            return updated;
-          });
+          if (latest.role !== 'assistant') return;
+          const restReasoning = (latest.reasoning_content ?? '').trim();
+          // Carry reasoning_content like the primary refreshRawMessages path:
+          // a recovered reasoning turn is a COMPLETED turn, so emit it as a
+          // closed (collapsed) agent_run capsule containing a reasoning_block,
+          // mirroring transformChatHistory's persisted handling. Without this
+          // the REST fallback silently drops reasoning.
+          if (restReasoning) {
+            setItems((prevItems) => {
+              const ts = latest.timestamp ?? new Date().toISOString();
+              const ms = Date.parse(ts);
+              // Dedup against the primary refetch / live append.
+              const already = prevItems.some(
+                (it) =>
+                  it.type === 'agent_run' &&
+                  it.items.some(
+                    (c) => c.type === 'reasoning_block' && c.content.trim() === restReasoning,
+                  ),
+              );
+              if (already) return prevItems;
+              // Close any still-running live capsule first.
+              const closed = finalizeLiveCapsule(prevItems, 'completed');
+              const capsule: AgentRunItem = {
+                type: 'agent_run',
+                capsule_id: `cap:rest:${ms}:${Math.random().toString(36).slice(2, 8)}`,
+                status: 'completed',
+                items: [
+                  {
+                    type: 'reasoning_block',
+                    content: restReasoning,
+                    timestamp: ts,
+                    turn_id: ts,
+                  },
+                ],
+                tool_call_count_by_name: {},
+                has_thinking: true,
+                started_at: Number.isFinite(ms) ? ms : Date.now(),
+                ended_at: Number.isFinite(ms) ? ms : Date.now(),
+              };
+              return [...closed, capsule];
+            });
+          }
+          if (!latest.content) return;
+          // Identity + dedup live in mergeRecoveredAssistantMessage: source
+          // is taken verbatim from the persisted row (same as normal
+          // ingest), and dedup scans the whole list — the old inline
+          // version hardcoded source: 'assistant' and only checked the
+          // last item, rendering one management turn as two speakers.
+          setItems((prevItems) => mergeRecoveredAssistantMessage(prevItems, latest));
         })
         .catch(() => {
           // REST fetch failed — best effort
         });
     }, REST_FALLBACK_DELAY_MS);
+  }, [projectId]);
+
+  // Track the loaded-offset synchronously so the idle-refresh below sees the
+  // current pagination depth without depending on state from a closure.
+  // Mirrored from `loadedOffset` state on every render.
+  const loadedOffsetRef = useRef(loadedOffset);
+  loadedOffsetRef.current = loadedOffset;
+
+  /**
+   * FE-A1: refresh the latest N raw messages from the backend after a
+   * running→idle transition so the just-finished turn's persisted lines
+   * (assistant w/ tool_calls, tool results, [Sub-agent] lifecycle markers)
+   * land in `rawMessages` before the memo re-runs. Without this, the seed
+   * effect overwrites `items` with stale historyItems and the live overlay
+   * from WS handlers is wiped.
+   *
+   * Uses `limit=max(loadedOffset, CHAT_PAGE_SIZE)` so any pages the user
+   * loaded via "Load earlier" stay covered. Scoped to the session captured
+   * at call time — if the user switches sessions mid-fetch, the response is
+   * dropped.
+   */
+  const refreshRawMessages = useCallback(() => {
+    const sid = sessionIdRef.current;
+    if (sid === undefined) return;
+    const targetLimit = Math.max(loadedOffsetRef.current, CHAT_PAGE_SIZE);
+    const url = `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${targetLimit}&session_id=${encodeURIComponent(sid)}`;
+    apiWithTotal<ChatMessageType[]>(url)
+      .then(({ data, total }) => {
+        // Guard against session switch during the in-flight fetch.
+        if (sessionIdRef.current !== sid) return;
+        setRawMessages(data);
+        setTotalMessages(total);
+        setLoadedOffset(Math.min(targetLimit, data.length || targetLimit));
+      })
+      .catch(() => {
+        // best-effort refresh; the seed remains the prior history
+      });
   }, [projectId]);
 
   const scrollToBottom = useCallback(() => {
@@ -427,6 +702,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
    * already present (dedup by tool_call_id). No-ops on network error.
    */
   const fetchPendingApproval = useCallback(() => {
+    // Scope the recovery to the viewed session. Without this, the backend
+    // resolves to the default-session sentinel and silently misses approvals
+    // pending in non-default sessions.
+    const viewed = sessionIdRef.current;
+    const qs = viewed ? `?session_id=${encodeURIComponent(viewed)}` : '';
     api<{
       pending: boolean;
       tool_call_id?: string;
@@ -435,9 +715,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       what?: string;
       recent_activity?: ChatMessageType[];
       reasoning?: string;
-    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval`)
+    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/pending-approval${qs}`)
       .then((result) => {
         if (!result.pending || !result.tool_call_id) return;
+        // Seam 3 / Phase 3 carryover: route this display path strictly by
+        // session_id, never by the holder. The fetch above is already scoped to
+        // the viewed session (?session_id=<viewed>), and the backend
+        // get_pending_approval resolves the (project, viewed) handle — it
+        // returns an approval ONLY when the viewed session itself is paused, and
+        // None for a non-holder viewed session. So a non-null result here
+        // already belongs to the viewed session; reading holderSessionId to gate
+        // display would be a latent cross-session leak (the old lenient
+        // null-holder branch could surface another session's card). Trust the
+        // session-scoped response.
         setApprovals((prev) => {
           // Dedup: skip if a card already exists for this tool_call_id
           if (prev.has(result.tool_call_id!)) return prev;
@@ -459,14 +749,64 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId, scrollToBottom]);
 
+  /**
+   * Resolve the project's current active-loop slot holder (the F1 session_id
+   * running right now, or null). run-status returns `current_holder_session_id`.
+   * Live WS events belong to this holder; the holder gates whether they are
+   * appended to the viewed conversation (see viewingHolder above). Fetched on
+   * mount, on agentStatus/sessionId change, and via the existing 5s poll.
+   */
+  const fetchHolder = useCallback(() => {
+    api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
+    )
+      .then((result) => {
+        setHolderSessionId(result.current_holder_session_id ?? null);
+      })
+      .catch(() => {
+        // best effort — leave the prior holder value in place
+      });
+  }, [projectId]);
+
+  // Keep the holder fresh: on mount/project change, on every agentStatus
+  // transition (a status change always implies the slot may have been
+  // acquired/released), and whenever the viewed session changes (so the
+  // viewingHolder comparison is correct for the newly-viewed session).
+  useEffect(() => {
+    fetchHolder();
+  }, [fetchHolder, agentStatus, statusTick, sessionId]);
+
+  // Per-session history load. Re-runs when the viewed sessionId changes so
+  // switching sessions shows that session's own history (and its own loading
+  // state). Skips while sessionId is undefined (active session not yet
+  // resolved) — the empty state renders until one arrives.
   useEffect(() => {
     let cancelled = false;
 
+    if (sessionId === undefined) {
+      // No active session resolved yet — clear and show the (non-loading)
+      // empty state. Reset pagination so a later session load starts fresh.
+      // Clearing rawMessages re-seeds `items` to [] via the history memo.
+      setRawMessages([]);
+      setItems([]);
+      setStream(null);
+      setApprovals(new Map());
+      setTotalMessages(0);
+      setLoadedOffset(0);
+      setLoading(false);
+      return;
+    }
+
+    const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
+
     async function loadData() {
       setLoading(true);
+      // Clear prior session's live state so it never bleeds into the new one.
+      setStream(null);
+      setApprovals(new Map());
       try {
         const chatResult = await apiWithTotal<ChatMessageType[]>(
-          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}`,
+          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}${sessionParam}`,
         ).catch((err) => {
           console.error('[ChatView] Failed to load chat history:', err);
           return null;
@@ -475,13 +815,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
         if (chatResult) {
           const { data: messages, total } = chatResult;
-          const transformed = reconcileTrailingRunning(
-            transformChatHistory(messages, project.workspace),
-          );
-          setItems(transformed);
+          // FE-1: store RAW messages; the transform-once memo turns them into
+          // DisplayItems and seeds `items`. No per-page transform here.
+          setRawMessages(messages);
+          // Empty history: seed effect is gated on non-empty, so clear `items`
+          // here explicitly. Non-empty history is seeded by the effect.
+          if (messages.length === 0) setItems([]);
           setTotalMessages(total);
           setLoadedOffset(CHAT_PAGE_SIZE);
         } else {
+          setRawMessages([]);
           setItems([]);
         }
       } finally {
@@ -493,7 +836,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, sessionId, project.workspace]);
 
   const hasMore = totalMessages > loadedOffset;
 
@@ -506,20 +849,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const pendingPrependPrevHeightRef = useRef<number | null>(null);
 
   async function loadOlderMessages() {
-    if (loadingMore || !hasMore) return;
+    if (loadingMore || !hasMore || sessionId === undefined) return;
     setLoadingMore(true);
     const el = scrollRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
+    const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
     try {
       const { data: messages } = await apiWithTotal<ChatMessageType[]>(
-        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}&offset=${loadedOffset}`,
+        `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}&offset=${loadedOffset}${sessionParam}`,
       );
       if (messages.length === 0) return;
-      const transformed = transformChatHistory(messages, project.workspace);
+      // FE-1: prepend the older RAW messages to the accumulated history. The
+      // transform-once memo re-runs on the FULL concatenated list, so a
+      // tool-call/result pair straddling the page seam is paired correctly
+      // (no orphan drops, no stranded pending rows). The memo result re-seeds
+      // `items` via its effect.
       // Stash prevHeight; the useLayoutEffect on `items` will compensate
       // synchronously after the prepended DOM has committed.
       pendingPrependPrevHeightRef.current = prevHeight;
-      setItems(prev => reconcileTrailingRunning([...transformed, ...prev]));
+      setRawMessages(prev => [...messages, ...prev]);
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
@@ -528,48 +876,102 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }
 
-  // Auto-start agent on first open when no messages exist
+  // Per-session composer draft (§4). Live mirror of inputText for synchronous
+  // reads in the swap effect. Set during render (not in an effect) so the swap
+  // effect — which runs in the same commit when sessionId changes — always
+  // sees the OUTGOING session's text, never a stale value. The draft MAP is
+  // written only by the swap effect (on switch), keeping ownership simple: the
+  // live `inputText` is the source of truth for the active session, and we
+  // persist-on-switch from this mirror.
+  inputTextRef.current = inputText;
+
+  const prevSessionForDraftRef = useRef<string | undefined>(sessionId);
   useEffect(() => {
-    if (!autoStarted.current && !loading && items.length === 0) {
-      autoStarted.current = true;
-      startAgent(projectId).catch(console.error);
+    const prev = prevSessionForDraftRef.current;
+    if (prev === sessionId) return;
+    // Save the outgoing session's draft from the live mirror.
+    if (prev !== undefined) {
+      draftsRef.current.set(prev, inputTextRef.current);
     }
-  }, [loading, items.length, projectId, startAgent]);
+    // Load the incoming session's draft (default to empty).
+    const incoming = sessionId !== undefined ? (draftsRef.current.get(sessionId) ?? '') : '';
+    prevSessionForDraftRef.current = sessionId;
+    setInputText(incoming);
+    // Reset the textarea height to fit the loaded draft on the next frame.
+    // Cancel on unmount / re-run so a pending frame can't fire after teardown.
+    const raf = requestAnimationFrame(() => adjustTextareaHeight());
+    return () => cancelAnimationFrame(raf);
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fix 3C: Show "Thinking..." indicator when agent starts running.
   // Live machinery rows accumulate inside an open agent_run capsule; on
   // terminal status the capsule is finalized so it collapses.
+  //
+  // agentStatus is PROJECT-wide (it reflects the slot holder). Conversation
+  // mutations here (finalize capsule, thinking indicator, catch-up fetch,
+  // new_session reset) therefore only apply when the VIEWED session is the
+  // holder. The Stop-button affordance (isCancelling) is project-wide and is
+  // always cleared on a terminal status regardless of which session is viewed.
   useEffect(() => {
-    if (agentStatus === 'idle' || agentStatus === 'error' || agentStatus === 'stopped') {
-      setShowThinking(false);
-      const finalStatus =
-        agentStatus === 'idle' ? 'completed' :
-        agentStatus === 'error' ? 'error' : 'stopped';
-      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
+    // "viewing" = the viewed session IS the running/holder session. This is a
+    // render-state concern (finalize capsule, thinking indicator), NOT event
+    // routing — live events route strictly by session_id in the handlers below.
+    const viewing =
+      sessionIdRef.current !== undefined &&
+      sessionIdRef.current === holderSessionIdRef.current;
+    if (agentStatus === 'idle' || agentStatus === 'error') {
       // Loop has actually exited — clear the in-flight cancel affordance.
       // Effect re-runs on agentStatus change, so this naturally coincides
-      // with the agent.status:idle WS broadcast from _on_loop_done.
+      // with the agent.status:idle WS broadcast from _on_loop_done. This is
+      // composer-global and must run even when viewing a non-holder session.
+      // (A stopped/cancelled agent reports as `idle` — there is no separate
+      // `stopped` run status.)
       setIsCancelling(false);
-      // Catch-up fetch: if the agent was running, fetch the latest message
-      // in case streaming deltas were entirely missed (tunnel down, etc.)
+      // Clear the thinking indicator and catch up the latest message even
+      // when `viewing` is false. Reason: under multi-session, the holder
+      // fetch racing with the running→idle transition can collapse
+      // `viewingHolder` to false in the same tick the idle event arrives —
+      // leaving the spinner stuck and the final reply unfetched on the
+      // session that actually ran. These two cleanups are about loop state,
+      // not the visible chat surface, so they are safe to run unconditionally.
+      // See docs/investigations/INVESTIGATION-thinking-stuck-after-dispatch.md
+      // (Option 1).
+      setShowThinking(false);
       if (wasRunningRef.current) {
         wasRunningRef.current = false;
         fetchLatestMessage();
+        // FE-A1: refresh raw history so the just-finished turn's persisted
+        // assistant/tool/[Sub-agent] lines reach the memo. Without this, the
+        // live overlay items get wiped on the next seed without a backing
+        // history line to replace them.
+        refreshRawMessages();
+        // Refresh the project's runtime fields (budget_spent_usd) so the
+        // header reflects the spend from the just-completed turn.
+        onRefreshProject?.(projectId);
       }
+      if (!viewing) return;
+      const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
+      setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
     } else if (agentStatus === 'running') {
+      if (!viewing) return;
       wasRunningRef.current = true;
       setShowThinking(true);
     } else if (agentStatus === 'pending_approval') {
+      if (!viewing) return;
       // Fetch pending approval via REST in case the WS event was missed.
       // Covers status poll discovering a stale approval after reconnect.
       fetchPendingApproval();
     } else if (agentStatus === 'new_session') {
+      if (!viewing) return;
       // WS event is the single source of truth for session swap
       wasRunningRef.current = false;
+      // Clear the accumulated raw history first so the transform-once memo
+      // re-seeds `items` to [] (matching the reset), then overlay the notice.
+      setRawMessages([]);
       setItems([{
         type: 'agent_notify' as const,
-        title: 'New session started',
-        body: 'Workspace memory preserved. The agent remembers your project.',
+        title: t('chat.notify.newSession.title'),
+        body: t('chat.notify.newSession.body'),
         urgency: 'low' as const,
         timestamp: new Date().toISOString(),
       }]);
@@ -579,7 +981,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setTotalMessages(0);
       setLoadedOffset(0);
     }
-  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval]);
+  }, [agentStatus, statusTick, projectId, fetchLatestMessage, fetchPendingApproval, refreshRawMessages, onRefreshProject]);
 
   // Cancel timeout fallback: if the loop hasn't actually idled within 10s
   // of the Stop click, clear the in-flight affordance and surface a
@@ -589,7 +991,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (!isCancelling) return;
     const timer = setTimeout(() => {
       setIsCancelling(false);
-      setCancelTimeoutNotice('Cancel took longer than expected — try again if needed.');
+      setCancelTimeoutNotice(t('chat.cancelTimeout'));
     }, 10_000);
     return () => clearTimeout(timer);
   }, [isCancelling]);
@@ -637,10 +1039,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   useEffect(() => {
     if (!agentStatus) return;
     const timer = setInterval(() => {
-      api<{ project_id: string; status: string }>(
+      api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
       )
         .then((result) => {
+          // Keep the slot holder current from the same poll response.
+          setHolderSessionId(result.current_holder_session_id ?? null);
           if (result.status !== agentStatus) {
             window.dispatchEvent(
               new CustomEvent('agent-status-override', {
@@ -672,9 +1076,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [agentStatus, fetchPendingApproval]);
 
   useEffect(() => {
+    // Single active-loop slot model: WS events carry only project_id, never
+    // session_id, so any live agent event belongs to the project's slot
+    // holder. We append it to the VIEWED conversation only when the viewed
+    // session IS the holder. When viewing a non-holder session, these live
+    // events pertain to the holder and must not bleed into the static
+    // history being shown (see §5 of the T5 brief). The user's own typed
+    // message (handleUserMessage nonce path) is the one exception — it always
+    // renders optimistically for the session it was sent into.
     function handleStreamDelta(event: WebSocketEvent) {
       const e = event as StreamDeltaEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing: render only deltas for the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       if (e.is_final) {
         setStream((prev) => {
@@ -708,6 +1122,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
 
+      const reasoning = e.reasoning_content ?? '';
+      const hasVisibleText = !!e.text;
+
+      // Reasoning-only phase: the delta carries reasoning with empty text. Keep
+      // the thinking indicator alive and render the streaming reasoning into the
+      // live capsule. Do NOT clear the spinner — that only happens once visible
+      // answer text begins (below) or the turn completes (is_final, above).
+      if (reasoning && !hasVisibleText) {
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString(), e.source));
+        scrollToBottom();
+        return;
+      }
+
+      // If this delta also carried reasoning alongside visible text, capture it.
+      if (reasoning) {
+        setItems((prev) => appendLiveReasoning(prev, reasoning, new Date().toISOString(), e.source));
+      }
+
+      // Visible answer text has begun — transition out of the thinking phase.
       setShowThinking(false);
       setStream((prev) => ({
         text: (prev?.text ?? '') + e.text,
@@ -720,6 +1153,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleActivity(event: WebSocketEvent) {
       const e = event as ActivityEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing (seam 3 / Phase 3): render only activity for the
+      // viewed session. Activity events carry session_id; the old viewingHolder
+      // fallback (for legacy no-session_id events) is gone — an event without a
+      // matching session_id is dropped, never shown by default. (A rare
+      // project-scoped activity with no session_id, e.g. network_blocked, is
+      // dropped rather than risk leaking into every session.)
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       // agent_output activities duplicate sub-agent messages already
       // delivered via chat.sub_agent_message — drop them.
@@ -763,6 +1203,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalRequest(event: WebSocketEvent) {
       const e = event as ApprovalRequestEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing (seam 3 / Phase 3): surface the approval card
+      // only for the viewed session. Management approvals now carry session_id
+      // (Phase 2), so the old always-on viewingHolder gate is removed — an
+      // approval for another session never leaks into this pane.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setApprovals((prev) => {
         const next = new Map(prev);
@@ -795,6 +1240,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleApprovalResolved(event: WebSocketEvent) {
       const e = event as ApprovalResolvedEvent;
       if (e.project_id !== projectId) return;
+      if (e.session_id && e.session_id !== sessionIdRef.current) return;
 
       setApprovals((prev) => {
         const next = new Map(prev);
@@ -809,6 +1255,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleSubAgentMessage(event: WebSocketEvent) {
       const e = event as SubAgentMessageEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing (seam 3 / Phase 3): sub-agent replies carry the
+      // parent session_id; render only those for the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -836,13 +1285,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         if (ts > 0 && now - ts > 30_000) localNoncesRef.current.delete(n);
       }
 
-      // Skip if this is our own message (nonce matches a local send)
+      // Skip if this is our own message (nonce matches a local send). The
+      // optimistic append in handleSend already rendered it into the viewed
+      // session, regardless of holder — so this dedup path is the one place
+      // a user's own message survives even when not viewing the holder.
       if (e.nonce && localNoncesRef.current.has(e.nonce)) {
         // Mark as received with timestamp instead of deleting, so relay
         // retries of the same event are still deduped within the TTL window.
         localNoncesRef.current.set(e.nonce, Date.now());
         return;
       }
+
+      // A non-own user_message echo (no matching nonce — e.g. injected from
+      // another client). Strict session routing (seam 3 / Phase 3): render it
+      // only when it belongs to the viewed session.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => {
         const afterCapsule = finalizeLiveCapsule(prev, 'completed');
@@ -861,6 +1318,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleAgentNotify(event: WebSocketEvent) {
       const e = event as AgentNotifyEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing (seam 3 / Phase 3): agent.notify now carries
+      // session_id (Phase 2); render only for the viewed session — the old
+      // always-on viewingHolder gate is removed so a notify for another session
+      // never leaks into this pane.
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => [
         ...prev,
@@ -884,6 +1346,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     function handleStateRefresh(event: WebSocketEvent) {
       const e = event as StateRefreshLifecycleEvent;
       if (e.project_id !== projectId) return;
+      // Strict session routing (seam 3 / Phase 3): state_refresh.lifecycle
+      // carries session_id; render only for the viewed session (was: ignored
+      // e.session_id and gated on viewingHolder).
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => {
         // Find the last refresh_status item to update in-place (in_progress → done/failed)
@@ -988,6 +1454,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // and again on status flip from running → completed.
       return `agent_run:${item.capsule_id}:${item.status}:${item.items.length}`;
     }
+    if (item.type === 'sub_agent_activity') {
+      return `sub_agent_activity:${item.timestamp}:${item.handle}:${item.action}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
     const contentPrefix = item.content.slice(0, 32);
@@ -1089,12 +1558,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     setShowCommandDropdown(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
-      const result = await newSession(projectId);
+      const result = await newSession(projectId, sessionId);
       if (result.status === 'no_active_session') {
         setItems((prev) => [...prev, {
           type: 'agent_notify' as const,
-          title: 'No active session',
-          body: 'Start the agent first, then use /new to reset the session.',
+          title: t('chat.notify.noSession.title'),
+          body: t('chat.notify.noSession.body'),
           urgency: 'high' as const,
           timestamp: new Date().toISOString(),
         }]);
@@ -1142,7 +1611,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         );
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : 'Upload failed';
+          err instanceof Error ? err.message : t('chat.uploadError');
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === att.id
@@ -1161,12 +1630,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setAttachments((prev) => {
         const room = MAX_ATTACHMENTS - prev.length;
         if (room <= 0) {
-          setInjectError(`Maximum of ${MAX_ATTACHMENTS} attachments per message.`);
+          setInjectError(t('chat.maxAttachments', { n: MAX_ATTACHMENTS }));
           return prev;
         }
         const usable = files.slice(0, room);
         if (files.length > usable.length) {
-          setInjectError(`Only ${MAX_ATTACHMENTS} attachments allowed per message.`);
+          setInjectError(t('chat.onlyNAllowed', { n: MAX_ATTACHMENTS }));
         }
         const additions: PendingAttachment[] = usable.map((file) => {
           const id = genId();
@@ -1182,7 +1651,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             status: tooBig ? 'error' : 'pending',
             thumbnailUrl,
             errorMessage: tooBig
-              ? 'File exceeds 10 MB limit'
+              ? t('chat.fileTooLarge')
               : undefined,
           };
           return att;
@@ -1303,9 +1772,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     (hasText || anyDone) &&
     !(attachments.length > 0 && !hasText && !anyDone);
   const disabledReason = anyUploading
-    ? 'Waiting for uploads…'
+    ? t('chat.disabled.waitingUploads')
     : allError && !hasText
-      ? 'Remove failed attachments or retry'
+      ? t('chat.disabled.removeFailed')
       : '';
 
   async function handleSend() {
@@ -1350,6 +1819,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
     clearAttachments();
 
+    const optimisticTimestamp = new Date().toISOString();
     setItems((prev) => {
       const afterCapsule = finalizeLiveCapsule(prev, 'completed');
       return [
@@ -1357,11 +1827,26 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {
           type: 'user_message',
           content: wireContent,
-          timestamp: new Date().toISOString(),
+          timestamp: optimisticTimestamp,
           ...(target && { target }),
         },
       ];
     });
+    // F1: also push into rawMessages so the transform-once memo (which the
+    // seed effect re-runs whenever isActivelyRunning flips on idle→running)
+    // reproduces this bubble instead of stomping it. Without this, the very
+    // next memo run would overwrite the optimistic tail and the just-typed
+    // message would vanish until the WS echo / catch-up fetch lands.
+    setRawMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        content: wireContent,
+        source: 'user',
+        timestamp: optimisticTimestamp,
+        ...(target && { target }),
+      },
+    ]);
 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
@@ -1372,6 +1857,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         target,
         nonce,
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+        sessionId,
       );
       // Track J Phase 1: backend returned 202 with `slot_held` because
       // another session in this project holds the active-loop slot.
@@ -1392,6 +1878,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           for (let i = prev.length - 1; i >= 0; i--) {
             const it = prev[i];
             if (it.type === 'user_message' && it.content === wireContent) {
+              return [...prev.slice(0, i), ...prev.slice(i + 1)];
+            }
+          }
+          return prev;
+        });
+        // F1: also strip the optimistic entry we pushed into rawMessages so
+        // the transform-once memo doesn't re-emit a phantom user bubble.
+        setRawMessages((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const m = prev[i];
+            if (m.role === 'user' && m.content === wireContent && m.timestamp === optimisticTimestamp) {
               return [...prev.slice(0, i), ...prev.slice(i + 1)];
             }
           }
@@ -1431,7 +1928,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         });
       }
     } catch {
-      setInjectError('Failed to send message. Please try again.');
+      setInjectError(t('chat.injectError'));
     } finally {
       setSubAgentLoading(null);
     }
@@ -1507,7 +2004,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           className="absolute inset-0 z-50 bg-background/80 border-2 border-dashed border-accent rounded flex items-center justify-center pointer-events-none"
           data-testid="chat-drop-overlay"
         >
-          <span className="text-lg font-medium">Drop files to attach</span>
+          <span className="text-lg font-medium">{t('chat.dropFiles')}</span>
         </div>
       )}
       {claudemdWarning && (
@@ -1517,7 +2014,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           onDismiss={() => setClaudemdWarning(null)}
         />
       )}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 max-md:pb-20">
+      {/* Piece 3 Part D: honest sub-agent status badge + user stop control */}
+      <SubAgentStatusBar projectId={projectId} sessionId={sessionId} />
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
@@ -1532,16 +2031,36 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             disabled={loadingMore}
             className="w-full py-2 text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
           >
-            {loadingMore ? 'Loading...' : `Load earlier messages (${totalMessages - loadedOffset} more)`}
+            {loadingMore ? t('chat.loadingMore') : t('chat.loadEarlier', { n: totalMessages - loadedOffset })}
           </button>
         )}
 
         {!loading && items.length === 0 && !stream && (
-          <div className="text-secondary text-sm text-center mt-12">
-            {autoStarted.current
-              ? 'Agent is starting...'
-              : 'No messages yet. Send a message to get started.'}
-          </div>
+          project?.is_empty_workspace === false &&
+          sessionId === undefined &&
+          !coldStartDismissed ? (
+            <div className="mt-8">
+              <ColdStartCard
+                folderName={(project.workspace || '').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
+                busy={coldStartBusy}
+                onScan={async () => {
+                  setColdStartBusy(true);
+                  try {
+                    // Navigation to the new session is WS-driven, like /new.
+                    await coldStartScan(project.project_id);
+                  } catch (err) {
+                    console.error('[ChatView] cold-start scan failed:', err);
+                    setColdStartBusy(false);
+                  }
+                }}
+                onSkip={() => setColdStartDismissed(true)}
+              />
+            </div>
+          ) : (
+            <div className="text-secondary text-sm text-center mt-12">
+              {t('chat.empty')}
+            </div>
+          )
         )}
 
         {!loading &&
@@ -1552,30 +2071,69 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             if (item.type === 'user_message') {
               rendered = <ChatMessage key={`msg-${index}`} message={item} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} />;
+            } else if (item.type === 'sub_agent_activity') {
+              // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
+              const label =
+                item.action === 'started' ? t('chat.subActivity.started') :
+                item.action === 'sent' ? t('chat.subActivity.sent', { preview: item.preview ?? '' }) :
+                item.action === 'completed'
+                  ? (item.summary
+                      ? t('chat.subActivity.completed', { summary: item.summary })
+                      : t('chat.subActivity.completed', { summary: '' }).replace(/[:：]\s*$/, ''))
+                  : /* failed */ (item.error
+                      ? t('chat.subActivity.failed', { error: item.error })
+                      : t('chat.subActivity.failed', { error: '' }).replace(/[:：]\s*$/, ''));
+              const tone = item.action === 'failed' ? 'text-error/80' : 'text-secondary';
+              rendered = (
+                <div
+                  key={`sa-${index}`}
+                  data-testid="sub-agent-activity"
+                  data-action={item.action}
+                  className={`flex items-baseline gap-2 px-2 py-1 text-[11.5px] font-mono ${tone}`}
+                >
+                  <span className="text-primary">{item.handle}</span>
+                  <span className="truncate">{label}</span>
+                </div>
+              );
             } else if (item.type === 'session_separator') {
               return (
-                <div key={`sep-${index}`} className="flex items-center gap-3 my-4 px-2 opacity-50">
+                <div key={`sep-${index}`} className="flex items-center gap-3 px-2 opacity-50">
                   <div className="flex-1 border-t border-border" />
                   <span className="text-xs text-secondary whitespace-nowrap">
-                    Previous session
+                    {t('chat.previousSession')}
                   </span>
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
             } else if (item.type === 'agent_run') {
-              const isExpanded = item.status === 'running' || expandedCapsules.has(item.capsule_id);
-              const isLocked = item.status === 'running';
-              const summary = capsuleSummaryText(item);
+              // FE-A1: trailing-capsule "running" status is a render-time
+              // derivation. The transform always emits `completed`; we
+              // upgrade to `running` only when this is the LAST item AND the
+              // viewed session is actively running. This keeps the transform
+              // pure (no status-flip re-runs that wipe the live overlay) and
+              // still shows a spinner when one is appropriate.
+              const isLastItem = index === items.length - 1;
+              const derivedStatus =
+                isLastItem && isActivelyRunning && item.status === 'completed'
+                  ? 'running'
+                  : item.status;
+              const isExpanded =
+                derivedStatus === 'running' ||
+                expandedCapsules.has(item.capsule_id);
+              const isLocked = derivedStatus === 'running';
+              const summary = capsuleSummaryText({ ...item, status: derivedStatus }, t);
               const Chevron = isExpanded ? ChevronDown : ChevronRight;
               rendered = (
                 <div
                   key={`run-${item.capsule_id}`}
                   data-testid="agent_run"
                   data-capsule-id={item.capsule_id}
-                  data-capsule-status={item.status}
-                  className="mb-3 rounded-md border border-border bg-sidebar/40 px-3 py-2"
+                  data-capsule-status={derivedStatus}
+                  className="ml-9 flex gap-[10px]"
                 >
+                  <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
+                  <div className="min-w-0 flex-1">
                   <button
                     type="button"
                     onClick={
@@ -1591,16 +2149,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                           }
                     }
                     disabled={isLocked}
-                    className={`flex items-center gap-2 w-full text-left text-[13px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+                    className={`flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
                   >
-                    <Chevron size={14} className="shrink-0" />
-                    {item.status === 'running' && (
+                    <Chevron size={13} className="shrink-0" />
+                    {derivedStatus === 'running' && (
                       <Loader2 size={12} className="shrink-0 animate-spin" />
                     )}
-                    <span className="truncate">{summary}</span>
+                    <span className="truncate text-primary font-medium">{summary}</span>
                   </button>
                   {isExpanded && item.items.length > 0 && (
-                    <div className="mt-2 pl-2 border-t border-border/30 pt-2">
+                    <div className="mt-2 pt-2 border-t border-border/30">
                       {item.items.map((child, ci) => {
                         if (child.type === 'reasoning_block') {
                           return (
@@ -1634,12 +2192,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       })}
                     </div>
                   )}
+                  </div>
                 </div>
               );
             } else if (item.type === 'agent_notify') {
               const urgencyColor = item.urgency === 'high' ? 'border-error/40 bg-error/5' : 'border-accent/30 bg-accent/5';
               rendered = (
-                <div key={`notify-${index}`} className={`mb-3 rounded-lg border ${urgencyColor} px-4 py-3`}>
+                <div key={`notify-${index}`} className={`rounded-lg border ${urgencyColor} px-4 py-3`}>
                   <p className="text-sm font-medium text-primary">{item.title}</p>
                   <p className="text-sm text-secondary mt-1">{item.body}</p>
                 </div>
@@ -1667,6 +2226,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     resolved: !!resolved,
                   }}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -1683,6 +2243,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`apr-${item.tool_call_id}`}
                   approval={item}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   resolved={resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -1730,6 +2291,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     reason: a.tool_args?.reason as string ?? '',
                   }}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   onResolve={(toolCallId: string) => {
                     setApprovals((prev) => {
                       const next = new Map(prev);
@@ -1746,6 +2308,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`rt-apr-${a.tool_call_id}`}
                   approval={a}
                   projectId={projectId}
+                  sessionId={holderSessionId ?? sessionId}
                   resolved={a.resolved}
                   onResolve={(toolCallId: string, resolution: 'approved' | 'denied') => {
                     setApprovals((prev) => {
@@ -1762,12 +2325,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
 
         {subAgentLoading && (
-          <div className="flex justify-start mb-3">
-            <div className="max-w-[75%] max-md:max-w-[85%]">
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-sm font-medium text-secondary">{subAgentLoading}</span>
+          <div className="flex gap-[10px]">
+            <MessageAvatar variant="agent" />
+            <div className="flex-1 min-w-0">
+              <div className="font-mono text-[11px] mb-1">
+                <span className="text-secondary">{subAgentLoading}</span>
               </div>
-              <div className="bg-background border border-border rounded-lg px-4 py-2 text-sm">
+              <div className="text-[13px] leading-[1.55]">
                 <span className="inline-flex gap-1 text-secondary">
                   <span className="animate-pulse">●</span>
                   <span className="animate-pulse" style={{animationDelay: '0.2s'}}>●</span>
@@ -1781,7 +2345,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {showThinking && !stream && !subAgentLoading && (
           <div className="flex items-center gap-2 px-2 py-1 text-secondary text-sm">
             <Loader2 size={14} className="animate-spin" />
-            <span>Thinking...</span>
+            <span>{t('chat.thinking')}</span>
           </div>
         )}
 
@@ -1806,16 +2370,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             holdingSessionId={slotHeldNotice.holdingSessionId}
             onWait={() => setSlotHeldNotice(null)}
             onCancelAndSend={async () => {
-              // Cancel the running turn on the holding session's project,
-              // then re-inject the previously-typed message. Note that
-              // /cancel is project-scoped (per ACTIVE-session-and-queue-model
-              // §3 — one slot per project), so we cancel via projectId, not
-              // the holding session_id directly.
-              await cancelMessage(projectId);
+              // Cancel the running turn on the holding session, then re-inject
+              // the previously-typed message. The backend /cancel now accepts a
+              // session_id so it stops the SPECIFIC session holding the slot
+              // (slotHeldNotice.holdingSessionId), not just the default one.
+              await cancelMessage(projectId, slotHeldNotice.holdingSessionId);
               const pending = slotHeldNotice;
               // Replace the notice with the actual user message (per
-              // DISPATCH-2026-05-22 §5.4) by re-running the send path
-              // without session_id (the user's intent is to take the slot).
+              // DISPATCH-2026-05-22 §5.4). After /cancel the slot is freed, so
+              // re-inject targeting the VIEWED session — it now takes the slot
+              // and the message lands in the conversation the user is looking
+              // at (single active-loop slot model).
               setSlotHeldNotice(null);
               setInputText('');
               const wireContent = pending.pendingContent;
@@ -1834,6 +2399,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 pending.pendingTarget,
                 pending.pendingNonce,
                 pending.pendingAttachments,
+                sessionId,
               );
             }}
           />
@@ -1847,7 +2413,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       )}
 
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-background max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
-        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
+        {queueActive ? (
+          <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+        ) : (
+        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-[10px] shadow-lg px-3 py-2">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredCommands.map((cmd, i) => (
@@ -1861,8 +2430,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     selectCommand(cmd.name);
                   }}
                 >
-                  <span className="font-medium text-zinc-200">{cmd.name}</span>
-                  <span className="ml-2 text-zinc-500">{cmd.description}</span>
+                  <span className="font-medium text-zinc-200">{cmd.name === '/new' ? t('chat.slash.new') : cmd.name}</span>
+                  <span className="ml-2 text-zinc-500">{cmd.name === '/new' ? t('chat.slash.new.desc') : cmd.description}</span>
                 </button>
               ))}
             </div>
@@ -1870,7 +2439,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           {showMentionDropdown && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredAgents.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-zinc-500">No agents available</div>
+                <div className="px-3 py-2 text-sm text-zinc-500">{t('chat.noAgents')}</div>
               ) : (
                 filteredAgents.map((agent, i) => (
                   <button
@@ -1922,7 +2491,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach files"
+              aria-label={t('chat.attachFiles')}
               className="shrink-0 p-2 text-secondary hover:text-primary rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
             >
               <Plus size={18} />
@@ -1933,10 +2502,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Send a message..."
+              placeholder={t('chat.composer.placeholder')}
               rows={1}
               disabled={isCancelling}
-              className="flex-1 resize-none text-sm max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
+              className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
             {(agentStatus === 'running' || agentStatus === 'waiting') ? (
               <>
@@ -1946,12 +2515,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    cancelMessage(projectId).catch(() => {
+                    // Cancel the SPECIFIC running session: prefer the resolved
+                    // slot holder, falling back to the viewed session.
+                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
                       // POST failed (offline, daemon down, etc.) — drop the
                       // optimistic state immediately so the user can retry
                       // instead of waiting for the 10s timeout.
                       setIsCancelling(false);
-                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                      setCancelTimeoutNotice(t('chat.cancelFailed'));
                     });
                   }}
                   onTouchEnd={(e) => {
@@ -1959,13 +2530,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     if (isCancelling) return;
                     setCancelTimeoutNotice(null);
                     setIsCancelling(true);
-                    cancelMessage(projectId).catch(() => {
+                    cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
                       setIsCancelling(false);
-                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                      setCancelTimeoutNotice(t('chat.cancelFailed'));
                     });
                   }}
                   disabled={isCancelling}
-                  aria-label={isCancelling ? 'Cancelling' : 'Stop'}
+                  aria-label={isCancelling ? t('chat.cancelling') : t('chat.stop')}
                   className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
                   {isCancelling
@@ -1984,7 +2555,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       : 'bg-secondary/20 text-secondary/40 cursor-default'
                   }`}
                 >
-                  Queue
+                  {t('chat.queue')}
                 </button>
               </>
             ) : (
@@ -1993,7 +2564,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 onClick={handleSend}
                 onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
                 aria-disabled={!canSend}
-                aria-label="Send"
+                aria-label={t('chat.send')}
                 disabled={!canSend}
                 title={disabledReason || undefined}
                 className={`shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
@@ -2007,6 +2578,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

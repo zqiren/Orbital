@@ -41,13 +41,20 @@ def project(tmp_path):
     requests.delete(f"{BASE}/projects/{pid}")
 
 
-def test_new_session_no_handle_returns_no_active_session(project):
-    """Backend returns no_active_session when agent has never been started."""
+@_requires_test_daemon
+def test_new_session_returns_fresh_id_even_with_no_handle(project):
+    """new_session is pure-create: it mints and returns a fresh session_id
+    even when no agent has ever been started (no handle required — the session
+    materializes on the first message)."""
     resp = requests.post(f"{BASE}/agents/{project}/new-session")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "no_active_session"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["session_id"].startswith("sess_")
+    assert body["session_uuid"]
 
 
+@_requires_test_daemon
 def test_new_session_no_handle_does_not_broadcast_ws_event(project):
     """No WS event should be broadcast when there's no active session —
     frontend feedback must come from API response, not WS."""
@@ -69,8 +76,12 @@ def test_new_session_no_handle_does_not_broadcast_ws_event(project):
 
 
 @_requires_test_daemon
-def test_new_session_with_active_agent_broadcasts_new_session_then_idle(project):
-    """When agent IS running, WS must broadcast new_session then idle in order."""
+def test_new_session_with_active_agent_is_pure_create(project):
+    """Even while an agent is running, new_session is pure-create: it returns
+    a fresh session_id and takes NO action on the running session — so no
+    rotation status (no 'new_session' broadcast) fires for it. The running
+    session keeps its slot; the new session materializes on its first
+    message."""
     import websocket, threading, time, json
 
     # Start the agent
@@ -89,11 +100,12 @@ def test_new_session_with_active_agent_broadcasts_new_session_then_idle(project)
 
     resp = requests.post(f"{BASE}/agents/{project}/new-session")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["session_id"].startswith("sess_")
     time.sleep(2.0)
     ws.close()
 
     statuses = [e.get("status") for e in events if e.get("type") == "agent.status"]
-    assert "new_session" in statuses
-    assert "idle" in statuses
-    assert statuses.index("idle") > statuses.index("new_session")
+    # Pure-create does not rotate, so no 'new_session' status is broadcast.
+    assert "new_session" not in statuses

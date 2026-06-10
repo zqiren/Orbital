@@ -97,7 +97,12 @@ export function uploadFile(params: UploadParams): Promise<UploadResult> {
   const { projectId, file, baseUrl, isRelayMode, onProgress } = params;
   return new Promise<UploadResult>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const url = `${baseUrl}/api/v2/projects/${encodeURIComponent(projectId)}/files/upload?path=/uploads/`;
+    // notify=false: this is a chat-composer attachment. The file is delivered
+    // inline in the outgoing message, so the server must NOT enqueue a separate
+    // "read this file" queue item (that would double-process the file, and
+    // orphans a task if the attachment is never sent). The file explorer uses
+    // its own request without this flag and keeps the default notify=true.
+    const url = `${baseUrl}/api/v2/projects/${encodeURIComponent(projectId)}/files/upload?path=/uploads/&notify=false`;
     xhr.open('POST', url);
 
     if (isRelayMode) {

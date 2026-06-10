@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api, isRelayMode, ApiError } from '../config';
+import { useT } from '../i18n/useT';
 import {
   Smartphone,
   RefreshCw,
@@ -24,6 +25,7 @@ interface PairedDevice {
 type PairState = 'idle' | 'loading' | 'active' | 'error' | 'no-relay';
 
 export default function PairPhone() {
+  const t = useT();
   const [state, setState] = useState<PairState>('idle');
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export default function PairPhone() {
         setLanError(result.error);
       }
     } catch {
-      setLanError('Failed to detect LAN address');
+      setLanError(t('pairPhone.lan.detectFailed'));
       setLanUrl(null);
     } finally {
       setLanLoading(false);
@@ -114,13 +116,11 @@ export default function PairPhone() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 503) {
         setState('no-relay');
-        setError(
-          'Cloud relay is not configured. Set the AGENT_OS_RELAY_URL environment variable and restart the daemon to enable remote pairing.',
-        );
+        setError(t('pairPhone.relay.noRelayError'));
       } else {
         setState('error');
         setError(
-          err instanceof ApiError ? err.detail : 'Failed to generate pairing code',
+          err instanceof ApiError ? err.detail : t('pairPhone.relay.genCodeFailed'),
         );
       }
     }
@@ -160,10 +160,10 @@ export default function PairPhone() {
           </div>
           <div>
             <h3 className="text-sm font-semibold text-primary leading-tight">
-              Mobile Access
+              {t('pairPhone.lan.header')}
             </h3>
             <p className="text-xs text-secondary">
-              Open Orbital on your phone via local network
+              {t('pairPhone.lan.subhead')}
             </p>
           </div>
         </div>
@@ -172,20 +172,20 @@ export default function PairPhone() {
           {lanLoading ? (
             <div className="p-6 flex items-center justify-center gap-3">
               <RefreshCw className="w-4 h-4 text-secondary animate-spin" />
-              <span className="text-sm text-secondary">Detecting LAN address...</span>
+              <span className="text-sm text-secondary">{t('pairPhone.lan.detecting')}</span>
             </div>
           ) : lanUrl ? (
             <div className="flex max-md:flex-col">
               {/* Left: instructions */}
               <div className="flex-1 p-6 flex flex-col justify-center">
                 <h4 className="text-base font-semibold text-primary mb-4">
-                  Scan to open Orbital on your phone
+                  {t('pairPhone.lan.scanTitle')}
                 </h4>
                 <ol className="space-y-3">
                   {[
-                    'Connect your phone to the same Wi-Fi network',
-                    'Open your phone\u2019s camera or QR scanner',
-                    'Point it at this QR code to open',
+                    t('pairPhone.lan.step1'),
+                    t('pairPhone.lan.step2'),
+                    t('pairPhone.lan.step3'),
                   ].map((step, i) => (
                     <li key={i} className="flex items-start gap-3">
                       <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-xs font-bold flex items-center justify-center mt-0.5">
@@ -201,13 +201,13 @@ export default function PairPhone() {
                 {/* Refresh button */}
                 <div className="flex items-center gap-3 mt-5 pt-4 border-t border-border">
                   <Wifi className="w-3.5 h-3.5 text-secondary" />
-                  <span className="text-xs text-secondary">Local network</span>
+                  <span className="text-xs text-secondary">{t('pairPhone.lan.localNetwork')}</span>
                   <button
                     onClick={fetchLanUrl}
                     className="ml-auto flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
                   >
                     <RefreshCw className="w-3 h-3" />
-                    Refresh
+                    {t('pairPhone.refresh')}
                   </button>
                 </div>
               </div>
@@ -241,10 +241,10 @@ export default function PairPhone() {
 
               <div className="flex-1 min-w-0">
                 <h4 className="text-sm font-semibold text-primary mb-1">
-                  No LAN network detected
+                  {t('pairPhone.lan.noNetworkTitle')}
                 </h4>
                 <p className="text-xs text-secondary leading-relaxed mb-3">
-                  {lanError || 'Could not determine a local network address. Make sure your computer is connected to Wi-Fi or Ethernet.'}
+                  {lanError || t('pairPhone.lan.noNetworkBody')}
                 </p>
 
                 <button
@@ -252,7 +252,7 @@ export default function PairPhone() {
                   className="inline-flex items-center gap-2 bg-accent text-white text-xs font-semibold rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Retry
+                  {t('pairPhone.retry')}
                 </button>
               </div>
             </div>
@@ -272,10 +272,10 @@ export default function PairPhone() {
         </div>
         <div>
           <h3 className="text-sm font-semibold text-primary leading-tight">
-            Linked Devices
+            {t('pairPhone.relay.header')}
           </h3>
           <p className="text-xs text-secondary">
-            Manage your phone and other paired devices
+            {t('pairPhone.relay.subhead')}
           </p>
         </div>
       </div>
@@ -288,13 +288,13 @@ export default function PairPhone() {
             {/* Left: instructions */}
             <div className="flex-1 p-6 flex flex-col justify-center">
               <h4 className="text-base font-semibold text-primary mb-4">
-                Pair your phone
+                {t('pairPhone.relay.pairTitle')}
               </h4>
               <ol className="space-y-3">
                 {[
-                  'Open your phone\u2019s camera or QR scanner',
-                  'Point it at this QR code to scan',
-                  'Confirm the connection on your phone',
+                  t('pairPhone.relay.step1'),
+                  t('pairPhone.relay.step2'),
+                  t('pairPhone.relay.step3'),
                 ].map((step, i) => (
                   <li key={i} className="flex items-start gap-3">
                     <span className="flex-shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-xs font-bold flex items-center justify-center mt-0.5">
@@ -325,7 +325,7 @@ export default function PairPhone() {
                   className="ml-auto flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
                 >
                   <RefreshCw className="w-3 h-3" />
-                  New code
+                  {t('pairPhone.relay.newCode')}
                 </button>
               </div>
             </div>
@@ -360,12 +360,10 @@ export default function PairPhone() {
 
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-primary mb-1">
-                Use Orbital on your phone
+                {t('pairPhone.relay.useTitle')}
               </h4>
               <p className="text-xs text-secondary leading-relaxed mb-3">
-                Pair your phone to monitor agents, approve actions, and send
-                messages remotely. Your phone connects through a secure cloud
-                relay.
+                {t('pairPhone.relay.useBody')}
               </p>
 
               {error && (
@@ -384,7 +382,7 @@ export default function PairPhone() {
                 ) : (
                   <LinkIcon className="w-3.5 h-3.5" />
                 )}
-                {state === 'loading' ? 'Generating...' : 'Link a Device'}
+                {state === 'loading' ? t('pairPhone.relay.generating') : t('pairPhone.relay.linkDevice')}
               </button>
             </div>
           </div>
@@ -397,7 +395,7 @@ export default function PairPhone() {
           onClick={resetPairing}
           className="mt-2 text-xs text-secondary hover:text-primary transition-colors"
         >
-          Cancel pairing
+          {t('pairPhone.relay.cancelPairing')}
         </button>
       )}
 
@@ -405,11 +403,11 @@ export default function PairPhone() {
       <div className="mt-6">
         <div className="flex items-center justify-between mb-3">
           <h4 className="text-xs font-semibold text-secondary uppercase tracking-wider">
-            Paired devices
+            {t('pairPhone.relay.pairedDevices')}
           </h4>
           {devices.length > 0 && (
             <span className="text-xs text-secondary">
-              {devices.length} device{devices.length !== 1 ? 's' : ''}
+              {t('pairPhone.relay.deviceCount', { n: devices.length })}
             </span>
           )}
         </div>
@@ -420,7 +418,7 @@ export default function PairPhone() {
               <Laptop className="w-5 h-5 text-secondary/40" />
             </div>
             <p className="text-xs text-secondary">
-              No devices paired yet. Link a device above to get started.
+              {t('pairPhone.relay.noDevices')}
             </p>
           </div>
         ) : (
@@ -451,16 +449,16 @@ export default function PairPhone() {
                     </p>
                     {pairedDate && (
                       <p className="text-xs text-secondary">
-                        Linked{' '}
-                        {pairedDate.toLocaleDateString(undefined, {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })}
-                        {' at '}
-                        {pairedDate.toLocaleTimeString(undefined, {
-                          hour: '2-digit',
-                          minute: '2-digit',
+                        {t('pairPhone.relay.linkedAt', {
+                          date: pairedDate.toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          }),
+                          time: pairedDate.toLocaleTimeString(undefined, {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          }),
                         })}
                       </p>
                     )}
@@ -470,10 +468,10 @@ export default function PairPhone() {
                     onClick={() => revokeDevice(device.phone_id)}
                     disabled={isRevoking}
                     className="flex items-center gap-1.5 text-xs text-secondary hover:text-error opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-all duration-150 rounded-lg px-2.5 py-1.5 hover:bg-error/5 max-md:min-h-[44px]"
-                    title="Unlink this device"
+                    title={t('pairPhone.relay.unlinkTitle')}
                   >
                     <Trash2 className="w-3 h-3" />
-                    Unlink
+                    {t('pairPhone.relay.unlink')}
                   </button>
                 </div>
               );

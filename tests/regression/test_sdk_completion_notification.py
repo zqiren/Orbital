@@ -106,12 +106,14 @@ async def test_turn_complete_fires_on_completed():
     ws, activity, observer, transcript = _make_mocks()
     pm = ProcessManager(ws, activity, lifecycle_observer=observer)
 
-    # Queue a message followed by turn_complete
+    # Queue a message followed by a successful turn_complete. Honest-
+    # completion contract: only cause="success" may report on_completed
+    # (tests/regression/test_honest_completion_reporting.py).
     await transport._event_queue.put(
         TransportEvent("message", data={"text": "hello"}, raw_text="hello")
     )
     await transport._event_queue.put(
-        TransportEvent("turn_complete", data={}, raw_text="")
+        TransportEvent("turn_complete", data={"cause": "success"}, raw_text="")
     )
 
     # Start consumer
@@ -124,8 +126,9 @@ async def test_turn_complete_fires_on_completed():
     transport._alive = False
     await asyncio.sleep(0.6)
 
-    # on_completed should have been called: once for turn_complete, once for stream end
-    # The turn_complete call is the one we care about — it must contain "hello"
+    # Exactly one on_completed: the turn_complete. (The stream-end boundary
+    # after a closed turn emits nothing — the old double-fire was the
+    # phantom-completed bug.)
     calls = observer.on_completed.call_args_list
     assert len(calls) >= 1, f"Expected on_completed to be called, got {len(calls)} calls"
 
@@ -157,14 +160,14 @@ async def test_multi_turn_completion_resets_response():
         TransportEvent("message", data={"text": "first response"}, raw_text="first response")
     )
     await transport._event_queue.put(
-        TransportEvent("turn_complete", data={}, raw_text="")
+        TransportEvent("turn_complete", data={"cause": "success"}, raw_text="")
     )
     # Second turn
     await transport._event_queue.put(
         TransportEvent("message", data={"text": "second response"}, raw_text="second response")
     )
     await transport._event_queue.put(
-        TransportEvent("turn_complete", data={}, raw_text="")
+        TransportEvent("turn_complete", data={"cause": "success"}, raw_text="")
     )
 
     await pm.start("proj1", "test-agent", adapter, transcript=transcript)
@@ -176,8 +179,9 @@ async def test_multi_turn_completion_resets_response():
 
     calls = observer.on_completed.call_args_list
 
-    # We expect at least 2 calls from the two turn_complete events
-    # (there may be a 3rd from stream-end with "(no output)" since response was reset)
+    # Exactly 2 calls from the two successful turn_completes (the stream-end
+    # boundary after a closed turn emits nothing under the honest-completion
+    # contract).
     assert len(calls) >= 2, f"Expected at least 2 on_completed calls, got {len(calls)}"
 
     # Extract summaries from the first two calls
@@ -203,9 +207,9 @@ async def test_turn_complete_without_response():
     ws, activity, observer, transcript = _make_mocks()
     pm = ProcessManager(ws, activity, lifecycle_observer=observer)
 
-    # Only queue turn_complete, no message before it
+    # Only queue a successful turn_complete, no message before it
     await transport._event_queue.put(
-        TransportEvent("turn_complete", data={}, raw_text="")
+        TransportEvent("turn_complete", data={"cause": "success"}, raw_text="")
     )
 
     await pm.start("proj1", "test-agent", adapter, transcript=transcript)

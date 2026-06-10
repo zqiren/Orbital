@@ -63,14 +63,17 @@ class TestGetRunStatus:
 
         assert manager.get_run_status("proj_1") == "idle"
 
-    def test_returns_stopped_when_session_stopped(self, manager):
-        """Projects with a stopped session should report stopped."""
+    def test_returns_idle_when_session_stopped(self, manager):
+        """A stopped session reports idle — being stopped is not a distinct
+        runtime state, just 'not running right now'. The historical fact lives
+        in last_terminal_event, not the live status."""
         handle = MagicMock()
         handle.session.is_stopped.return_value = True
+        handle.session._paused_for_approval = False
         handle.task = None
         manager._handles[("proj_1", "default")] = handle
 
-        assert manager.get_run_status("proj_1") == "stopped"
+        assert manager.get_run_status("proj_1") == "idle"
 
     def test_returns_waiting_when_poll_task_active(self, manager):
         """Projects with active sub-agent polling should report waiting."""
@@ -83,6 +86,8 @@ class TestGetRunStatus:
 
         poll_task = MagicMock()
         poll_task.done.return_value = False
-        manager._idle_poll_tasks["proj_1"] = poll_task
+        # _idle_poll_tasks is keyed by SessionKey (project_id, session_id);
+        # the bare-project_id key was a pre-multi-session relic.
+        manager._idle_poll_tasks[("proj_1", "default")] = poll_task
 
         assert manager.get_run_status("proj_1") == "waiting"

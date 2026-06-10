@@ -354,7 +354,7 @@ class TestSubAgentManagerApprovalRouting:
 
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", "proj_1_sess0001")] = {"test-agent": mock_adapter}
 
         result = await mgr.resolve_sub_agent_approval("proj_1", "req-123", approved=True)
 
@@ -384,7 +384,7 @@ class TestSubAgentManagerApprovalRouting:
 
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", "proj_1_sess0001")] = {"test-agent": mock_adapter}
 
         result = await mgr.resolve_sub_agent_approval("proj_1", "req-123", approved=True)
 

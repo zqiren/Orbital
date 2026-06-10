@@ -65,6 +65,7 @@ def _make_transport():
     transport = SDKTransport.__new__(SDKTransport)
     transport._client = MagicMock()
     transport._session_id = None
+    transport._last_model = None  # piece-2 resume-persistence field
     transport._alive = True
     transport._workspace = ""
     transport._pending_approvals = {}

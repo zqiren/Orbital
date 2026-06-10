@@ -46,6 +46,11 @@ class LLMResponse:
     finish_reason: str
     status_text: str | None
     usage: TokenUsage
+    # Diagnostic: True when the stream delivered a final usage-bearing chunk
+    # (the chunk that drives CACHE_AUDIT). False signals a stream that ended
+    # without its terminal chunk — the "silent truncation" signature. Defaults
+    # False so non-streaming/legacy constructors are unaffected.
+    final_usage_chunk_seen: bool = False
 
 
 class StreamAccumulator:
@@ -144,6 +149,7 @@ class StreamAccumulator:
             finish_reason=finish_reason,
             status_text=status_text,
             usage=self.usage or TokenUsage(0, 0),
+            final_usage_chunk_seen=self.usage is not None,
         )
 
 

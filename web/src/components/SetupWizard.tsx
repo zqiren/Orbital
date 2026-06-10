@@ -7,6 +7,7 @@ import { Loader2, Shield, AlertTriangle, Globe } from 'lucide-react';
 import { api } from '../config';
 import type { PlatformStatus } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
+import { useT } from '../i18n/useT';
 
 type WizardStep = 'api_key' | 'sandbox_status' | 'browser_warmup';
 
@@ -15,6 +16,7 @@ interface SetupWizardProps {
 }
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
+  const t = useT();
   const [step, setStep] = useState<WizardStep>('api_key');
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -111,10 +113,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       const data = await api<PlatformStatus>('/api/v2/platform/status');
       setSandboxStatus(data);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Setup failed';
+      const msg = e instanceof Error ? e.message : t('wizard.setupFailed');
       // Clean up common error messages
       if (msg.includes('administrator') || msg.includes('elevation') || msg.includes('privilege')) {
-        setSetupError('Requires administrator privileges. Please run Orbital.exe --setup-sandbox from an elevated Command Prompt.');
+        setSetupError(t('wizard.sandboxIncomplete.adminError'));
       } else {
         setSetupError(msg);
       }
@@ -130,7 +132,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     try {
       await api('/api/v2/platform/browser/warmup', { method: 'POST' });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to open browser';
+      const msg = e instanceof Error ? e.message : t('wizard.browser.openFailed');
       setBrowserError(msg);
       setBrowserLoading(false);
       return;
@@ -157,28 +159,27 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         <div className="flex items-center gap-3 mb-4">
           <Shield className="w-6 h-6 text-success" />
           <h1 className="text-2xl font-semibold text-primary">
-            Your Agents Are Sandboxed
+            {t('wizard.sandboxComplete.title')}
           </h1>
         </div>
 
         <div className="space-y-3 mb-6">
           <div className="flex items-center gap-2 text-sm">
             <span className="text-success font-medium">{'\u2713'}</span>
-            <span className="text-primary">Isolated user account created</span>
+            <span className="text-primary">{t('wizard.sandboxComplete.item1')}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <span className="text-success font-medium">{'\u2713'}</span>
-            <span className="text-primary">Agents cannot access your personal files</span>
+            <span className="text-primary">{t('wizard.sandboxComplete.item2')}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <span className="text-success font-medium">{'\u2713'}</span>
-            <span className="text-primary">Network traffic is filtered</span>
+            <span className="text-primary">{t('wizard.sandboxComplete.item3')}</span>
           </div>
         </div>
 
         <p className="text-secondary text-sm leading-relaxed mb-6">
-          AI agents run in a restricted environment separate from your personal data.
-          They can only access project files you explicitly grant.
+          {t('wizard.sandboxComplete.body')}
         </p>
 
         <div className="flex justify-end">
@@ -186,7 +187,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             onClick={() => setStep('browser_warmup')}
             className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
           >
-            Next {'\u2192'}
+            {t('wizard.next')}
           </button>
         </div>
       </div>
@@ -200,21 +201,20 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         <div className="flex items-center gap-3 mb-4">
           <AlertTriangle className="w-6 h-6 text-warning" />
           <h1 className="text-2xl font-semibold text-primary">
-            Sandbox Not Configured
+            {t('wizard.sandboxIncomplete.title')}
           </h1>
         </div>
 
         <p className="text-secondary text-sm leading-relaxed mb-4">
-          Agent sandbox setup did not complete during installation.
-          Agents will run with your full system permissions.
+          {t('wizard.sandboxIncomplete.body')}
         </p>
 
         <div className="bg-surface border border-border rounded-lg p-4 mb-6">
-          <p className="text-secondary text-sm mb-2">To set up the sandbox later:</p>
+          <p className="text-secondary text-sm mb-2">{t('wizard.sandboxIncomplete.howto')}</p>
           <ol className="text-secondary text-sm space-y-1 list-decimal list-inside">
-            <li>Open Command Prompt as Administrator</li>
+            <li>{t('wizard.sandboxIncomplete.step1')}</li>
             <li>
-              Run: <code className="text-primary bg-background px-1.5 py-0.5 rounded text-xs font-mono">Orbital.exe --setup-sandbox</code>
+              {t('wizard.sandboxIncomplete.step2')}
             </li>
           </ol>
         </div>
@@ -230,7 +230,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             onClick={handleSkipSandbox}
             className="border border-border text-primary text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
           >
-            Continue Without Sandbox
+            {t('wizard.continueNoSandbox')}
           </button>
           <button
             onClick={handleRetrySandbox}
@@ -240,7 +240,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             {retrying ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Retrying...
+                {t('wizard.retrying')}
               </>
             ) : (
               'Retry Setup'
@@ -256,17 +256,17 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <span className="font-mono text-lg text-primary tracking-tight">
-            Orbital
+            {t('setupGate.wordmark')}
           </span>
         </div>
 
         {step === 'api_key' && (
           <div className="bg-background border border-border rounded-lg p-8">
             <h1 className="text-2xl font-semibold text-primary mb-3">
-              Welcome to Orbital
+              {t('wizard.welcome')}
             </h1>
             <p className="text-secondary text-sm leading-relaxed mb-6">
-              Let's set up your LLM provider to get started.
+              {t('wizard.intro')}
             </p>
 
             <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />
@@ -280,10 +280,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 {checkingKey ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Checking...
+                    {t('wizard.checking')}
                   </>
                 ) : (
-                  'Next \u2192'
+                  t('wizard.next')
                 )}
               </button>
             </div>
@@ -307,19 +307,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             <div className="flex items-center gap-3 mb-4">
               <Globe className="w-6 h-6 text-accent" />
               <h1 className="text-2xl font-semibold text-primary">
-                Set Up Browser Access
+                {t('wizard.browser.title')}
               </h1>
             </div>
 
             <p className="text-secondary text-sm leading-relaxed mb-4">
-              Sign in to your Google account so your agents can browse
-              websites without being blocked by CAPTCHAs. This is a
-              one-time setup.
+              {t('wizard.browser.body1')}
             </p>
             <p className="text-secondary text-sm leading-relaxed mb-6">
-              A browser window will open. Sign in to Google, then close
-              the browser when you're done. You can also visit other sites
-              your agents will need.
+              {t('wizard.browser.body2')}
             </p>
 
             {browserError && (
@@ -333,7 +329,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onClick={onComplete}
                 className="border border-border text-primary text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-surface transition-all duration-150"
               >
-                Skip
+                {t('wizard.skip')}
               </button>
 
               {browserDone ? (
@@ -341,7 +337,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   onClick={onComplete}
                   className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
                 >
-                  Get Started {'\u2192'}
+                  {t('wizard.getStarted')}
                 </button>
               ) : (
                 <button
@@ -352,10 +348,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   {browserLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Browser open — sign in and close it...
+                      {t('wizard.browser.opening')}
                     </>
                   ) : (
-                    'Open Browser'
+                    t('wizard.openBrowser')
                   )}
                 </button>
               )}

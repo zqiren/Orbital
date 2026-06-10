@@ -47,6 +47,7 @@ async def test_message_events_queued_for_read_stream():
     transport = SDKTransport.__new__(SDKTransport)
     transport._client = MagicMock()
     transport._session_id = None
+    transport._last_model = None  # piece-2 resume-persistence field
     transport._alive = True
     transport._workspace = ""
     transport._pending_approvals = {}
@@ -85,6 +86,7 @@ async def test_tool_use_events_still_queued():
     transport = SDKTransport.__new__(SDKTransport)
     transport._client = MagicMock()
     transport._session_id = None
+    transport._last_model = None  # piece-2 resume-persistence field
     transport._alive = True
     transport._workspace = ""
     transport._pending_approvals = {}

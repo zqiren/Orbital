@@ -1,6 +1,6 @@
 """Tests for token budget derivation from dollar budget."""
 import pytest
-from agent_os.agent.pricing import budget_usd_to_token_budget
+from agent_os.agent.pricing import budget_usd_to_token_budget, get_cost_rates
 from agent_os.daemon_v2.models import AgentConfig
 
 
@@ -58,3 +58,26 @@ class TestAgentConfigTokenBudgetDefault:
     def test_custom_token_budget_preserved(self):
         config = AgentConfig(workspace="/tmp", model="m", api_key="k", token_budget=50_000)
         assert config.token_budget == 50_000
+
+
+class TestDeepSeekPricingFromProvidersJson:
+    """get_cost_rates loads DeepSeek prices from the real providers.json.
+
+    deepseek-v4-pro was overstated 4x (1.74/3.48) vs the provider's
+    published USD per-1M rates of 0.435/0.87
+    (https://api-docs.deepseek.com/quick_start/pricing, fetched 2026-06-08).
+    These assert the corrected number loads, and anchor the per-1M -> per-1K
+    conversion in get_cost_rates.
+    """
+
+    def test_deepseek_v4_pro_corrected_rate(self):
+        # providers.json stores 0.435/0.87 per 1M; get_cost_rates returns per-1K.
+        ci, co = get_cost_rates("deepseek-v4-pro", "deepseek")
+        assert ci == pytest.approx(0.435 / 1000)
+        assert co == pytest.approx(0.87 / 1000)
+
+    def test_deepseek_v4_flash_unchanged_rate(self):
+        # Verified correct against the same source; guards the conversion path.
+        ci, co = get_cost_rates("deepseek-v4-flash", "deepseek")
+        assert ci == pytest.approx(0.14 / 1000)
+        assert co == pytest.approx(0.28 / 1000)

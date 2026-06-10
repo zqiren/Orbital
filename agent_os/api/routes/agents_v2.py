@@ -26,6 +26,7 @@ from pydantic import BaseModel, field_validator
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
+from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.routes._attachment_formatter import (
     validate_attachments,
@@ -235,11 +236,27 @@ class ApproveRequest(BaseModel):
     reply_text: str | None = None
     approve_all: bool = False
     response_payload: str | None = None  # User text input for MFA codes etc.
+    session_id: str | None = None  # which session's approval (defaults to holder)
 
 
 class DenyRequest(BaseModel):
     tool_call_id: str
     reason: str
+    session_id: str | None = None  # which session's approval (defaults to holder)
+    # Codex "Deny & stop": route decision="cancel" (turn ends `interrupted`)
+    # instead of the default decline (turn continues). Ignored by transports
+    # without a decision vocabulary.
+    stop_turn: bool = False
+
+
+class SessionScopedRequest(BaseModel):
+    """Body for lifecycle verbs that act on a specific chat session.
+
+    ``session_id`` identifies which session in the project to act on, so the
+    UI can target the session it has open (not just the default sentinel).
+    Optional for backward compatibility; the frontend passes the active id.
+    """
+    session_id: str | None = None
 
 
 class TriggerToggleRequest(BaseModel):
@@ -317,6 +334,22 @@ def _get_or_create_session(project_id: str, workspace: str):
 
 # ---- Helpers ----
 
+def _workspace_is_empty(workspace: str) -> bool:
+    """True if the workspace has no user content (ignoring the orbital/ scaffold
+    and dotfiles). Used by the frontend to decide whether to offer a cold-start scan.
+    """
+    if not workspace or not os.path.isdir(workspace):
+        return True
+    try:
+        for name in os.listdir(workspace):
+            if name == "orbital" or name.startswith("."):
+                continue
+            return False
+    except OSError:
+        return True
+    return True
+
+
 def _redact_project(project: dict) -> dict:
     """Return project dict with api_key masked."""
     from agent_os.daemon_v2.project_store import DEFAULT_NOTIFICATION_PREFS
@@ -328,6 +361,7 @@ def _redact_project(project: dict) -> dict:
         result["api_key"] = "****"
     prefs = result.get("notification_prefs", {})
     result["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
+    result["is_empty_workspace"] = _workspace_is_empty(result.get("workspace", ""))
     return result
 
 
@@ -362,6 +396,23 @@ def _write_workspace_file(workspace: str, filename: str, content: str) -> None:
         filepath = os.path.join(pp.instructions_dir, filename)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def _maybe_sync_instructions_to_goals(workspace: str, *, goals_content: str | None,
+                                      instructions: str | None) -> None:
+    """Sync the legacy `instructions` field to project_goals.md, guarded.
+
+    Explicit goals_content always wins. Otherwise the legacy field only seeds
+    project_goals.md when it does NOT already exist — so a scan- or onboarding-
+    authored file is never clobbered by a later unrelated Settings save.
+    """
+    effective = goals_content
+    if effective is None and instructions is not None:
+        if os.path.exists(ProjectPaths(workspace).project_goals):
+            return  # disk is canonical; do not clobber
+        effective = instructions
+    if effective is not None:
+        _write_workspace_file(workspace, "project_goals.md", effective)
 
 
 # ---- Project Endpoints ----
@@ -427,6 +478,14 @@ async def create_project(req: CreateProjectRequest):
         )
 
     project = _project_store.get_project(pid)
+    # Create the project's dispatcher now (project-scoped lifecycle manager) so
+    # queue work can be picked up without waiting for a daemon restart.
+    try:
+        await _agent_manager._ensure_dispatcher(pid, project.get("workspace", ""))
+    except Exception:
+        logger.warning(
+            "failed to create dispatcher for new project %s", pid, exc_info=True,
+        )
     return _redact_project(project)
 
 
@@ -473,15 +532,12 @@ async def update_project(project_id: str, body: ProjectUpdate):
     workspace = project.get("workspace", "")
     goals_content = updates.pop("project_goals_content", None)
     rules_content = updates.pop("user_directives_content", None)
-    # The Settings UI writes to the `instructions` field. Sync it to
-    # instructions/project_goals.md so the prompt builder (which reads from
-    # disk) sees it. If project_goals_content is also present, the explicit
-    # field wins. The `instructions` key itself stays in `updates` so it is
-    # still persisted in projects.json for backward compatibility.
-    if goals_content is None and updates.get("instructions") is not None:
-        goals_content = updates["instructions"]
-    if goals_content is not None:
-        _write_workspace_file(workspace, "project_goals.md", goals_content)
+    # Sync the legacy `instructions` field to project_goals.md, but guarded so
+    # a later Settings save cannot clobber scan-/onboarding-authored goals. The
+    # `instructions` key itself stays in `updates` for projects.json back-compat.
+    _maybe_sync_instructions_to_goals(
+        workspace, goals_content=goals_content, instructions=updates.get("instructions"),
+    )
     if rules_content is not None:
         _write_workspace_file(workspace, "user_directives.md", rules_content)
     # If api_key matches the current global key, store empty string so the
@@ -577,7 +633,13 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
         pid = p["project_id"]
         try:
             if _agent_manager.is_running(pid):
-                await _agent_manager.stop_agent(pid)
+                # Seam 3 / D1 (Root C): is_running is holder-aware but
+                # stop_agent is passthrough-None — forward the holder session so
+                # the running loop is actually stopped, not orphaned (a bare
+                # stop_agent(pid) misses the uuid-keyed handle → KeyError).
+                await _agent_manager.stop_agent(
+                    pid, session_id=_agent_manager.current_holder_session_id(pid),
+                )
             workspace = p.get("workspace", "")
             if workspace:
                 _cleanup_project_files(workspace)
@@ -595,9 +657,18 @@ async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Stop agent if running
+    # Stop agent if running. is_running is holder-aware but stop_agent is
+    # passthrough-None (seam 3 / D1, Root C): forward the holder session so the
+    # running loop is stopped rather than orphaned (a bare stop_agent(project_id)
+    # misses the uuid-keyed handle → KeyError → 500 with the loop left alive).
     if _agent_manager.is_running(project_id):
-        await _agent_manager.stop_agent(project_id)
+        await _agent_manager.stop_agent(
+            project_id, session_id=_agent_manager.current_holder_session_id(project_id),
+        )
+
+    # Tear down the project's dispatcher. It is project-scoped and survives
+    # agent stop, so deletion must shut it down explicitly.
+    await _agent_manager.shutdown_dispatcher(project_id)
 
     # Clean up project files on disk
     workspace = project.get("workspace", "")
@@ -689,6 +760,36 @@ async def start_agent(req: StartAgentRequest):
     return {"status": "started"}
 
 
+@router.post("/agents/{project_id}/cold-start-scan", status_code=201)
+async def cold_start_scan(project_id: str):
+    """Mint the project's first session and start the agent in cold-start mode.
+
+    Runs the deterministic skeleton walk synchronously (so a walker failure
+    surfaces as an HTTP error), then starts a content-less loop whose prompt
+    drives the 3-stage scan. No user message is fabricated.
+    """
+    from agent_os.agent.workspace_scan import scan_workspace
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    workspace = project.get("workspace", "")
+    if not workspace or not os.path.isdir(workspace):
+        raise HTTPException(status_code=400, detail="workspace missing")
+
+    skeleton = scan_workspace(workspace)
+    config = _agent_manager._build_agent_config_from_project(project_id)
+    minted = await _agent_manager.new_session(project_id)
+    session_id = minted["session_id"]
+    await _agent_manager.start_agent(
+        project_id, config,
+        initial_message=None,
+        session_id=session_id,
+        cold_start=True,
+        cold_start_skeleton=skeleton,
+    )
+    return {"status": "started", "session_id": session_id}
+
+
 @router.post("/agents/{project_id}/inject")
 async def inject_message(project_id: str, req: InjectRequest):
     # Verify project exists before attempting inject
@@ -696,35 +797,13 @@ async def inject_message(project_id: str, req: InjectRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Slot enforcement guard (Track J Phase 1, per ACTIVE-session-and-queue-model.md §3
-    # and INVESTIGATION-slot-enforcement-surface.md §5).
-    #
-    # When the caller explicitly addresses a session_id and that is NOT the
-    # session currently holding the project's active-loop slot, reject with
-    # 202 Accepted and a structured `slot_held` payload. The frontend renders
-    # an intermediate notice; future Phase 2 will turn 202 into "queued for
-    # later dispatch" without changing the status code (forward-compat).
-    #
-    # Cases that proceed normally (no guard fires):
-    #   - session_id is absent (backward compat — old clients keep working)
-    #   - no session currently holds the slot (project idle / never started)
-    #   - the requested session matches the holder (same-session continuation)
-    #
-    # Sub-agent dispatches happen INSIDE the holding session's turn and do
-    # not consume a separate slot, so we apply the guard regardless of
-    # `req.target`: a /inject with target= addressed to a non-holding
-    # session would still be a cross-session attempt to start a turn.
-    if req.session_id is not None:
-        holder = _agent_manager.current_holder_session_id(project_id)
-        if holder is not None and holder != req.session_id:
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "status": "slot_held",
-                    "holding_session_id": holder,
-                    "message": "Another session in this project is currently running.",
-                },
-            )
+    # Single-slot enforcement now lives at the MANAGER level: start_agent()
+    # raises ValueError("Slot held by session …") when a different session
+    # holds the project's active-loop slot, so every caller is covered (HTTP,
+    # dispatcher, triggers, internal auto-starts) — not just this route. The
+    # route's only job is to translate that rejection into the 202 `slot_held`
+    # response the frontend's SlotHeldNotice expects (see below, around the
+    # inject_message call). See REPORT-subagent-leak-and-slot-gap.md Q4.
 
     # Build the ``<attached_files>...</attached_files>`` prefix BEFORE the branch split so
     # both the management-agent branch and the sub-agent branch see the
@@ -749,6 +828,15 @@ async def inject_message(project_id: str, req: InjectRequest):
         workspace = project.get("workspace", "")
         session = _get_or_create_session(project_id, workspace)
 
+        # Seam 3 / D1 (Root A): the @mention sub-agent attaches to a CONCRETE
+        # chat session. send()/start() require a parent session id — their
+        # resolver hard-raises on None (a sub-agent always has a parent) — so
+        # this route must FORWARD the session it already has, not drop it.
+        # Prefer the client-supplied session_id (the open chat session); fall
+        # back to the session this message is persisted into so a session-less
+        # @mention still routes to a concrete session instead of 404-ing.
+        mention_session_id = req.session_id or getattr(session, "session_uuid", None)
+
         # Persist user message BEFORE sending to sub-agent
         user_ts = datetime.now(timezone.utc).isoformat()
         user_msg: dict = {
@@ -763,23 +851,22 @@ async def inject_message(project_id: str, req: InjectRequest):
             user_msg["attachments"] = attachment_dicts
         session.append(user_msg)
 
-        # Auto-start sub-agent if not running
+        # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
+        # manual try-send -> on-error-start -> re-send dance that used to
+        # live here is now the manager's single built-in implementation.
         try:
-            result = await _sub_agent_manager.send(project_id, req.target, effective_content)
+            result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
-        if result.startswith("Error: agent") and "not running" in result:
-            try:
-                await _sub_agent_manager.start(project_id, req.target)
-                result = await _sub_agent_manager.send(project_id, req.target, effective_content)
-            except Exception:
-                raise HTTPException(status_code=404, detail=f"Failed to auto-start {req.target}")
+        if result.startswith("Error"):
+            raise HTTPException(status_code=404, detail=f"Failed to dispatch to {req.target}: {result}")
 
         # Broadcast acknowledgement so ChatView knows the message was sent
         ack_ts = datetime.now(timezone.utc).isoformat()
         _ws_manager.broadcast(project_id, {
             "type": "chat.sub_agent_message",
             "project_id": project_id,
+            "session_id": mention_session_id,
             "content": result,
             "source": req.target,
             "timestamp": ack_ts,
@@ -794,6 +881,7 @@ async def inject_message(project_id: str, req: InjectRequest):
                 initiator="user_mention",
                 message_preview=effective_content[:100],
                 transcript_path=transcript_path,
+                session_id=mention_session_id,
             )
 
         return {"status": result}
@@ -802,10 +890,28 @@ async def inject_message(project_id: str, req: InjectRequest):
         # The prefix is part of effective_content; agent_manager.inject_message
         # itself does not learn about attachments — see PR description for the
         # deliberate v1 audit-field asymmetry.
-        result = await _agent_manager.inject_message(
-            project_id, effective_content, nonce=req.nonce,
-            session_id=req.session_id,
-        )
+        try:
+            result = await _agent_manager.inject_message(
+                project_id, effective_content, nonce=req.nonce,
+                session_id=req.session_id,
+            )
+        except ValueError:
+            # The manager rejected the inject — most commonly because another
+            # session holds the project's active-loop slot (start_agent raised).
+            # Translate that into the same 202 `slot_held` payload the frontend
+            # expects, instead of a 500. Re-check the holder to confirm it is a
+            # genuine slot conflict; re-raise anything else.
+            holder = _agent_manager.current_holder_session_id(project_id)
+            if holder is not None and holder != req.session_id:
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "slot_held",
+                        "holding_session_id": holder,
+                        "message": "Another session in this project is currently running.",
+                    },
+                )
+            raise
         # inject_message returns either a str (legacy: "queued"/"delivered"/
         # "started") or a dict (new: auto-deny-on-paused-approval branch,
         # includes status + approval_dismissed + dismissed_tool_call_id).
@@ -816,20 +922,35 @@ async def inject_message(project_id: str, req: InjectRequest):
 
 @router.get("/agents/{project_id}/run-status")
 async def agent_run_status(project_id: str):
-    """Return the current runtime status for a project agent."""
+    """Return the current runtime status for a project agent.
+
+    Also returns ``current_holder_session_id``: the F1 session_id that
+    currently holds the project's active-loop slot, or None.
+    """
     status = _agent_manager.get_run_status(project_id)
-    return {"project_id": project_id, "status": status}
+    holder = _agent_manager.current_holder_session_id(project_id)
+    return {"project_id": project_id, "status": status, "current_holder_session_id": holder}
 
 
 @router.get("/agents/{project_id}/pending-approval")
-async def get_pending_approval(project_id: str):
+async def get_pending_approval(
+    project_id: str,
+    session_id: str | None = Query(default=None, description="F1 session_id; omit for default session"),
+):
     """Return the current pending approval payload, if any.
 
     Used by mobile clients to recover approval cards missed via WebSocket.
+
+    ``session_id`` scopes the recovery to a specific session. Without it,
+    both the management-agent and sub-agent lookups resolve to the
+    default-session sentinel and silently miss approvals pending in
+    non-default sessions.
     """
-    approval = _agent_manager.get_pending_approval(project_id)
+    approval = _agent_manager.get_pending_approval(project_id, session_id=session_id)
     if approval is None and _sub_agent_manager is not None:
-        approval = _sub_agent_manager.get_pending_sub_agent_approval(project_id)
+        approval = _sub_agent_manager.get_pending_sub_agent_approval(
+            project_id, session_id=session_id,
+        )
     if approval is None:
         return {"pending": False}
     return {"pending": True, **approval}
@@ -859,39 +980,113 @@ async def list_project_sessions(project_id: str):
     return {"project_id": project_id, "sessions": sessions}
 
 
+class SessionRenameRequest(BaseModel):
+    """Body for renaming a session (display label only). ``name`` is the new
+    human-readable label; it has no effect on routing or hydration."""
+    name: str
+
+
+@router.patch("/agents/{project_id}/sessions/{session_id}")
+async def rename_session(project_id: str, session_id: str, req: SessionRenameRequest):
+    """Rename a session's display label.
+
+    Updates ``session.name`` in memory (when a live handle exists) and rewrites
+    the ``session_start`` meta line in the JSONL so the name persists. The name
+    is display-only — F1/F2 identifiers are unchanged.
+
+    Returns ``{"status": "renamed", "session_id", "name"}``. 404 if no session
+    with this id (F1 or F2/uuid) exists for the project.
+    """
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    try:
+        return await asyncio.to_thread(
+            _agent_manager.rename_session, project_id, session_id, name
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.delete("/agents/{project_id}/sessions/{session_id}")
+async def delete_session(project_id: str, session_id: str):
+    """Delete a single session (removes its JSONL from disk).
+
+    - 404 if no session with this id (F1 or F2/uuid) exists for the project.
+    - 409 if the session is currently running — the caller must cancel first.
+    - 200 ``{"status": "deleted", "session_id"}`` otherwise. An idle handle is
+      torn down (idle-poll cancelled, sub-agents stopped) before the unlink.
+
+    Workspace files the agent created are NOT deleted — they belong to the
+    project, not the session. Deleting the only session is allowed; the next
+    message creates a fresh one.
+    """
+    if _project_store is not None and _project_store.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        return await _agent_manager.delete_session(project_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.get("/blocked")
+async def list_blocked_globally():
+    """Global blocked-session summary across ALL projects.
+
+    Returns the count and list of sessions currently in ``pending_approval``
+    state daemon-wide.  Useful for a global badge / notification badge
+    that shows how many sessions are awaiting user approval.
+
+    Response shape::
+
+        {
+            "blocked_count": int,
+            "blocked_sessions": [{"project_id": str, "session_id": str}, ...]
+        }
+    """
+    blocked = _agent_manager.list_blocked_sessions()
+    return {"blocked_count": len(blocked), "blocked_sessions": blocked}
+
+
 @router.post("/agents/{project_id}/cancel")
-async def cancel_message(project_id: str) -> dict:
+async def cancel_message(project_id: str, req: SessionScopedRequest | None = None) -> dict:
     """Cancel the current turn. Loop exits, agent stays alive.
 
-    Wired to the UI Stop button. The cancel breaks the loop at the next
-    iteration boundary (the CancelledError handlers in loop.py write a
-    [cancelled by user] marker to the session JSONL, then exit the
-    while body). Sub-agents, browser pages, and sandbox state are
-    preserved. _on_loop_done broadcasts the post-cancel status (idle,
-    waiting, or running for queued hot-resume) and frees the active-loop
-    slot mechanically when the loop task completes.
+    Wired to the UI Stop button. ``session_id`` (body) targets the session the
+    UI has open. The cancel breaks the loop at the next iteration boundary (the
+    CancelledError handlers in loop.py write a [cancelled by user] marker to the
+    session JSONL, then exit the while body). Sub-agents, browser pages, and
+    sandbox state are preserved.
     """
-    return await _agent_manager.cancel_message(project_id)
+    return await _agent_manager.cancel_message(
+        project_id, session_id=(req.session_id if req else None),
+    )
 
 
-@router.post("/agents/{project_id}/stop")
-async def stop_agent(project_id: str):
-    """Internal/admin: full teardown of agent, session, and sub-agents.
-
-    NOT wired to the UI — the Stop button uses /cancel, which preserves
-    sub-agent and browser-page state. /stop is reserved for crash
-    recovery, debug tooling, and daemon shutdown coordination.
-    """
-    try:
-        await _agent_manager.stop_agent(project_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No active session for project")
-    return {"status": "stopping"}
+# NOTE: the user-facing POST /agents/{project_id}/stop route was removed.
+# Under the multi-session + idle-eviction model there is no user-facing
+# "tear down this session" action: /cancel interrupts the turn (handle and
+# session stay resumable), and idle eviction reclaims runtime resources
+# automatically after AgentManager.EVICTION_IDLE_TIMEOUT. The full-teardown
+# AgentManager.stop_agent() remains an INTERNAL method, called only by the
+# eviction sweep, daemon shutdown, and project deletion — never by an HTTP
+# request. See TASK-idle-eviction-and-remove-stop.md.
 
 
 @router.post("/agents/{project_id}/new-session")
-async def new_session(project_id: str):
-    result = await _agent_manager.new_session(project_id)
+async def new_session(project_id: str, req: SessionScopedRequest | None = None):
+    """Create a fresh session for the project (pure-create). Mints a new
+    ``session_id`` + ``session_uuid`` and returns them; writes no file and
+    touches no running session. The UI navigates to the new ``session_id`` and
+    the session materializes on the first message. The body ``session_id`` is
+    accepted for compatibility but ignored — a new session is always fresh."""
+    result = await _agent_manager.new_session(
+        project_id, session_id=(req.session_id if req else None),
+    )
     return result
 
 
@@ -937,6 +1132,26 @@ def _resolve_queue_store(project_id: str):
     if not workspace:
         raise HTTPException(status_code=400, detail="Project has no workspace")
     return _agent_manager.get_queue_store(project_id, workspace=workspace)
+
+
+async def _ensure_dispatcher_for(project_id: str):
+    """Return the project's dispatcher, creating it on demand.
+
+    The dispatcher is project-scoped (created at daemon startup / project
+    creation), but create it lazily here too so the queue endpoints work for a
+    project created before this code path existed. The dispatcher always
+    existing is what lets stop/resume/start be thin and never 409.
+    """
+    if _agent_manager is None:
+        return None
+    dispatcher = _agent_manager.get_dispatcher(project_id)
+    if dispatcher is None:
+        project = _project_store.get_project(project_id) if _project_store else None
+        workspace = (project or {}).get("workspace", "")
+        if workspace:
+            await _agent_manager._ensure_dispatcher(project_id, workspace)
+            dispatcher = _agent_manager.get_dispatcher(project_id)
+    return dispatcher
 
 
 @router.get("/projects/{project_id}/queue")
@@ -1004,10 +1219,82 @@ async def edit_queue_item(project_id: str, item_id: str, req: QueueEditItemReque
 
 @router.delete("/projects/{project_id}/queue/items/{item_id}")
 async def delete_queue_item(project_id: str, item_id: str) -> dict:
+    """Delete a queue item. IDLE-ONLY — a RUNNING item is rejected (409).
+
+    Per ACTIVE-session-and-queue-model.md, delete is idle-only. The route is
+    the liveness gate because the store has no agent_manager reference:
+
+    - REJECT-RUNNING: the item is "running" iff its latest attempt's session is
+      the live slot-holder (``current_holder_session_id``), NOT the stored
+      ``item.state`` flag (which can be stale). A running item is rejected with
+      409 and ZERO mutation — no remove, no CANCELLED stamp, the session is left
+      untouched. Mirrors the session-delete reject convention.
+    - IDLE DELETE: remove the store record FIRST, then clean up each DISTINCT
+      bound session JSONL via ``delete_session`` (best-effort). An item with no
+      attempts (never dispatched) skips session cleanup.
+
+    Ordering matters for concurrency safety: the liveness gate and
+    ``remove_item`` run with NO ``await`` between them, so they are atomic on the
+    event loop. Removing the record before the first ``await`` (the session
+    cleanup) means the dispatcher's ``next_queued()`` can never pick this item
+    into the gap — closing the TOCTOU where a QUEUED-with-attempts
+    (interrupted-requeued) item could be re-dispatched mid-delete and orphaned.
+
+    Sub-agent JSONLs are intentionally NOT deleted (handle-keyed, shared on
+    disk, no per-session mapping survives restart) — ``delete_session`` leaves
+    them in place, which is the chosen behavior.
+    """
+    # Fail-closed: the route is the liveness gate, which needs the manager. If
+    # it is unwired, refuse rather than silently degrade to "allow a running
+    # delete" (mirrors the sibling queue routes' 503).
+    if _agent_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager not ready")
+
     store = _resolve_queue_store(project_id)
+
+    # Resolve the item by id so we can inspect its attempts / liveness.
+    item = next((it for it in store.load().items if it.id == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Liveness gate (NOT item.state): the item is running iff its latest-attempt
+    # session currently holds the project's active-loop slot. No ``await`` between
+    # this check and ``remove_item`` below — the pair is atomic on the loop.
+    if item.attempts and item.attempts[-1].session_id == (
+        _agent_manager.current_holder_session_id(project_id)
+    ):
+        # ZERO mutation: do not remove, do not stamp CANCELLED, do not touch the
+        # session. The caller must stop/pause it first.
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a running queue item. "
+                   "Stop or pause it first, then delete.",
+        )
+
+    # Remove the store record FIRST (sync, no await since the gate) so the
+    # dispatcher cannot dispatch a record that is being deleted.
     removed = store.remove_item(item_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    # Best-effort: clean up each distinct bound session JSONL. The record is
+    # already gone, so any failure here only leaves an orphaned JSONL (acceptable
+    # — sub-agent transcripts are likewise left) and never a half-removed record.
+    seen: set[str] = set()
+    for attempt in item.attempts:
+        sid = attempt.session_id
+        if sid in seen:
+            continue
+        seen.add(sid)
+        try:
+            await _agent_manager.delete_session(project_id, sid)
+        except Exception:
+            logger.warning(
+                "delete_queue_item(%s): session JSONL cleanup for %s failed; "
+                "store record already removed",
+                project_id, sid, exc_info=True,
+            )
+
     if _ws_manager is not None:
         _ws_manager.broadcast(project_id, {
             "type": "queue.item_removed",
@@ -1031,15 +1318,17 @@ async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
 
 @router.post("/projects/{project_id}/queue/stop")
 async def stop_queue(project_id: str) -> dict:
-    """Pause the queue and switch the active session to chat mode."""
+    """Pause the queue and bring the active session to rest.
+
+    Thin: the dispatcher is project-scoped and always exists, so this no longer
+    409s on "no dispatcher" — pausing an agentless/empty queue just records the
+    pause intent and returns.
+    """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
-    dispatcher = _agent_manager.get_dispatcher(project_id)
+    dispatcher = await _ensure_dispatcher_for(project_id)
     if dispatcher is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No active dispatcher; start the agent first",
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
     return await dispatcher.stop()
 
 
@@ -1086,77 +1375,42 @@ async def start_queue(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
-    if not _project_has_completed_onboarding(project):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Complete onboarding in Chat first — the project has no "
-                "captured state yet (PROJECT_STATE.md missing). Send a "
-                "message in the Chat tab, let the agent respond, and try "
-                "starting the queue again."
-            ),
-        )
+    # Thin: the dispatcher is project-scoped and always exists. It auto-starts
+    # the agent (onboarding-gated, inside the dispatcher) when it sees work, so
+    # the endpoint no longer owns the onboarding gate or the auto-start.
+    dispatcher = await _ensure_dispatcher_for(project_id)
+    if dispatcher is None:
+        raise HTTPException(status_code=500, detail="Dispatcher unavailable")
 
     store = _resolve_queue_store(project_id)
     current_state = store.load().state
-    has_handle = _agent_manager.has_handle(project_id)
 
-    # True no-op only when the queue says RUNNING AND an agent is actually
-    # up to back that claim. State-without-handle (e.g. fresh project whose
-    # queue defaulted to RUNNING but no agent has started, or daemon restart
-    # that didn't auto-resume) needs to fall through to the auto-start path.
-    if current_state == QueueRunState.RUNNING and has_handle:
+    # No-op when the queue is already RUNNING and backed by a live agent —
+    # calling resume() here would mis-read the in-flight item's RUNNING head as
+    # a parked attempt and double-dispatch it.
+    if current_state == QueueRunState.RUNNING and _agent_manager.has_handle(project_id):
         return {"status": "already_running"}
 
-    if current_state == QueueRunState.PAUSED:
-        # Existing resume behavior — hot-resumes any parked attempt.
-        dispatcher = _agent_manager.get_dispatcher(project_id)
-        if dispatcher is None:
-            # No dispatcher (agent was torn down) — auto-start, then resume.
-            await _agent_manager.ensure_agent_started(project_id)
-            dispatcher = _agent_manager.get_dispatcher(project_id)
-        if dispatcher is None:
-            raise HTTPException(status_code=500, detail="Dispatcher unavailable after start")
-        return await dispatcher.resume()
-
-    # IDLE, or RUNNING-without-handle: auto-start the agent if needed and
-    # ensure queue state is RUNNING so the dispatcher will drain.
-    if not has_handle:
-        try:
-            await _agent_manager.ensure_agent_started(project_id)
-        except Exception as e:
-            logger.exception("queue start: agent auto-start failed for %s", project_id)
-            raise HTTPException(status_code=500, detail=f"Agent auto-start failed: {e}")
-    if current_state != QueueRunState.RUNNING:
-        store.set_queue_state(QueueRunState.RUNNING)
-        if _ws_manager is not None:
-            _ws_manager.broadcast(project_id, {
-                "type": "queue.state_changed",
-                "project_id": project_id,
-                "state": QueueRunState.RUNNING.value,
-            })
-    dispatcher = _agent_manager.get_dispatcher(project_id)
-    if dispatcher is not None:
+    # PAUSED → hot-resume any parked attempt. IDLE / RUNNING-without-handle →
+    # un-pause and wake; the dispatcher drains and auto-starts the agent.
+    result = await dispatcher.resume()
+    if current_state != QueueRunState.PAUSED:
         dispatcher.notify_new_item()
-    return {"status": "running"}
+    return result
 
 
 @router.post("/projects/{project_id}/queue/resume")
 async def resume_queue(project_id: str) -> dict:
     """Resume the queue. If an attempt was parked, hot-resume it.
 
-    Kept as an alias for /queue/start so existing frontends that emit
-    /queue/resume keep working. New code should call /queue/start, which
-    handles both idle→running and paused→running.
+    Kept as an alias for /queue/start. Thin: the project-scoped dispatcher
+    always exists, so this no longer 409s.
     """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
-    dispatcher = _agent_manager.get_dispatcher(project_id)
+    dispatcher = await _ensure_dispatcher_for(project_id)
     if dispatcher is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No active dispatcher; start the agent first",
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
     return await dispatcher.resume()
 
 
@@ -1200,13 +1454,14 @@ async def approve(project_id: str, req: ApproveRequest):
     try:
         await _agent_manager.approve(
             project_id, req.tool_call_id, reply_text=req.reply_text,
-            approve_all=req.approve_all,
+            approve_all=req.approve_all, session_id=req.session_id,
         )
     except KeyError:
         # Try sub-agent approval path
         if _sub_agent_manager is not None:
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
-                project_id, req.tool_call_id, approved=True
+                project_id, req.tool_call_id, approved=True,
+                session_id=req.session_id,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")
@@ -1215,6 +1470,7 @@ async def approve(project_id: str, req: ApproveRequest):
     _ws_manager.broadcast(project_id, {
         "type": "approval.resolved",
         "project_id": project_id,
+        "session_id": req.session_id,
         "tool_call_id": req.tool_call_id,
         "resolution": "approved",
     })
@@ -1224,12 +1480,16 @@ async def approve(project_id: str, req: ApproveRequest):
 @router.post("/agents/{project_id}/deny")
 async def deny(project_id: str, req: DenyRequest):
     try:
-        await _agent_manager.deny(project_id, req.tool_call_id, req.reason)
+        await _agent_manager.deny(
+            project_id, req.tool_call_id, req.reason, session_id=req.session_id,
+        )
     except KeyError:
         # Try sub-agent approval path
         if _sub_agent_manager is not None:
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
-                project_id, req.tool_call_id, approved=False
+                project_id, req.tool_call_id, approved=False,
+                session_id=req.session_id,
+                decision="cancel" if req.stop_turn else None,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")
@@ -1238,6 +1498,7 @@ async def deny(project_id: str, req: DenyRequest):
     _ws_manager.broadcast(project_id, {
         "type": "approval.resolved",
         "project_id": project_id,
+        "session_id": req.session_id,
         "tool_call_id": req.tool_call_id,
         "resolution": "denied",
     })
@@ -1331,11 +1592,139 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
     return result, total
 
 
+def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tuple[list[dict], int]:
+    """Read chat messages from a single JSONL file with pagination. Runs in a thread.
+
+    Returns (messages, total_count). Mirrors ``_read_chat_messages`` pagination
+    semantics but operates on one file instead of a directory.
+    """
+    if not os.path.isfile(jsonl_path):
+        return [], 0
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        lines = [l for l in f if l.strip()]
+
+    total = len(lines)
+
+    if limit <= 0:
+        messages = []
+        for line in lines:
+            try:
+                messages.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return messages, total
+
+    end = total - offset
+    start = max(0, end - limit)
+    if end <= 0:
+        return [], total
+
+    result = []
+    for line in lines[start:end]:
+        try:
+            result.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return result, total
+
+
+# Matches the "[Sub-agent] {handle} started ... Transcript: {path}" system
+# line the lifecycle observer writes into the management session JSONL. Group
+# 1 is the sub-agent handle; group 2 is the transcript path.
+_SUB_AGENT_STARTED_RE = re.compile(
+    r"^\[Sub-agent\]\s+(\S+)\s+started\b.*?Transcript:\s*(.+?)\s*$"
+)
+
+
+def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
+    """Inline a compact sub-agent run summary after each dispatch marker.
+
+    For every ``[Sub-agent] {handle} started … Transcript: {path}`` system
+    message in *messages*, read the referenced sub-agent transcript and insert
+    a synthetic ``source="sub_agent"`` message immediately after it. The
+    frontend transforms that into a distinct ``sub_agent_run`` block (tools
+    used, duration, response) so the management chat carries the durable record
+    of the sub-agent's work — not just the one-line completion summary.
+
+    Read-only and best-effort: a missing/empty transcript leaves the markers
+    untouched. Operates on whatever page was already paginated, so it never
+    changes the total-count math.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        out.append(msg)
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content") or ""
+        m = _SUB_AGENT_STARTED_RE.match(content)
+        if not m:
+            continue
+        handle, transcript_path = m.group(1), m.group(2)
+        try:
+            summary = read_sub_agent_summary(transcript_path)
+        except Exception:
+            summary = None
+        if not summary:
+            continue
+        out.append({
+            "role": "assistant",
+            "content": summary.get("response") or "",
+            "source": "sub_agent",
+            "sub_agent_handle": handle,
+            "sub_agent_tool_rows": summary.get("tool_rows", []),
+            "sub_agent_duration": summary.get("total_duration_seconds", 0.0),
+            "timestamp": msg.get("timestamp", ""),
+            "session_id": msg.get("session_id"),
+        })
+    return out
+
+
+def _find_session_uuid_on_disk(sessions_dir: str, session_id: str) -> str | None:
+    """Resolve an F1 ``session_id`` to its F2 JSONL stem by scanning disk.
+
+    Fallback for the chat ``session_id`` filter when no live handle exists
+    (e.g. a stopped/popped session). Scans each ``*.jsonl`` for a record whose
+    ``session_id`` field matches, returning the filename stem (F2). Runs in a
+    thread — does blocking disk I/O, must not be called on the event loop.
+
+    Accepts either identifier: if ``session_id`` is itself an F2 stem (the
+    sidebar addresses disk-only sessions by uuid), the matching
+    ``{session_id}.jsonl`` is returned directly. Otherwise it is treated as an
+    F1 chat id and the records are scanned. Returns the F2 stem, or None.
+    """
+    if not os.path.isdir(sessions_dir):
+        return None
+    # Direct F2 match: the identifier names a file (uuid addressing).
+    if os.path.isfile(os.path.join(sessions_dir, f"{session_id}.jsonl")):
+        return session_id
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("session_id") == session_id:
+                        return fname[:-6]  # strip .jsonl
+        except OSError:
+            pass
+    return None
+
+
 @router.get("/agents/{project_id}/chat")
 async def chat_history(
     project_id: str,
     limit: int = Query(default=0, ge=0, description="Max messages to return (0 = all)"),
     offset: int = Query(default=0, ge=0, description="Skip first N messages from the end"),
+    session_id: str | None = Query(default=None, description="Filter to a specific F1 session_id"),
 ):
     """Return chat history, newest messages last.
 
@@ -1343,6 +1732,11 @@ async def chat_history(
     - limit=20, offset=0 → last 20 messages
     - limit=20, offset=20 → messages 21-40 from the end
     - limit=0 (default) → all messages (backward-compatible)
+
+    When ``session_id`` is provided (F1 user-facing id), only messages from
+    that session are returned.  The F1→F2 mapping is resolved via
+    ``list_sessions()`` which already carries both ids.  Sub-agent transcript
+    entries are included only in the unfiltered (no ``session_id``) path.
 
     Response includes X-Total-Count header for pagination UI.
     """
@@ -1353,6 +1747,46 @@ async def chat_history(
     workspace = project["workspace"]
     from agent_os.agent.project_paths import ProjectPaths
     sessions_dir = ProjectPaths(workspace).sessions_dir
+
+    # ── session_id filter path ────────────────────────────────────────────
+    if session_id is not None:
+        # Map F1 session_id → F2 session_uuid so we know which JSONL to read.
+        # list_sessions returns both fields for active/idle sessions; for
+        # stopped/popped sessions the handle is gone but the JSONL still
+        # exists on disk — fall back to scanning the JSONL content for a
+        # matching session_id field (offloaded to a thread; it does blocking
+        # disk I/O and must not run on the event loop).
+        session_uuid: str | None = None
+        for entry in _agent_manager.list_sessions(project_id):
+            if entry["session_id"] == session_id:
+                session_uuid = entry["session_uuid"]
+                break
+
+        if session_uuid is None:
+            session_uuid = await asyncio.to_thread(
+                _find_session_uuid_on_disk, sessions_dir, session_id
+            )
+
+        if session_uuid is None:
+            # Unknown session — return empty rather than 404 (may not be active yet).
+            resp = JSONResponse(content=[])
+            resp.headers["X-Total-Count"] = "0"
+            return resp
+
+        # Read only that session's JSONL.
+        session_jsonl = os.path.join(sessions_dir, f"{session_uuid}.jsonl")
+        messages, total = await asyncio.to_thread(
+            _read_chat_messages_single, session_jsonl, limit, offset
+        )
+        # Inline each dispatched sub-agent's run summary (tools/duration/
+        # response) read from its own transcript, so the management chat shows
+        # what the sub-agent actually did. Offloaded — does blocking disk I/O.
+        messages = await asyncio.to_thread(_interleave_sub_agent_summaries, messages)
+        resp = JSONResponse(content=messages)
+        resp.headers["X-Total-Count"] = str(total)
+        return resp
+
+    # ── unfiltered path (existing behaviour) ─────────────────────────────
 
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []
@@ -1386,7 +1820,6 @@ async def chat_history(
         else:
             messages = all_messages
 
-    from starlette.responses import JSONResponse
     resp = JSONResponse(content=messages)
     resp.headers["X-Total-Count"] = str(total)
     return resp
@@ -1829,13 +2262,88 @@ def _memory_md_path_for(workspace: str, agent_slug: str) -> str:
     )
 
 
+@router.get("/agents/{project_id}/sub-agents/status")
+async def sub_agents_status(project_id: str, session_id: str | None = None):
+    """Live sub-agent statuses for the badge (Piece 3 Part D).
+
+    Status vocabulary: 'running' (turn open) | 'background-running' (turn
+    done, tracked background work alive — SDK only) | 'idle'. Each entry
+    carries the live background commands so the stop dialog can warn
+    honestly. ``session_id`` defaults to the project's active-loop holder.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+    if sid is None:
+        return {"session_id": None, "agents": []}
+    agents = _sub_agent_manager.list_active(project_id, session_id=sid)
+    from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+    registry = getattr(
+        _sub_agent_manager._process_manager, "background_work", None)
+    for a in agents:
+        if isinstance(registry, BackgroundWorkRegistry):
+            a["background_commands"] = registry.live_commands(
+                project_id, sid, a["handle"])
+        else:
+            a["background_commands"] = []
+    return {"session_id": sid, "agents": agents}
+
+
+@router.post("/agents/{project_id}/sub-agents/{handle}/stop")
+async def stop_sub_agent(project_id: str, handle: str,
+                         session_id: str | None = None):
+    """User stop button (Piece 3 Part D): cancel turn + kill agent + tracked
+    children (confirmed), with an honest report of what was terminated and
+    the raw-detach limitation. ``session_id`` defaults to the holder."""
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    if not _AGENT_SLUG_RE.match(handle):
+        raise HTTPException(status_code=400, detail="Invalid agent handle")
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+    if sid is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active session for this project — nothing to stop",
+        )
+    result = await _sub_agent_manager.stop_for_user(
+        project_id, handle, session_id=sid)
+    result["session_id"] = sid
+    return result
+
+
+def _installed_sub_agents() -> list[dict]:
+    """Compute the list of ALL installed (non-built-in) sub-agents.
+
+    Mirrors the installed/built-in filter of ``_resolve_available_sub_agents``
+    but WITHOUT subtracting the project's ``disabled_sub_agents`` denylist.
+    The merged Project-Settings card shows a disabled-but-installed agent's
+    card too (dimmed) and its memory body must stay reachable, so the memory
+    listing is keyed on "installed" rather than "available". Real dispatch
+    gating still goes through ``_resolve_available_sub_agents`` (unchanged).
+    """
+    if _setup_engine is None:
+        return []
+    statuses = _setup_engine.check_all()
+    out: list[dict] = []
+    for s in statuses:
+        if s.slug == "built-in":
+            continue
+        if not s.installed:
+            continue
+        out.append({"slug": s.slug, "name": s.name})
+    return out
+
+
 @router.get("/projects/{project_id}/sub-agent-memory")
 async def list_sub_agent_memory(project_id: str):
-    """Return MEMORY.md status for each enabled sub-agent in this project.
+    """Return MEMORY.md status for each INSTALLED sub-agent in this project.
 
     Each entry: {agent_slug, agent_name, exists, content, last_modified, size_bytes}.
-    `exists: false` for sub-agents enabled but never dispatched (MEMORY.md
-    not yet lazily created on disk).
+    Lists ALL installed (non-built-in) sub-agents regardless of the project's
+    disabled denylist — the merged Project-Settings card renders a card per
+    installed agent (a disabled one is dimmed but still expandable to edit its
+    memory). `exists: false` for sub-agents never dispatched (MEMORY.md not
+    yet lazily created on disk).
     """
     project = _project_store.get_project(project_id)
     if not project:
@@ -1843,7 +2351,7 @@ async def list_sub_agent_memory(project_id: str):
     workspace = project.get("workspace", "")
     if not workspace:
         return []
-    available = _resolve_available_sub_agents(project)
+    available = _installed_sub_agents()
     out: list[dict] = []
     for entry in available:
         slug = entry["slug"]

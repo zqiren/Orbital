@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ProviderRegistry, ProviderInfo } from '../types';
 import { api } from '../config';
+import { useT } from '../i18n/useT';
 
 interface LLMSettingsResponse {
   llm: {
@@ -53,6 +54,7 @@ export default function LLMProviderSettings({
   hideSaveButton,
   saveRef,
 }: LLMProviderSettingsProps) {
+  const t = useT();
   // Collapsed state for project mode
   const [expanded, setExpanded] = useState(mode !== 'project');
 
@@ -138,6 +140,8 @@ export default function LLMProviderSettings({
     if (providersLoading || !globalLoaded) return;
 
     const providerKeys = Object.keys(providers);
+    // Track the provider we resolve to so we can seed the model picker below.
+    let resolvedProvider = '';
 
     if (mode === 'global') {
       // Populate from global settings
@@ -145,6 +149,7 @@ export default function LLMProviderSettings({
         const gp = globalSettings.provider || '';
         if (gp && providers[gp]) {
           setProvider(gp);
+          resolvedProvider = gp;
           setSdk(providers[gp].sdk);
           // Detect region
           const info = providers[gp];
@@ -153,9 +158,11 @@ export default function LLMProviderSettings({
           }
         } else if (gp && !providers[gp]) {
           setProvider(CUSTOM_PROVIDER_KEY);
+          resolvedProvider = CUSTOM_PROVIDER_KEY;
           setShowAdvanced(true);
         } else if (providerKeys.length > 0) {
           setProvider(providerKeys[0]);
+          resolvedProvider = providerKeys[0];
           setSdk(providers[providerKeys[0]].sdk);
         }
         setModel(globalSettings.model || '');
@@ -164,6 +171,7 @@ export default function LLMProviderSettings({
         if (globalSettings.sdk) setSdk(globalSettings.sdk as 'openai' | 'anthropic');
       } else if (providerKeys.length > 0) {
         setProvider(providerKeys[0]);
+        resolvedProvider = providerKeys[0];
         setSdk(providers[providerKeys[0]].sdk);
         setBaseUrl(resolveBaseUrl(providers[providerKeys[0]], 'global'));
       }
@@ -172,6 +180,7 @@ export default function LLMProviderSettings({
       const pv = projectValues;
       if (pv?.provider && providers[pv.provider]) {
         setProvider(pv.provider);
+        resolvedProvider = pv.provider;
         setSdk(providers[pv.provider].sdk);
         const info = providers[pv.provider];
         if (info.china_base_url && pv.base_url === info.china_base_url) {
@@ -179,9 +188,11 @@ export default function LLMProviderSettings({
         }
       } else if (pv?.provider && !providers[pv.provider]) {
         setProvider(CUSTOM_PROVIDER_KEY);
+        resolvedProvider = CUSTOM_PROVIDER_KEY;
         setShowAdvanced(true);
       } else if (providerKeys.length > 0) {
         setProvider(providerKeys[0]);
+        resolvedProvider = providerKeys[0];
         setSdk(providers[providerKeys[0]].sdk);
       }
       setModel(pv?.model || '');
@@ -190,6 +201,9 @@ export default function LLMProviderSettings({
       if (pv?.sdk) setSdk(pv.sdk as 'openai' | 'anthropic');
     }
     // wizard mode: no fields to initialize
+
+    // Seed the model dropdown from the catalog so it's populated before any key.
+    if (resolvedProvider) seedModelsFromCatalog(resolvedProvider);
 
     setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,6 +229,26 @@ export default function LLMProviderSettings({
     return info.base_url || '';
   }
 
+  // Seed the model picker from the catalog's suggested_models so a dropdown is
+  // available immediately, with no network call and before any API key. A live
+  // /models fetch upgrades this to modelSource='api' when it succeeds. Providers
+  // with no catalog (custom) fall back to free-text entry.
+  function seedModelsFromCatalog(key: string) {
+    if (key === CUSTOM_PROVIDER_KEY) {
+      setModelOptions([]);
+      setModelSource('freetext');
+      return;
+    }
+    const info: ProviderInfo | undefined = providers[key];
+    if (info && info.suggested_models.length > 0) {
+      setModelOptions(info.suggested_models);
+      setModelSource('suggested');
+    } else {
+      setModelOptions([]);
+      setModelSource('freetext');
+    }
+  }
+
   const currentProviderHasChinaUrl =
     provider !== CUSTOM_PROVIDER_KEY && !!providers[provider]?.china_base_url;
 
@@ -222,11 +256,11 @@ export default function LLMProviderSettings({
     setProvider(key);
     setModel('');
     setModelInputValue('');
-    setModelOptions([]);
-    setModelSource('none');
     setTestStatus('idle');
     setTestMessage('');
     setRegion('global');
+    // Seed the dropdown from the catalog immediately (no key required).
+    seedModelsFromCatalog(key);
     if (key === CUSTOM_PROVIDER_KEY) {
       setBaseUrl('');
       setSdk('openai');
@@ -254,6 +288,9 @@ export default function LLMProviderSettings({
   useEffect(() => {
     if (!initialized) return;
     if (!provider || provider === CUSTOM_PROVIDER_KEY) return;
+    // Respect an explicit free-text choice (escape hatch / empty catalog):
+    // don't yank the user back into a dropdown by a background fetch.
+    if (modelSource === 'freetext') return;
 
     // Need either a new key typed in, or existing key (global or project)
     const hasKey = apiKey.trim() || globalSettings?.api_key_set || (mode === 'project' && projectValues?.api_key);
@@ -262,10 +299,11 @@ export default function LLMProviderSettings({
     const info = providers[provider];
     if (!info) return;
 
+    // Do NOT clear the catalog-seeded options here — keep the suggested dropdown
+    // usable while the live fetch is in flight. A success upgrades to 'api'; a
+    // failure re-seeds the suggested list (or free-text for empty catalogs).
     let cancelled = false;
     setModelsLoading(true);
-    setModelSource('none');
-    setModelOptions([]);
 
     async function fetchModels() {
       try {
@@ -276,26 +314,22 @@ export default function LLMProviderSettings({
         if (apiKey.trim()) {
           body.api_key = apiKey.trim();
         }
-        const result = await api<string[]>('/api/v2/providers/models', {
+        // Backend returns { models: string[] }.
+        const result = await api<{ models?: string[] }>('/api/v2/providers/models', {
           method: 'POST',
           body: JSON.stringify(body),
         });
-        if (!cancelled && result && result.length > 0) {
-          setModelOptions(result);
+        const models = result?.models ?? [];
+        if (!cancelled && models.length > 0) {
+          setModelOptions(models);
           setModelSource('api');
         } else {
           throw new Error('empty');
         }
       } catch {
         if (cancelled) return;
-        const info = providers[provider];
-        if (info && info.suggested_models.length > 0) {
-          setModelOptions(info.suggested_models);
-          setModelSource('suggested');
-        } else {
-          setModelOptions([]);
-          setModelSource('freetext');
-        }
+        // Fall back to the catalog's suggested models (free-text if none).
+        seedModelsFromCatalog(provider);
       } finally {
         if (!cancelled) setModelsLoading(false);
       }
@@ -340,6 +374,21 @@ export default function LLMProviderSettings({
     setTestMessage('');
   }
 
+  // Escape hatch: switch the picker to free-text entry for a custom model name.
+  function enterCustomModel() {
+    setModelSource('freetext');
+    setModelOptions([]);
+    setModel('');
+    setModelInputValue('');
+    setShowModelDropdown(false);
+    setTestStatus('idle');
+    setTestMessage('');
+    // Focus the (now plain) model input so the user can type immediately.
+    requestAnimationFrame(() => {
+      modelComboRef.current?.querySelector('input')?.focus();
+    });
+  }
+
   // Test connection
   async function handleTestConnection() {
     setTestStatus('testing');
@@ -365,16 +414,16 @@ export default function LLMProviderSettings({
         setTestStatus('success');
         const displayProvider =
           provider === CUSTOM_PROVIDER_KEY
-            ? 'custom provider'
+            ? t('llm.test.customProvider')
             : providers[provider]?.display_name || provider;
-        setTestMessage(`Connected to ${displayProvider} using ${model}`);
+        setTestMessage(t('llm.test.success', { provider: displayProvider, model }));
       } else {
         setTestStatus('error');
-        setTestMessage(result.error || result.message || 'Connection failed.');
+        setTestMessage(result.error || result.message || t('llm.test.failed'));
       }
     } catch (err: unknown) {
       setTestStatus('error');
-      const msg = err instanceof Error ? err.message : 'Connection test failed.';
+      const msg = err instanceof Error ? err.message : t('llm.test.failedAlt');
       setTestMessage(msg);
     }
   }
@@ -392,13 +441,13 @@ export default function LLMProviderSettings({
   }, [mode]);
 
   async function handleDeleteApiKey() {
-    if (!confirm('Remove the stored API key?')) return;
+    if (!confirm(t('llm.apiKey.deleteConfirm'))) return;
     try {
       await api('/api/v2/settings/api-key', { method: 'DELETE' });
       setApiKeyStatus({ configured: false, source: 'none' });
       setGlobalSettings(prev => prev ? { ...prev, api_key_set: false, api_key_masked: '' } : prev);
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to delete API key.');
+      setSaveError(err instanceof Error ? err.message : t('llm.apiKey.deleteError'));
     }
   }
 
@@ -434,7 +483,7 @@ export default function LLMProviderSettings({
       setTimeout(() => setSaved(false), 2000);
       return true;
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save settings.');
+      setSaveError(err instanceof Error ? err.message : t('llm.saveError'));
       return false;
     } finally {
       setSaving(false);
@@ -461,7 +510,7 @@ export default function LLMProviderSettings({
       return (
         <div className="flex items-center gap-2 text-sm text-secondary py-2">
           <Loader2 className="w-4 h-4 animate-spin" />
-          Checking LLM configuration...
+          {t('llm.checking')}
         </div>
       );
     }
@@ -469,27 +518,24 @@ export default function LLMProviderSettings({
       const displayProvider = globalSettings.provider && providers[globalSettings.provider]
         ? providers[globalSettings.provider].display_name
         : globalSettings.provider || 'Custom';
-      const displayModel = globalSettings.model || 'not set';
+      const displayModel = globalSettings.model || t('llm.wizard.notSet');
       return (
         <div className="border border-border rounded-lg p-4 bg-sidebar/50">
-          <p className="text-sm text-primary font-medium mb-1">LLM Provider</p>
+          <p className="text-sm text-primary font-medium mb-1">{t('llm.provider.heading')}</p>
           <p className="text-sm text-secondary">
-            Using global defaults: {displayProvider} / {displayModel}
+            {t('llm.wizard.usingDefaults', { provider: displayProvider, model: displayModel })}
           </p>
           <p className="text-xs text-secondary mt-2">
-            Change defaults in{' '}
-            <span className="text-accent cursor-default">Global Settings</span>.
+            {t('llm.wizard.changeIn')}
           </p>
         </div>
       );
     }
     return (
       <div className="border border-warning/30 rounded-lg p-4 bg-warning/5">
-        <p className="text-sm text-primary font-medium mb-1">LLM Provider</p>
+        <p className="text-sm text-primary font-medium mb-1">{t('llm.provider.heading')}</p>
         <p className="text-sm text-secondary">
-          No LLM provider configured yet. Set up your API key and model in{' '}
-          <span className="text-accent cursor-default">Global Settings</span>{' '}
-          before creating a project.
+          {t('llm.wizard.notConfigured')}
         </p>
       </div>
     );
@@ -500,7 +546,7 @@ export default function LLMProviderSettings({
     return (
       <div className="flex items-center gap-2 text-sm text-secondary py-4">
         <Loader2 className="w-4 h-4 animate-spin" />
-        Loading LLM settings...
+        {t('llm.loading')}
       </div>
     );
   }
@@ -513,14 +559,16 @@ export default function LLMProviderSettings({
       className="flex items-center gap-2 text-sm font-medium text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
     >
       {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-      <span>LLM Provider</span>
+      <span>{t('llm.provider.heading')}</span>
       {!expanded && (
         <span className="text-secondary font-normal ml-1">
-          (using {projectValues?.provider && providers[projectValues.provider]
-            ? providers[projectValues.provider].display_name
-            : globalSettings?.provider && providers[globalSettings.provider]
-              ? providers[globalSettings.provider].display_name
-              : 'global'} default)
+          {t('llm.project.usingDefault', {
+            provider: projectValues?.provider && providers[projectValues.provider]
+              ? providers[projectValues.provider].display_name
+              : globalSettings?.provider && providers[globalSettings.provider]
+                ? providers[globalSettings.provider].display_name
+                : t('llm.project.globalFallback'),
+          })}
         </span>
       )}
     </button>
@@ -529,9 +577,9 @@ export default function LLMProviderSettings({
   // ---- Global mode header ----
   const globalHeader = mode === 'global' ? (
     <div className="mb-4">
-      <h2 className="text-sm font-semibold text-primary mb-1">Default LLM Settings</h2>
+      <h2 className="text-sm font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
       <p className="text-xs text-secondary">
-        Used by all projects unless overridden in project settings.
+        {t('llm.global.subhead')}
       </p>
     </div>
   ) : null;
@@ -541,13 +589,13 @@ export default function LLMProviderSettings({
     <div className="space-y-5">
       {mode === 'project' && (
         <p className="text-xs text-secondary -mt-2">
-          Leave blank to use global defaults. Only fill in to override for this project.
+          {t('llm.project.overrideHint')}
         </p>
       )}
 
       {/* Provider */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">Provider</label>
+        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>
         <select
           value={provider}
           onChange={(e) => handleProviderChange(e.target.value)}
@@ -556,7 +604,7 @@ export default function LLMProviderSettings({
           {Object.entries(providers).map(([key, info]) => (
             <option key={key} value={key}>{info.display_name}</option>
           ))}
-          <option value={CUSTOM_PROVIDER_KEY}>Custom / Self-Hosted</option>
+          <option value={CUSTOM_PROVIDER_KEY}>{t('llm.provider.custom')}</option>
         </select>
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
           <p className="text-xs text-secondary mt-1">{providers[provider].notes}</p>
@@ -566,7 +614,7 @@ export default function LLMProviderSettings({
       {/* Region toggle */}
       {currentProviderHasChinaUrl && (
         <div>
-          <label className="block text-sm font-medium text-primary mb-1.5">Region</label>
+          <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.region')}</label>
           <div className="inline-flex rounded-lg border border-border overflow-hidden">
             <button
               type="button"
@@ -577,7 +625,7 @@ export default function LLMProviderSettings({
                   : 'bg-sidebar text-secondary hover:text-primary'
               }`}
             >
-              Global
+              {t('llm.region.global')}
             </button>
             <button
               type="button"
@@ -588,7 +636,7 @@ export default function LLMProviderSettings({
                   : 'bg-sidebar text-secondary hover:text-primary'
               }`}
             >
-              China
+              {t('llm.region.china')}
             </button>
           </div>
         </div>
@@ -596,22 +644,22 @@ export default function LLMProviderSettings({
 
       {/* API Key */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">API Key</label>
+        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
         <input
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={
             globalSettings?.api_key_set
-              ? 'Type a new key to replace the current one'
-              : 'sk-...'
+              ? t('llm.apiKey.replacePlaceholder')
+              : t('llm.apiKey.placeholder')
           }
           className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
         />
         {mode === 'global' && globalSettings?.api_key_set && !apiKey && (
           <div className="flex items-center gap-3 mt-1">
             <p className="text-xs text-secondary">
-              Current key: {globalSettings.api_key_masked}
+              {t('llm.apiKey.current', { masked: globalSettings.api_key_masked })}
               {apiKeyStatus?.source && apiKeyStatus.source !== 'none' && (
                 <span className="ml-1 text-secondary/60">({apiKeyStatus.source})</span>
               )}
@@ -621,7 +669,7 @@ export default function LLMProviderSettings({
               onClick={handleDeleteApiKey}
               className="text-xs text-error hover:text-error/80 transition-colors"
             >
-              Remove key
+              {t('llm.apiKey.remove')}
             </button>
           </div>
         )}
@@ -629,11 +677,11 @@ export default function LLMProviderSettings({
 
       {/* Model combobox */}
       <div>
-        <label className="block text-sm font-medium text-primary mb-1.5">Model</label>
+        <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.model')}</label>
         {modelsLoading ? (
           <div className="flex items-center gap-2 text-sm text-secondary py-2">
             <Loader2 className="w-4 h-4 animate-spin" />
-            Fetching available models...
+            {t('llm.model.fetching')}
           </div>
         ) : (
           <div className="relative" ref={modelComboRef}>
@@ -646,12 +694,14 @@ export default function LLMProviderSettings({
               }}
               placeholder={
                 modelSource === 'freetext'
-                  ? 'Type model name, e.g. gpt-4o'
-                  : 'Select or type a model name'
+                  ? t('llm.model.freetextPlaceholder')
+                  : t('llm.model.selectPlaceholder')
               }
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
             />
-            {showModelDropdown && filteredModels.length > 0 && (
+            {showModelDropdown &&
+              modelSource !== 'freetext' &&
+              (filteredModels.length > 0 || modelOptions.length > 0) && (
               <ul className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto bg-sidebar border border-border rounded-lg shadow-lg">
                 {filteredModels.map((m) => (
                   <li key={m}>
@@ -666,8 +716,7 @@ export default function LLMProviderSettings({
                     </button>
                   </li>
                 ))}
-                {modelSource === 'suggested' &&
-                  modelInputValue &&
+                {modelInputValue &&
                   !modelOptions.includes(modelInputValue) && (
                     <li>
                       <button
@@ -675,20 +724,35 @@ export default function LLMProviderSettings({
                         onClick={() => selectModel(modelInputValue)}
                         className="w-full text-left text-sm px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
                       >
-                        Use &quot;{modelInputValue}&quot;
+                        {t('llm.model.useCustom', { value: modelInputValue })}
                       </button>
                     </li>
                   )}
+                {/* Escape hatch: always offer free-text entry as the last option. */}
+                <li className="border-t border-border">
+                  <button
+                    type="button"
+                    onClick={enterCustomModel}
+                    className="w-full text-left text-sm px-3 py-2 text-secondary hover:bg-accent/5 hover:text-primary transition-all duration-150 italic"
+                  >
+                    {t('llm.model.enterCustom')}
+                  </button>
+                </li>
               </ul>
+            )}
+            {modelSource === 'api' && (
+              <p className="text-xs text-secondary mt-1">
+                {t('llm.model.source.api')}
+              </p>
             )}
             {modelSource === 'suggested' && (
               <p className="text-xs text-secondary mt-1">
-                Could not fetch live models. Showing suggested models for this provider. You can also type a custom model name.
+                {t('llm.model.source.suggested')}
               </p>
             )}
             {modelSource === 'freetext' && (
               <p className="text-xs text-secondary mt-1">
-                Enter the model identifier to use with this provider.
+                {t('llm.model.source.freetext')}
               </p>
             )}
           </div>
@@ -702,30 +766,30 @@ export default function LLMProviderSettings({
           onClick={() => setShowAdvanced(!showAdvanced)}
           className="text-sm text-secondary hover:text-primary transition-all duration-150"
         >
-          {showAdvanced ? '\u25BE' : '\u25B8'} Advanced
+          {showAdvanced ? '\u25BE' : '\u25B8'} {t('llm.advanced')}
         </button>
         {showAdvanced && (
           <div className="mt-3 space-y-3">
             <div>
-              <label className="block text-sm font-medium text-primary mb-1.5">Base URL</label>
+              <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.baseUrl')}</label>
               <input
                 type="text"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://api.openai.com/v1"
+                placeholder={t('llm.baseUrl.placeholder')}
                 className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
               />
             </div>
             {provider === CUSTOM_PROVIDER_KEY && (
               <div>
-                <label className="block text-sm font-medium text-primary mb-1.5">SDK</label>
+                <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.sdk')}</label>
                 <select
                   value={sdk}
                   onChange={(e) => setSdk(e.target.value as 'openai' | 'anthropic')}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
                 >
-                  <option value="openai">OpenAI-compatible</option>
-                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">{t('llm.sdk.openai')}</option>
+                  <option value="anthropic">{t('llm.sdk.anthropic')}</option>
                 </select>
               </div>
             )}
@@ -745,10 +809,10 @@ export default function LLMProviderSettings({
             {testStatus === 'testing' ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Testing...
+                {t('llm.testing')}
               </>
             ) : (
-              'Test Connection'
+              t('llm.test')
             )}
           </button>
           {testStatus === 'success' && (
@@ -777,16 +841,16 @@ export default function LLMProviderSettings({
             {saving ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Saving...
+                {t('llm.saving')}
               </>
             ) : (
-              'Save'
+              t('settings.save')
             )}
           </button>
           {saved && (
             <span className="flex items-center gap-1 text-sm text-success">
               <Check className="w-4 h-4" />
-              Saved
+              {t('settings.saved')}
             </span>
           )}
           {saveError && (

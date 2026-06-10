@@ -14,8 +14,8 @@ import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
+from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
-    DEFAULT_SESSION_ID,
     SessionKey,
     make_session_key,
 )
@@ -29,6 +29,26 @@ MAX_CONCURRENT_SUBAGENTS = 5  # Max active sub-agents per project
 
 class SubAgentManager:
     """Owns all sub-agent adapters. Provides interface for AgentMessageTool."""
+
+    # Piece 3 Part E — teardown budgets, ordered OUTER > INNER (the old
+    # inversion — caller 5.0s < adapter 6.0s — is what cancelled kills
+    # mid-flight into the force-drop leak):
+    #
+    # ADAPTER_STOP_TIMEOUT bounds adapter.stop() itself and must exceed the
+    # transport's real kill budget. The SDK path is the worst case: bg-task
+    # cancel wait (5s) + disconnect + kill_process_tree (SIGTERM grace +
+    # SIGKILL grace + parent reap ≈ 4s) — 6.0 was BELOW it, so any adapter
+    # with descendants timed out by construction (reproduced 3× in the
+    # piece-3 probes). On exceeding it we now ESCALATE to a direct
+    # snapshotted tree kill and confirm — never force-drop.
+    ADAPTER_STOP_TIMEOUT = 15.0
+    # Straggler escalation grace per phase (wait → terminate → wait → kill →
+    # wait) in _reap_stragglers.
+    STOP_CONFIRM_GRACE = 3.0
+    # How long stop() WAITS for the (shielded) teardown task. On expiry the
+    # caller returns; the kill keeps running to confirmation in the
+    # background — waiting is bounded, killing is not abandoned.
+    TEARDOWN_WAIT_BUDGET = 30.0
 
     def __init__(self, process_manager, adapter_configs: dict | None = None,
                  platform_provider=None, registry=None, setup_engine=None,
@@ -44,12 +64,22 @@ class SubAgentManager:
         # WebSocketManager used to surface CLAUDE.md interference banners.
         # Optional: when None we fall back to process_manager._ws if set.
         self._ws_manager = ws_manager
+        # Resume persistence (TASK-resume-persistence): resolver wired at
+        # bootstrap to AgentManager.get_session so dispatch can read the
+        # per-(SessionKey, handle) thread records without SubAgentManager
+        # holding an AgentManager reference. None => resume disabled
+        # (every spawn is fresh/first_spawn).
+        self._session_resolver = None
         # ``_adapters`` is keyed by ``SessionKey == (project_id, session_id)``
         # so each chat session within a project owns an independent slate of
         # active sub-agents. Single-loop callers route through
         # ``DEFAULT_SESSION_ID`` via ``_resolve_session_id``.
         self._adapters: dict[SessionKey, dict[str, object]] = {}
-        self._transcripts: dict[tuple[str, str], object] = {}  # (project_id, handle) -> SubAgentTranscript
+        # Piece 3 Part E (keying fix): transcripts are SESSION-scoped —
+        # (project_id, session_id, handle) -> SubAgentTranscript. Two chat
+        # sessions running the same handle must not clobber each other's
+        # transcript reference.
+        self._transcripts: dict[tuple[str, str, str], object] = {}
         # Per-session lifecycle lock — concurrent sub-agent dispatch from
         # two sessions in the same project must not serialize behind a
         # single project-level lock.
@@ -73,13 +103,22 @@ class SubAgentManager:
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
-        """Normalize optional ``session_id`` to a non-empty string.
+        """Resolve a sub-agent's parent session id (seam 3 / D1).
 
-        Mirror of ``AgentManager._resolve_session_id`` — both managers
-        share the same back-compat sentinel so single-loop callers do
-        not need to know about ``DEFAULT_SESSION_ID``.
+        A sub-agent ALWAYS has a parent session, so ``None`` here is a real
+        programming bug — it is a hard raise, never a fallback. This is the
+        deliberate None-policy difference from the project-level resolver
+        (which maps None → holder / persistent chat); the common non-None
+        passthrough is the shared ``resolve_session_id`` rule.
         """
-        return session_id or DEFAULT_SESSION_ID
+        from agent_os.daemon_v2.models import resolve_session_id
+
+        def _required():
+            raise ValueError(
+                "sub-agent session_id is required (a sub-agent always has a "
+                "parent session); got None"
+            )
+        return resolve_session_id(session_id, on_none=_required)
 
     def _get_lock(self, project_id: str,
                   session_id: str | None = None) -> asyncio.Lock:
@@ -145,11 +184,17 @@ class SubAgentManager:
         return path
 
     async def start(self, project_id: str, handle: str, depth: int = 0,
-                    *, session_id: str | None = None) -> str:
+                    *, session_id: str | None = None,
+                    announce: bool = True) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
         Defaults to ``DEFAULT_SESSION_ID`` for single-loop back-compat.
+
+        ``announce=False`` suppresses the on_started session injection (WS
+        broadcast still fires) — used when the spawn is internal to a
+        spawn-on-demand ``send`` so one action yields one session message
+        (TASK-collapse-dispatch-to-send H2).
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -168,7 +213,7 @@ class SubAgentManager:
         # New path: use registry + setup_engine if available
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
-                project_id, handle, session_id=session_id,
+                project_id, handle, session_id=session_id, announce=announce,
             )
 
         # Legacy path: use adapter_configs
@@ -216,17 +261,28 @@ class SubAgentManager:
                 from uuid import uuid4
                 from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
                 transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
-                self._transcripts[(project_id, handle)] = transcript
+                self._transcripts[(project_id, session_id, handle)] = transcript
 
-        await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+        await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id, inject=announce)
 
         return f"Started {handle}"
 
-    def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None):
+    @staticmethod
+    def _argv_value(args, flag: str) -> str | None:
+        """Value following ``flag`` in an argv list (config-store flag
+        templates render e.g. ["--model", "sonnet"]), or None."""
+        args = args or []
+        for i, a in enumerate(args):
+            if a == flag and i + 1 < len(args):
+                return args[i + 1]
+        return None
+
+    def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
+                           resume_record: dict | None = None):
         """Resolve the appropriate transport for a manifest.
 
         system_prompt, when provided, is forwarded to transports that
@@ -282,7 +338,16 @@ class SubAgentManager:
             try:
                 from agent_os.agent.transports.sdk_transport import SDKTransport, HAS_SDK
                 if HAS_SDK:
-                    return SDKTransport(autonomy=autonomy, system_prompt=system_prompt)
+                    return SDKTransport(
+                        autonomy=autonomy, system_prompt=system_prompt,
+                        resume_session_id=(resume_record or {}).get("session_id"),
+                        # Model is CONFIG (AMENDS piece 2): resolved live from
+                        # the current config-store override — never from the
+                        # record. No override -> None -> the CLI serves the
+                        # session's last-used model (wire-verified).
+                        model=self._argv_value(
+                            (config_dict or {}).get("args"), "--model"),
+                    )
             except ImportError:
                 pass
             # Fallback to pipe if SDK not available
@@ -303,12 +368,137 @@ class SubAgentManager:
             from agent_os.agent.transports.pty_transport import PTYTransport
             approval_patterns = config_dict.get("approval_patterns", [])
             return PTYTransport(approval_patterns=approval_patterns)
+        elif transport_type == "codex-appserver":
+            from agent_os.agent.transports.codex_transport import CodexTransport
+            # Resume identity: threadId from the pre-checked record; the
+            # record's model is display metadata only — the transport
+            # resolves the model from current config argv at start()
+            # (model-is-config, AMENDS piece 2). Rollout pre-check happened
+            # in _determine_resume. system_prompt is NOT forwarded — the
+            # protocol's developerInstructions param is live-untested.
+            return CodexTransport(
+                autonomy=autonomy,
+                resume_record=resume_record,
+            )
         elif transport_type == "acp":
             from agent_os.agent.transports.acp_transport import ACPTransport
             return ACPTransport()
         else:
             # Fallback: no transport, use legacy CLIAdapter path
             return None
+
+    def _determine_resume(self, workspace: str, project_id: str, handle: str,
+                          session_id: str | None):
+        """Resume decision for a (SessionKey, handle) dispatch.
+
+        Returns ``(record_or_None, status, reason)`` where status/reason
+        follow the TASK-resume-persistence taxonomy:
+        ``("resumed", None)`` | ``("fresh", "first_spawn")`` |
+        ``("fresh", "resume_failed")``.
+
+        Pre-checks the on-disk resume source instead of trusting the resume
+        call to fail loudly (claude-code prunes its store at ~30 days, and
+        it is machine-local). A fresh start must never look like a resume.
+        """
+        resolver = self._session_resolver
+        session = resolver(project_id, session_id) if resolver else None
+        getter = getattr(session, "get_sub_agent_thread", None)
+        record = getter(handle) if getter else None
+        if not record or not record.get("session_id"):
+            return None, "fresh", "first_spawn"
+        # Piece 3 Part F (minimal resume backstop): if a LIVE process is
+        # still attached to this claude session id (the rare force-drop/
+        # OS-refused-kill leftover that survives Part E), do NOT
+        # double-attach — kill-then-resume, confirmed. Resuming a live
+        # session silently shares its store file and loses one branch's
+        # history on the next resume (REPORT-piece3-prerequisites.md Q2).
+        if not self._ensure_no_live_attachment(project_id, handle, record):
+            logger.error(
+                "resume backstop: live process attached to claude session "
+                "%s for %s/%s could NOT be confirmed dead — starting fresh "
+                "instead of double-attaching",
+                record.get("session_id"), project_id, handle,
+            )
+            return None, "fresh", "resume_failed"
+        try:
+            manifest = self._registry.get(handle) if self._registry else None
+            transport_hint = getattr(
+                getattr(manifest, "runtime", None), "transport", None)
+            if transport_hint == "codex-appserver":
+                from agent_os.agent.transports.codex_transport import CodexTransport
+                source_ok = CodexTransport.resume_source_exists(record)
+            else:
+                from agent_os.agent.transports.sdk_transport import SDKTransport
+                source_ok = SDKTransport.resume_source_exists(
+                    workspace, record["session_id"])
+            if source_ok:
+                if record.get("background_loss"):
+                    # Part E loud-loss: the prior teardown destroyed live
+                    # background work — the resume clause must say so.
+                    return record, "resumed_after_loss", None
+                return record, "resumed", None
+        except Exception:
+            logger.exception(
+                "resume_source_exists check failed for %s/%s — treating as "
+                "resume_failed", project_id, handle,
+            )
+        return None, "fresh", "resume_failed"
+
+    def _ensure_no_live_attachment(self, project_id: str, handle: str,
+                                   record: dict) -> bool:
+        """Part F backstop body: True when it is safe to resume the record's
+        claude session (no live attachment, or the leftover was killed and
+        CONFIRMED dead). False = could not confirm — caller must not resume.
+
+        Identity check is pid + create_time (PID reuse reads as dead, not
+        alive). Minimal by design: no orphan-sweeping subsystem, just
+        don't-double-attach.
+        """
+        pid = record.get("proc_pid")
+        ctime = record.get("proc_create_time")
+        if not isinstance(pid, int):
+            return True  # no anchor recorded — nothing to check
+        import psutil as _psutil
+        try:
+            proc = _psutil.Process(pid)
+            if ctime is not None and abs(proc.create_time() - ctime) > 1.0:
+                return True  # PID reused by an unrelated process
+        except _psutil.NoSuchProcess:
+            return True
+        except _psutil.Error:
+            return True  # unreadable — treat as gone (can't be attached)
+        logger.warning(
+            "resume backstop: pid %s is still attached to claude session %s "
+            "for %s/%s — killing it (confirmed) before resuming",
+            pid, record.get("session_id"), project_id, handle,
+        )
+        try:
+            victims = [proc] + proc.children(recursive=True)
+        except _psutil.Error:
+            victims = [proc]
+        # Short grace: this runs synchronously inside the dispatch path and
+        # only on the rare leaked-attachment hit; worst case ~3s.
+        return self._reap_stragglers(victims, 1.0)
+
+    @staticmethod
+    def _format_resume_clause(status: str, reason: str | None) -> str:
+        """Human/LLM-facing resume-status clause for the spawn result.
+
+        Honesty rule (R4): a fresh start must never read as a resume, and a
+        failed resume says so explicitly so the orchestrator re-briefs.
+        """
+        if status == "resumed":
+            return ("resumed prior session — context from previous work "
+                    "is available")
+        if status == "resumed_after_loss":
+            return ("resumed prior session — context is available, but "
+                    "background processes from the prior run were "
+                    "TERMINATED before completing; re-verify any work they "
+                    "were doing")
+        if reason == "resume_failed":
+            return ("fresh session — prior session could not be resumed; "
+                    "re-brief any context it needs")
+        return "fresh session — first spawn"
 
     def _get_pipe_config(self, slug: str):
         """Build a PipeTransportConfig for the given agent slug."""
@@ -331,7 +521,8 @@ class SubAgentManager:
             return self._ws_manager
         return getattr(self._process_manager, "_ws", None)
 
-    def _maybe_emit_claudemd_warning(self, project_id: str, workspace: str) -> None:
+    def _maybe_emit_claudemd_warning(self, project_id: str, workspace: str,
+                                     *, session_id: str | None = None) -> None:
         """Inspect workspace CLAUDE.md and emit a one-time WS banner.
 
         - Logs INFO when CLAUDE.md is present (with content hash).
@@ -379,6 +570,7 @@ class SubAgentManager:
                 ws.broadcast(project_id, {
                     "type": "workspace_claudemd_warning",
                     "project_id": project_id,
+                    "session_id": session_id,
                     "claudemd_path": info["claudemd_path"],
                     "content_hash": info["content_hash"],
                     "matched_token": info["matched_token"],
@@ -399,7 +591,8 @@ class SubAgentManager:
         self._claudemd_warning_state[(project_id, content_hash)] = "dismissed"
 
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
-                                   *, session_id: str | None = None) -> str:
+                                   *, session_id: str | None = None,
+                                   announce: bool = True) -> str:
         """Start a sub-agent using the manifest registry and setup engine."""
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -455,14 +648,15 @@ class SubAgentManager:
             except RuntimeError as e:
                 return f"Error: network configuration failed: {e}"
 
-        # Resolve autonomy preset for SDK transport filtering
-        autonomy = None
-        if project:
-            autonomy_str = project.get("autonomy", "check_in")
-            try:
-                autonomy = Autonomy(autonomy_str)
-            except ValueError:
-                autonomy = Autonomy.CHECK_IN
+        # Sub-agents always run with HANDS_OFF autonomy, regardless of the
+        # project's setting for the management agent. Rationale: dispatching a
+        # sub-agent IS the user's approval — the management agent (acting on
+        # the user's behalf) already decided this work should happen. Requiring
+        # a second per-tool approval inside the sub-agent breaks the
+        # unattended-queue workflow that is the product's headline feature.
+        # The user's project autonomy still applies to the management agent
+        # (see agents_v2.py:651-655).
+        autonomy = Autonomy.HANDS_OFF
 
         # --- Sub-agent inheritance: render prompt + lazily create MEMORY.md ---
         # Re-render fresh per dispatch (per spec: "Do NOT cache the rendered string").
@@ -475,17 +669,14 @@ class SubAgentManager:
                     render_sub_agent_prompt,
                 )
 
-                # Determine peer slugs (other enabled sub-agents in the project)
-                enabled_sub_agents = project.get("enabled_sub_agents", None) if project else None
-                if not enabled_sub_agents and self._setup_engine is not None:
-                    try:
-                        available = self._setup_engine.check_all()
-                        enabled_sub_agents = [
-                            a.slug for a in available
-                            if getattr(a, "installed", False) and a.slug != "built-in"
-                        ]
-                    except Exception:
-                        enabled_sub_agents = [handle]
+                # Determine peer slugs (other enabled sub-agents in the project),
+                # honouring the project's disabled_sub_agents denylist so a
+                # disabled sub-agent is never listed as a peer either.
+                enabled_sub_agents = resolve_visible_sub_agent_slugs(
+                    enabled_sub_agents=(project.get("enabled_sub_agents") if project else None),
+                    disabled_sub_agents=(project.get("disabled_sub_agents") if project else None),
+                    setup_engine=self._setup_engine,
+                )
                 if not enabled_sub_agents:
                     enabled_sub_agents = [handle]
 
@@ -503,7 +694,7 @@ class SubAgentManager:
                 transport_hint = getattr(manifest.runtime, "transport", "auto")
                 runtime_mode = getattr(manifest.runtime, "mode", None)
                 skips_system_prompt = (
-                    transport_hint in ("pty", "acp")
+                    transport_hint in ("pty", "acp", "codex-appserver")
                     or (transport_hint == "auto" and runtime_mode != "pipe")
                 )
                 if skips_system_prompt:
@@ -538,21 +729,43 @@ class SubAgentManager:
             # Detect workspace CLAUDE.md interference (passive surface only).
             # This is a separate side-channel concern from prompt rendering.
             try:
-                self._maybe_emit_claudemd_warning(project_id, workspace)
+                self._maybe_emit_claudemd_warning(project_id, workspace, session_id=session_id)
             except Exception:
                 logger.exception(
                     "claudemd detection failed for project=%s handle=%s",
                     project_id, handle,
                 )
 
+        # Resume decision (TASK-resume-persistence): load the persisted
+        # (SessionKey, handle) record and pre-check its on-disk source
+        # BEFORE building the transport, so a live record resumes and a
+        # dead one starts fresh — and says so.
+        resume_record, resume_status, resume_reason = self._determine_resume(
+            workspace, project_id, handle, session_id,
+        )
+
         # Resolve transport from manifest. May raise ValueError for invalid
         # manifest combinations (e.g. claude-code with transport: acp).
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
+                resume_record=resume_record,
             )
         except ValueError as e:
             return f"Error: unsupported transport in manifest: {e}"
+
+        # Honesty downgrade: a record existed and its source was live, but
+        # the resolved transport cannot resume (e.g. pipe fallback when the
+        # SDK is unavailable). Never claim "resumed" for a thread the
+        # transport did not actually pick up.
+        if resume_record is not None and getattr(
+                transport, "_resume_session_id", None) != resume_record.get("session_id"):
+            resume_status, resume_reason = "fresh", "resume_failed"
+            logger.warning(
+                "resume record present for %s/%s but transport %s cannot "
+                "resume — starting fresh", project_id, handle,
+                type(transport).__name__,
+            )
 
         adapter = CLIAdapter(
             handle=handle,
@@ -586,43 +799,87 @@ class SubAgentManager:
             from uuid import uuid4
             from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
             transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
-            self._transcripts[(project_id, handle)] = transcript
+            self._transcripts[(project_id, session_id, handle)] = transcript
 
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
         from agent_os.agent.transports.acp_transport import ACPTransport
         from agent_os.agent.transports.pipe_transport import PipeTransport
         if not isinstance(transport, (ACPTransport, PipeTransport)):
-            await self._process_manager.start(project_id, handle, adapter, transcript=transcript)
+            await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
             tp = transcript.filepath if transcript else "unknown"
-            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp)
+            await self._lifecycle_observer.on_started(project_id, handle, initiator="management_agent", transcript_path=tp, session_id=session_id, inject=announce)
 
-        return f"Started {manifest.name}"
+        # Resume-status reporting: the spawn result is what the management
+        # agent reads, so the outcome travels on it (resumed | fresh +
+        # reason). Stashed on the adapter too for list/status surfacing
+        # (consumed by the collaboration model, SPEC-multiagent).
+        adapter._resume_status = (resume_status, resume_reason)
+        return (
+            f"Started {manifest.name} "
+            f"({self._format_resume_clause(resume_status, resume_reason)})"
+        )
 
     async def send(self, project_id: str, handle: str, message: str,
-                   *, session_id: str | None = None) -> str:
-        """Dispatch message to adapter without blocking on response.
+                   *, session_id: str | None = None, depth: int = 0) -> str:
+        """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
         The response will appear asynchronously in the transcript and
         via WebSocket broadcast.
+
+        Spawn-on-demand (TASK-collapse-dispatch-to-send): a send to a
+        not-running handle spawns it via ``start()`` (announce=False — the
+        dispatch ack is the one announcement, carrying the piece-2
+        resume/honesty clause) and then dispatches, all in one call. ``send``
+        is the management agent's ONLY dispatch verb; the ``start`` tool
+        action was removed so a spawned-but-untasked strand state cannot
+        occur. ``depth`` is the spawning agent's nesting depth + 1, forwarded
+        to the spawn (the MAX_DEPTH policy gate lives in AgentMessageTool).
 
         ``session_id`` selects which session's adapter slate to dispatch
         through; defaults to ``DEFAULT_SESSION_ID``.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
-        adapters = self._adapters.get(sk, {})
-        adapter = adapters.get(handle)
-        if adapter is None:
-            return f"Error: agent '{handle}' not running for project '{project_id}'"
 
-        transcript = self._transcripts.get((project_id, handle))
-        transcript_path = transcript.filepath if transcript else "unknown"
+        # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
+        # the same per-session lifecycle lock internally (non-reentrant), so
+        # spawning under it would deadlock. A concurrent double-send race here
+        # mirrors the pre-existing @mention try/start/retry race — last
+        # registration wins, same as before this change.
+        spawn_clause = ""
+        if handle not in self._adapters.get(sk, {}):
+            start_result = await self.start(
+                project_id, handle, depth=depth,
+                session_id=session_id, announce=False,
+            )
+            if start_result.startswith("Error"):
+                return start_result
+            spawned = self._adapters.get(sk, {}).get(handle)
+            status, reason = getattr(
+                spawned, "_resume_status", (None, None)) if spawned else (None, None)
+            if status:
+                spawn_clause = f" ({self._format_resume_clause(status, reason)})"
 
-        await self._dispatch_async(adapter, project_id, handle, message)
+        # Invariant 7 (reap-vs-dispatch): take the per-session lifecycle lock
+        # around the dispatch so turn-start is mutually exclusive with a reap in
+        # ``stop`` (which holds the same lock across the kill). If a reap is
+        # mid-kill, this blocks until the adapter is dropped, then finds it gone
+        # and refuses — never opening a new turn on a process being killed.
+        lock = self._get_lock(project_id, session_id=session_id)
+        async with lock:
+            adapters = self._adapters.get(sk, {})
+            adapter = adapters.get(handle)
+            if adapter is None:
+                return f"Error: agent '{handle}' not running for project '{project_id}'"
+
+            transcript = self._transcripts.get((project_id, session_id, handle))
+            transcript_path = transcript.filepath if transcript else "unknown"
+
+            await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
 
         if self._lifecycle_observer:
             await self._lifecycle_observer.on_message_routed(
@@ -630,11 +887,13 @@ class SubAgentManager:
                 initiator="management_agent",
                 message_preview=message[:100],
                 transcript_path=transcript_path,
+                session_id=session_id,
             )
 
-        return f"Message sent to {handle}. Transcript: {transcript_path}"
+        return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
 
-    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str) -> None:
+    async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
+                              *, session_id: str | None = None) -> None:
         """Dispatch message to adapter without blocking on response.
 
         For transports that support non-blocking dispatch (SDK with queue),
@@ -649,7 +908,7 @@ class SubAgentManager:
             return
 
         # Fallback: wrap send() in background task (covers PTY, Pipe, ACP)
-        transcript = self._transcripts.get((project_id, handle))
+        transcript = self._transcripts.get((project_id, session_id, handle))
 
         async def _background_send():
             from datetime import datetime, timezone
@@ -669,16 +928,36 @@ class SubAgentManager:
                     self._process_manager._ws.broadcast(project_id, {
                         "type": "chat.sub_agent_message",
                         "project_id": project_id,
+                        "session_id": session_id,
                         "content": response,
                         "source": handle,
                         "timestamp": ts,
                     })
                     if self._lifecycle_observer and transcript is not None:
-                        await self._lifecycle_observer.on_completed(
-                            project_id, handle,
-                            summary=response[:200] if response else "(no output)",
-                            transcript_path=transcript.filepath,
-                        )
+                        # Honest routing (TASK-honest-subagent-completion-
+                        # reporting, fix 6): blocking transports surface
+                        # failures as "Error:"-prefixed response strings
+                        # (pipe timeout / non-zero exit, SDK send errors).
+                        # Those are failures, not completion summaries.
+                        if response.startswith("Error"):
+                            await self._lifecycle_observer.on_error(
+                                project_id, handle,
+                                response[:500],
+                                transcript.filepath,
+                                session_id=session_id,
+                            )
+                        else:
+                            await self._lifecycle_observer.on_completed(
+                                project_id, handle,
+                                summary=response[:200] if response else "(no output)",
+                                transcript_path=transcript.filepath,
+                                session_id=session_id,
+                            )
+                        # The turn is accounted for — a later clean teardown's
+                        # stream-end must not re-report it (these transports
+                        # never emit turn_complete).
+                        self._process_manager.note_turn_closed(
+                            project_id, handle, session_id=session_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -689,9 +968,13 @@ class SubAgentManager:
                 adapter._broken = True
                 if self._lifecycle_observer is not None:
                     try:
-                        self._lifecycle_observer.on_failed(
+                        # on_failed injects into the management session (not
+                        # just WS) so the dispatcher learns the task died —
+                        # path (e) of the honest-reporting contract.
+                        await self._lifecycle_observer.on_failed(
                             project_id, handle,
                             reason="background_send_exception",
+                            session_id=session_id,
                         )
                     except Exception:
                         logger.exception(
@@ -743,27 +1026,244 @@ class SubAgentManager:
 
     async def stop(self, project_id: str, handle: str, *,
                    session_id: str | None = None) -> str:
-        """Stop adapter, deregister from process_manager.
+        """Stop adapter with CONFIRMED death, then deregister the consumer.
 
-        ``session_id`` selects which session's adapter slate to stop in;
-        defaults to ``DEFAULT_SESSION_ID``.
+        Piece 3 Part E: no path pops the adapter and walks away while the
+        process may be alive — the old force-drop on timeout is what leaked
+        a live process with a stale resume record (the double-attach
+        precondition). The kill-to-confirmation runs in its OWN task and is
+        shielded from caller cancellation: an impatient caller stops
+        WAITING, never the KILL. The adapter slot is released only after
+        the snapshotted process tree is verified dead; an unkillable tree
+        keeps the slot (marked broken — dispatch refuses it) and logs
+        loudly.
+
+        ``session_id`` selects which session's adapter slate to stop in.
         """
         session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        teardown = asyncio.create_task(
+            self._kill_confirm_and_release(project_id, session_id, handle),
+            name=f"teardown-{project_id}-{handle}",
+        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.shield(teardown), timeout=self.TEARDOWN_WAIT_BUDGET,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "stop: teardown of %s exceeded the %.0fs wait budget; the "
+                "kill CONTINUES in the background until confirmed dead "
+                "(adapter slot retained meanwhile — no force-drop)",
+                handle, self.TEARDOWN_WAIT_BUDGET,
+            )
+            return f"Stopping {handle} (kill continuing in background)"
+        except asyncio.CancelledError:
+            # Caller cancelled — the shielded teardown still runs to
+            # completion on its own; never abandon a kill mid-flight.
+            raise
+        if result == "not_running":
+            return f"Agent '{handle}' not running"
+        # NOTE (shutdown-ordering coupling, TASK-honest-completion fix 4 /
+        # trigger-fix piece 3): adapter.stop() inside the teardown cancels
+        # the SDK bg task, whose finally pushes a turn_complete tagged
+        # cause="stopped" that the still-alive consumer ingests during the
+        # SIGTERM grace window. ProcessManager routes cause="stopped" to NO
+        # lifecycle event — that tag is the only thing standing between a
+        # clean reap and a phantom "[Sub-agent] completed". The consumer is
+        # deregistered only AFTER the teardown completed.
+        await self._process_manager.stop(
+            project_id, handle, session_id=session_id,
+        )
+        if result == "unkillable":
+            return (f"Stop FAILED for {handle}: process not confirmed dead; "
+                    f"slot retained (broken)")
+        return f"Stopped {handle}"
+
+    @staticmethod
+    def _snapshot_kill_targets(adapter) -> list:
+        """psutil handles for the adapter's process tree, captured BEFORE
+        adapter.stop() (which clears the transport's proc references)."""
+        import psutil as _psutil
+        roots = []
+        transport = getattr(adapter, "_transport", None)
+        proc = getattr(transport, "_proc", None)  # SDK: psutil.Process
+        # Strict isinstance: partially-mocked adapters (tests) and foreign
+        # transports must not feed non-psutil objects into the kill path.
+        if isinstance(proc, _psutil.Process):
+            roots.append(proc)
+        for raw in (getattr(transport, "_process", None),
+                    getattr(adapter, "_process", None)):
+            pid = getattr(raw, "pid", None)
+            if isinstance(pid, int):
+                try:
+                    roots.append(_psutil.Process(pid))
+                except _psutil.Error:
+                    pass
+        victims = []
+        for r in roots:
+            victims.append(r)
+            try:
+                victims.extend(r.children(recursive=True))
+            except Exception:
+                pass
+        return victims
+
+    @staticmethod
+    def _reap_stragglers(victims: list, grace_s: float) -> bool:
+        """Blocking (run in a thread): escalate terminate→kill on whatever in
+        ``victims`` is still alive and CONFIRM death. True iff all dead."""
+        import psutil as _psutil
+        if not victims:
+            return True
+        _, alive = _psutil.wait_procs(victims, timeout=grace_s)
+        for p in alive:
+            try:
+                p.terminate()
+            except _psutil.Error:
+                pass
+        _, alive = _psutil.wait_procs(alive, timeout=grace_s)
+        for p in alive:
+            try:
+                p.kill()
+            except _psutil.Error:
+                pass
+        _, alive = _psutil.wait_procs(alive, timeout=grace_s)
+        return not alive
+
+    async def _kill_confirm_and_release(self, project_id: str,
+                                        session_id: str, handle: str) -> str:
+        """The teardown body: kill → confirm → release-or-retain.
+
+        Holds the per-session lifecycle lock across the whole sequence
+        (invariant 7: a concurrent dispatch cannot open a turn mid-kill).
+        Returns 'stopped' | 'unkillable' | 'not_running'.
+        """
         sk = make_session_key(project_id, session_id)
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
             adapters = self._adapters.get(sk, {})
-            adapter = adapters.pop(handle, None)
-        if adapter is None:
-            return f"Agent '{handle}' not running"
-        await adapter.stop()
-        await self._process_manager.stop(project_id, handle)
+            adapter = adapters.get(handle)
+            if adapter is None:
+                return "not_running"
 
-        return f"Stopped {handle}"
+            # Loud-loss accounting BEFORE the kill (Part E): live tracked
+            # background work that this teardown will destroy.
+            from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+            registry = getattr(self._process_manager, "background_work", None)
+            doomed: list[str] = []
+            if isinstance(registry, BackgroundWorkRegistry):
+                doomed = registry.live_commands(project_id, session_id, handle)
+
+            victims = self._snapshot_kill_targets(adapter)
+            try:
+                await asyncio.wait_for(
+                    adapter.stop(), timeout=self.ADAPTER_STOP_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "stop: adapter %s stop() exceeded %.0fs; escalating to "
+                    "direct tree kill", handle, self.ADAPTER_STOP_TIMEOUT,
+                )
+            except Exception:
+                logger.exception(
+                    "stop: adapter %s stop() raised; escalating to direct "
+                    "tree kill", handle,
+                )
+            confirmed = await asyncio.to_thread(
+                self._reap_stragglers, victims, self.STOP_CONFIRM_GRACE,
+            )
+            if confirmed:
+                adapters.pop(handle, None)
+                if not adapters:
+                    self._adapters.pop(sk, None)
+                if isinstance(registry, BackgroundWorkRegistry):
+                    registry.clear(project_id, session_id, handle)
+            else:
+                # NEVER pop-and-leak: keep the slot so the process stays
+                # addressable; broken refuses reuse; Part F's backstop
+                # protects resume.
+                adapter._broken = True
+                logger.error(
+                    "stop: adapter %s NOT confirmed dead after escalation; "
+                    "slot retained (broken) — pids may include %s",
+                    handle,
+                    [getattr(v, 'pid', '?') for v in victims][:8],
+                )
+                return "unkillable"
+
+        # Outside the lock: loud loss reporting + resume-record note.
+        if doomed:
+            await self._report_background_loss(
+                project_id, session_id, handle, doomed,
+            )
+        return "stopped"
+
+    async def _report_background_loss(self, project_id: str, session_id: str,
+                                      handle: str, commands: list[str]) -> None:
+        """A teardown destroyed live background work — report LOUDLY (Part E):
+        management-session event + WS broadcast + a note on the resume record
+        so the next resume is briefed about the loss."""
+        if self._lifecycle_observer is not None:
+            try:
+                await self._lifecycle_observer.on_background_work_lost(
+                    project_id, handle, commands=commands,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.exception(
+                    "on_background_work_lost raised for %s/%s",
+                    project_id, handle,
+                )
+        # Flag the persisted thread record (cleared naturally by the next
+        # completed turn's on_thread_update overwrite).
+        try:
+            resolver = self._session_resolver
+            session = resolver(project_id, session_id) if resolver else None
+            record = (session.get_sub_agent_thread(handle)
+                      if session is not None else None)
+            if session is not None and record and record.get("session_id"):
+                session.set_sub_agent_thread(
+                    handle,
+                    session_id=record["session_id"],
+                    model=record.get("model"),
+                    background_loss=True,
+                )
+        except Exception:
+            logger.exception(
+                "failed to flag background loss on thread record for %s/%s",
+                project_id, handle,
+            )
+
+    def _adapter_status(self, adapter, project_id: str, session_id: str,
+                        handle: str) -> str:
+        """Three-state status (Piece 3 Part A): 'running' (turn open),
+        'background-running' (turn done but registered background work is
+        live), 'idle' (turn done, nothing real underneath).
+
+        Three-state applies ONLY to transports that declare
+        ``supports_background_status`` (SDK claude-code) AND only when the
+        registry's platform gate is open (the Windows liveness shape is
+        unverified — degraded two-state there). Warm infrastructure (MCP
+        servers, browsers) is never consulted: classification is by
+        provenance records, not by any-live-child.
+        """
+        if not adapter.is_idle():
+            return "running"
+        transport = getattr(adapter, "_transport", None)
+        if transport is not None and getattr(
+                transport, "supports_background_status", False):
+            from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+            registry = getattr(self._process_manager, "background_work", None)
+            if (isinstance(registry, BackgroundWorkRegistry)
+                    and registry.three_state_supported
+                    and registry.has_live(project_id, session_id, handle)):
+                return "background-running"
+        return "idle"
 
     def status(self, project_id: str, handle: str, *,
                session_id: str | None = None) -> str:
-        """Return 'running' | 'idle' | 'stopped' | 'unknown'."""
+        """Return 'running' | 'background-running' | 'idle' | 'stopped' | 'unknown'."""
         session_id = self._resolve_session_id(session_id)
         adapters = self._adapters.get(make_session_key(project_id, session_id), {})
         adapter = adapters.get(handle)
@@ -771,9 +1271,7 @@ class SubAgentManager:
             return "unknown"
         if not adapter.is_alive():
             return "stopped"
-        if adapter.is_idle():
-            return "idle"
-        return "running"
+        return self._adapter_status(adapter, project_id, session_id, handle)
 
     def get_pending_sub_agent_approval(self, project_id: str, *,
                                        session_id: str | None = None) -> dict | None:
@@ -781,46 +1279,93 @@ class SubAgentManager:
 
         Used by the REST recovery endpoint so clients can fetch sub-agent
         approval card data when they miss the WebSocket event.
+
+        This is a LOOKUP/RECOVERY read (seam 3 / D1): ``session_id`` is
+        optional. The REST poll (``GET /agents/{pid}/pending-approval``) has no
+        session in hand, so it passes ``None`` — a legitimate "not yet known"
+        state, NOT a bug. None must therefore degrade GRACEFULLY (scan), never
+        hard-raise like the sub-agent lifecycle resolver. When ``session_id`` is
+        None we scan every adapter slate in the project (a pending approval is
+        unique to its transport, so a project-wide scan is unambiguous),
+        mirroring the None-tolerance of ``resolve_sub_agent_approval``. A
+        provided ``session_id`` narrows to that one slate.
         """
-        session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
-        for handle, adapter in adapters.items():
-            transport = getattr(adapter, '_transport', None)
-            if transport is None:
-                continue
-            pending = getattr(transport, '_pending_approvals', {})
-            if not pending:
-                continue
-            # Get metadata from _pending_approval_data if available
-            approval_data = getattr(transport, '_pending_approval_data', {})
-            for request_id in pending:
-                data = approval_data.get(request_id, {})
-                return {
-                    "tool_call_id": data.get("request_id", request_id),
-                    "tool_name": data.get("tool_name", ""),
-                    "tool_args": data.get("tool_input", {}),
-                    "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
-                    "source": handle,
-                }
+        if session_id is None:
+            slates = [
+                adapters for (pid, _sid), adapters in self._adapters.items()
+                if pid == project_id
+            ]
+        else:
+            slates = [self._adapters.get(make_session_key(project_id, session_id), {})]
+        for adapters in slates:
+            for handle, adapter in adapters.items():
+                transport = getattr(adapter, '_transport', None)
+                if transport is None:
+                    continue
+                pending = getattr(transport, '_pending_approvals', {})
+                if not pending:
+                    continue
+                # Get metadata from _pending_approval_data if available
+                approval_data = getattr(transport, '_pending_approval_data', {})
+                for request_id in pending:
+                    data = approval_data.get(request_id, {})
+                    return {
+                        "tool_call_id": data.get("request_id", request_id),
+                        "tool_name": data.get("tool_name", ""),
+                        "tool_args": data.get("tool_input", {}),
+                        "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
+                        "source": handle,
+                    }
         return None
 
     async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str,
                                          approved: bool, *,
-                                         session_id: str | None = None) -> bool:
+                                         session_id: str | None = None,
+                                         decision: str | None = None) -> bool:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
+
+        Unlike ``start``/``send``/``stop`` (which act on one named session and so
+        require a session_id), approval routing is a *lookup by tool_call_id*: the
+        REST approve/deny endpoints may not know which session owns the pending
+        request. So ``session_id`` is optional here — when omitted (None), every
+        adapter slate in the project is scanned. The tool_call_id is globally
+        unique, so a project-wide scan is unambiguous. This is the one sub-agent
+        path that legitimately tolerates None (seam 3 / D1: no "default" sentinel —
+        a None search just widens to all sessions, it does not route to a phantom).
+
+        Optional ``decision`` passes a richer Codex vocabulary string (e.g.
+        ``"cancel"`` to end the turn as ``interrupted``) to transports that
+        implement ``respond_to_permission_decision``.  When ``decision`` is None
+        the legacy boolean ``respond_to_permission`` path is used unchanged.
         """
-        session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
-        for handle, adapter in adapters.items():
-            transport = getattr(adapter, '_transport', None)
-            if transport is not None and hasattr(transport, 'respond_to_permission'):
-                # Check if this transport has the pending approval
-                pending = getattr(transport, '_pending_approvals', {})
-                if tool_call_id in pending:
-                    await transport.respond_to_permission(tool_call_id, approved)
-                    return True
+        if session_id is None:
+            slates = [
+                adapters for (pid, _sid), adapters in self._adapters.items()
+                if pid == project_id
+            ]
+        else:
+            slates = [self._adapters.get(make_session_key(project_id, session_id), {})]
+        for adapters in slates:
+            for handle, adapter in adapters.items():
+                transport = getattr(adapter, '_transport', None)
+                if transport is not None and hasattr(transport, 'respond_to_permission'):
+                    # Check if this transport has the pending approval
+                    pending = getattr(transport, '_pending_approvals', {})
+                    if tool_call_id in pending:
+                        if decision is not None and hasattr(
+                                transport, "respond_to_permission_decision"):
+                            # Richer codex vocabulary: "cancel" ends the turn
+                            # `interrupted` (Deny & stop); "decline" lets it
+                            # continue. Transports without the method (SDK)
+                            # fall back to the boolean wire.
+                            await transport.respond_to_permission_decision(
+                                tool_call_id, decision)
+                        else:
+                            await transport.respond_to_permission(
+                                tool_call_id, approved)
+                        return True
         return False
 
     def update_sub_agent_autonomy(self, project_id: str, preset, *,
@@ -860,22 +1405,157 @@ class SubAgentManager:
 
     def list_active(self, project_id: str, *,
                     session_id: str | None = None) -> list[dict]:
-        """Return [{'handle', 'display_name', 'status'}, ...] for a session."""
+        """Return [{'handle', 'display_name', 'status'}, ...] for a session.
+
+        Lazily evicts dead adapters: an adapter is otherwise removed only by
+        ``stop()``, so a sub-agent process that exits on its own would leave a
+        stale entry forever (REPORT-is-idle-and-adapter-lifecycle.md Q6).
+        ``is_alive()==False`` means the process is gone, so the entry is popped
+        as we scan; an emptied SessionKey bucket is dropped too.
+        """
         session_id = self._resolve_session_id(session_id)
-        adapters = self._adapters.get(make_session_key(project_id, session_id), {})
+        sk = make_session_key(project_id, session_id)
+        adapters = self._adapters.get(sk, {})
         result = []
+        dead: list[str] = []
         for handle, adapter in adapters.items():
             if adapter.is_alive():
                 result.append({
                     "handle": handle,
                     "display_name": getattr(adapter, "display_name", handle),
-                    "status": "running" if not adapter.is_idle() else "idle",
+                    "status": self._adapter_status(
+                        adapter, project_id, session_id, handle),
                 })
+            else:
+                dead.append(handle)
+        for handle in dead:
+            adapters.pop(handle, None)
+            logger.debug("cleaned stale adapter %s for %s", handle, sk)
+        if not adapters:
+            self._adapters.pop(sk, None)
         return result
 
-    def get_transcript(self, project_id: str, handle: str):
-        """Return the transcript for a sub-agent, or None."""
-        return self._transcripts.get((project_id, handle))
+    # User-facing honesty: what the stop button can and cannot reach
+    # (Piece 3 Part D; accepted limitation per
+    # REPORT-piece3-child-classification.md — raw `&`-detached work
+    # reparents away from the tree and equally escapes the reap kill).
+    RAW_DETACH_WARNING = (
+        "Stopping cancels the agent's current turn and terminates its "
+        "tracked background work. Work the agent detached via a raw shell "
+        "'&'/'nohup' runs outside the agent's process tree and cannot be "
+        "guaranteed stopped."
+    )
+
+    async def stop_for_user(self, project_id: str, handle: str, *,
+                            session_id: str | None = None) -> dict:
+        """User stop button (Piece 3 Part D): cancel the open turn, terminate
+        the agent's TRACKED background work (confirmed), stop the adapter
+        (tree kill), and report honestly what was terminated and what the
+        mechanism cannot reach."""
+        session_id = self._resolve_session_id(session_id)
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        terminated: list[str] = []
+        if isinstance(registry, BackgroundWorkRegistry):
+            try:
+                terminated = await registry.terminate_all(
+                    project_id, session_id, handle,
+                )
+            except Exception:
+                logger.exception(
+                    "stop_for_user: background-work termination raised for "
+                    "%s/%s/%s", project_id, session_id, handle,
+                )
+        # stop() cancels the in-flight send (the open turn) and tears the
+        # process tree down; Part E hardens it to confirmed-death.
+        stop_result = await self.stop(project_id, handle, session_id=session_id)
+        if self._lifecycle_observer is not None:
+            try:
+                await self._lifecycle_observer.on_user_stopped(
+                    project_id, handle,
+                    terminated=terminated, session_id=session_id,
+                )
+            except Exception:
+                logger.exception("on_user_stopped raised for %s/%s",
+                                 project_id, handle)
+        return {
+            "handle": handle,
+            "status": "stopped",
+            "stop_result": stop_result,
+            "background_terminated": terminated,
+            "warning": self.RAW_DETACH_WARNING,
+        }
+
+    def seconds_since_background_activity(self, project_id: str, *,
+                                          session_id: str | None = None) -> float | None:
+        """Seconds since the most recent registered background-work activity
+        across this session's sub-agents, or None if none was ever observed.
+        The eviction timer resets on this (Piece 3 Part B)."""
+        import time as _time
+        from agent_os.daemon_v2.background_work import BackgroundWorkRegistry
+        registry = getattr(self._process_manager, "background_work", None)
+        if not isinstance(registry, BackgroundWorkRegistry):
+            return None
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        deltas = []
+        for handle in self._adapters.get(sk, {}):
+            t = registry.last_background_activity(project_id, session_id, handle)
+            if t is not None:
+                deltas.append(_time.monotonic() - t)
+        return min(deltas) if deltas else None
+
+    def has_live_descendants_degraded(self, project_id: str, *,
+                                      session_id: str | None = None) -> bool:
+        """Conservative eviction gate for degraded-path transports (Piece 3).
+
+        For adapters whose transport does NOT support background-status
+        classification (Pipe/ACP/PTY — their event streams discard
+        tool_input), we cannot distinguish real work from infrastructure, so
+        ANY live descendant blocks eviction. May over-keep agents holding
+        warm infra — accepted (costs only RAM). SDK adapters are skipped
+        here; the provenance gate covers them.
+        """
+        import psutil as _psutil
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+        for handle, adapter in self._adapters.get(sk, {}).items():
+            transport = getattr(adapter, "_transport", None)
+            if transport is not None and getattr(
+                    transport, "supports_background_status", False):
+                continue  # SDK — provenance-gated, not descendant-gated
+            pid = None
+            proc = getattr(transport, "_proc", None)  # psutil handle
+            if proc is not None:
+                pid = getattr(proc, "pid", None)
+            if pid is None:
+                raw = (getattr(transport, "_process", None)
+                       or getattr(adapter, "_process", None)
+                       or getattr(adapter, "_proc_handle", None))
+                pid = getattr(raw, "pid", None)
+            if not isinstance(pid, int):
+                continue  # no reachable process — nothing to gate on
+            try:
+                if _psutil.Process(pid).children(recursive=True):
+                    return True
+            except _psutil.Error:
+                continue
+        return False
+
+    def get_transcript(self, project_id: str, handle: str,
+                       session_id: str | None = None):
+        """Return the transcript for a sub-agent, or None.
+
+        Session-scoped key (Part E). A session-less caller (e.g. the
+        @mention REST path) gets the most recently created transcript for
+        (project, handle) across sessions.
+        """
+        if session_id is not None:
+            return self._transcripts.get((project_id, session_id, handle))
+        for (pid, _sid, h), transcript in reversed(list(self._transcripts.items())):
+            if pid == project_id and h == handle:
+                return transcript
+        return None
 
     def get_all_transcript_entries(self, project_id: str) -> list[dict]:
         """Read all sub-agent transcript entries for a project.
@@ -908,7 +1588,7 @@ class SubAgentManager:
                         pass
 
         # 2. In-memory transcripts (covers cases where workspace lookup fails)
-        for (pid, handle), transcript in self._transcripts.items():
+        for (pid, _sid, handle), transcript in self._transcripts.items():
             if pid == project_id:
                 norm = os.path.normpath(transcript.filepath)
                 if norm not in seen_paths:

@@ -29,6 +29,11 @@ import pytest
 
 from agent_os.platform.types import PermissionResult
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, handles are
+# keyed by a real session uuid (SessionKey tuple), and approve/deny are holder-aware
+# (a bare project_id key breaks the holder scan). Pass session_id explicitly.
+SID = "proj_1_sess0001"
+
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
     reason="macOS/Linux sandbox folder-grant flow; Windows sandbox user not configured",
@@ -69,13 +74,16 @@ def _setup_handle_with_pending_approval(mgr, project_id, tool_call_id,
                                          tool_name, tool_args):
     """Set up a handle with a pending approval for testing."""
     mock_session = MagicMock()
+    # No prior result for this tool_call — exercise approve/deny's normal path
+    # (the has_result_for guard short-circuits when a result already exists).
+    mock_session.has_result_for.return_value = False
+
+    pending = {"tool_name": tool_name, "tool_args": tool_args}
     mock_interceptor = MagicMock()
-    mock_interceptor._pending_approvals = {
-        tool_call_id: {
-            "tool_name": tool_name,
-            "tool_args": tool_args,
-        }
-    }
+    mock_interceptor._pending_approvals = {tool_call_id: pending}
+    # Current approve()/deny() read the pending entry via get_pending(), not the
+    # raw _pending_approvals dict — configure it so the real path runs.
+    mock_interceptor.get_pending.return_value = pending
 
     mock_task = asyncio.get_event_loop().create_future()
     mock_task.set_result(None)
@@ -86,7 +94,12 @@ def _setup_handle_with_pending_approval(mgr, project_id, tool_call_id,
         interceptor=mock_interceptor,
         loop=MagicMock(),
     )
-    mgr._handles[project_id] = handle
+    # Non-request_access approvals execute the tool through the registry; give it
+    # a sync execute returning a result object so that branch doesn't await a
+    # bare MagicMock. request_access approvals go through the provider instead.
+    handle.registry.is_async.return_value = False
+    handle.registry.execute.return_value = MagicMock(content="ok", meta=None)
+    mgr._handles[(project_id, SID)] = handle
     return handle, mock_session, mock_interceptor
 
 
@@ -119,7 +132,7 @@ class TestApproveCallsGrantFolderAccess:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.approve("proj_1", "tc_1")
+            await mgr.approve("proj_1", "tc_1", session_id=SID)
 
         provider.grant_folder_access.assert_called_once_with(
             "C:\\Users\\Test\\Documents", "read_only"
@@ -146,7 +159,7 @@ class TestApproveCallsGrantFolderAccess:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.approve("proj_1", "tc_2")
+            await mgr.approve("proj_1", "tc_2", session_id=SID)
 
         provider.grant_folder_access.assert_called_once_with(
             "C:\\Users\\Test\\Code", "read_write"
@@ -166,7 +179,7 @@ class TestApproveCallsGrantFolderAccess:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.approve("proj_1", "tc_3")
+            await mgr.approve("proj_1", "tc_3", session_id=SID)
 
         provider.grant_folder_access.assert_not_called()
 
@@ -191,7 +204,7 @@ class TestApproveCallsGrantFolderAccess:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.approve("proj_1", "tc_4")
+            await mgr.approve("proj_1", "tc_4", session_id=SID)
 
         # Session should have a tool result with the error
         # The exact method depends on implementation, but session should be informed
@@ -231,7 +244,7 @@ class TestApprovalHistoryJSONL:
             mock_open.return_value.__enter__ = MagicMock(return_value=mock_file)
             mock_open.return_value.__exit__ = MagicMock(return_value=False)
 
-            await mgr.approve("proj_1", "tc_1")
+            await mgr.approve("proj_1", "tc_1", session_id=SID)
 
             # Check that _record_approval_decision or similar was called
             # The implementation should write to a JSONL file
@@ -252,7 +265,7 @@ class TestApprovalHistoryJSONL:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.deny("proj_1", "tc_1", "Too dangerous")
+            await mgr.deny("proj_1", "tc_1", "Too dangerous", session_id=SID)
 
         # Session should have the denial recorded
         session.append_tool_result.assert_called_once()
@@ -374,7 +387,7 @@ class TestRequestAccessApproveGrantFlow:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.approve("proj_1", "tc_ra_1")
+            await mgr.approve("proj_1", "tc_ra_1", session_id=SID)
 
         # NullProvider.grant_folder_access returns success=False
         # The flow should still complete and resume the loop
@@ -400,7 +413,7 @@ class TestRequestAccessApproveGrantFlow:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.deny("proj_1", "tc_ra_2", "Not allowed to access system files")
+            await mgr.deny("proj_1", "tc_ra_2", "Not allowed to access system files", session_id=SID)
 
         session.append_tool_result.assert_called_once()
         deny_content = session.append_tool_result.call_args[0][1]
@@ -429,7 +442,7 @@ class TestRequestAccessApproveGrantFlow:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            await mgr.approve("proj_1", "tc_ra_3")
+            await mgr.approve("proj_1", "tc_ra_3", session_id=SID)
 
         session.resume.assert_called()
         mock_start.assert_awaited_once()
@@ -455,7 +468,7 @@ class TestRequestAccessApproveGrantFlow:
         )
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            await mgr.approve("proj_1", "tc_ra_4")
+            await mgr.approve("proj_1", "tc_ra_4", session_id=SID)
 
         # Loop should still resume
         session.resume.assert_called()

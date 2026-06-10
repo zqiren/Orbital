@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
-import { useAgent } from './hooks/useAgent';
 import { useTriggers } from './hooks/useTriggers';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
 import type {
@@ -20,19 +19,20 @@ import type {
   ProjectUpdateRequest,
   WebSocketEvent,
 } from './types';
+import type { Route } from './route';
 import SetupGate from './components/SetupGate';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
 import CreateProject from './components/CreateProject';
-import ProjectDetail, { type DetailTab } from './components/ProjectDetail';
+import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
-import SettingsView from './components/SettingsView';
-import ChatView from './components/ChatView';
+import SettingsModalPage from './components/SettingsModalPage';
+import ChatTab from './components/ChatTab';
+import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
+import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
-
-type View = 'list' | 'create' | 'detail' | 'settings';
 
 function mapConnectionState(
   state: ConnectionState,
@@ -47,22 +47,21 @@ function mapConnectionState(
 }
 
 export default function App() {
+  const t = useT();
   const platform = usePlatform();
   const {
     projects,
     listProjects,
     createProject,
+    refreshProject,
     updateProject,
     deleteProject,
   } = useProjects();
-  const { cancelMessage } = useAgent();
   const ws = useWebSocket();
 
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [view, setView] = useState<View>('list');
-  const [tab, setTab] = useState<DetailTab>('queue');
+  const [route, setRoute] = useState<Route>({ name: 'list' });
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -73,6 +72,17 @@ export default function App() {
   // tab switch doesn't block on the daemon's /agents/available cache miss
   // (cold call can take up to 8s). null = not yet loaded.
   const [agentsAvailable, setAgentsAvailable] = useState<Array<{ slug: string; name: string }> | null>(null);
+  // Global/default LLM model (from app settings) — header fallback when a
+  // project has no per-project model pinned. Fetched once on mount.
+  const [defaultModel, setDefaultModel] = useState<string>('');
+  useEffect(() => {
+    api<{ llm?: { model?: string } }>('/api/v2/settings')
+      .then((d) => setDefaultModel(d?.llm?.model || ''))
+      .catch(() => {});
+  }, []);
+
+  // Derive selected project ID from route for convenience
+  const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
   const { triggers, fetchTriggers, toggleTrigger, deleteTrigger } = useTriggers(selectedProjectId ?? '');
 
@@ -221,15 +231,15 @@ export default function App() {
       // Browser notification when tab not focused
       if (!document.hasFocus()) {
         const project = projects.find((p) => p.project_id === e.project_id);
-        const name = project?.name ?? 'A project';
+        const name = project?.name ?? t('app.notify.fallbackName');
         if (Notification.permission === 'granted') {
-          new Notification(`Orbital: ${name} needs your approval`);
+          new Notification(t('app.notify.approval', { name }));
         } else if (Notification.permission !== 'denied') {
           Notification.requestPermission();
         }
       }
     },
-    [projects],
+    [projects, t],
   );
 
   const handleApprovalResolved = useCallback((event: WebSocketEvent) => {
@@ -334,7 +344,8 @@ export default function App() {
 
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === 'navigate' && event.data.projectId) {
-        handleSelectProject(event.data.projectId);
+        setRoute({ name: 'project', projectId: event.data.projectId, tab: 'chat', sessionId: undefined });
+        setMobileView('content');
       }
     }
 
@@ -350,23 +361,18 @@ export default function App() {
   }
 
   function handleSelectProject(id: string) {
-    setSelectedProjectId(id);
-    setView('detail');
-    setTab('queue');
+    setRoute({ name: 'project', projectId: id, tab: 'chat', sessionId: undefined });
     setMobileView('content');
   }
 
   function handleNewProject() {
-    setView('create');
-    setSelectedProjectId(null);
+    setRoute({ name: 'create' });
     setMobileView('content');
   }
 
   async function handleCreateProject(data: ProjectCreateRequest) {
     const created = await createProject(data);
-    setSelectedProjectId(created.project_id);
-    setView('detail');
-    setTab('queue');
+    setRoute({ name: 'project', projectId: created.project_id, tab: 'chat', sessionId: undefined });
   }
 
   async function handleUpdateProject(data: ProjectUpdateRequest) {
@@ -377,14 +383,8 @@ export default function App() {
   async function handleDeleteProject() {
     if (!selectedProjectId) return;
     await deleteProject(selectedProjectId);
-    setSelectedProjectId(null);
-    setView('list');
+    setRoute({ name: 'list' });
     setMobileView('sidebar');
-  }
-
-  async function handleCancelMessage() {
-    if (!selectedProjectId) return;
-    await cancelMessage(selectedProjectId);
   }
 
   // First-run wizard (before setup gate)
@@ -405,7 +405,7 @@ export default function App() {
   if (setupComplete === null || needsWizard === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <span className="text-sm text-secondary">Loading...</span>
+        <span className="text-sm text-secondary">{t('app.loading')}</span>
       </div>
     );
   }
@@ -420,9 +420,9 @@ export default function App() {
     );
   }
 
-  const selectedProject = projects.find(
-    (p) => p.project_id === selectedProjectId,
-  );
+  const selectedProject = route.name === 'project'
+    ? projects.find((p) => p.project_id === route.projectId)
+    : undefined;
 
   function handleMobileBack() {
     setMobileView('sidebar');
@@ -439,11 +439,14 @@ export default function App() {
           agentStatuses={agentStatuses}
           statusSummaries={statusSummaries}
           pendingApprovals={pendingApprovals}
-          selectedProjectId={selectedProjectId}
+          route={route}
           connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
           onSelectProject={handleSelectProject}
           onNewProject={handleNewProject}
-          onSettings={() => { setView('settings'); setSelectedProjectId(null); setMobileView('content'); }}
+          onSettings={() => {
+            setRoute({ name: 'settings' });
+            setMobileView('content');
+          }}
         />
       </div>
 
@@ -455,90 +458,109 @@ export default function App() {
             className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-[44px] text-sm text-secondary hover:text-primary transition-colors"
           >
             <ArrowLeft size={16} />
-            Back
+            {t('app.mobileBack')}
           </button>
         )}
 
         {platform.status && platform.status.platform !== 'null' && !platform.status.setup_complete && (
           <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mx-4 mt-4 text-sm">
-            <span className="text-warning font-medium">{'\u26A0'} Agent sandbox is not configured.</span>{' '}
+            <span className="text-warning font-medium">{t('app.sandboxWarning.title')}</span>{' '}
             <span className="text-secondary">
-              Agents will run with your full system permissions.
-              Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.
+              {t('app.sandboxWarning.body')}
             </span>
           </div>
         )}
 
-        {view === 'settings' && (
+        {route.name === 'settings' && (
           <GlobalSettings
-            onBack={() => { setView(selectedProjectId ? 'detail' : 'list'); setMobileView('sidebar'); }}
+            onBack={() => { setRoute({ name: 'list' }); setMobileView('sidebar'); }}
           />
         )}
 
-        {view === 'create' && (
+        {route.name === 'create' && (
           <CreateProject
             onSubmit={handleCreateProject}
-            onCancel={() => { setView(selectedProjectId ? 'detail' : 'list'); setMobileView('sidebar'); }}
+            onCancel={() => {
+              setRoute({ name: 'list' });
+              setMobileView('sidebar');
+            }}
           />
         )}
 
-        {view === 'detail' && selectedProject && (
-          <ProjectDetail
-            project={selectedProject}
-            agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
-            statusSummary={statusSummaries[selectedProject.project_id]}
-            tab={tab}
-            onTabChange={setTab}
-            onStopAgent={handleCancelMessage}
-            triggers={triggers}
-            onTriggerToggle={toggleTrigger}
-            onTriggerDelete={deleteTrigger}
+        {route.name === 'project' && selectedProject && (
+          // Scoped to the project view: a render crash here shows a recoverable
+          // fallback instead of unmounting the whole app (the app shell/sidebar
+          // stays alive). resetKey clears a prior crash when the user navigates.
+          <ErrorBoundary
+            resetKey={`${selectedProject.project_id}:${route.tab}:${route.sessionId ?? ''}:${route.settings ? 'settings' : ''}`}
           >
-            {tab === 'settings' && (
-              <SettingsView
+            {route.settings ? (
+              <SettingsModalPage
                 project={selectedProject}
+                route={route}
+                setRoute={setRoute}
                 onSave={handleUpdateProject}
                 onDelete={handleDeleteProject}
               />
-            )}
-            {tab === 'queue' && (
-              <QueueTab
-                key={`queue-${selectedProject.project_id}`}
-                projectId={selectedProject.project_id}
-              />
-            )}
-            {tab === 'chat' && (
-              <ChatView
-                key={selectedProject.project_id}
-                projectId={selectedProject.project_id}
+            ) : (
+              <ProjectDetail
                 project={selectedProject}
                 agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
-                statusTick={statusTicks[selectedProject.project_id] ?? 0}
-                mentionAgents={agentsAvailable ?? []}
-              />
+                statusSummary={statusSummaries[selectedProject.project_id]}
+                route={route}
+                setRoute={setRoute}
+                triggers={triggers}
+                onTriggerToggle={toggleTrigger}
+                onTriggerDelete={deleteTrigger}
+                globalDefaultModel={defaultModel}
+              >
+                {route.tab === 'queue' && (
+                  <QueueTab
+                    key={`queue-${selectedProject.project_id}`}
+                    projectId={selectedProject.project_id}
+                  />
+                )}
+                {route.tab === 'chat' && (
+                  <ChatTab
+                    key={selectedProject.project_id}
+                    project={selectedProject}
+                    agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
+                    statusTick={statusTicks[selectedProject.project_id] ?? 0}
+                    mentionAgents={agentsAvailable ?? []}
+                    route={route}
+                    setRoute={setRoute}
+                    onRefreshProject={refreshProject}
+                  />
+                )}
+                {route.tab === 'files' && (
+                  <FileExplorer projectId={selectedProject.project_id} />
+                )}
+              </ProjectDetail>
             )}
-            {tab === 'files' && (
-              <FileExplorer projectId={selectedProject.project_id} />
-            )}
-          </ProjectDetail>
+          </ErrorBoundary>
         )}
 
-        {view === 'list' && !selectedProjectId && (
+        {route.name === 'list' && (
           <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
             <p className="text-secondary text-sm">
               {projects.length === 0
-                ? 'No projects yet. Create your first one.'
-                : 'Select a project from the sidebar.'}
+                ? t('app.list.empty')
+                : t('app.list.selectPrompt')}
             </p>
             {projects.length === 0 && (
               <button
                 onClick={handleNewProject}
                 className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
               >
-                + New Project
+                {t('app.newProject')}
               </button>
             )}
           </div>
+        )}
+
+        {/* 'blocked' route UI (BlockedBadge view) is a later task — minimal stub for now. */}
+        {route.name === 'blocked' && (
+          <div data-testid="blocked-route-stub" />
         )}
       </main>
     </div>

@@ -73,48 +73,52 @@ class TestDepthLimit:
 
     @pytest.mark.asyncio
     async def test_max_depth_blocks_spawn(self):
-        """An agent at depth=MAX_DEPTH cannot start sub-agents."""
+        """An agent at depth=MAX_DEPTH cannot dispatch (send spawns-on-demand,
+        so the depth gate now lives on send — TASK-collapse-dispatch-to-send)."""
         tool, mgr = _make_tool(depth=MAX_DEPTH)
-        result = await tool.execute(action="start", agent="child-agent")
+        result = await tool.execute(action="send", agent="child-agent",
+                                    message="go")
         assert "depth limit" in result.content.lower()
         assert str(MAX_DEPTH) in result.content
-        mgr.start.assert_not_called()
+        mgr.send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_depth_counter_increments(self):
-        """An agent at depth=1 passes depth=2 to SubAgentManager.start()."""
+        """An agent at depth=1 passes depth=2 through send (the manager
+        forwards it to its internal spawn-on-demand start)."""
         tool, mgr = _make_tool(depth=1)
-        await tool.execute(action="start", agent="child-agent")
-        mgr.start.assert_called_once()
-        call_kwargs = mgr.start.call_args
-        # depth=2 should be passed through
-        assert call_kwargs[1].get("depth") == 2 or (
-            len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == 2
-        )
+        await tool.execute(action="send", agent="child-agent", message="go")
+        mgr.send.assert_called_once()
+        assert mgr.send.call_args.kwargs.get("depth") == 2
 
     @pytest.mark.asyncio
     async def test_depth_zero_allows_spawn(self):
-        """Primary agent (depth=0) can start sub-agents normally."""
+        """Primary agent (depth=0) dispatches (and thereby spawns) normally."""
         tool, mgr = _make_tool(depth=0)
-        result = await tool.execute(action="start", agent="child-agent")
-        assert "Error" not in result.content or "depth" not in result.content.lower()
-        mgr.start.assert_called_once()
+        result = await tool.execute(action="send", agent="child-agent",
+                                    message="go")
+        assert "depth limit" not in result.content.lower()
+        mgr.send.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_depth_just_below_limit_allows_spawn(self):
-        """Agent at depth=MAX_DEPTH-1 can still start sub-agents."""
+        """Agent at depth=MAX_DEPTH-1 can still dispatch/spawn."""
         tool, mgr = _make_tool(depth=MAX_DEPTH - 1)
-        result = await tool.execute(action="start", agent="child-agent")
+        result = await tool.execute(action="send", agent="child-agent",
+                                    message="go")
         assert "depth limit" not in result.content.lower()
-        mgr.start.assert_called_once()
+        mgr.send.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_depth_does_not_affect_send(self):
-        """Depth limit only applies to start, not send."""
+    async def test_depth_limit_gates_send(self):
+        """NEW INVARIANT (TASK-collapse-dispatch-to-send): send spawns-on-
+        demand, so the depth gate applies to send. An at-limit agent could
+        never have a deeper sub-agent running, so gating every send is
+        equivalent to the old start-only gate — without the spawn loophole."""
         tool, mgr = _make_tool(depth=MAX_DEPTH)
         result = await tool.execute(action="send", agent="a", message="hello")
-        assert "depth" not in result.content.lower()
-        mgr.send.assert_called_once()
+        assert "depth limit" in result.content.lower()
+        mgr.send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_depth_does_not_affect_stop(self):

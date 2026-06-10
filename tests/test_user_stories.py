@@ -644,15 +644,21 @@ async def test_us6_stop_agent(tmp_path, workspace):
 
                     trace.step("EVENTS_BEFORE_STOP", f"{len(events)} events collected before stop")
 
-                    # Stop the agent
-                    trace.step("REST", "POST /api/v2/agents/{pid}/stop")
-                    resp = await client.post(f"/api/v2/agents/{pid}/stop")
+                    # Cancel the in-flight turn (the user-facing "stop button").
+                    # NOTE: /cancel replaces the removed /stop route. It returns
+                    # the cancel shape ("cancelled" when a turn was interrupted,
+                    # "idle" when there was nothing to cancel) instead of
+                    # "stopping", and it does NOT tear the session down — the
+                    # handle + session stay resumable in memory.
+                    trace.step("REST", "POST /api/v2/agents/{pid}/cancel")
+                    resp = await client.post(f"/api/v2/agents/{pid}/cancel")
                     trace.step("REST_RESPONSE", f"status={resp.status_code}", body=resp.json())
                     assert resp.status_code == 200
-                    assert resp.json()["status"] == "stopping"
+                    assert resp.json().get("status") in ("cancelled", "idle")
 
-                    # Collect stopped event
-                    trace.step("WS_COLLECTING", "Waiting for stopped event")
+                    # Collect settle event — after cancel the agent returns to
+                    # idle/stopped rather than emitting a teardown "stopped".
+                    trace.step("WS_COLLECTING", "Waiting for idle/stopped settle event")
                     stop_start = time.time()
                     while time.time() - stop_start < 15:
                         try:
@@ -660,19 +666,21 @@ async def test_us6_stop_agent(tmp_path, workspace):
                             events.append(data)
                             trace.ws_events.append({"t": round(time.time() - trace.started_at, 2), **data})
                             if (data.get("type") == "agent.status"
-                                    and data.get("status") == "stopped"):
-                                trace.step("STOPPED_EVENT", "Received agent.status stopped")
+                                    and data.get("status") in ("idle", "stopped")):
+                                trace.step("SETTLED_EVENT", f"Received agent.status {data.get('status')}")
                                 break
                         except asyncio.TimeoutError:
                             continue
                         except Exception:
                             break
 
-        # Verify stopped
+        # Verify the agent settled. NOTE: semantics changed with /cancel — the
+        # session is interrupted but NOT torn down, so we accept any idle-ish
+        # settle state rather than requiring a dedicated "stopped" teardown event.
         status_events = [e for e in events if e.get("type") == "agent.status"]
-        stopped = [e for e in status_events if e.get("status") == "stopped"]
+        settled = [e for e in status_events if e.get("status") in ("idle", "stopped")]
         trace.step("VERIFY", f"Status events: {[(e.get('status'), e.get('reason','')) for e in status_events]}")
-        assert len(stopped) >= 1, f"No stopped event found. Status events: {status_events}"
+        assert len(settled) >= 1, f"No idle/stopped settle event found. Status events: {status_events}"
 
         passed = True
         trace.step("RESULT", "PASSED")

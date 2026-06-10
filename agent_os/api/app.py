@@ -84,7 +84,7 @@ def _ensure_scratch_project(project_store, settings_store, data_dir):
         "agent_name": "Assistant",
         "workspace": scratch_workspace,
         "is_scratch": True,
-        "autonomy": "check_in",
+        "autonomy": "hands_off",
         "model": "",
         "api_key": "",
     })
@@ -275,6 +275,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     lifecycle_observer = LifecycleObserver(agent_manager, ws_manager)
     process_manager._lifecycle = lifecycle_observer
     sub_agent_manager._lifecycle_observer = lifecycle_observer
+    # Resume persistence (TASK-resume-persistence): dispatch reads the
+    # per-(SessionKey, handle) thread records off the management session.
+    # (get_session's session_id is keyword-only; the resolver contract is
+    # positional (project_id, session_id).)
+    sub_agent_manager._session_resolver = (
+        lambda pid, sid: agent_manager.get_session(pid, session_id=sid)
+    )
 
     # 6b. Trigger manager
     trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager)
@@ -330,7 +337,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(settings_routes.router)
 
     # 7b. File browsing routes
-    files_v2.configure(project_store)
+    files_v2.configure(project_store, agent_manager=agent_manager, ws_manager=ws_manager)
     app.include_router(files_v2.router)
 
     # 7c. Platform routes
@@ -378,15 +385,30 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _stop_agent_manager():
         await agent_manager.shutdown()
 
-    # 7h. Auto-resume agents from previous session
+    # 7h. Create one queue dispatcher per project. The dispatcher is the
+    # project's session-lifecycle manager — it exists for the life of the
+    # project, independent of agent lifecycle, so it is created at boot
+    # rather than inside start_agent.
     @app.on_event("startup")
-    async def _auto_resume_agents():
+    async def _start_dispatchers():
         try:
-            await agent_manager.auto_resume_agents()
+            await agent_manager.start_all_dispatchers()
         except Exception:
             import logging
             logging.getLogger(__name__).exception(
-                "Failed to auto-resume agents on startup"
+                "Failed to start project dispatchers on startup"
+            )
+
+    # Idle-eviction sweep: tears down runtime resources for sessions left idle
+    # past AgentManager.EVICTION_IDLE_TIMEOUT. Cancelled in agent_manager.shutdown().
+    @app.on_event("startup")
+    async def _start_eviction():
+        try:
+            agent_manager.start_eviction()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to start idle-eviction sweep on startup"
             )
 
     # 7f. Pairing routes

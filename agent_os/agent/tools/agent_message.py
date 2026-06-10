@@ -17,11 +17,22 @@ class AgentMessageTool(Tool):
     is_async = True  # Signal to ToolRegistry that execute is async
 
     def __init__(self, sub_agent_manager=None, project_id: str = "",
-                 max_sends_per_run: int = 10, depth: int = 0):
+                 max_sends_per_run: int = 10, depth: int = 0,
+                 session_id: str | None = None):
         self.sub_agent_manager = sub_agent_manager
         self.project_id = project_id
+        # The management session this tool instance is registered under. Threaded
+        # to every sub_agent_manager.* call so the sub-agent adapter is keyed by
+        # SessionKey(project, session_id) — list_active, stop_all, eviction,
+        # and the on_completed push all see the same bucket. Without this, a
+        # non-default management session would route sub-agents under "default"
+        # and lose them downstream (see Quick Tasks failure 2026-05-28).
+        self.session_id = session_id
         self.name = "agent_message"
-        self.description = "Communicate with sub-agents: start, send, stop, list, status."
+        self.description = (
+            "Communicate with sub-agents: send (dispatches a task — spawns "
+            "the agent automatically if it is not running), stop, list, status."
+        )
         self._max_sends_per_run = max_sends_per_run
         self._send_count = 0
         self._depth = depth
@@ -30,11 +41,14 @@ class AgentMessageTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "Action: start, send, stop, list, status",
-                    "enum": ["start", "send", "stop", "list", "status"],
+                    "description": (
+                        "Action: send (dispatch a task; spawns on demand), "
+                        "stop, list, status"
+                    ),
+                    "enum": ["send", "stop", "list", "status"],
                 },
                 "agent": {"type": "string", "description": "Agent handle"},
-                "message": {"type": "string", "description": "Message to send"},
+                "message": {"type": "string", "description": "The task to dispatch (required for send)"},
             },
             "required": ["action", "agent"],
         }
@@ -49,20 +63,28 @@ class AgentMessageTool(Tool):
                 return ToolResult(content="Error: sub-agent support not yet available.")
 
             # Require agent for start/send/stop
-            if action in ("start", "send", "stop") and not agent:
+            if action in ("send", "stop") and not agent:
                 return ToolResult(
                     content=f"Error: 'agent' parameter is required for action '{action}'"
                 )
 
             if action == "list":
-                agents = self.sub_agent_manager.list_active(self.project_id)
+                agents = self.sub_agent_manager.list_active(
+                    self.project_id, session_id=self.session_id,
+                )
                 return ToolResult(content=json.dumps(agents))
 
             if action == "status":
-                status = self.sub_agent_manager.status(self.project_id, agent)
+                status = self.sub_agent_manager.status(
+                    self.project_id, agent, session_id=self.session_id,
+                )
                 return ToolResult(content=status)
 
-            if action == "start":
+            if action == "send":
+                # Depth gate: send spawns-on-demand, so the nesting limit
+                # that previously guarded the (removed) start action lives
+                # here. A max-depth agent can never have a deeper sub-agent
+                # already running, so gating every send is equivalent.
                 if self._depth >= MAX_DEPTH:
                     return ToolResult(
                         content=(
@@ -72,12 +94,6 @@ class AgentMessageTool(Tool):
                             f"return results to your parent agent."
                         )
                     )
-                result = await self.sub_agent_manager.start(
-                    self.project_id, agent, depth=self._depth + 1,
-                )
-                return ToolResult(content=result)
-
-            if action == "send":
                 self._send_count += 1
                 if self._send_count > self._max_sends_per_run:
                     return ToolResult(
@@ -87,11 +103,30 @@ class AgentMessageTool(Tool):
                             f"Summarize what you have so far and present results to the user."
                         )
                     )
-                result = await self.sub_agent_manager.send(self.project_id, agent, message)
-                return ToolResult(content=result)
+                result = await self.sub_agent_manager.send(
+                    self.project_id, agent, message,
+                    session_id=self.session_id,
+                    depth=self._depth + 1,
+                )
+                # A failed dispatch (unknown agent, spawn failure, shutdown)
+                # must NOT yield — surface the error so the LLM can react.
+                if isinstance(result, str) and result.startswith("Error"):
+                    return ToolResult(content=result)
+                # Successful dispatch: delivering a task ends the management
+                # turn (yield_turn). The send is non-blocking; the sub-agent's
+                # result is pushed back later via on_completed and the loop
+                # restarts. Yielding here prevents the LLM from busy-polling the
+                # sub-agent (which trips the ping-pong guard). See
+                # docs/investigations/REPORT-dispatch-yield-and-push.md.
+                return ToolResult(
+                    content=f"Dispatched to {agent}. Awaiting completion. {result}",
+                    meta={"yield_turn": True},
+                )
 
             if action == "stop":
-                result = await self.sub_agent_manager.stop(self.project_id, agent)
+                result = await self.sub_agent_manager.stop(
+                    self.project_id, agent, session_id=self.session_id,
+                )
                 return ToolResult(content=result)
 
             return ToolResult(content=f"Error: unknown action '{action}'")

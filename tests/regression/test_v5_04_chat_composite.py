@@ -63,7 +63,7 @@ class TestGetAllTranscriptEntries:
             transcript.append({"source": "test-agent", "content": "Hi", "timestamp": "2026-03-10T10:00:01Z"})
 
             mgr = SubAgentManager(process_manager=None)
-            mgr._transcripts[("proj1", "test-agent")] = transcript
+            mgr._transcripts[("proj1", "sess1", "test-agent")] = transcript  # session-scoped (Part E)
 
             entries = mgr.get_all_transcript_entries("proj1")
             assert len(entries) == 1
@@ -82,7 +82,7 @@ class TestGetAllTranscriptEntries:
                 process_manager=None,
                 project_store=project_store,
             )
-            mgr._transcripts[("proj1", "claude-code")] = transcript
+            mgr._transcripts[("proj1", "sess1", "claude-code")] = transcript  # session-scoped (Part E)
 
             entries = mgr.get_all_transcript_entries("proj1")
             # Should have exactly 1 entry, not duplicated

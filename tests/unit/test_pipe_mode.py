@@ -23,6 +23,11 @@ from agent_os.agent.transports.pipe_transport import (
     CLAUDE_CODE_PIPE_CONFIG,
 )
 
+# Canonical chat-session uuid for SubAgentManager fixtures (post-"default"
+# retirement: adapter slates are keyed by a real session uuid and send/start
+# require an explicit session_id — None hard-raises).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # PipeTransport core tests
@@ -388,7 +393,7 @@ class TestSubAgentManagerPipeWiring:
         with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as MockAdapter:
             mock_instance = AsyncMock()
             MockAdapter.return_value = mock_instance
-            await mgr.start("proj_1", "test-agent")
+            await mgr.start("proj_1", "test-agent", session_id=SID)
 
         pm.start.assert_not_called()
 
@@ -402,9 +407,9 @@ class TestSubAgentManagerPipeWiring:
 
         mock_adapter = AsyncMock()
         mock_adapter._transport = None  # Legacy path: background task
-        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", SID)] = {"test-agent": mock_adapter}
 
-        result = await mgr.send("proj_1", "test-agent", "hi")
+        result = await mgr.send("proj_1", "test-agent", "hi", session_id=SID)
 
         assert "Message sent to test-agent" in result
         assert "Transcript:" in result
@@ -419,9 +424,9 @@ class TestSubAgentManagerPipeWiring:
 
         mock_adapter = AsyncMock()
         mock_adapter._transport = None  # Legacy path: background task
-        mgr._adapters[("proj_1", "default")] = {"test-agent": mock_adapter}
+        mgr._adapters[("proj_1", SID)] = {"test-agent": mock_adapter}
 
-        result = await mgr.send("proj_1", "test-agent", "hi")
+        result = await mgr.send("proj_1", "test-agent", "hi", session_id=SID)
 
         assert "Message sent to test-agent" in result
         assert "Transcript: unknown" in result
@@ -434,7 +439,7 @@ class TestSubAgentManagerPipeWiring:
         pm = MagicMock()
         mgr = SubAgentManager(process_manager=pm)
 
-        result = await mgr.send("proj_1", "nonexistent", "hi")
+        result = await mgr.send("proj_1", "nonexistent", "hi", session_id=SID)
 
         assert result.startswith("Error:")
 
@@ -462,9 +467,9 @@ class TestSubAgentManagerPipeWiring:
 
         pm = MagicMock()
         mgr = SubAgentManager(process_manager=pm)
-        mgr._adapters[("proj_1", "default")] = {"test-agent": adapter}
+        mgr._adapters[("proj_1", SID)] = {"test-agent": adapter}
 
-        result = await mgr.send("proj_1", "test-agent", "hello")
+        result = await mgr.send("proj_1", "test-agent", "hello", session_id=SID)
 
         # Non-blocking: returns transcript ack, not the response body
         assert "Message sent to test-agent" in result

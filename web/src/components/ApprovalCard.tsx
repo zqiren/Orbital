@@ -4,6 +4,9 @@
 
 import { useState } from 'react';
 import { useAgent } from '../hooks/useAgent';
+import { useT } from '../i18n/useT';
+
+type TFunc = ReturnType<typeof useT>;
 
 interface ApprovalCardProps {
   approval: {
@@ -15,11 +18,15 @@ interface ApprovalCardProps {
     reasoning?: string;
   };
   projectId: string;
+  /** F1 session_id this approval belongs to (the viewed/holder session).
+   *  Threaded into approve/deny so the backend resolves the SPECIFIC
+   *  session's pending tool call, not just the project's default one. */
+  sessionId?: string;
   resolved?: 'approved' | 'denied';
   onResolve?: (toolCallId: string, resolution: 'approved' | 'denied') => void;
 }
 
-function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>) {
+function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: TFunc) {
   switch (toolName) {
     case 'shell':
       return (
@@ -44,7 +51,7 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>) {
           {content && (
             <details className="text-xs">
               <summary className="cursor-pointer text-secondary hover:text-primary">
-                Show content
+                {t('approval.showContent')}
               </summary>
               <pre className="font-mono bg-sidebar rounded-lg p-2 mt-1 overflow-x-auto whitespace-pre-wrap max-h-40">
                 {truncated}
@@ -73,9 +80,11 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>) {
 export default function ApprovalCard({
   approval,
   projectId,
+  sessionId,
   resolved,
   onResolve,
 }: ApprovalCardProps) {
+  const t = useT();
   const [replyText, setReplyText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localResolution, setLocalResolution] = useState<'approved' | 'denied' | null>(null);
@@ -93,7 +102,7 @@ export default function ApprovalCard({
     return (
       <div className="mb-3 px-4 py-2 rounded-lg bg-sidebar text-sm">
         <span className={isApproved ? 'text-success' : 'text-error'}>
-          {isApproved ? '\u2713 Approved' : '\u2717 Denied'}:
+          {isApproved ? t('approval.approved') : t('approval.denied')}:
         </span>{' '}
         <span className="text-secondary">{approval.what}</span>
       </div>
@@ -112,12 +121,12 @@ export default function ApprovalCard({
     setSubmitting(true);
     setError(null);
     try {
-      await approveToolCall(projectId, approval.tool_call_id, replyText || undefined, approveAll || undefined);
+      await approveToolCall(projectId, approval.tool_call_id, replyText || undefined, approveAll || undefined, sessionId);
       setLocalResolution('approved');
       onResolve?.(approval.tool_call_id, 'approved');
     } catch {
       setSubmitting(false);
-      setError('Failed to submit. Please try again.');
+      setError(t('approval.submitError'));
     }
   }
 
@@ -129,19 +138,37 @@ export default function ApprovalCard({
     setSubmitting(true);
     setError(null);
     try {
-      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || 'Denied by user');
+      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || t('approval.deniedByUser'), sessionId);
       setLocalResolution('denied');
       onResolve?.(approval.tool_call_id, 'denied');
     } catch {
       setSubmitting(false);
-      setError('Failed to submit. Please try again.');
+      setError(t('approval.submitError'));
+    }
+  }
+
+  // Codex approvals advertise their valid decisions; "cancel" ends the turn
+  // immediately (no final answer) vs plain deny which lets the agent adapt.
+  const canDenyAndStop = Array.isArray(approval.tool_args?.availableDecisions)
+    && (approval.tool_args.availableDecisions as unknown[]).includes('cancel');
+
+  async function handleDenyAndStop() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await denyToolCall(projectId, approval.tool_call_id, denyFeedback.trim() || replyText || t('approval.deniedByUser'), sessionId, true);
+      setLocalResolution('denied');
+      onResolve?.(approval.tool_call_id, 'denied');
+    } catch {
+      setSubmitting(false);
+      setError(t('approval.submitError'));
     }
   }
 
   return (
-    <div className="mb-3 rounded-lg border border-border overflow-hidden">
-      <div className="bg-warning/10 px-4 py-1.5 border-b border-border">
-        <span className="text-warning font-semibold text-sm">APPROVAL NEEDED</span>
+    <div className="mb-3 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-[#FFFBF0] overflow-hidden">
+      <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
+        <span className="text-[10.5px] uppercase tracking-[0.6px] text-warning font-semibold">{t('approval.header')}</span>
       </div>
 
       <div className="px-4 py-3 space-y-3">
@@ -151,7 +178,7 @@ export default function ApprovalCard({
 
         {approval.reasoning && (
           <div className="text-sm">
-            <span className="text-xs text-secondary font-medium">Why: </span>
+            <span className="text-xs text-secondary font-medium">{t('approval.why')} </span>
             <span className={`text-primary whitespace-pre-wrap break-words ${!reasoningExpanded ? 'line-clamp-4 md:line-clamp-none' : ''}`}>
               {approval.reasoning}
             </span>
@@ -161,7 +188,7 @@ export default function ApprovalCard({
                 onClick={() => setReasoningExpanded(!reasoningExpanded)}
                 className="text-xs text-accent hover:underline ml-1 md:hidden cursor-pointer"
               >
-                {reasoningExpanded ? 'Show less' : 'Show more'}
+                {reasoningExpanded ? t('approval.showLess') : t('approval.showMore')}
               </button>
             )}
           </div>
@@ -169,21 +196,21 @@ export default function ApprovalCard({
 
         <details open={!isMobile}>
           <summary className="text-xs text-secondary cursor-pointer select-none mb-1">
-            Action details
+            {t('approval.actionDetails')}
           </summary>
-          {renderToolArgs(approval.tool_name, approval.tool_args)}
+          {renderToolArgs(approval.tool_name, approval.tool_args, t)}
         </details>
 
         {recentLines.length > 0 && (
           <details open={!isMobile} className="text-xs text-secondary">
             <summary className="font-medium cursor-pointer select-none mb-0.5">
-              Recent context
+              {t('approval.recentContext')}
             </summary>
             <div className="space-y-0.5">
               {recentLines.map((line, i) => (
                 <div key={i} className="whitespace-pre-wrap break-words">
                   <span className="font-semibold text-secondary">
-                    {line.role === 'user' ? 'You:' : 'Agent:'}
+                    {line.role === 'user' ? t('approval.you') : t('approval.agent')}
                   </span>{' '}
                   {line.content.length > 300 ? line.content.slice(0, 300) + '...' : line.content}
                 </div>
@@ -194,7 +221,7 @@ export default function ApprovalCard({
 
         <input
           type="text"
-          placeholder="Optional guidance for the agent..."
+          placeholder={t('approval.guidance.placeholder')}
           value={replyText}
           onChange={(e) => setReplyText(e.target.value)}
           className="w-full text-sm px-3 py-1.5 rounded-lg border border-border bg-sidebar focus:outline-none focus:border-accent max-md:min-h-[44px]"
@@ -204,7 +231,7 @@ export default function ApprovalCard({
           <div className="space-y-2">
             <input
               type="text"
-              placeholder="Why are you denying? (optional)"
+              placeholder={t('approval.denyReason.placeholder')}
               value={denyFeedback}
               onChange={(e) => setDenyFeedback(e.target.value)}
               autoFocus
@@ -217,7 +244,7 @@ export default function ApprovalCard({
                 onTouchEnd={(e) => { e.preventDefault(); setShowDenyInput(false); }}
                 className="px-4 py-1.5 text-sm font-medium rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 cursor-pointer w-full md:w-auto min-h-[44px]"
               >
-                Cancel
+                {t('approval.cancel')}
               </button>
               <button
                 type="button"
@@ -226,41 +253,53 @@ export default function ApprovalCard({
                 disabled={submitting}
                 className="px-4 py-1.5 text-sm font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
               >
-                Confirm Deny
+                {t('approval.confirmDeny')}
               </button>
+              {canDenyAndStop && (
+                <button
+                  type="button"
+                  onClick={handleDenyAndStop}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDenyAndStop(); }}
+                  disabled={submitting}
+                  title={t('approval.denyAndStop.title')}
+                  className="px-4 py-1.5 text-sm font-medium rounded-lg border border-error/40 text-error hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+                >
+                  {t('approval.denyAndStop')}
+                </button>
+              )}
             </div>
           </div>
         )}
 
         {!showDenyInput && (
-          <div className="flex flex-col md:flex-row gap-2 md:justify-end sticky bottom-0 md:static bg-bg pt-2 md:pt-0 -mx-4 px-4 md:mx-0 md:px-0 pb-1 md:pb-0">
+          <div className="flex flex-col md:flex-row gap-2 md:justify-end pt-2 md:pt-0 pb-1 md:pb-0">
             <button
               type="button"
               onClick={handleDenyClick}
               onTouchEnd={(e) => { e.preventDefault(); handleDenyClick(); }}
               disabled={submitting}
-              className="px-4 py-1.5 text-sm font-medium rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="border border-error/40 text-error bg-background rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
-              Deny
+              {t('credCard.deny')}
             </button>
             <button
               type="button"
               onClick={() => handleApprove(true)}
               onTouchEnd={(e) => { e.preventDefault(); handleApprove(true); }}
               disabled={submitting}
-              title="Approve and auto-approve all actions for 10 minutes"
-              className="px-4 py-1.5 text-sm font-medium rounded-lg border border-accent text-accent hover:bg-accent/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              title={t('approval.autoApprove.title')}
+              className="border border-border bg-background text-secondary rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
-              Auto-approve 10 min
+              {t('approval.autoApprove')}
             </button>
             <button
               type="button"
               onClick={() => handleApprove()}
               onTouchEnd={(e) => { e.preventDefault(); handleApprove(); }}
               disabled={submitting}
-              className="px-4 py-1.5 text-sm font-medium rounded-lg bg-accent text-white hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="bg-primary text-white rounded-[6px] text-[12px] font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
-              Approve
+              {t('approval.approve')}
             </button>
           </div>
         )}

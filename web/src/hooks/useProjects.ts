@@ -41,6 +41,21 @@ export function useProjects() {
     return api<Project>(`/api/v2/projects/${encodeURIComponent(id)}`);
   }, []);
 
+  /**
+   * Re-fetch a single project and merge it into the list. Used to refresh
+   * runtime fields (e.g. `budget_spent_usd`) after a turn completes, without
+   * re-listing every project. No-op on fetch error (keeps the prior value).
+   */
+  const refreshProject = useCallback(async (id: string) => {
+    try {
+      const updated = await api<Project>(`/api/v2/projects/${encodeURIComponent(id)}`);
+      setProjects((prev) => prev.map((p) => (p.project_id === id ? updated : p)));
+      return updated;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const updateProject = useCallback(async (id: string, data: ProjectUpdateRequest) => {
     const updated = await api<Project>(
       `/api/v2/projects/${encodeURIComponent(id)}`,
@@ -66,6 +81,7 @@ export function useProjects() {
     listProjects,
     createProject,
     getProject,
+    refreshProject,
     updateProject,
     deleteProject,
   };

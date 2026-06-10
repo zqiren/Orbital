@@ -18,7 +18,7 @@
 # -----------------------------------------------------------------------
 
 manifest_version: "1"
-name: "OpenAI Codex CLI"
+name: "Codex"
 slug: "codex"
 description: "OpenAI's lightweight coding agent that runs in your terminal"
 author: "openai"
@@ -27,7 +27,10 @@ version: "1.0.0"
 runtime:
   adapter: cli
   command: "codex"
-  transport: pty
+  # App-server JSON-RPC transport (CodexTransport). NOT pty: the screen
+  # scrape had no genuine turn boundary. Pinned to codex-cli 0.125.0
+  # protocol — see docs/superpowers/plans/2026-06-06-codex-appserver-transport.md.
+  transport: codex-appserver
   mode: interactive
   args: []
   prompt_flag: "-q"
@@ -57,10 +60,34 @@ setup:
   install_command: "npm install -g @openai/codex"
   check_command: "codex --version"
   credentials:
+    # Primary path: native ChatGPT browser OAuth via `codex login`, mirroring
+    # claude_code's oauth_cli credential. The Login button resolves this
+    # credential's setup_command (`codex login`), which opens the browser flow.
+    #
+    # `codex login status` emits PLAIN TEXT ("Logged in using ChatGPT") and
+    # exits 0 when authenticated / non-zero when not — there is no --json flag
+    # (verified on codex-cli 0.125.0). SetupEngine._check_cli_auth always
+    # JSON-parses check_command stdout, so we wrap the status check in a shell
+    # expression that converts its exit code into parseable JSON. The leading
+    # `codex` token is what SetupEngine._substitute_binary swaps for the
+    # resolved absolute binary path; the rest of the line is untouched.
+    - key: "codex_auth"
+      label: "Codex (ChatGPT) Account"
+      type: oauth_cli
+      required: true
+      check_command: "codex login status >/dev/null 2>&1 && echo '{\"loggedIn\":\"true\"}' || echo '{\"loggedIn\":\"false\"}'"
+      check_field: "loggedIn"
+      check_value: "true"
+      setup_command: "codex login"
+      setup_label: "Log in to Codex"
+    # Alternative path: API key handed to the CLI via stdin
+    # (`codex login --with-api-key`, wired in the settings.py api-key route).
+    # Optional so that ChatGPT-OAuth users aren't reported as "not logged in"
+    # just because no API key is set.
     - key: "OPENAI_API_KEY"
       label: "OpenAI API Key"
       type: secret
-      required: true
+      required: false
       env_var: "OPENAI_API_KEY"
   auto_detect:
     windows:

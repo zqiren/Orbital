@@ -3,6 +3,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { ChatMessage, ToolCall, ActivityCategory } from '../types';
+import { translate } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
+
+/**
+ * Locale-aware translator for activity descriptions. Defaults to English so
+ * callers (and unit tests) that omit it get the original English strings,
+ * keeping output byte-identical when no locale is threaded in.
+ */
+export type ActivityTranslate = (
+  key: StringKey,
+  vars?: Record<string, string | number>,
+) => string;
+const EN_ACTIVITY: ActivityTranslate = (key, vars) => translate('en', key, vars);
 
 export interface Activity {
   id: string;
@@ -14,7 +27,20 @@ export interface Activity {
 
 export type DisplayItem =
   | { type: 'user_message'; content: string; timestamp: string; target?: string; isHistorical?: boolean }
-  | { type: 'agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
+  | {
+      type: 'agent_message';
+      content: string;
+      source: string;
+      timestamp: string;
+      isHistorical?: boolean;
+      /**
+       * When true, the renderer shows only the avatar + "agent · HH:MM" header
+       * row with no body. Used to give a content-null (tool-only) assistant
+       * turn a visible agent anchor above its capsule so the capsule does not
+       * visually attach to the preceding user message. See FE-A3.
+       */
+      isHeaderOnly?: boolean;
+    }
   | { type: 'sub_agent_message'; content: string; source: string; timestamp: string; isHistorical?: boolean }
   | { type: 'reasoning_block'; content: string; timestamp: string; turn_id: string; isHistorical?: boolean }
   | {
@@ -38,8 +64,35 @@ export type DisplayItem =
       started_at: number;
       ended_at: number | null;
       isHistorical?: boolean;
+      /**
+       * When true, the renderer starts this capsule expanded so the reasoning
+       * is visible without the user having to click the chevron. Set by the
+       * transform when a content-null turn with reasoning opens the capsule.
+       * See FE-A3 / FE-2.
+       */
+      defaultExpanded?: boolean;
     }
   | { type: 'session_separator'; timestamp: string }
+  | {
+      /**
+       * A compact, one-line marker rendered in the chat flow for the daemon's
+       * [Sub-agent] lifecycle system messages — start, message-sent, completion
+       * (with summary), failure. Surfaces the persisted record that a
+       * sub-agent ran; without this, the messages are silently dropped. See
+       * FE-A2.
+       */
+      type: 'sub_agent_activity';
+      action: 'started' | 'sent' | 'completed' | 'failed';
+      handle: string;
+      timestamp: string;
+      /** Present for action='completed'. Trimmed; may be empty. */
+      summary?: string;
+      /** Present for action='sent'. The first chunk of the sent message. */
+      preview?: string;
+      /** Present for action='failed'. */
+      error?: string;
+      isHistorical?: boolean;
+    }
   | {
       type: 'approval_card';
       what: string;
@@ -109,8 +162,15 @@ const TOOL_NAME_TO_CATEGORY: Record<string, ActivityCategory> = {
   browser: 'browser_automation',
 };
 
-function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessage, workspace?: string): Activity {
-  // Check for persisted description first (from JSONL _activity_descriptions)
+function toolCallToActivity(
+  tc: ToolCall,
+  timestamp: string,
+  message?: ChatMessage,
+  workspace?: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
+): Activity {
+  // Check for persisted description first (from JSONL _activity_descriptions).
+  // These are backend-authored English strings; surfaced verbatim.
   const persisted = message?._activity_descriptions?.[tc.id];
   if (persisted) {
     const name = tc.function.name;
@@ -130,59 +190,61 @@ function toolCallToActivity(tc: ToolCall, timestamp: string, message?: ChatMessa
   let description: string;
   switch (category) {
     case 'file_read':
-      description = `Read ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.read', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_write':
-      description = `Created ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.created', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_edit':
-      description = `Edited ${args.path ?? args.file_path ?? name}`;
+      description = tr('activity.edited', { path: String(args.path ?? args.file_path ?? name) });
       break;
     case 'file_search':
-      description = `Searching files: ${args.pattern ?? '?'}`;
+      description = tr('activity.searchingFiles', { pattern: String(args.pattern ?? '?') });
       break;
     case 'content_search':
-      description = `Searching for "${args.pattern ?? '?'}"${args.path ? ` in ${args.path}` : ''}`;
+      description = args.path
+        ? tr('activity.searchingForIn', { pattern: String(args.pattern ?? '?'), path: String(args.path) })
+        : tr('activity.searchingFor', { pattern: String(args.pattern ?? '?') });
       break;
     case 'command_exec':
       if (workspace && typeof args.command === 'string' && containsExternalPaths(args.command, workspace)) {
-        description = 'Ran: shell command (access restricted)';
+        description = tr('activity.ranRestricted');
       } else {
-        description = `Ran: ${args.command ?? name}`;
+        description = tr('activity.ran', { command: String(args.command ?? name) });
       }
       break;
     case 'web_search':
-      description = `Searched: ${args.query ?? name}`;
+      description = tr('activity.searched', { query: String(args.query ?? name) });
       break;
     case 'web_fetch':
-      description = `Fetched: ${args.url ?? name}`;
+      description = tr('activity.fetched', { url: String(args.url ?? name) });
       break;
     case 'request_access':
-      description = `Requested access to ${args.path ?? name}`;
+      description = tr('activity.requestedAccess', { path: String(args.path ?? name) });
       break;
     case 'agent_message':
-      description = `Messaged: @${args.handle ?? args.target ?? name}`;
+      description = tr('activity.messaged', { handle: String(args.handle ?? args.target ?? name) });
       break;
     case 'browser_automation': {
       const action = args.action as string | undefined;
       switch (action) {
-        case 'navigate': description = `Navigating to ${args.url ?? 'page'}`; break;
-        case 'search': description = `Searching web for '${String(args.query ?? '?').slice(0, 50)}'`; break;
-        case 'click': description = `Clicking element ${args.ref ?? args.selector ?? '?'}`; break;
-        case 'screenshot': description = 'Taking screenshot'; break;
-        case 'scroll': description = `Scrolling ${args.direction ?? 'down'}`; break;
-        case 'snapshot': description = 'Reading page content'; break;
-        case 'type': description = `Typing into element ${args.ref ?? '?'}`; break;
-        case 'fill': description = 'Filling form fields'; break;
-        case 'search_page': description = `Searching page for '${String(args.text ?? '?').slice(0, 30)}'`; break;
-        case 'fetch': description = `Fetching ${String(args.url ?? '?').slice(0, 60)}`; break;
-        case 'done': description = 'Browser task complete'; break;
-        default: description = `Browser: ${action ?? 'unknown'}`; break;
+        case 'navigate': description = tr('activity.browser.navigate', { url: String(args.url ?? 'page') }); break;
+        case 'search': description = tr('activity.browser.search', { query: String(args.query ?? '?').slice(0, 50) }); break;
+        case 'click': description = tr('activity.browser.click', { ref: String(args.ref ?? args.selector ?? '?') }); break;
+        case 'screenshot': description = tr('activity.browser.screenshot'); break;
+        case 'scroll': description = tr('activity.browser.scroll', { direction: String(args.direction ?? 'down') }); break;
+        case 'snapshot': description = tr('activity.browser.snapshot'); break;
+        case 'type': description = tr('activity.browser.type', { ref: String(args.ref ?? '?') }); break;
+        case 'fill': description = tr('activity.browser.fill'); break;
+        case 'search_page': description = tr('activity.browser.searchPage', { text: String(args.text ?? '?').slice(0, 30) }); break;
+        case 'fetch': description = tr('activity.browser.fetch', { url: String(args.url ?? '?').slice(0, 60) }); break;
+        case 'done': description = tr('activity.browser.done'); break;
+        default: description = tr('activity.browser.unknown', { action: String(action ?? 'unknown') }); break;
       }
       break;
     }
     default:
-      description = `Used tool: ${name}`;
+      description = tr('activity.usedTool', { name });
   }
 
   return {
@@ -206,9 +268,62 @@ interface OpenCapsule {
   items: CapsuleChild[];
   startedAtMs: number;
   endedAtMs: number;
+  defaultExpanded: boolean;
 }
 
-export function transformChatHistory(messages: ChatMessage[], workspace?: string): DisplayItem[] {
+// [Sub-agent] lifecycle markers persisted to JSONL by the lifecycle observer.
+// Parsed and surfaced as sub_agent_activity items; without this they are
+// silently dropped along with every other non-approval system message.
+const SUB_AGENT_STARTED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+started\b/;
+const SUB_AGENT_SENT_RE = /^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):\s*(.*)$/;
+const SUB_AGENT_COMPLETED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+completed\.\s*Summary:\s*([\s\S]*)$/;
+const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
+
+type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
+
+function parseSubAgentSystemMessage(
+  content: string,
+  timestamp: string,
+): SubAgentActivity | null {
+  let m: RegExpMatchArray | null;
+  if ((m = content.match(SUB_AGENT_STARTED_RE))) {
+    return { type: 'sub_agent_activity', action: 'started', handle: m[1], timestamp };
+  }
+  if ((m = content.match(SUB_AGENT_SENT_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'sent',
+      handle: m[1],
+      preview: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_COMPLETED_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'completed',
+      handle: m[1],
+      summary: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_FAILED_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'failed',
+      handle: m[1],
+      error: m[2].trim(),
+      timestamp,
+    };
+  }
+  return null;
+}
+
+export function transformChatHistory(
+  messages: ChatMessage[],
+  workspace?: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
+): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
   let currentSessionId: string | undefined;
@@ -220,9 +335,9 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     return Number.isFinite(n) ? n : 0;
   }
 
-  function openCapsuleAt(ts: string): OpenCapsule {
+  function openCapsuleAt(ts: string, defaultExpanded = false): OpenCapsule {
     const ms = tsToMs(ts);
-    return { items: [], startedAtMs: ms, endedAtMs: ms };
+    return { items: [], startedAtMs: ms, endedAtMs: ms, defaultExpanded };
   }
 
   function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
@@ -248,6 +363,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
       has_thinking: hasThinking,
       started_at: currentCapsule.startedAtMs,
       ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+      ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
     });
     currentCapsule = null;
   }
@@ -256,6 +372,81 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     const msg = messages[i];
 
     if (msg._compaction) {
+      i++;
+      continue;
+    }
+
+    // Synthetic sub-agent run injected by the /chat endpoint after a dispatch
+    // marker (source === "sub_agent"). A sub-agent is a first-class agent, so
+    // it renders with the SAME display items as the management agent: an
+    // agent header, a collapsible `agent_run` tool capsule, and a response
+    // bubble. The handle rides on `source` (drives both the name and the icon
+    // in ChatMessage). Tool rows carry name + duration only — no args/results
+    // are on the wire.
+    if (msg.source === 'sub_agent') {
+      finalizeCapsule();
+      const handle = msg.sub_agent_handle ?? 'sub-agent';
+      const startedAtMs = tsToMs(msg.timestamp);
+      const toolRows = msg.sub_agent_tool_rows ?? [];
+
+      // 1. Agent header (avatar + "<handle> · HH:MM"), no body.
+      items.push({
+        type: 'agent_message',
+        content: '',
+        source: handle,
+        timestamp: msg.timestamp,
+        isHeaderOnly: true,
+      });
+
+      // 2. Tool capsule — identical shape to a management `agent_run` so the
+      //    existing capsule renderer (chevron, expand/collapse, tool rows,
+      //    summary) works unchanged. Collapsed by default.
+      if (toolRows.length > 0) {
+        const counts: Record<string, number> = {};
+        const capsuleItems: CapsuleChild[] = [];
+        for (let r = 0; r < toolRows.length; r++) {
+          const row = toolRows[r];
+          const name = row.name || 'tool';
+          counts[name] = (counts[name] ?? 0) + 1;
+          const category = TOOL_NAME_TO_CATEGORY[name.toLowerCase()] ?? 'tool_use';
+          capsuleItems.push({
+            type: 'tool_call_row',
+            tool_name: name,
+            // No args/results available; surface the per-tool duration as the
+            // row detail (honest: "Write · 1.2s").
+            target_description: `${(row.duration_seconds ?? 0).toFixed(1)}s`,
+            tool_call_id: `sub:${handle}:${msg.timestamp}:${r}`,
+            category,
+            timestamp: row.timestamp || msg.timestamp,
+            result_content: null,
+            result_status: 'received',
+          });
+        }
+        const durationMs = Math.round((msg.sub_agent_duration ?? 0) * 1000);
+        items.push({
+          type: 'agent_run',
+          capsule_id: `sub_agent:${handle}:${msg.timestamp}:${capsuleCounter++}`,
+          status: 'completed',
+          items: capsuleItems,
+          tool_call_count_by_name: counts,
+          has_thinking: false,
+          started_at: startedAtMs,
+          ended_at: startedAtMs + durationMs,
+          defaultExpanded: false,
+        });
+      }
+
+      // 3. Response bubble (same as a management agent_message), if non-empty.
+      const respText = (msg.content ?? '').trim();
+      if (respText) {
+        items.push({
+          type: 'agent_message',
+          content: msg.content ?? '',
+          source: handle,
+          timestamp: msg.timestamp,
+        });
+      }
+
       i++;
       continue;
     }
@@ -273,7 +464,20 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
           reasoning: msg._meta.reasoning as string | undefined,
           resolved: msg._meta.resolution as 'approved' | 'denied' | undefined,
         });
+        i++;
+        continue;
       }
+      // [Sub-agent] lifecycle markers — surface them as compact timeline rows.
+      // Finalize the open capsule first so the marker appears AFTER the
+      // capsule that contains the originating dispatch tool call (chronologic
+      // JSONL order), not inside or before it.
+      const activity = parseSubAgentSystemMessage(msg.content ?? '', msg.timestamp);
+      if (activity) {
+        finalizeCapsule();
+        items.push(activity);
+      }
+      // Other system messages (ping-pong guard, etc.) remain dropped — they
+      // are not user-facing.
       i++;
       continue;
     }
@@ -354,14 +558,50 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
           });
           currentCapsule.endedAtMs = msTime;
         }
+      } else {
+        // Never-vanish guard: an assistant message with empty content AND no
+        // reasoning AND no tool_calls would otherwise hit neither branch and
+        // emit NOTHING — a silent permanent disappearance. Emit a minimal
+        // header-only marker so the turn is always represented in the UI.
+        finalizeCapsule();
+        items.push({
+          type: 'agent_message',
+          content: '',
+          source: msg.source,
+          timestamp: msg.timestamp,
+          isHeaderOnly: true,
+        });
       }
 
       // Machinery (reasoning + tool_calls) flows into the capsule that
       // follows the just-emitted visible text, or extends the current one.
       if (reasoning || hasTools) {
         if (!currentCapsule) {
-          currentCapsule = openCapsuleAt(msg.timestamp);
+          // FE-A3: a content-null assistant turn would otherwise produce a
+          // bare capsule with no agent identity above it, visually attaching
+          // to the preceding user message. Emit an `agent_message` header
+          // marker (rendered as avatar + "agent · HH:MM" only) so the capsule
+          // is anchored to a visible agent turn. Only emitted when we have no
+          // visible text to anchor on — `text` already covered that case.
+          if (!text) {
+            items.push({
+              type: 'agent_message',
+              content: '',
+              source: msg.source,
+              timestamp: msg.timestamp,
+              isHeaderOnly: true,
+            });
+          }
+          // transformChatHistory only ever runs over PERSISTED (completed)
+          // history, so a capsule produced here represents a COMPLETED turn.
+          // Per the locked product decision a completed reasoning turn renders
+          // COLLAPSED (clean summary); it expands only while actively RUNNING,
+          // which is handled at render time in ChatView (running ⇒ force-expand).
+          // Therefore never force-expand here — open collapsed.
+          currentCapsule = openCapsuleAt(msg.timestamp, false);
         }
+        // (No force-expand when appending reasoning to an existing capsule
+        // either — see the comment above; completed turns stay collapsed.)
         if (reasoning) {
           currentCapsule.items.push({
             type: 'reasoning_block',
@@ -373,7 +613,7 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
         }
         if (hasTools) {
           for (const tc of msg.tool_calls!) {
-            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace);
+            const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
             currentCapsule.items.push({
               type: 'tool_call_row',
               tool_name: activity.toolName,
@@ -422,8 +662,11 @@ export function transformChatHistory(messages: ChatMessage[], workspace?: string
     i++;
   }
 
-  // End of stream: any still-open capsule is in-flight.
-  finalizeCapsule('running');
+  // End of stream: always finalize the trailing capsule as `completed`. The
+  // transform output is now purely a function of persisted history; the
+  // "running" status is applied at render time in ChatView (FE-A1) based on
+  // the live agentStatus + viewingHolder, so this stays a pure transform.
+  finalizeCapsule('completed');
 
   // Mark items from historical sessions
   let lastSepIndex = -1;
@@ -484,4 +727,69 @@ export function truncateResult(
     text: firstNLinesText + '…',
     footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
   };
+}
+
+/**
+ * REST-recovery merge for a single recovered assistant row (the text-bubble
+ * half of ChatView's /chat?limit=1 fallback).
+ *
+ * Identity contract (INVESTIGATION-two-speakers): the recovered item's
+ * `source` is taken VERBATIM from the persisted row — exactly how
+ * transformChatHistory stamps it (`source: msg.source`) — never via a
+ * hardcoded default. The old inline version hardcoded source: 'assistant',
+ * which rendered one management turn as two speakers ("Assistant" with the
+ * Orbit glyph vs raw "assistant" with the grey AS monogram).
+ *
+ * Merge semantics, in order:
+ * 1. Dedup: if an identical-content agent_message exists ANYWHERE in
+ *    `prevItems`, return `prevItems` unchanged (the production duplicate
+ *    slipped through a last-item-only check because a system message
+ *    followed the WS-built bubble).
+ * 2. Truncation repair: if the LAST item is an agent_message whose content
+ *    is a shorter prefix-era variant (stream cut mid-delta), replace its
+ *    content with the full persisted text.
+ * 3. Insert: add the recovered message before any trailing user messages so
+ *    a recovered reply lands before follow-up questions.
+ */
+export function mergeRecoveredAssistantMessage(
+  prevItems: DisplayItem[],
+  row: ChatMessage,
+): DisplayItem[] {
+  const text = row.content;
+  if (!text) return prevItems;
+
+  // 1. Dedup against the whole list, not just the tail.
+  const exists = prevItems.some(
+    (it) => it.type === 'agent_message' && it.content === text,
+  );
+  if (exists) return prevItems;
+
+  // 2. Extend a truncated trailing message instead of duplicating it.
+  const last = prevItems[prevItems.length - 1];
+  if (
+    last &&
+    last.type === 'agent_message' &&
+    text.length > last.content.length &&
+    text.startsWith(last.content)
+  ) {
+    const updated = [...prevItems];
+    updated[prevItems.length - 1] = { ...last, content: text };
+    return updated;
+  }
+
+  // 3. Genuinely missing — insert before trailing user messages, identity
+  //    taken verbatim from the row (same as normal ingest).
+  const newMsg: DisplayItem = {
+    type: 'agent_message',
+    content: text,
+    source: row.source,
+    timestamp: row.timestamp ?? new Date().toISOString(),
+  };
+  let insertIdx = prevItems.length;
+  while (insertIdx > 0 && prevItems[insertIdx - 1].type === 'user_message') {
+    insertIdx--;
+  }
+  const updated = [...prevItems];
+  updated.splice(insertIdx, 0, newMsg);
+  return updated;
 }

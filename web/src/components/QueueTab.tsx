@@ -4,7 +4,9 @@
 
 import { useMemo } from 'react';
 import { useQueue } from '../hooks/useQueue';
+import { useT } from '../i18n/useT';
 import type { QueueItem } from '../types';
+import AutomationsList from './AutomationsList';
 import QueueComposer from './QueueComposer';
 import QueueHeader from './QueueHeader';
 import QueueItemCard from './QueueItemCard';
@@ -15,18 +17,20 @@ interface QueueTabProps {
 
 function Section({
   title,
+  testId,
   items,
   onRemove,
   emptyHint,
 }: {
   title: string;
+  testId: string;
   items: QueueItem[];
   onRemove?: (itemId: string) => void;
   emptyHint?: string;
 }) {
   if (items.length === 0 && !emptyHint) return null;
   return (
-    <section className="flex flex-col gap-2" data-testid={`queue-section-${title.toLowerCase().replace(/\s+/g, '-')}`}>
+    <section className="flex flex-col gap-2" data-testid={`queue-section-${testId}`}>
       <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
         {title}
         <span className="ml-2 text-secondary/60 font-normal">{items.length}</span>
@@ -35,8 +39,8 @@ function Section({
         <p className="text-sm text-secondary px-1 italic">{emptyHint}</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((item) => (
-            <QueueItemCard key={item.id} item={item} onRemove={onRemove} />
+          {items.map((item, i) => (
+            <QueueItemCard key={item.id} item={item} index={i + 1} onRemove={onRemove} />
           ))}
         </div>
       )}
@@ -45,6 +49,7 @@ function Section({
 }
 
 export default function QueueTab({ projectId }: QueueTabProps) {
+  const t = useT();
   const { snapshot, loading, error, addItem, removeItem, stopQueue, resumeQueue } =
     useQueue(projectId);
 
@@ -58,7 +63,7 @@ export default function QueueTab({ projectId }: QueueTabProps) {
     };
   }, [snapshot]);
 
-  const isStopped = snapshot?.state === 'stopped';
+  const isPaused = snapshot?.state === 'paused';
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -75,28 +80,36 @@ export default function QueueTab({ projectId }: QueueTabProps) {
           </div>
         )}
         <Section
-          title="Now Running"
+          title={t('queue.section.nowRunning')}
+          testId="now-running"
           items={grouped.running}
+          onRemove={removeItem}
           emptyHint={
-            isStopped
-              ? 'Queue is stopped. Resume to continue draining.'
+            isPaused
+              ? t('queue.empty.paused')
               : grouped.queued.length === 0
-                ? 'Idle — add a task below.'
+                ? t('queue.empty.idle')
                 : undefined
           }
         />
-        <Section title="Needs Attention" items={grouped.blocked} onRemove={removeItem} />
-        <Section title="Queued" items={grouped.queued} onRemove={removeItem} />
-        <Section title="Completed" items={grouped.done} onRemove={removeItem} />
+        <Section title={t('queue.section.needsAttention')} testId="needs-attention" items={grouped.blocked} onRemove={removeItem} />
+        <Section title={t('queue.section.queued')} testId="queued" items={grouped.queued} onRemove={removeItem} />
+        <Section title={t('queue.section.completed')} testId="completed" items={grouped.done} onRemove={removeItem} />
+        <section className="flex flex-col gap-2" data-testid="queue-section-automations">
+          <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
+            {t('queue.section.automations')}
+          </h2>
+          <AutomationsList projectId={projectId} />
+        </section>
       </div>
       <QueueComposer
         onSubmit={(content, opts) =>
           addItem(content, { priority: opts.priority, review: opts.review })
         }
         hint={
-          isStopped
-            ? 'Chat freely — queue is stopped'
-            : 'Steer the agent or queue a new task'
+          isPaused
+            ? t('queue.composer.hint.paused')
+            : t('queue.composer.hint.active')
         }
       />
     </div>

@@ -7,13 +7,65 @@
   --color-border: #E4E4E7;
   --color-primary: #18181B;
   --color-secondary: #71717A;
+  --color-muted: #A1A1AA;
   --color-accent: #6366F1;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
   --color-error: #EF4444;
   --color-idle: #A1A1AA;
-  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  /* Latin glyphs render in Geist / JetBrains Mono (unchanged). CJK glyphs,
+     which those Latin-only faces don't cover, fall through to a professional
+     system Chinese font — PingFang SC (Apple), Microsoft YaHei (Windows),
+     Source Han / Noto Sans SC (Linux). System fonts only: no CDN, works
+     offline and in China, consistent with the self-hosted-Latin approach. */
+  --font-sans: 'Geist', 'Inter', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans SC', ui-monospace, monospace;
+}
+
+/* Self-hosted fonts (woff2, latin subset). Bundled under web/public/fonts so
+   the app does not depend on the Google Fonts CDN at runtime (unreliable in
+   some regions, e.g. China). Weights: 400 Regular, 500 Medium, 600 Semibold. */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/geist-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/geist-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/geist-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-600.woff2') format('woff2');
 }
 
 body {
@@ -40,8 +92,8 @@ body {
 
 /* Markdown content styles for agent messages */
 .markdown-content {
-  font-size: 0.875rem;
-  line-height: 1.625;
+  font-size: 0.8125rem;
+  line-height: 1.55;
   color: var(--color-primary);
 }
 

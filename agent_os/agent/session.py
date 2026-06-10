@@ -27,6 +27,34 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_NAME_MAX_LEN = 50
+
+
+def _derive_name(content) -> str | None:
+    """Derive a session display name from a user message's content.
+
+    Truncates to ``_NAME_MAX_LEN`` characters, word-boundary-aware, appending
+    an ellipsis (``…``) when truncated. Returns ``None`` for content that is
+    not a non-empty string (e.g. multimodal list content with no usable text).
+    """
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return None
+    if len(text) <= _NAME_MAX_LEN:
+        return text
+    # Truncate to the budget, then back up to the last word boundary so we
+    # don't cut mid-word. Fall back to a hard cut if the first word is longer
+    # than the budget.
+    head = text[:_NAME_MAX_LEN]
+    cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    head = head.rstrip()
+    return head + "…"
+
+
 class Session:
     """Append-only conversation log backed by a JSONL file.
 
@@ -68,6 +96,11 @@ class Session:
         # equality key either way.
         self.session_uuid: str = os.path.splitext(os.path.basename(filepath))[0]
         self.session_id: str = self.session_uuid
+        # Seam 3 / Phase 4: how this session was born — "chat" (user-initiated)
+        # or "queue" (minted by the QueueDispatcher per attempt). Set by new()
+        # and recovered by load() from the session_start meta; legacy logs with
+        # no origin meta default to "chat".
+        self.origin: str = "chat"
 
         # Pending tool call tracking
         self.pending_tool_calls: set[str] = set()
@@ -87,6 +120,30 @@ class Session:
         self.on_append = None
         self.on_stream = None
 
+        # Deferred session_start meta record. A session is a file on disk; the
+        # file is not created until the first message. ``Session.new`` stashes
+        # the session_start meta here, and the first physical write flushes it
+        # as the first line (see ``_write_line``). None for loaded sessions.
+        self._pending_meta: dict | None = None
+
+        # Human-readable display label (TASK-session-naming-and-deletion.md).
+        # Auto-derived from the first ``role: user`` message (truncated) and
+        # user-editable via ``set_name``. Stored on the ``session_start`` meta
+        # record so it lives in the single JSONL with no sidecar. ``None`` until
+        # a name exists (e.g. headless sessions with no user message — DATA-1).
+        # Display-only: never an identifier, never used for routing/lookup.
+        self.name: str | None = None
+
+        # Sub-agent thread registry (TASK-resume-persistence, piece 2).
+        # handle -> {"session_id", "model", "last_used_at"}: the resume
+        # identity of each sub-agent thread this session owns. The composite
+        # key is (SessionKey, handle): this JSONL is SessionKey-scoped, the
+        # map is per-handle. Persisted as ``event: sub_agent_thread`` meta
+        # rows (last row wins on load) — same single-JSONL, no-sidecar rule
+        # as ``name``. Governance settings are deliberately NOT here; they
+        # resolve live at dispatch.
+        self.sub_agent_threads: dict[str, dict] = {}
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -103,6 +160,7 @@ class Session:
         model: str = "unknown",
         sdk: str = "unknown",
         fallback_models: list[str] | None = None,
+        origin: str = "chat",
     ) -> Session:
         """Create a fresh session.
 
@@ -128,24 +186,27 @@ class Session:
         # existing callers (and legacy tests) keep working unchanged. The
         # frontend treats the field as an opaque equality key in either form.
         session.session_id = session_id if session_id is not None else session_uuid
+        session.origin = origin
         meta_record = {
             "role": "meta",
             "event": "session_start",
             "session_id": session.session_id,
             "session_uuid": session.session_uuid,
+            "origin": origin,
             "provider": provider,
             "model": model,
             "sdk": sdk,
             "fallback_models": list(fallback_models) if fallback_models else [],
             "timestamp": _now(),
         }
-        # Create file and write the session_start meta record under file lock.
-        # The meta record is intentionally NOT appended to self._messages —
-        # it is identity metadata, not conversation, and must never reach
-        # the LLM via get_messages()/get_recent().
-        with session._file_lock:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
+        # Deferred creation: do NOT write the file here. A session is a file on
+        # disk only once it has a first message — minting a Session object that
+        # is never messaged must leave no on-disk trace. The session_start meta
+        # is stashed and flushed as the first physical line by the first write
+        # (see ``_write_line``). The meta record is identity metadata, not
+        # conversation, so it is never added to self._messages and never
+        # reaches the LLM via get_messages()/get_recent().
+        session._pending_meta = meta_record
         return session
 
     @classmethod
@@ -154,6 +215,7 @@ class Session:
         session = cls(filepath)
         with session._file_lock:
             skipped = 0
+            stored_name: str | None = None
             with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -170,11 +232,47 @@ class Session:
                     # message state so the sliding window never surfaces them
                     # to the LLM.
                     if msg.get("role") == "meta":
+                        # The session_start meta carries the display name when
+                        # it was set (auto or via rename). Capture it for the
+                        # name backfill below.
+                        if msg.get("event") == "session_start":
+                            if msg.get("name") is not None:
+                                stored_name = msg["name"]
+                            # Origin recovered from meta; legacy logs predating
+                            # the field keep the "chat" default set in __init__.
+                            if msg.get("origin"):
+                                session.origin = msg["origin"]
+                        elif msg.get("event") == "sub_agent_thread":
+                            # Resume identity rows: append-only, last row per
+                            # handle wins (TASK-resume-persistence).
+                            if msg.get("handle") and isinstance(
+                                    msg.get("thread"), dict):
+                                session.sub_agent_threads[msg["handle"]] = (
+                                    dict(msg["thread"])
+                                )
                         continue
                     session._messages.append(msg)
 
             if skipped > 0:
                 logger.warning("Skipped %d corrupted lines during session load", skipped)
+
+            # Name resolution (display label):
+            #   1. Stored name on the session_start meta wins (explicit rename
+            #      or a previously persisted auto-name).
+            #   2. Otherwise derive lazily from the first user message — legacy
+            #      sessions and meta-records-without-name. This is IN-MEMORY
+            #      ONLY: we do NOT rewrite the JSONL on load (avoid touching
+            #      every legacy file). It persists on the next append/rename.
+            #   3. Else None (headless / no user message — DATA-1).
+            if stored_name is not None:
+                session.name = stored_name
+            else:
+                for m in session._messages:
+                    if m.get("role") == "user":
+                        derived = _derive_name(m.get("content"))
+                        if derived is not None:
+                            session.name = derived
+                        break
 
             # Rebuild pending_tool_calls
             all_tool_call_ids: set[str] = set()
@@ -215,6 +313,16 @@ class Session:
 
         self._messages.append(message)
 
+        # Auto-name on the FIRST user message. The name is a display label
+        # derived by truncation (see ``_derive_name``); it is stored on the
+        # session_start meta record so it persists with the JSONL. Only the
+        # first user message sets it — later messages and renames don't.
+        if self.name is None and message.get("role") == "user":
+            derived = _derive_name(message.get("content"))
+            if derived is not None:
+                self.name = derived
+                self._apply_name_to_meta(derived)
+
         # Track tool_call IDs from assistant messages
         if message.get("role") == "assistant" and "tool_calls" in message:
             for tc in message["tool_calls"]:
@@ -231,10 +339,26 @@ class Session:
 
         # Thread-safe + cross-process JSONL write (now includes any fields added by observer)
         line_bytes = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+        self._write_line(line_bytes)
+
+    def _write_line(self, line_bytes: bytes) -> None:
+        """Append one physical JSONL line under both locks.
+
+        Deferred creation: if a session_start meta record is still pending
+        (set by ``Session.new`` and not yet flushed), write it as the very
+        first line of the file before this line. The file is created here by
+        ``O_CREAT`` — it does not exist until the first write.
+        """
         with self._lock:
             with self._file_lock:
                 fd = os.open(self._filepath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
                 try:
+                    if self._pending_meta is not None:
+                        meta_bytes = (
+                            json.dumps(self._pending_meta, ensure_ascii=False) + "\n"
+                        ).encode("utf-8")
+                        os.write(fd, meta_bytes)
+                        self._pending_meta = None
                     os.write(fd, line_bytes)
                 finally:
                     os.close(fd)
@@ -321,13 +445,123 @@ class Session:
             **fields,
         }
         line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        self._write_line(line_bytes)
+
+    # ------------------------------------------------------------------
+    # Sub-agent thread registry (resume persistence)
+    # ------------------------------------------------------------------
+
+    def set_sub_agent_thread(self, handle: str, *, session_id: str,
+                             model: str | None = None,
+                             background_loss: bool = False,
+                             proc_pid: int | None = None,
+                             proc_create_time: float | None = None,
+                             rollout_path: str | None = None) -> None:
+        """Record (or refresh) the resume identity of a sub-agent thread.
+
+        Appends an ``event: sub_agent_thread`` meta row (the persistence) and
+        updates the in-memory map. Called on each sub-agent completion that
+        carries a thread id, so ``last_used_at`` stays current. The record
+        carries thread-identity only — resume ``session_id`` and
+        ``model`` (``model`` is display/debug metadata: which model last
+        served the thread — NEVER consulted to drive resume; model resolves
+        live from config at dispatch; AMENDS piece 2). Governance settings
+        resolve live at dispatch and are never snapshotted here.
+
+        ``background_loss`` (Piece 3 Part E): a teardown terminated this
+        thread's live background work — the next resume's honesty clause
+        briefs the orchestrator about the loss. The flag clears naturally on
+        the next completed turn's record overwrite.
+        """
+        record = {
+            "session_id": session_id,
+            "model": model,
+            "last_used_at": _now(),
+        }
+        if background_loss:
+            record["background_loss"] = True
+        if proc_pid is not None:
+            # Piece 3 Part F: live-attachment anchor (pid + create_time is
+            # PID-reuse-safe) — the resume backstop checks it before
+            # attaching to this claude session id.
+            record["proc_pid"] = proc_pid
+            record["proc_create_time"] = proc_create_time
+        if rollout_path is not None:
+            # Codex thread (TASK-codex-appserver-transport): exact rollout
+            # JSONL path from thread/start|resume — pre-checked before resume.
+            record["rollout_path"] = rollout_path
+        self.sub_agent_threads[handle] = record
+        self.append_meta("sub_agent_thread", handle=handle, thread=record)
+
+    def get_sub_agent_thread(self, handle: str) -> dict | None:
+        """Return the persisted resume record for ``handle``, or None."""
+        return self.sub_agent_threads.get(handle)
+
+    # ------------------------------------------------------------------
+    # Session naming (display label)
+    # ------------------------------------------------------------------
+
+    def set_name(self, name: str) -> None:
+        """Set the session's display name (user rename) and persist it.
+
+        Updates ``self.name`` in memory and writes the value onto the
+        ``session_start`` meta record — the pending meta if the file does not
+        exist yet, otherwise an in-place rewrite of the first meta line. The
+        name is display-only and never affects routing or hydration.
+        """
+        self.name = name
+        self._apply_name_to_meta(name)
+
+    def _apply_name_to_meta(self, name: str) -> None:
+        """Stamp ``name`` onto the session_start meta.
+
+        If the file is not yet materialized, the meta is still pending — set the
+        field there so it lands when the first write flushes it. Otherwise the
+        meta is already the first physical line: rewrite it in place.
+        """
+        if self._pending_meta is not None:
+            self._pending_meta["name"] = name
+            return
+        self._rewrite_meta_name(name)
+
+    def _rewrite_meta_name(self, name: str) -> None:
+        """Read-modify-write the session_start meta line to carry ``name``.
+
+        The JSONL is otherwise append-only; this is the one mutation of an
+        existing line. Atomic via tmp-file + ``os.replace`` (same pattern as
+        ``_compact``). No-op if the file has no session_start meta line.
+        """
         with self._lock:
             with self._file_lock:
-                fd = os.open(self._filepath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
                 try:
-                    os.write(fd, line_bytes)
-                finally:
-                    os.close(fd)
+                    with open(self._filepath, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                except OSError:
+                    return
+
+                changed = False
+                for idx, raw in enumerate(lines):
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        rec = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("role") == "meta" and rec.get("event") == "session_start":
+                        rec["name"] = name
+                        lines[idx] = json.dumps(rec, ensure_ascii=False) + "\n"
+                        changed = True
+                        break
+                if not changed:
+                    return
+
+                tmp_path = self._filepath + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self._filepath)
 
     def get_messages(self) -> list[dict]:
         """Return full in-memory message list."""

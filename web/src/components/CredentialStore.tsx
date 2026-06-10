@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { Key, Trash2, RotateCcw, Loader2, Plus, X } from 'lucide-react';
 import { api } from '../config';
+import { useT } from '../i18n/useT';
 
 interface Credential {
   name: string;
@@ -23,6 +24,7 @@ interface StoreCredentialRequest {
 }
 
 export default function CredentialStore({ projectId }: { projectId?: string }) {
+  const t = useT();
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -68,7 +70,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
   async function handleStore() {
     setFormError('');
     if (!formName.trim() || !formDomain.trim()) {
-      setFormError('Name and domain are required.');
+      setFormError(t('credStore.form.nameDomainRequired'));
       return;
     }
     const fields: Record<string, string> = {};
@@ -78,7 +80,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
       }
     }
     if (Object.keys(fields).length === 0) {
-      setFormError('At least one field with a value is required.');
+      setFormError(t('credStore.form.fieldRequired'));
       return;
     }
     setSaving(true);
@@ -99,7 +101,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
       setFormFields([{ key: 'username', value: '' }, { key: 'password', value: '' }]);
       await fetchCredentials();
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : 'Failed to store credential');
+      setFormError(e instanceof Error ? e.message : t('credStore.form.storeError'));
     } finally {
       setSaving(false);
     }
@@ -108,12 +110,12 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
   function formatAge(isoDate: string): string {
     const diff = Date.now() - new Date(isoDate).getTime();
     const minutes = Math.floor(diff / 60_000);
-    if (minutes < 1) return 'just now';
-    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 1) return t('credStore.age.justNow');
+    if (minutes < 60) return t('credStore.age.minutes', { n: minutes });
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 24) return t('credStore.age.hours', { n: hours });
     const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}d ago`;
+    if (days < 30) return t('credStore.age.days', { n: days });
     return new Date(isoDate).toLocaleDateString();
   }
 
@@ -124,14 +126,14 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
       className="flex items-center gap-1.5 text-sm text-secondary hover:text-primary transition-all duration-150 mt-2"
     >
       <Plus className="w-3.5 h-3.5" />
-      Add credential
+      {t('credStore.addButton')}
     </button>
   );
 
   const formUI = showForm ? (
     <div className="border border-border rounded-lg px-4 py-3 bg-sidebar/50 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-primary">New Credential</span>
+        <span className="text-sm font-medium text-primary">{t('credStore.form.title')}</span>
         <button onClick={() => { setShowForm(false); setFormError(''); }} className="p-1 text-secondary hover:text-primary">
           <X className="w-4 h-4" />
         </button>
@@ -139,14 +141,14 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
       {formError && <p className="text-xs text-error">{formError}</p>}
       <input
         type="text"
-        placeholder="Name (e.g. GitHub)"
+        placeholder={t('credStore.form.name.placeholder')}
         value={formName}
         onChange={e => setFormName(e.target.value)}
         className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent"
       />
       <input
         type="text"
-        placeholder="Domain (e.g. github.com)"
+        placeholder={t('credStore.form.domain.placeholder')}
         value={formDomain}
         onChange={e => setFormDomain(e.target.value)}
         className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent"
@@ -155,7 +157,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
         <div key={i} className="flex gap-2">
           <input
             type="text"
-            placeholder="Field name"
+            placeholder={t('credStore.form.fieldName.placeholder')}
             value={f.key}
             onChange={e => {
               const next = [...formFields];
@@ -166,7 +168,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
           />
           <input
             type="password"
-            placeholder="Value"
+            placeholder={t('credStore.form.value.placeholder')}
             value={f.value}
             onChange={e => {
               const next = [...formFields];
@@ -182,7 +184,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
         onClick={() => setFormFields(prev => [...prev, { key: '', value: '' }])}
         className="text-xs text-secondary hover:text-primary transition-colors"
       >
-        + Add field
+        {t('credStore.form.addField')}
       </button>
       <div className="flex gap-2 pt-1">
         <button
@@ -191,14 +193,14 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
           disabled={saving}
           className="bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? t('llm.saving') : t('settings.save')}
         </button>
         <button
           type="button"
           onClick={() => { setShowForm(false); setFormError(''); }}
           className="text-sm text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150"
         >
-          Cancel
+          {t('fallback.cancel')}
         </button>
       </div>
     </div>
@@ -208,7 +210,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
     return (
       <div className="flex items-center gap-2 text-sm text-secondary py-4">
         <Loader2 className="w-4 h-4 animate-spin" />
-        Loading credentials...
+        {t('credStore.loading')}
       </div>
     );
   }
@@ -217,7 +219,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
     return (
       <div className="space-y-3">
         <div className="text-sm text-secondary/70 py-2">
-          No saved credentials. When an agent needs to log into a website, it will request credentials through a secure modal.
+          {t('credStore.empty')}
         </div>
         {formUI || addButton}
       </div>
@@ -242,7 +244,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
             <div className="flex items-center gap-1 shrink-0">
               <button
                 onClick={() => handleRevoke(cred.name)}
-                title="Revoke browser session"
+                title={t('credStore.revokeTitle')}
                 className="p-1.5 text-secondary hover:text-primary rounded-md hover:bg-primary/5 transition-all duration-150"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -250,7 +252,7 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
               <button
                 onClick={() => handleDelete(cred.name)}
                 disabled={deleting === cred.name}
-                title="Delete credential"
+                title={t('credStore.deleteTitle')}
                 className="p-1.5 text-secondary hover:text-error rounded-md hover:bg-error/5 transition-all duration-150 disabled:opacity-50"
               >
                 {deleting === cred.name
@@ -264,14 +266,14 @@ export default function CredentialStore({ projectId }: { projectId?: string }) {
             <span>{cred.fields.join(', ')}</span>
             <span className="text-secondary/30">|</span>
             {cred.use_count > 0 ? (
-              <span>Used {cred.use_count} time{cred.use_count !== 1 ? 's' : ''}</span>
+              <span>{t('credStore.usedTimes', { n: cred.use_count })}</span>
             ) : (
-              <span>Never used</span>
+              <span>{t('credStore.neverUsed')}</span>
             )}
             {cred.last_used && (
               <>
                 <span className="text-secondary/30">|</span>
-                <span>Last: {formatAge(cred.last_used)}</span>
+                <span>{t('credStore.last', { age: formatAge(cred.last_used) })}</span>
               </>
             )}
           </div>

@@ -233,7 +233,6 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 
 ~/orbital/                              # Home global (daemon infrastructure)
 +-- daemon.pid                          # Singleton enforcement
-+-- daemon-state.json                   # Agent heartbeat state
 +-- device.json                         # Device identity
 +-- browser-profile/                    # Shared browser profile
 +-- credential-meta.json                # Credential metadata

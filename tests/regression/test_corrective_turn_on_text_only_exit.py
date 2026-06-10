@@ -66,15 +66,19 @@ class _MultiTurnAgentManager:
         self._task: Optional[asyncio.Task] = None
         self.new_session_calls = 0
         self.inject_system_calls: list[str] = []
+        self.inject_system_session_ids: list[str | None] = []
         self.inject_message_calls: list[str] = []
+
+    def is_onboarding_complete(self, project_id):
+        return True
 
     def get_session(self, project_id):
         return self._session
 
-    def get_loop(self, project_id):
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
     def get_sub_agent_manager(self):
@@ -93,25 +97,34 @@ class _MultiTurnAgentManager:
 
         self._task = asyncio.create_task(_instant())
 
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
         self.inject_message_calls.append(content)
         self._consume_and_run()
         return "delivered"
 
-    async def inject_system_message(self, project_id, content):
+    async def inject_system_message(self, project_id, content, *, session_id=None):
+        # Mirror the real AgentManager.inject_system_message signature: the
+        # dispatcher now forwards the item's session_id (seam 3 / D1, Root D).
         self.inject_system_calls.append(content)
+        self.inject_system_session_ids.append(session_id)
         self._consume_and_run()
         return "delivered"
 
-    async def new_session(self, project_id):
+    async def new_session(self, project_id, *, session_id=None):
         self.new_session_calls += 1
         self._session_counter += 1
-        self._session = _FakeSession(f"sess_{self._session_counter}")
+        sid = f"sess_{self._session_counter}"
+        self._session = _FakeSession(sid)
         # Mirror the real loop.run() reset
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
         self._loop._exit_block_reason = None
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self._session_counter:08d}",
+        }
 
     async def switch_session(self, project_id, session_id, *, start_loop=False):
         # Used by retry. Park current task if any, then reuse the named

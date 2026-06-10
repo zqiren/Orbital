@@ -22,6 +22,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, passing
+# an explicit session_id is required for SubAgentManager.start (None hard-raises)
+# and avoids start_agent's lazy uuid-mint (which would call get_project on a bare
+# MagicMock project_store and fail in _sanitize_project_name).
+SID = "proj_1_sess0001"
+
 
 # ---------------------------------------------------------------------------
 # 1. create_app loads registry
@@ -178,7 +184,7 @@ class TestSubAgentStartUsesManifest:
             mock_instance = AsyncMock()
             MockAdapter.return_value = mock_instance
 
-            result = await mgr.start("proj_1", "test-agent")
+            result = await mgr.start("proj_1", "test-agent", session_id=SID)
 
         assert "Started" in result
         assert "Test Agent" in result
@@ -211,7 +217,7 @@ class TestSubAgentStartUnknownSlug:
             setup_engine=setup_engine,
         )
 
-        result = await mgr.start("proj_1", "foobar")
+        result = await mgr.start("proj_1", "foobar", session_id=SID)
         assert "Error" in result
         assert "unknown" in result.lower() or "foobar" in result
 
@@ -242,7 +248,7 @@ class TestSubAgentStartUnknownSlug:
             setup_engine=setup_engine,
         )
 
-        result = await mgr.start("proj_1", "built-in")
+        result = await mgr.start("proj_1", "built-in", session_id=SID)
         assert "Error" in result
         assert "built-in" in result.lower() or "built_in" in result.lower()
 
@@ -399,7 +405,7 @@ class TestPromptContextIncludesCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
             # ContextManager is called with (session, prompt_builder, prompt_context)
             cm_call_args = MockCM.call_args
@@ -466,7 +472,7 @@ class TestPromptContextIncludesCapabilities:
             mock_loop.run = AsyncMock()
             MockLoop.return_value = mock_loop
 
-            await mgr.start_agent("proj_1", config)
+            await mgr.start_agent("proj_1", config, session_id=SID)
 
             cm_call_args = MockCM.call_args
             prompt_context = cm_call_args[0][2]
@@ -517,6 +523,68 @@ class TestAgentConfigNewFields:
 # ---------------------------------------------------------------------------
 # 9. PromptBuilder._sub_agents() produces directive output
 # ---------------------------------------------------------------------------
+
+
+class TestCodexManifestLoginWiring:
+    """Codex manifest exposes a login setup_command and the short display name.
+
+    Regression for: the Login button called _resolve_setup_command('codex',
+    'login') which returned None (codex declared only an API-key credential),
+    yielding a 400 "does not expose a login subcommand". After adding an
+    oauth_cli credential with setup_command 'codex login', resolution must
+    return a non-empty command. Also asserts the display rename to "Codex".
+    """
+
+    def _load_codex_manifest(self):
+        from agent_os.agents.manifest import ManifestLoader
+
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "agent_os", "agents", "manifests", "codex.yaml",
+        )
+        return ManifestLoader.load(os.path.abspath(path))
+
+    def test_codex_exposes_login_setup_command(self):
+        """At least one codex credential carries a non-empty setup_command, so
+        _resolve_setup_command('codex', 'login') returns a usable command."""
+        manifest = self._load_codex_manifest()
+        setup_commands = [
+            c.setup_command
+            for c in manifest.setup.credentials
+            if c.setup_command
+        ]
+        assert setup_commands, (
+            "codex manifest has no credential with a setup_command — the Login "
+            "button will 400"
+        )
+        # The resolved command should invoke the codex login subcommand.
+        assert any("login" in cmd for cmd in setup_commands)
+
+    def test_resolve_setup_command_returns_codex_login(self):
+        """End-to-end: _resolve_setup_command('codex', 'login') is non-empty."""
+        from agent_os.agents.registry import AgentRegistry
+        from agent_os.agents.setup_engine import SetupEngine
+        from agent_os.api.routes import settings as settings_routes
+
+        registry = AgentRegistry()
+        registry.register(self._load_codex_manifest())
+        engine = SetupEngine(registry)
+
+        # Temporarily wire the module-level engine the resolver reads from.
+        prev = settings_routes._setup_engine
+        settings_routes._setup_engine = engine
+        try:
+            cmd = settings_routes._resolve_setup_command("codex", "login")
+        finally:
+            settings_routes._setup_engine = prev
+
+        assert cmd, "_resolve_setup_command('codex', 'login') returned None/empty"
+        assert "login" in cmd
+
+    def test_codex_display_name_is_codex(self):
+        """Manifest name renamed from 'OpenAI Codex CLI' to 'Codex'."""
+        manifest = self._load_codex_manifest()
+        assert manifest.name == "Codex"
 
 
 class TestPromptBuilderSubAgentsSection:

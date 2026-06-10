@@ -14,7 +14,9 @@ Endpoints are verified against ``agent_os/api/routes/agents_v2.py`` and
 - ``DELETE /api/v2/projects/{id}``             — delete
 - ``POST   /api/v2/agents/start``              — start agent (dispatch)
 - ``POST   /api/v2/agents/{id}/inject``        — inject message
-- ``POST   /api/v2/agents/{id}/stop``          — stop agent
+- ``POST   /api/v2/agents/{id}/cancel``        — cancel in-flight turn
+  (the old ``/stop`` route was removed; full teardown is now automatic
+  via idle eviction)
 - ``GET    /api/v2/agents/{id}/run-status``    — runtime status
 - ``WS     /ws``                               — single daemon-wide ws
   with subscribe/pong protocol (see ``agent_os/api/app.py``)
@@ -178,8 +180,19 @@ class ApiClient:
     dispatch = inject
 
     async def stop(self, project_id: str) -> dict:
-        """POST /api/v2/agents/{id}/stop."""
-        resp = await self.post(f"/api/v2/agents/{project_id}/stop")
+        """POST /api/v2/agents/{id}/cancel.
+
+        The user-facing "stop button" now maps to ``/cancel`` under the
+        multi-session model: it interrupts the in-flight turn but leaves the
+        handle + session in memory (resumable). The old ``/stop`` route that
+        fully tore down sub-agents/browser/sandbox was removed; full teardown
+        is now automatic via idle eviction. The method name stays ``stop``
+        because callers treat it as the stop-button action.
+
+        Returns the cancel-shaped JSON: ``status`` is one of
+        ``{"cancelled", "idle", "no_agent"}``.
+        """
+        resp = await self.post(f"/api/v2/agents/{project_id}/cancel")
         # 404 when no active session — let caller inspect.
         if resp.status_code == 404:
             return {"status": "not-running"}

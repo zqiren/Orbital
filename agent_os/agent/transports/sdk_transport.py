@@ -5,6 +5,7 @@
 """SDK transport: uses claude-agent-sdk to communicate with Claude Code."""
 import asyncio
 import logging
+import os
 import uuid
 from typing import AsyncIterator
 
@@ -40,11 +41,29 @@ class SDKTransport(AgentTransport):
     AgentOS's approval system.
     """
 
-    def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None):
+    # Piece 3 Part A: this transport's event stream carries tool_input
+    # (incl. run_in_background) and exposes the subprocess handle, so the
+    # provenance-based three-state status applies. Pipe/ACP/PTY discard
+    # tool_input (pipe_transport.py / acp_transport.py) and stay two-state.
+    supports_background_status = True
+
+    def __init__(self, autonomy: "Autonomy | None" = None, system_prompt: str | None = None,
+                 resume_session_id: str | None = None, model: str | None = None):
         if not HAS_SDK:
             raise ImportError("claude-agent-sdk is not installed")
         self._client: "ClaudeSDKClient | None" = None
         self._session_id: str | None = None
+        # Resume identity (TASK-resume-persistence): when set, start() passes
+        # ClaudeAgentOptions(resume=..., model=...) so the spawned claude
+        # session continues the persisted thread instead of starting fresh.
+        # Model is config — the caller passes the current override or None
+        # (CLI serves the session's last-used model when omitted;
+        # mid-thread switch wire-verified coherent; AMENDS piece 2).
+        self._resume_session_id: str | None = resume_session_id
+        self._model: str | None = model
+        # Last model observed on an AssistantMessage this turn — captured so
+        # the thread record can persist it (turn_complete carries it).
+        self._last_model: str | None = model
         self._alive: bool = False
         self._workspace: str = ""
         # Pending permission requests: request_id -> asyncio.Future
@@ -65,9 +84,48 @@ class SDKTransport(AgentTransport):
         # task so the event loop cannot GC it mid-stream. Also used by
         # stop() to cancel in-flight iteration before disconnect().
         self._bg_task: asyncio.Task | None = None
+        # Direction B (own the kill): captured at connect() so stop() can
+        # terminate the claude subprocess tree directly, independent of the
+        # SDK's cross-task-failing graceful disconnect(). ``_proc`` is a
+        # ``psutil.Process`` (PID-reuse-safe kill anchor); ``_raw_proc`` is the
+        # SDK's anyio process handle, kept only for best-effort FD close.
+        self._proc = None
+        self._raw_proc = None
         # Optional system prompt. Forwarded to ClaudeAgentOptions(system_prompt=...)
         # at start() time. Used by sub-agent inheritance flow.
         self._system_prompt: str | None = system_prompt
+
+    @staticmethod
+    def claude_project_slug(workspace: str) -> str:
+        """Derive claude-code's per-cwd session-store directory name.
+
+        Observed layout (confirmed against ~/.claude/projects):
+        ``/Users/x/Desktop/orbital-test`` -> ``-Users-x-Desktop-orbital-test``;
+        symlinked paths are stored by realpath (``/tmp`` -> ``/private/tmp``
+        on macOS). Non ``[A-Za-z0-9-]`` characters become ``-``.
+        """
+        import re as _re
+        real = os.path.realpath(workspace)
+        return _re.sub(r"[^A-Za-z0-9-]", "-", real)
+
+    @staticmethod
+    def resume_source_exists(workspace: str, session_id: str,
+                             *, projects_root: str | None = None) -> bool:
+        """Pre-check that the resumable session state still exists on disk.
+
+        TASK-resume-persistence: do NOT trust the resume call to error on a
+        dead id — claude-code prunes its store (~30 days, machine-local).
+        Primary check is the derived cwd-slug path; a glob fallback covers
+        any slug-derivation drift (session ids are UUIDs, so a cross-project
+        match is unambiguous).
+        """
+        import glob as _glob
+        root = projects_root or os.path.join(
+            os.path.expanduser("~"), ".claude", "projects")
+        slug = SDKTransport.claude_project_slug(workspace)
+        if os.path.isfile(os.path.join(root, slug, f"{session_id}.jsonl")):
+            return True
+        return bool(_glob.glob(os.path.join(root, "*", f"{session_id}.jsonl")))
 
     async def start(self, command: str, args: list[str], workspace: str, env: dict | None = None) -> None:
         self._workspace = workspace
@@ -84,15 +142,48 @@ class SDKTransport(AgentTransport):
             env=sdk_env,
         )
         if self._system_prompt is not None:
+            # Re-rendered per dispatch; idempotent on resume — the append is
+            # per-connection config, never persisted into the session
+            # transcript, so resuming with a fresh render does not duplicate.
             options_kwargs["system_prompt"] = {
                 "type": "preset",
                 "preset": "claude_code",
                 "append": self._system_prompt,
             }
+        if self._resume_session_id is not None:
+            options_kwargs["resume"] = self._resume_session_id
+        if self._model is not None:
+            options_kwargs["model"] = self._model
         options = ClaudeAgentOptions(**options_kwargs)
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
         self._alive = True
+        self._capture_process_handle()
+
+    def _capture_process_handle(self) -> None:
+        """Capture the claude subprocess handle for own-the-kill teardown.
+
+        Reaches into the SDK's subprocess transport (read-only) for the spawned
+        process. Stores a ``psutil.Process`` (identity-checked by pid+create_time,
+        so a recycled PID raises ``NoSuchProcess`` rather than signalling an
+        innocent process) plus the raw anyio handle for best-effort FD close.
+        """
+        try:
+            raw = self._client._transport._process  # anyio Process
+        except Exception:
+            logger.warning("SDKTransport: could not reach subprocess handle; "
+                           "teardown will rely on disconnect() only")
+            return
+        self._raw_proc = raw
+        pid = getattr(raw, "pid", None)
+        if pid is None:
+            return
+        try:
+            import psutil
+            self._proc = psutil.Process(pid)
+        except Exception:
+            logger.warning("SDKTransport: could not wrap subprocess pid=%s in "
+                           "psutil.Process", pid, exc_info=True)
 
     async def send(self, message: str) -> str | None:
         if self._client is None:
@@ -192,13 +283,30 @@ class SDKTransport(AgentTransport):
         )
 
     async def _consume_response_background(self) -> None:
-        """Background task: iterate receive_response(), feed events to queue."""
+        """Background task: iterate receive_response(), feed events to queue.
+
+        The closing ``turn_complete`` carries an honest ``cause``:
+
+        - ``success`` — a ``ResultMessage`` arrived AND ``is_error`` is False.
+          NOT a bare got-result flag: ``ResultMessage(is_error=True)``
+          (context-window-exceeded, API errors) has a result but is a failure
+          (TASK-honest-subagent-completion-reporting, path b).
+        - ``stopped`` — this task was cancelled, i.e. a deliberate
+          ``stop()``/reap. Tagging it here is what stops the still-alive
+          consumer from reporting a phantom "completed" during the SIGTERM
+          grace window (path g).
+        - ``error`` — everything else: stream exception (path a), stream
+          ended without a ResultMessage (path c — external process death).
+        """
         got_result = False
+        result_is_error = False
+        cause: str | None = None
         try:
             try:
                 async for msg in self._client.receive_response():
                     if isinstance(msg, ResultMessage):
                         got_result = True
+                        result_is_error = bool(getattr(msg, "is_error", False))
                     events = self._message_to_events(msg)
                     for event in events:
                         await self._event_queue.put(event)
@@ -215,9 +323,26 @@ class SDKTransport(AgentTransport):
                 logger.warning("SDKTransport: background response ended without ResultMessage; will flush on next send")
             else:
                 self._needs_flush = False
+        except asyncio.CancelledError:
+            cause = "stopped"
+            raise
         finally:
-            # Always signal turn completion so adapter transitions to idle
-            await self._event_queue.put(TransportEvent(event_type="turn_complete"))
+            if cause is None:
+                cause = "success" if (got_result and not result_is_error) else "error"
+            # Always signal turn completion so adapter transitions to idle.
+            # Queue is unbounded, so this put() does not suspend — safe to
+            # run during cancellation cleanup. The event carries the thread's
+            # resume identity (session_id + model) so the daemon can persist
+            # it — nothing reads transport.session_id after the fact
+            # (TASK-resume-persistence).
+            await self._event_queue.put(TransportEvent(
+                event_type="turn_complete",
+                data={
+                    "cause": cause,
+                    "session_id": self._session_id,
+                    "model": self._last_model,
+                },
+            ))
 
     async def _flush_stale_messages(self) -> None:
         """Drain leftover messages from the SDK buffer after a prior crash.
@@ -279,15 +404,63 @@ class SDKTransport(AgentTransport):
                 )
         self._bg_task = None
 
+        # 1. Best-effort graceful disconnect. The SDK's Query.close() exits an
+        #    anyio task group that was entered in a DIFFERENT task (the one that
+        #    connected), so on the daemon's reap/eviction path this raises
+        #    "Attempted to exit cancel scope in a different task" — which is
+        #    EXPECTED and harmless here. Termination does NOT depend on it
+        #    succeeding (FINDINGS-reap-confirmation; Direction B).
         if self._client is not None:
             try:
                 await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
+                logger.debug("SDKTransport.stop: disconnect() returned cleanly")
+            except Exception as e:
+                logger.debug("SDKTransport.stop: disconnect() best-effort failed "
+                             "(expected cross-task): %r", e)
 
+        # 2. Own the kill: terminate the claude process tree ourselves,
+        #    independent of the SDK. Snapshots descendants, SIGTERM→SIGKILL,
+        #    reaps the parent zombie, never blocks the loop.
+        if self._proc is not None:
+            try:
+                from agent_os.agent.transports.process_kill import kill_process_tree
+                outcome = await kill_process_tree(self._proc, label="sdk")
+                if not outcome.parent_dead:
+                    logger.error("SDKTransport.stop: claude subprocess survived "
+                                 "kill; PID may leak")
+            except Exception:
+                logger.exception("SDKTransport.stop: kill_process_tree raised")
+
+        # 3. Explicitly close subprocess stdio. The leaked SDK task group may
+        #    not, so close FDs ourselves to avoid descriptor growth across
+        #    dispatch→reap cycles.
+        await self._close_subprocess_fds()
+
+        self._client = None
+        self._proc = None
+        self._raw_proc = None
         self._alive = False
         self._session_id = None
+
+    async def _close_subprocess_fds(self) -> None:
+        """Best-effort close of the claude subprocess stdio streams."""
+        raw = self._raw_proc
+        if raw is None:
+            return
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(raw, name, None)
+            if stream is None:
+                continue
+            try:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+                    continue
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+            except Exception:
+                logger.debug("SDKTransport: closing %s failed", name, exc_info=True)
 
     def is_alive(self) -> bool:
         return self._alive
@@ -360,6 +533,9 @@ class SDKTransport(AgentTransport):
         events = []
 
         if isinstance(msg, AssistantMessage):
+            # Thread-identity capture: the model actually serving this thread
+            # (persisted with the resume record; must match on resume).
+            self._last_model = getattr(msg, "model", None) or self._last_model
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     events.append(TransportEvent(

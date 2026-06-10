@@ -9,6 +9,15 @@ interface ActionResult {
   status: string;
 }
 
+export interface NewSessionResult extends ActionResult {
+  /** The id of the session. For a fresh-create (no session_id supplied) this
+   *  is a brand-new id like `sess_xxxxxxxx`; the session materializes on the
+   *  server only when the first message is injected into it. */
+  session_id?: string;
+  /** Opaque uuid for the minted session (debug / forward-compat). */
+  session_uuid?: string;
+}
+
 export interface InjectResult extends ActionResult {
   /** True when inject_message auto-denied a pending approval because the
    *  user sent a new message while the agent was paused. */
@@ -41,24 +50,36 @@ export function useAgent() {
     [],
   );
 
-  // kept for admin/debug use; UI Stop button uses cancelMessage (T05)
-  const stopAgent = useCallback(async (projectId: string) => {
-    return api<ActionResult>(
-      `/api/v2/agents/${encodeURIComponent(projectId)}/stop`,
-      { method: 'POST' },
-    );
-  }, []);
-
-  const cancelMessage = useCallback(async (projectId: string) => {
+  // The UI Stop button uses cancelMessage (/cancel). There is no user-facing
+  // /stop endpoint: runtime-resource teardown is automatic via the daemon's
+  // idle-eviction sweep. See TASK-idle-eviction-and-remove-stop.md.
+  const cancelMessage = useCallback(async (projectId: string, sessionId?: string) => {
     return api<ActionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/cancel`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(sessionId !== undefined && { session_id: sessionId }),
+        }),
+      },
     );
   }, []);
 
-  const newSession = useCallback(async (projectId: string) => {
-    return api<ActionResult>(
+  const newSession = useCallback(async (projectId: string, sessionId?: string) => {
+    return api<NewSessionResult>(
       `/api/v2/agents/${encodeURIComponent(projectId)}/new-session`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(sessionId !== undefined && { session_id: sessionId }),
+        }),
+      },
+    );
+  }, []);
+
+  const coldStartScan = useCallback(async (projectId: string) => {
+    return api<{ status: string; session_id?: string }>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/cold-start-scan`,
       { method: 'POST' },
     );
   }, []);
@@ -90,7 +111,13 @@ export function useAgent() {
   );
 
   const approveToolCall = useCallback(
-    async (projectId: string, toolCallId: string, replyText?: string, approveAll?: boolean) => {
+    async (
+      projectId: string,
+      toolCallId: string,
+      replyText?: string,
+      approveAll?: boolean,
+      sessionId?: string,
+    ) => {
       return api<ActionResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/approve`,
         {
@@ -99,6 +126,7 @@ export function useAgent() {
             tool_call_id: toolCallId,
             ...(replyText !== undefined && { reply_text: replyText }),
             ...(approveAll && { approve_all: true }),
+            ...(sessionId !== undefined && { session_id: sessionId }),
           }),
         },
       );
@@ -107,7 +135,7 @@ export function useAgent() {
   );
 
   const denyToolCall = useCallback(
-    async (projectId: string, toolCallId: string, reason: string) => {
+    async (projectId: string, toolCallId: string, reason: string, sessionId?: string, stopTurn?: boolean) => {
       return api<ActionResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/deny`,
         {
@@ -115,6 +143,8 @@ export function useAgent() {
           body: JSON.stringify({
             tool_call_id: toolCallId,
             reason,
+            ...(sessionId !== undefined && { session_id: sessionId }),
+            ...(stopTurn && { stop_turn: true }),
           }),
         },
       );
@@ -122,5 +152,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, stopAgent, cancelMessage, newSession, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, approveToolCall, denyToolCall };
 }

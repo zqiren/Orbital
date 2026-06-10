@@ -25,6 +25,7 @@ from agent_os.agent.providers.types import (
     ContextOverflowError,
     LLMError,
 )
+from agent_os.agent.providers.think_splitter import InlineThinkSplitter
 
 _cache_logger = logging.getLogger("orbital.cache_audit")
 
@@ -46,9 +47,14 @@ def _extract_cache_read_tokens(usage_obj) -> int:
 
 
 def _make_token_usage(usage_obj) -> TokenUsage:
+    # Some OpenAI-compatible endpoints (observed: MiniMax api.minimaxi.com)
+    # return a usage object whose prompt_tokens / completion_tokens are None.
+    # Coerce to 0 so downstream int math (_log_cache_audit, cumulative token
+    # tracking, budget) never hits "'>' not supported between NoneType and int",
+    # which previously crashed the whole turn mid-stream.
     return TokenUsage(
-        input_tokens=usage_obj.prompt_tokens,
-        output_tokens=usage_obj.completion_tokens,
+        input_tokens=getattr(usage_obj, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(usage_obj, "completion_tokens", 0) or 0,
         cache_read_tokens=_extract_cache_read_tokens(usage_obj),
     )
 
@@ -191,6 +197,67 @@ def _build_reasoning_off_switch(model: str, reasoning) -> dict | None:
     return None
 
 
+def _content_is_blank(content) -> bool:
+    """True when a message's content is empty/whitespace-only.
+
+    A list (multimodal) with any block is treated as non-blank — image-only
+    turns are legitimate. None and "" / "   " are blank.
+    """
+    if content is None:
+        return True
+    if isinstance(content, list):
+        return len(content) == 0
+    if isinstance(content, str):
+        return content.strip() == ""
+    return False
+
+
+# Sent when an OpenAI-compatible request would otherwise carry zero non-system
+# turns. The onboarding flow is driven entirely by the system prompt (see
+# PromptBuilder._onboarding_or_directive), so a fresh agent's very first request
+# is system-only. Lenient providers answer that; strict ones (MiniMax
+# api.minimaxi.com → 400 "chat content is empty (2013)") require at least one
+# user/assistant message with real content. A minimal user kickoff gives them a
+# turn to respond to without changing the persisted session history.
+_KICKOFF_CONTENT = "Begin."
+
+
+def _ensure_chat_content(messages: list) -> list:
+    """Guarantee the outbound OpenAI-style chat array is acceptable to strict
+    providers (e.g. MiniMax) that reject empty content.
+
+    Two defects are repaired, both at the provider boundary only (the persisted
+    session is never mutated):
+
+    1. A user/system message whose content is blank ("" / whitespace / None)
+       gets a single-space placeholder. Assistant messages are left alone —
+       an assistant turn carrying only ``tool_calls`` legitimately has
+       content None/"" and must stay that way.
+    2. If, after step 1, there is no user OR assistant message at all (the
+       system-prompt-only onboarding kickoff), a minimal user turn is
+       appended so the provider has a conversational turn to answer.
+    """
+    if not messages:
+        return [{"role": "user", "content": _KICKOFF_CONTENT}]
+
+    repaired: list = []
+    has_chat_turn = False
+    for msg in messages:
+        role = msg.get("role")
+        if role in ("user", "assistant"):
+            has_chat_turn = True
+        if role in ("system", "user") and _content_is_blank(msg.get("content")):
+            # Must be genuinely non-blank: MiniMax strips whitespace before its
+            # emptiness check, so a single space would still trip error 2013.
+            msg = dict(msg)
+            msg["content"] = "(no content)"
+        repaired.append(msg)
+
+    if not has_chat_turn:
+        repaired.append({"role": "user", "content": _KICKOFF_CONTENT})
+    return repaired
+
+
 def _apply_reasoning_policy(message: dict, reasoning) -> dict:
     """Enforce per-model echo_back contract on outbound assistant messages.
 
@@ -249,6 +316,18 @@ class LLMProvider:
             self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
             self._anthropic_client = None
 
+    def _inline_think_mode(self) -> bool:
+        """True when this model emits reasoning inline as ``<think>…</think>``
+        within ``content`` (ReasoningInfo.field is None + supported). Such
+        models need the think segments peeled into ``reasoning_content``; models
+        with a named reasoning delta field are left untouched."""
+        r = self.reasoning
+        return bool(
+            r is not None
+            and getattr(r, "supported", False)
+            and getattr(r, "field", "sentinel") is None
+        )
+
     def update_api_key(self, new_key: str) -> None:
         """Hot-swap the API key, reconstructing the underlying client."""
         if new_key == self.api_key:
@@ -272,7 +351,10 @@ class LLMProvider:
                 msg["content"] = _flatten_multimodal_content(content)
             stripped = _strip_to_spec(msg)
             result.append(_apply_reasoning_policy(stripped, getattr(self, "reasoning", None)))
-        return result
+        # Final pass: strict OpenAI-compatible providers (MiniMax) reject any
+        # message with empty content and reject system-only requests. Repair
+        # both here, at the wire boundary, so the persisted session is untouched.
+        return _ensure_chat_content(result)
 
     async def stream(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Stream completion, yielding StreamChunk objects.
@@ -332,6 +414,11 @@ class LLMProvider:
             else:
                 _classify_error(exc)
 
+        # Inline-think models (e.g. MiniMax M-series) stream reasoning inside
+        # <think>…</think> within `content`. Peel it into reasoning_content as
+        # deltas arrive (tags may span chunk boundaries). None for other models.
+        splitter = InlineThinkSplitter() if self._inline_think_mode() else None
+
         async for chunk in response_iter:
             if not chunk.choices:
                 if chunk.usage is not None:
@@ -348,6 +435,11 @@ class LLMProvider:
             text = delta.content or ""
             tc_delta = delta.tool_calls or []
             reasoning = getattr(delta, "reasoning_content", None) or ""
+
+            if splitter is not None and text:
+                visible, think = splitter.feed(text)
+                text = visible
+                reasoning = reasoning + think
 
             if choice.finish_reason is not None and chunk.usage is not None:
                 usage = _make_token_usage(chunk.usage)
@@ -368,6 +460,13 @@ class LLMProvider:
                 )
             else:
                 yield StreamChunk(text=text, tool_calls_delta=tc_delta, reasoning_content=reasoning)
+
+        # Flush any buffered inline-think remainder (an unclosed <think> block,
+        # or a trailing partial tag) once the upstream stream is exhausted.
+        if splitter is not None:
+            visible, think = splitter.flush()
+            if visible or think:
+                yield StreamChunk(text=visible, reasoning_content=think)
 
     async def _stream_anthropic(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Anthropic SDK streaming path with adapter translation."""
@@ -452,6 +551,21 @@ class LLMProvider:
         finish_reason = choice.finish_reason
         usage = _make_token_usage(response.usage)
         _log_cache_audit(self.model, usage)
+
+        # Inline-think models: peel <think>…</think> out of content into
+        # reasoning_content so the persisted message keeps a clean answer.
+        if self._inline_think_mode() and isinstance(text, str) and text:
+            splitter = InlineThinkSplitter()
+            visible, think = splitter.feed(text)
+            v2, t2 = splitter.flush()
+            text = visible + v2
+            extracted = think + t2
+            raw_message["content"] = text
+            if extracted:
+                raw_message["reasoning_content"] = (
+                    (raw_message.get("reasoning_content") or "") + extracted
+                )
+
         status_text = _extract_status(text)
 
         return LLMResponse(

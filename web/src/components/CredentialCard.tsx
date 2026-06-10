@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { api } from '../config';
 import { useAgent } from '../hooks/useAgent';
+import { useT } from '../i18n/useT';
 
 export interface PendingCredential {
   tool_call_id: string;
@@ -18,14 +19,20 @@ export interface PendingCredential {
 interface CredentialCardProps {
   credential: PendingCredential;
   projectId: string;
+  /** F1 session_id this credential request belongs to (the viewed/holder
+   *  session). Threaded into approve/deny so the backend resolves the
+   *  SPECIFIC session's pending tool call, not just the project's default. */
+  sessionId?: string;
   onResolve?: (toolCallId: string) => void;
 }
 
 export default function CredentialCard({
   credential,
   projectId,
+  sessionId,
   onResolve,
 }: CredentialCardProps) {
+  const t = useT();
   const [values, setValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [resolved, setResolved] = useState(false);
@@ -34,8 +41,8 @@ export default function CredentialCard({
   if (resolved || credential.resolved) {
     return (
       <div className="mb-3 px-4 py-2 rounded-lg bg-sidebar text-sm">
-        <span className="text-success">{'\u2713'} Credentials provided</span>{' '}
-        <span className="text-secondary">for {credential.domain}</span>
+        <span className="text-success">{t('credCard.providedHeader')}</span>{' '}
+        <span className="text-secondary">{t('credCard.providedFor', { domain: credential.domain })}</span>
       </div>
     );
   }
@@ -58,7 +65,7 @@ export default function CredentialCard({
         }),
       });
       // Resolve the intercepted request_credential tool call
-      await approveToolCall(projectId, credential.tool_call_id);
+      await approveToolCall(projectId, credential.tool_call_id, undefined, undefined, sessionId);
       setResolved(true);
       onResolve?.(credential.tool_call_id);
     } finally {
@@ -69,7 +76,7 @@ export default function CredentialCard({
   async function handleDeny() {
     setSubmitting(true);
     try {
-      await denyToolCall(projectId, credential.tool_call_id, 'User declined to provide credentials');
+      await denyToolCall(projectId, credential.tool_call_id, t('approval.declinedCredsReason'), sessionId);
       setResolved(true);
       onResolve?.(credential.tool_call_id);
     } finally {
@@ -82,7 +89,7 @@ export default function CredentialCard({
   return (
     <div className="mb-3 rounded-lg border border-border overflow-hidden">
       <div className="bg-accent/10 px-4 py-1.5 border-b border-border">
-        <span className="text-accent font-semibold text-sm">CREDENTIALS NEEDED</span>
+        <span className="text-accent font-semibold text-sm">{t('credCard.header')}</span>
       </div>
 
       <div className="px-4 py-3 space-y-3">
@@ -111,7 +118,7 @@ export default function CredentialCard({
         </div>
 
         <p className="text-xs text-secondary">
-          Credentials are stored securely and never sent through chat.
+          {t('credCard.storedNote')}
         </p>
 
         <div className="flex flex-col md:flex-row gap-2 md:justify-end">
@@ -122,7 +129,7 @@ export default function CredentialCard({
             disabled={submitting}
             className="px-4 py-1.5 text-sm rounded-lg border border-border text-secondary hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
           >
-            Deny
+            {t('credCard.deny')}
           </button>
           <button
             type="button"
@@ -131,7 +138,7 @@ export default function CredentialCard({
             disabled={submitting || !allFilled}
             className="px-4 py-1.5 text-sm rounded-lg bg-accent text-white hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
           >
-            {submitting ? 'Submitting...' : 'Provide Credentials'}
+            {submitting ? t('credCard.submitting') : t('credCard.provide')}
           </button>
         </div>
       </div>

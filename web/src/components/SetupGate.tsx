@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { api } from '../config';
 import type { PlatformStatus } from '../types';
+import { useT } from '../i18n/useT';
 
 interface SetupGateProps {
   setupIssues: string[];
@@ -12,6 +13,7 @@ interface SetupGateProps {
 }
 
 export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
+  const t = useT();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +27,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
       onComplete();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Setup failed. Please try again.',
+        err instanceof Error ? err.message : t('setupGate.setupError'),
       );
       setLoading(false);
     }
@@ -36,18 +38,16 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <span className="font-mono text-lg text-primary tracking-tight">
-            Orbital
+            {t('setupGate.wordmark')}
           </span>
         </div>
 
         <div className="bg-background border border-border rounded-lg p-8">
           <h1 className="text-2xl font-semibold text-primary mb-3">
-            Welcome to Orbital
+            {t('setupGate.welcome')}
           </h1>
           <p className="text-secondary text-sm leading-relaxed mb-6">
-            A secure sandbox environment needs to be configured before you can
-            create and manage agents. This requires administrator permissions and
-            may take a moment.
+            {t('setupGate.intro')}
           </p>
 
           {setupIssues.length > 0 && (
@@ -73,8 +73,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
           {loading ? (
             <div className="text-center py-4">
               <p className="text-sm text-secondary">
-                Setting up sandbox environment. This may take up to 30
-                seconds...
+                {t('setupGate.settingUp')}
               </p>
             </div>
           ) : (
@@ -82,7 +81,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
               onClick={handleSetup}
               className="w-full bg-accent text-white text-sm font-medium rounded-lg px-4 py-2.5 hover:bg-accent/90 transition-all duration-150"
             >
-              {error ? 'Retry Setup' : 'Set Up Sandbox'}
+              {error ? t('setupGate.retry') : t('setupGate.setup')}
             </button>
           )}
         </div>

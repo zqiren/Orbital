@@ -273,8 +273,12 @@ def test_prompt_contains_new_decisions_instructions(tmp_path):
     )
     assert "Cap: 30 entries" in normalized, "prompt missing 'Cap: 30 entries'"
 
-    # Context exclusion list
-    assert "Exclusions (do NOT include)" in normalized, (
+    # Context is now a section-based project map (Layer-1 promotion) with a
+    # token target and a "belongs in other files" exclusion list.
+    assert "map of this project" in normalized, (
+        "prompt missing CONTEXT project-map framing"
+    )
+    assert "Exclusions (belong in other files)" in normalized, (
         "prompt missing CONTEXT exclusion-list header"
     )
 

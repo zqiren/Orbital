@@ -37,8 +37,9 @@ def manager():
     return mgr
 
 
-def test_cancelled_error_broadcasts_stopped(manager):
-    """When a loop task is cancelled, _on_loop_done should broadcast 'stopped'."""
+def test_cancelled_error_broadcasts_idle(manager):
+    """When a loop task is cancelled, _on_loop_done should broadcast 'idle'
+    (a cancelled loop is idle; the 'stopped' fact is in last_terminal_event)."""
     project_id = "proj_test"
     callback = manager._on_loop_done(project_id)
 
@@ -59,13 +60,13 @@ def test_cancelled_error_broadcasts_stopped(manager):
         # Call the done-callback
         callback(task)
 
-        # Verify that 'stopped' status was broadcast
+        # Verify that 'idle' status was broadcast
         calls = manager._ws.broadcast.call_args_list
         assert len(calls) == 1
         call_args = calls[0]
         assert call_args[0][0] == project_id
         payload = call_args[0][1]
         assert payload["type"] == "agent.status"
-        assert payload["status"] == "stopped"
+        assert payload["status"] == "idle"
     finally:
         loop.close()

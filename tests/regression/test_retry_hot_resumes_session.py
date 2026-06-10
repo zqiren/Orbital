@@ -75,13 +75,16 @@ class _RetryAgentManager:
 
     # ---- API expected by QueueDispatcher ----
 
+    def is_onboarding_complete(self, project_id):
+        return True
+
     def get_session(self, project_id):
         return self._sessions[self._current_sid]
 
-    def get_loop(self, project_id):
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
     def get_sub_agent_manager(self):
@@ -98,7 +101,8 @@ class _RetryAgentManager:
 
     # ---- Lifecycle ----
 
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state="chat"):
         # Capture the injected text RAW for assertions.
         self.injected_messages.append(content)
         self._sessions[self._current_sid].append(
@@ -151,7 +155,7 @@ class _RetryAgentManager:
             return None
         self._task = asyncio.create_task(_noop())
 
-    async def new_session(self, project_id):
+    async def new_session(self, project_id, *, session_id=None):
         self.new_session_calls += 1
         sid = f"sess_rotated_{self.new_session_calls}"
         self._sessions[sid] = _FakeSession(sid)
@@ -160,7 +164,11 @@ class _RetryAgentManager:
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
         self._loop._exit_block_reason = None
-        return {"status": "new_session"}
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_uuid": f"proj_{self.new_session_calls:08d}",
+        }
 
 
 async def _wait(predicate, timeout=5.0, interval=0.05):

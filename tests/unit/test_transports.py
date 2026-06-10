@@ -8,6 +8,11 @@ import pytest
 from unittest.mock import MagicMock, patch
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
 
+# Canonical chat-session uuid for SubAgentManager fixtures (post-"default"
+# retirement: _start_from_registry requires an explicit session_id — None
+# hard-raises because a sub-agent always has a parent session).
+SID = "proj1_sess0001"
+
 
 class TestTransportEvent:
     def test_create_message_event(self):
@@ -188,7 +193,7 @@ class TestACPWiring:
             mock_adapter = MagicMock()
             mock_adapter.start = AsyncMock()
             MockAdapter.return_value = mock_adapter
-            await mgr._start_from_registry("proj1", "gemini-cli")
+            await mgr._start_from_registry("proj1", "gemini-cli", session_id=SID)
 
         # process_manager.start should NOT have been called for ACP
         mock_pm.start.assert_not_called()
@@ -225,7 +230,7 @@ class TestACPWiring:
             mock_adapter = MagicMock()
             mock_adapter.start = AsyncMock()
             MockAdapter.return_value = mock_adapter
-            await mgr._start_from_registry("proj1", "test-agent")
+            await mgr._start_from_registry("proj1", "test-agent", session_id=SID)
 
         # process_manager.start MUST be called for PTY
         mock_pm.start.assert_called_once()

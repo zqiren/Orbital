@@ -81,11 +81,21 @@ export function useQueue(projectId: string | null) {
   const removeItem = useCallback(
     async (itemId: string) => {
       if (!projectId) return;
-      await api(`/api/v2/projects/${projectId}/queue/items/${itemId}`, {
-        method: 'DELETE',
-      });
+      try {
+        await api(`/api/v2/projects/${projectId}/queue/items/${itemId}`, {
+          method: 'DELETE',
+        });
+      } catch (e) {
+        // The server gates delete on live slot-holder state, which can disagree
+        // with the client's item.state across the WS/REST lag window (e.g. a
+        // 409 "cannot delete a running item"). Surface it and resync rather than
+        // failing silently.
+        setError(e instanceof Error ? e.message : String(e));
+        void refresh();
+        throw e;
+      }
     },
-    [projectId],
+    [projectId, refresh],
   );
 
   const editItem = useCallback(

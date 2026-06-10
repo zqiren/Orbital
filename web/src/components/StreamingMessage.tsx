@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import MarkdownContent from './MarkdownContent';
+import MessageAvatar from './MessageAvatar';
+import { useT } from '../i18n/useT';
 
 interface StreamingMessageProps {
   text: string;
@@ -10,25 +12,32 @@ interface StreamingMessageProps {
   isComplete: boolean;
 }
 
+/** 24-hour HH:MM for "now" — the streaming message is always live. */
+function nowTime(): string {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 export default function StreamingMessage({
   text,
   source,
   isComplete,
 }: StreamingMessageProps) {
+  const t = useT();
   const isSubAgent = source !== 'management' && source !== 'user';
+  const senderLabel = isSubAgent ? source : t('chat.message.agent');
 
   return (
-    <div className="flex justify-start mb-3">
-      <div className="max-w-[75%] max-md:max-w-[85%]">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-sm font-medium text-secondary">Agent</span>
-          {isSubAgent && (
-            <span className="text-sm font-mono bg-sidebar px-1.5 py-0.5 rounded">
-              @{source}
-            </span>
-          )}
+    <div className="flex gap-[10px]">
+      <MessageAvatar variant="agent" />
+      <div className="flex-1 min-w-0">
+        <div className="font-mono text-[11px] mb-1">
+          <span className="text-secondary">{senderLabel}</span>
+          <span className="text-muted"> · {nowTime()}</span>
         </div>
-        <div className="bg-background border border-border rounded-lg px-4 py-2 break-words overflow-x-auto">
+        <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
           <MarkdownContent content={text} />
           {!isComplete && <span className="streaming-cursor">|</span>}
         </div>

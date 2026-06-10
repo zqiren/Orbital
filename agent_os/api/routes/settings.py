@@ -144,6 +144,25 @@ async def get_api_key_status():
 # ---------------------------------------------------------------------------
 
 
+def _supports_login(slug: str) -> bool:
+    """Whether this sub-agent exposes an interactive login (OAuth) flow.
+
+    True when the agent's manifest declares a credential with a non-empty
+    ``setup_command`` (e.g. ``claude login`` / ``codex login``). Agents that
+    only accept an API key — and therefore have no login subcommand — return
+    False so the frontend can hide a Login button that would otherwise 400.
+    """
+    if _setup_engine is None:
+        return False
+    registry = getattr(_setup_engine, "_registry", None)
+    if registry is None:
+        return False
+    manifest = registry.get(slug)
+    if manifest is None:
+        return False
+    return any(c.setup_command for c in manifest.setup.credentials)
+
+
 def _build_sub_agent_status_entry(s) -> dict:
     """Convert an AgentSetupStatus into the wire shape this page expects."""
     config = {}
@@ -166,6 +185,7 @@ def _build_sub_agent_status_entry(s) -> dict:
         "missing_dependencies": s.missing_dependencies,
         "credentials_configured": s.credentials_configured,
         "missing_credentials": s.missing_credentials,
+        "supports_login": _supports_login(s.slug),
         "setup_actions": [
             {"action": a.action, "label": a.label, "command": a.command,
              "blocking": a.blocking}

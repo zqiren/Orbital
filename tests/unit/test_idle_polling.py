@@ -21,6 +21,11 @@ import pytest
 
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
+# Canonical chat-session uuid for fixtures. Post-"default" retirement, handles
+# and idle-poll tasks are keyed by a real session uuid; the internal loop/poll
+# helpers take an explicit session_id (None → handle-miss no-op, no "default").
+SID = "proj_sess0001"
+
 
 def _make_manager():
     """Create an AgentManager with mock dependencies."""
@@ -71,16 +76,19 @@ class TestOnLoopDoneWaiting:
 
     def test_broadcasts_waiting_when_sub_agents_active(self):
         mgr, ws, sub_agent_mgr = _make_manager()
-        sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
+        # Piece 3: only an OPEN TURN (status "running") counts as busy for
+        # the awaiting poll — the fixture carries the real status shape.
+        sub_agent_mgr.list_active.return_value = [
+            {"handle": "agent-a", "status": "running"}]
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         # Simulate task completing successfully
         mock_task = MagicMock()
         mock_task.exception.return_value = None
 
-        callback = mgr._on_loop_done("proj")
+        callback = mgr._on_loop_done("proj", session_id=SID)
         mock_future = MagicMock()
         with patch("asyncio.ensure_future", return_value=mock_future) as mock_ensure:
             callback(mock_task)
@@ -96,20 +104,22 @@ class TestOnLoopDoneWaiting:
 
         # Should have launched poll task
         mock_ensure.assert_called_once()
-        # Task should be stored
-        assert mgr._idle_poll_tasks.get("proj") is mock_future
+        # Task should be stored under SessionKey (project_id, session_id)
+        # after the multi-session refactor — bare project_id key was a
+        # pre-multi-session relic. See REPORT-session-id-audit.md §1.
+        assert mgr._idle_poll_tasks.get(("proj", SID)) is mock_future
 
     def test_broadcasts_idle_when_no_sub_agents(self):
         mgr, ws, sub_agent_mgr = _make_manager()
         sub_agent_mgr.list_active.return_value = []
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = None
 
-        callback = mgr._on_loop_done("proj")
+        callback = mgr._on_loop_done("proj", session_id=SID)
         callback(mock_task)
 
         calls = ws.broadcast.call_args_list
@@ -121,12 +131,12 @@ class TestOnLoopDoneWaiting:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = RuntimeError("boom")
 
-        callback = mgr._on_loop_done("proj")
+        callback = mgr._on_loop_done("proj", session_id=SID)
         callback(mock_task)
 
         calls = ws.broadcast.call_args_list
@@ -136,42 +146,44 @@ class TestOnLoopDoneWaiting:
         # Sub-agents should not be checked on error path
         sub_agent_mgr.list_active.assert_not_called()
 
-    def test_broadcast_stopped_on_cancelled_task(self):
-        """Fix 3B: CancelledError should broadcast 'stopped' so the frontend
-        doesn't get stuck showing a running indicator."""
+    def test_broadcast_idle_on_cancelled_task(self):
+        """Fix 3B: CancelledError should broadcast 'idle' so the frontend
+        doesn't get stuck showing a running indicator. A cancelled loop is
+        idle, not a distinct 'stopped' state; the breadcrumb is recorded in
+        last_terminal_event."""
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         mock_task = MagicMock()
         mock_task.exception.side_effect = asyncio.CancelledError()
 
-        callback = mgr._on_loop_done("proj")
+        callback = mgr._on_loop_done("proj", session_id=SID)
         callback(mock_task)
 
         ws.broadcast.assert_called_once()
         payload = ws.broadcast.call_args[0][1]
         assert payload["type"] == "agent.status"
-        assert payload["status"] == "stopped"
+        assert payload["status"] == "idle"
 
-    def test_broadcasts_stopped_when_session_stopped(self):
+    def test_broadcasts_idle_when_session_stopped(self):
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         mock_task = MagicMock()
         mock_task.exception.return_value = None
 
-        callback = mgr._on_loop_done("proj")
+        callback = mgr._on_loop_done("proj", session_id=SID)
         callback(mock_task)
 
         ws.broadcast.assert_called_once()
         event = ws.broadcast.call_args[0][1]
-        assert event["status"] == "stopped"
+        assert event["status"] == "idle"
         # Handle should be cleaned up
-        assert ("proj", "default") not in mgr._handles
+        assert ("proj", SID) not in mgr._handles
 
 
 class TestCheckSubAgentsDone:
@@ -182,7 +194,7 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         # First poll: still active. Second poll: done.
         call_count = [0]
@@ -194,7 +206,7 @@ class TestCheckSubAgentsDone:
         sub_agent_mgr.list_active.side_effect = list_active_side_effect
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj")
+            await mgr._check_sub_agents_done("proj", session_id=SID)
 
         # Should broadcast idle
         calls = ws.broadcast.call_args_list
@@ -207,12 +219,12 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(task_done=False)  # task not done = loop running
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj")
+            await mgr._check_sub_agents_done("proj", session_id=SID)
 
         # Should NOT broadcast — new loop handles its own status
         ws.broadcast.assert_not_called()
@@ -222,12 +234,12 @@ class TestCheckSubAgentsDone:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle(session_stopped=True)
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj")
+            await mgr._check_sub_agents_done("proj", session_id=SID)
 
         ws.broadcast.assert_not_called()
 
@@ -238,32 +250,40 @@ class TestCheckSubAgentsDone:
         sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await mgr._check_sub_agents_done("proj")
+            await mgr._check_sub_agents_done("proj", session_id=SID)
 
         ws.broadcast.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_poll_terminates_on_max_polls(self):
+    async def test_poll_survives_past_old_max_polls_horizon(self):
+        """Piece 3 Part B (REWRITTEN from test_poll_terminates_on_max_polls):
+        the 150-poll/300s force-stop is removed. A busy sub-agent keeps the
+        poll alive arbitrarily long; the poll exits idle only when the turn
+        actually closes — and never calls stop_all/stop."""
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
-        # Sub-agents always active (stuck)
-        sub_agent_mgr.list_active.return_value = [{"handle": "agent-a"}]
-
-        # Set low cap for testing
-        mgr._MAX_IDLE_POLLS = 3
+        sub_agent_mgr.list_active.return_value = [
+            {"handle": "agent-a", "status": "running"}]
+        sub_agent_mgr.stop_all = AsyncMock()
+        sub_agent_mgr.stop = AsyncMock()
 
         sleep_count = [0]
+
         async def counting_sleep(duration):
             sleep_count[0] += 1
+            if sleep_count[0] >= 200:  # well past the old 150-poll kill point
+                sub_agent_mgr.list_active.return_value = [
+                    {"handle": "agent-a", "status": "idle"}]
 
         with patch("asyncio.sleep", side_effect=counting_sleep):
-            await mgr._check_sub_agents_done("proj")
+            await mgr._check_sub_agents_done("proj", session_id=SID)
 
-        # Should have polled exactly 3 times, then forced idle
-        assert sleep_count[0] == 3
+        assert sleep_count[0] >= 200
+        sub_agent_mgr.stop_all.assert_not_awaited()
+        sub_agent_mgr.stop.assert_not_awaited()
         calls = ws.broadcast.call_args_list
         assert len(calls) == 1
         event = calls[0][0][1]
@@ -278,26 +298,26 @@ class TestStopAgentCancelsPolling:
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
-        # Simulate a running poll task
+        # Simulate a running poll task keyed by SessionKey (post-refactor).
         mock_poll_task = MagicMock()
         mock_poll_task.done.return_value = False
         mock_poll_task.cancel = MagicMock()
-        mgr._idle_poll_tasks["proj"] = mock_poll_task
+        mgr._idle_poll_tasks[("proj", SID)] = mock_poll_task
 
-        await mgr.stop_agent("proj")
+        await mgr.stop_agent("proj", session_id=SID)
 
         mock_poll_task.cancel.assert_called_once()
-        assert "proj" not in mgr._idle_poll_tasks
+        assert ("proj", SID) not in mgr._idle_poll_tasks
 
     @pytest.mark.asyncio
     async def test_stop_agent_no_poll_task_ok(self):
         mgr, ws, sub_agent_mgr = _make_manager()
 
         handle = _make_handle()
-        mgr._handles[("proj", "default")] = handle
+        mgr._handles[("proj", SID)] = handle
 
         # No poll task — should not raise
-        await mgr.stop_agent("proj")
-        assert "proj" not in mgr._idle_poll_tasks
+        await mgr.stop_agent("proj", session_id=SID)
+        assert ("proj", SID) not in mgr._idle_poll_tasks

@@ -4,6 +4,7 @@
 
 import { Check, FileText, Loader2, RotateCw, X } from 'lucide-react';
 import { humanSize } from '../lib/attachment-upload';
+import { useT } from '../i18n/useT';
 
 export interface AttachmentChipProps {
   filename: string;
@@ -31,6 +32,7 @@ export default function AttachmentChip({
   onRemove,
   onRetry,
 }: AttachmentChipProps) {
+  const t = useT();
   const isImage = mime.startsWith('image/');
   const isError = status === 'error';
   const isPendingOrUploading = status === 'pending' || status === 'uploading';
@@ -80,7 +82,7 @@ export default function AttachmentChip({
         <Loader2
           className="w-4 h-4 shrink-0 animate-spin"
           data-testid="chip-spinner"
-          aria-label="Uploading"
+          aria-label={t('attachmentChip.uploadingAria')}
         />
       )}
 
@@ -88,7 +90,7 @@ export default function AttachmentChip({
         <Check
           className="w-4 h-4 shrink-0 text-green-500"
           data-testid="chip-check"
-          aria-label="Uploaded"
+          aria-label={t('attachmentChip.uploadedAria')}
         />
       )}
 
@@ -96,7 +98,7 @@ export default function AttachmentChip({
         <button
           type="button"
           onClick={onRetry}
-          aria-label="Retry upload"
+          aria-label={t('attachmentChip.retryAria')}
           className="shrink-0 p-1 hover:text-foreground text-red-500 max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
         >
           <RotateCw className="w-4 h-4" />
@@ -107,7 +109,7 @@ export default function AttachmentChip({
         <button
           type="button"
           onClick={onRemove}
-          aria-label="Remove attachment"
+          aria-label={t('attachmentChip.removeAria')}
           className="shrink-0 p-1 text-muted-foreground hover:text-foreground rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
         >
           <X className="w-4 h-4" />

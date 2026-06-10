@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import sys
 import time
 from datetime import datetime, timezone
 from collections import deque
@@ -33,6 +34,17 @@ from agent_os.agent.tool_result_filters import dispatch_prefilter
 from agent_os.agent.tool_result_lifecycle import truncate_consumed_tool_results
 
 logger = logging.getLogger(__name__)
+
+# Permanent, always-on per-iteration diagnostics. Kept on a dedicated logger so
+# the loop's disposition/exit path is greppable and routable independently of
+# the noisy module logger. Records carry a structured `diag` dict on the
+# LogRecord (via extra=) plus a greppable "agent.diag.<event>" message. See
+# TASK-loop-diagnostic-instrumentation. Low-cost: one log call per iteration.
+_diag_logger = logging.getLogger("agent.diag")
+
+# Per-session cache-hit aggregation (Part 4D). Shares the provider's cache
+# audit channel so per-call and per-session lines land together in daemon.log.
+_cache_logger = logging.getLogger("orbital.cache_audit")
 
 # Default cost rates ($/1K tokens) used when no per-model pricing is available.
 _DEFAULT_COST_PER_1K_INPUT = 0.003
@@ -113,6 +125,14 @@ class AgentLoop:
         self._llm_failed = False
         self._on_session_end = on_session_end
 
+        # Per-session cache-hit telemetry (Part 4D). Accumulated across every
+        # run() of this loop (one loop == one session), logged at each run end.
+        # The CONTEXT.md on-judgment-update decision is an empirical bet on the
+        # prefix cache; this is the instrument that measures its impact.
+        self._cache_read_tokens_total = 0
+        self._prompt_input_tokens_total = 0
+        self._llm_call_count = 0
+
         # Periodic state refresh callback (async callable(trigger_name: str))
         # Injected by agent_manager so loop.py stays decoupled from workspace_files.
         self._on_session_end_refresh = on_session_end_refresh
@@ -146,9 +166,50 @@ class AgentLoop:
     def is_running(self) -> bool:
         return self._running
 
+    def get_completion_state(self) -> "tuple[str, str | None, str | None]":
+        """Return how the last run ended: (exit_reason, summary, block_reason).
+
+        ``exit_reason`` is one of ``complete`` | ``blocked`` | ``cancelled`` |
+        ``text`` (text-only — no completion tool called). The queue dispatcher
+        reads this after each run to route the item; this accessor formalizes
+        what was previously a raw read of the private ``_exit_*`` attributes.
+        """
+        return (self._exit_reason, self._exit_summary, self._exit_block_reason)
+
     @property
     def budget_spent_usd(self) -> float:
         return self._budget_spent_usd
+
+    # ------------------------------------------------------------------
+    # Diagnostics (permanent, always-on; see TASK-loop-diagnostic-instrumentation)
+    # ------------------------------------------------------------------
+    def _diag(self, event: str, **fields) -> None:
+        """Emit one structured diagnostic record to the ``agent.diag`` logger.
+
+        Observation only — never mutates session/prompt/cache state. The
+        structured payload rides on the LogRecord as ``record.diag`` (via
+        ``extra=``) so consumers assert on fields, not free text. project_id is
+        not available at the loop layer (it lives in agent_manager); session_id
+        / session_uuid identify the run.
+        """
+        payload = {
+            "event": event,
+            "session_id": getattr(self._session, "session_id", None),
+            "session_uuid": getattr(self._session, "session_uuid", None),
+            **fields,
+        }
+        # Render the payload into the message so it is greppable as a single
+        # line in plain daemon.log text (`grep 'agent.diag'`), and ALSO attach
+        # it structured on the record (`record.diag`) for programmatic/test use.
+        _diag_logger.info(
+            "agent.diag %s", json.dumps(payload, default=str, ensure_ascii=False),
+            extra={"diag": payload},
+        )
+
+    def _note_exit(self, name: str, iteration: int) -> None:
+        """Record the named loop-exit/continue path taken this iteration."""
+        self._loop_exit_path = name
+        self._diag("loop_exit", iteration=iteration, exit=name)
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
         """Stream LLM response from the primary provider.
@@ -210,6 +271,15 @@ class AgentLoop:
     async def run(self, initial_message: str | None = None,
                   initial_nonce: str | None = None) -> None:
         """Main loop entry point."""
+        if self._running:
+            # Re-entrancy guard: a second concurrent run() on the same loop would
+            # write two interleaved turns into one session. Reject rather than
+            # silently start a duplicate loop. (Defense-in-depth alongside the
+            # single-active-slot discipline.)
+            raise RuntimeError(
+                f"AgentLoop.run() re-entered while already running "
+                f"(session {getattr(self._session, 'session_id', '?')})"
+            )
         self._running = True
         # Reset queue exit-reason at the start of every run so the dispatcher
         # always reads a fresh value scoped to this run.
@@ -225,6 +295,9 @@ class AgentLoop:
         # no initial_message, so this reset must fire unconditionally —
         # not just when initial_message is provided.
         self._cancellation_marker_appended_this_turn = False
+        # Diagnostics: track exit path + appended-row delta for this run.
+        self._loop_exit_path = None
+        rows_at_run_start = None  # set before the while; guarded in finally
         try:
             # Resolve pending if not resuming from approval pause
             if self._session._paused_for_approval:
@@ -268,6 +341,11 @@ class AgentLoop:
             error_tracker: dict[str, dict] = {}  # tool_name -> {"error": str, "count": int}
             blocked_tools: set[str] = set()
 
+            # Diagnostics: row count at run start (after the initial user
+            # message is appended above) — the run_terminal disposition compares
+            # against this to detect a turn that appended nothing.
+            rows_at_run_start = len(self._session._messages)
+
             while True:
                 # Drain queued user messages before preparing context
                 queued = self._session.pop_queued_messages()
@@ -298,6 +376,7 @@ class AgentLoop:
                     self._session.append_system(
                         "Maximum iteration limit reached. Save your current state and stop."
                     )
+                    self._note_exit("max_iter", iteration)
                     break
 
                 # Check token budget
@@ -305,6 +384,7 @@ class AgentLoop:
                     self._session.append_system(
                         "Token budget exceeded. Save your current state and stop."
                     )
+                    self._note_exit("token_budget", iteration)
                     break
 
                 iteration += 1
@@ -350,6 +430,11 @@ class AgentLoop:
                 # message is idempotent.
                 self._turn_cancelled = False
 
+                # Diagnostics: row count at the start of this iteration's work,
+                # to classify the bottom-of-loop continue as tool_continue
+                # (rows grew) vs fell_through (nothing appended).
+                rows_at_iter_start = len(self._session._messages)
+
                 # Prepare context
                 context = self._context_manager.prepare()
 
@@ -381,6 +466,7 @@ class AgentLoop:
                     # block + _on_loop_done drain any queued messages and
                     # hot-resume a fresh loop task if needed, preserving
                     # sub-agents / browser pages / sandbox state.
+                    self._note_exit("cancel", iteration)
                     break
                 except ContextOverflowError:
                     self._inflight_stream = None
@@ -389,6 +475,7 @@ class AgentLoop:
                         self._session.append_system(
                             "Context overflow cannot be resolved. Save state and stop."
                         )
+                        self._note_exit("context_overflow", iteration)
                         break
                     self._context_manager.reduce_window(0.5)
                     continue
@@ -402,6 +489,7 @@ class AgentLoop:
                         self._session.append_system(
                             f"LLM error (non-recoverable): {e.message}. Stopping."
                         )
+                        self._note_exit("llm_error", iteration)
                         break
 
                     # Transient: rotate to next fallback provider
@@ -455,6 +543,7 @@ class AgentLoop:
                             f"LLM error after {llm_retries} retries: "
                             f"{e.message}. Stopping."
                         )
+                        self._note_exit("llm_error", iteration)
                         break
                     await asyncio.sleep(2 ** _retries_on_current)
                     continue
@@ -462,9 +551,33 @@ class AgentLoop:
                 # Successful stream completion — clear inflight task handle.
                 self._inflight_stream = None
 
+                # Diagnostics (Point 1): per-iteration finalized response shape,
+                # logged BEFORE any branch decision. `final_usage_chunk_seen`
+                # is the explicit named signal for the "no CACHE_AUDIT" anomaly.
+                self._diag(
+                    "response_shape",
+                    iteration=iteration,
+                    text_len=len(response.text or ""),
+                    tool_call_names=[
+                        normalize_tool_call(tc)["name"]
+                        for tc in (response.tool_calls or [])
+                    ],
+                    usage_present=bool(
+                        response.usage
+                        and (response.usage.input_tokens or response.usage.output_tokens)
+                    ),
+                    final_usage_chunk_seen=getattr(
+                        response, "final_usage_chunk_seen", False
+                    ),
+                )
+
                 # Track token usage
                 if response.usage:
                     cumulative_tokens += response.usage.input_tokens + response.usage.output_tokens
+                    # Per-session cache-hit aggregation (Part 4D)
+                    self._prompt_input_tokens_total += response.usage.input_tokens
+                    self._cache_read_tokens_total += response.usage.cache_read_tokens
+                    self._llm_call_count += 1
 
                 # Budget tracking (always active for spend persistence)
                 if response.usage:
@@ -482,6 +595,7 @@ class AgentLoop:
                                 f"Budget limit exceeded (${self._budget_spent_usd:.2f} / "
                                 f"${self._budget_limit_usd:.2f}). Stopping."
                             )
+                            self._note_exit("budget_stop", iteration)
                             break
                         else:  # "ask" — pause for user approval
                             self._session.append_system(
@@ -489,18 +603,29 @@ class AgentLoop:
                                 f"${self._budget_limit_usd:.2f}). Pausing for approval."
                             )
                             self._session.pause()
+                            self._note_exit("budget_pause", iteration)
                             break
 
                 # Text-only response: append and exit
                 if not response.has_tool_calls:
-                    self._session.append({
+                    assistant_msg = {
                         "role": "assistant",
                         "content": response.text,
                         "source": "management",
-                    })
+                    }
+                    # Carry reasoning through. finalize() writes
+                    # reasoning_content onto raw_message only when reasoning
+                    # exists, so mirror the tool-call persist path: include it
+                    # when present, never write an empty/None field. Dropping it
+                    # here is the silent-vanish bug for reasoned text-only turns.
+                    reasoning = (response.raw_message or {}).get("reasoning_content")
+                    if reasoning:
+                        assistant_msg["reasoning_content"] = reasoning
+                    self._session.append(assistant_msg)
                     truncate_consumed_tool_results(
                         self._session, response.text, iteration,
                     )
+                    self._note_exit("text_complete", iteration)
                     break
 
                 # Extract status
@@ -546,6 +671,7 @@ class AgentLoop:
                             "signal": "complete",
                             "payload": {"summary": summary},
                         })
+                        self._note_exit("task_complete", iteration)
                         _queue_signal_exit = True
                         break
                     if _tc["name"] == "mark_task_blocked":
@@ -563,6 +689,7 @@ class AgentLoop:
                             "signal": "blocked",
                             "payload": {"reason": reason},
                         })
+                        self._note_exit("task_blocked", iteration)
                         _queue_signal_exit = True
                         break
                 if _queue_signal_exit:
@@ -661,6 +788,7 @@ class AgentLoop:
                             intercepted_tc_id = tc["id"]
                             self._session._paused_for_approval = True
                             self._session.pause()
+                            self._note_exit("approval_pause", iteration)
                             exit_outer = True
                             break
 
@@ -703,9 +831,23 @@ class AgentLoop:
                         # Store result for observation-aware hash
                         _exec_result = result
 
+                        # yield_turn: a dispatch tool that delivered a task to a
+                        # sub-agent ends the management turn immediately so the
+                        # LLM cannot busy-poll it (which trips the ping-pong
+                        # guard). The result is already appended above
+                        # (tool_call_id paired), so resolve_pending_tool_calls
+                        # will not CANCEL it. The sub-agent's result is pushed
+                        # back later via on_completed and the loop restarts.
+                        if result.meta and result.meta.get("yield_turn"):
+                            logger.info("yield_turn: dispatch tool ended the management turn")
+                            self._note_exit("yield_turn", iteration)
+                            exit_outer = True
+                            break
+
                         # Pause if credential was requested (wait for user input)
                         if result.meta and result.meta.get("credential_request"):
                             self._session.pause()
+                            self._note_exit("credential_request", iteration)
                             exit_outer = True
                             break
                     except Exception as e:
@@ -729,6 +871,7 @@ class AgentLoop:
                             self._session.append_system(
                                 "Repetitive action detected. Save your state and try a different approach."
                             )
+                            self._note_exit("repetition", iteration)
                             exit_outer = True
                             break
 
@@ -746,6 +889,7 @@ class AgentLoop:
                                     f"accomplish, then try a fundamentally "
                                     f"different approach."
                                 )
+                                self._note_exit("ping_pong", iteration)
                                 exit_outer = True
                                 break
                         _prev_action_hash = action_hash
@@ -786,6 +930,7 @@ class AgentLoop:
                     # Resolve any tool calls that never got a result — these
                     # are the ones we skipped via the per-tool break above.
                     self._session.resolve_pending_tool_calls()
+                    self._note_exit("cancel", iteration)
                     break
 
                 # Resolve unprocessed tool calls from this batch on intercept-break
@@ -806,10 +951,12 @@ class AgentLoop:
                 # Check stopped
                 if self._session.is_stopped():
                     self._session.resolve_pending_tool_calls()
+                    self._note_exit("stopped", iteration)
                     break
 
                 # Check paused (redundant with exit_outer but kept for safety)
                 if self._session.is_paused():
+                    self._note_exit("paused", iteration)
                     break
 
                 # Check compaction
@@ -849,7 +996,13 @@ class AgentLoop:
                         flush_response = await flush_llm.complete(flush_context)
                         flush_text = flush_response.text or ""
                         if not compaction_mod.is_silent_response(flush_text):
-                            # Agent wants to save state — execute any tool calls
+                            # Agent wants to save state — execute any tool calls.
+                            # FO-1 invariant (audit 2026-06-03): this flush executor is
+                            # intentionally NOT interceptor-gated, and is scoped to project-state
+                            # persistence only (MEMORY_FLUSH_PROMPT directs PROJECT_STATE.md writes;
+                            # the flush completion is given no tool schemas). Do not repurpose it to
+                            # run arbitrary approval-required tools without routing through the
+                            # interceptor.
                             if flush_response.tool_calls:
                                 raw_msg = dict(flush_response.raw_message)
                                 raw_msg["source"] = "management"
@@ -881,11 +1034,20 @@ class AgentLoop:
                                             tc_id, f"Error: {e}",
                                         )
                             else:
-                                self._session.append({
+                                flush_msg = {
                                     "role": "assistant",
                                     "content": flush_text,
                                     "source": "management",
-                                })
+                                }
+                                # Carry reasoning through (same omission as the
+                                # main text-only persist). Reasoning lives on the
+                                # flush response's raw_message when present.
+                                _reasoning = (
+                                    flush_response.raw_message or {}
+                                ).get("reasoning_content")
+                                if _reasoning:
+                                    flush_msg["reasoning_content"] = _reasoning
+                                self._session.append(flush_msg)
                     except (ContextOverflowError, LLMError):
                         # Context too full for flush — skip and proceed to compaction
                         pass
@@ -907,18 +1069,71 @@ class AgentLoop:
                     if workspace:
                         compaction_mod.inject_reorientation(workspace, self._session)
 
+                # Bottom of the loop body: no named branch broke out, so this
+                # iteration is continuing to the next. Classify as tool_continue
+                # when rows grew this iteration, else fell_through — the
+                # catch-all for a path that produced no appended row (the
+                # original-bug shape), captured even though no named branch fired.
+                _appended_this_iter = len(self._session._messages) - rows_at_iter_start
+                self._note_exit(
+                    "tool_continue" if _appended_this_iter > 0 else "fell_through",
+                    iteration,
+                )
+
         finally:
             if not self._session._paused_for_approval:
                 self._session.resolve_pending_tool_calls()
             # Drain any remaining deferred messages
             for msg in self._session.pop_deferred_messages():
                 self._session.append(msg)
+            # Per-session cache-hit summary (Part 4D). Logged at every run-end
+            # boundary; the totals are cumulative across the session, so the
+            # last line for a session is its session total. Lets us compare
+            # cache hit rate before/after the CONTEXT.md on-judgment change.
+            if self._llm_call_count > 0 and self._prompt_input_tokens_total > 0:
+                _rate = self._cache_read_tokens_total / self._prompt_input_tokens_total
+                _cache_logger.info(
+                    "[CACHE_SESSION] session=%s calls=%d prompt_tokens=%d "
+                    "cached_tokens=%d cache_rate=%.1f%%",
+                    getattr(self._session, "session_uuid", "?"),
+                    self._llm_call_count,
+                    self._prompt_input_tokens_total,
+                    self._cache_read_tokens_total,
+                    _rate * 100,
+                )
             # NOTE: fire-and-forget asyncio.create_task(self._on_session_end())
             # was previously here. Removed in TASK-cancel-arch-04: the
             # synchronous session-end inside agent_manager.new_session() is
             # now the sole authoritative summarization path. The fire-and-
             # forget had no strong reference and would emit
             # "Task was destroyed but it is pending" on cancel.
+
+            # Diagnostics (Point 3): run-level terminal disposition. This is the
+            # authoritative capture of the original-bug fingerprint —
+            # `none_appended` means the loop exited without persisting any new
+            # row this turn. Runs even while an exception propagates through the
+            # finally (detected via sys.exc_info), which is logged as `error`.
+            _base = (
+                rows_at_run_start
+                if rows_at_run_start is not None
+                else len(self._session._messages)
+            )
+            _rows_appended = len(self._session._messages) - _base
+            if sys.exc_info()[0] is not None:
+                _disposition = "error"
+            elif _rows_appended == 0:
+                _disposition = "none_appended"
+            elif self._cancellation_marker_appended_this_turn or self._turn_cancelled:
+                _disposition = "cancel"
+            else:
+                _disposition = "normal"
+            self._diag(
+                "run_terminal",
+                disposition=_disposition,
+                rows_appended=_rows_appended,
+                exit_path=self._loop_exit_path,
+            )
+
             self._running = False
 
     # ------------------------------------------------------------------

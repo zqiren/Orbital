@@ -73,12 +73,15 @@ class TestSendCountLimit:
 
 
 class TestStartStopNotCounted:
-    """start, stop, list, status must not increment the send counter."""
+    """stop, list, status (and rejected actions) must not increment the send counter."""
 
     @pytest.mark.asyncio
-    async def test_start_not_counted(self):
+    async def test_removed_start_action_not_counted(self):
+        """start was removed from the tool surface (send spawns-on-demand);
+        a stray start is an unknown action and consumes no budget."""
         tool, _ = _make_tool(max_sends=1)
-        await tool.execute(action="start", agent="a")
+        result = await tool.execute(action="start", agent="a")
+        assert "unknown action" in result.content.lower()
         assert tool._send_count == 0
 
     @pytest.mark.asyncio

@@ -51,6 +51,12 @@ class QueueDispatcher:
     IDLE_WAIT_TIMEOUT_SEC = 5.0
     LOOP_WAIT_POLL_SEC = 2.0
     SUB_AGENT_STOP_TIMEOUT_SEC = 10.0
+    # After auto-starting an agent, poll run-status this often until it settles
+    # to 'idle' (so the queue item hot-resumes a dedicated run instead of being
+    # folded into the freshly-launched loop's in-flight turn). Bounded by the
+    # timeout, after which we inject anyway rather than hang.
+    AGENT_READY_POLL_SEC = 0.1
+    AGENT_READY_TIMEOUT_SEC = 30.0
 
     def __init__(
         self,
@@ -59,12 +65,16 @@ class QueueDispatcher:
         agent_manager,
         ws_manager=None,
         max_runtime_seconds: int = 1800,
+        workspace: str = "",
     ):
         self._project_id = project_id
         self._store = store
         self._agent_manager = agent_manager
         self._ws = ws_manager
         self._max_runtime_seconds = max_runtime_seconds
+        # Project workspace — used to resolve queue-item file_refs into the
+        # <attached_files> prefix (attachment symmetry with the chat composer).
+        self._workspace = workspace
         self._task: Optional[asyncio.Task] = None
         self._shutting_down = False
         self._idle_event = asyncio.Event()
@@ -90,8 +100,21 @@ class QueueDispatcher:
         if self._task is not None and not self._task.done():
             return
         self._shutting_down = False
-        self._task = asyncio.create_task(self._run())
+        self._ensure_run_task()
         logger.info("dispatcher(%s): started", self._project_id)
+
+    def _ensure_run_task(self) -> None:
+        """Idempotently (re)create the main drain task.
+
+        Safety net for B3: if the ``_run`` loop ever dies (e.g. some
+        CancelledError path the layer-1 guard didn't anticipate), the queue
+        would stay RUNNING with no task pulling items. Any transition back to
+        RUNNING (start / resume) calls this to self-heal a dead loop. A no-op
+        when the task is already live so we never double-spawn — two ``_run``
+        loops would race on the single agent slot.
+        """
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
 
     def reclaim_on_startup(self) -> dict:
         """Reconcile queue state with on-disk records at daemon startup.
@@ -216,7 +239,8 @@ class QueueDispatcher:
         # in place — no rotation, no swap — so chat messages sent during
         # pause land in the parked attempt's session, and resume picks up
         # exactly where pause left off.
-        loop_obj = self._agent_manager.get_loop(self._project_id)
+        holder_sid = self._agent_manager.current_holder_session_id(self._project_id)
+        loop_obj = self._agent_manager.get_loop(self._project_id, session_id=holder_sid)
         if loop_obj is not None:
             try:
                 await loop_obj.terminate()
@@ -242,6 +266,13 @@ class QueueDispatcher:
         self._stalled_item_id = None
         self._store.set_queue_state(QueueRunState.RUNNING)
 
+        # B3 safety net: ensure the main drain loop is alive before we resume.
+        # If a prior pause cancellation killed _run (the layer-1 guard is the
+        # primary defense, but belt-and-suspenders), resume alone must bring
+        # the queue back to life — re-create the task here so that after the
+        # parked item finishes, the loop is there to pull the next queued item.
+        self._ensure_run_task()
+
         # Find a parked attempt: head item in RUNNING with an attempts list.
         head = self._store.head()
         parked_item = head if (head and head.state == ItemState.RUNNING) else None
@@ -255,7 +286,7 @@ class QueueDispatcher:
             # No switch_session needed — pause did not swap, the parked
             # session is still active. Set the loop's queue_state so the
             # approval branch picks it up before _start_loop fires.
-            loop_obj = self._agent_manager.get_loop(self._project_id)
+            loop_obj = self._agent_manager.get_loop(self._project_id, session_id=session_id)
             if loop_obj is not None:
                 try:
                     loop_obj._queue_state = "running"
@@ -295,7 +326,7 @@ class QueueDispatcher:
                 self._project_id, item.id,
             )
             return
-        await self._await_and_handle(item)
+        await self._await_and_handle(item, session_id)
 
     # ------------------------------------------------------------------
     # Concern 5: retry a BLOCKED item on its preserved session
@@ -362,7 +393,7 @@ class QueueDispatcher:
         # 7. State → RUNNING. Also set loop._queue_state so Phase-3
         # approval-as-block behaviour fires on the retry.
         self._store.set_item_state(item_id, ItemState.RUNNING)
-        loop_obj = self._agent_manager.get_loop(self._project_id)
+        loop_obj = self._agent_manager.get_loop(self._project_id, session_id=prior_session_id)
         if loop_obj is not None:
             try:
                 loop_obj._queue_state = "running"
@@ -414,7 +445,7 @@ class QueueDispatcher:
         # through the standard handler — same shape as _resume_attempt.
         # Note: inject_message (Case 2: idle session + alive handle) already
         # calls _start_loop internally, so we do NOT call _start_loop here.
-        asyncio.create_task(self._retry_attempt_handler(item))
+        asyncio.create_task(self._retry_attempt_handler(item, prior_session_id))
 
         self._broadcast_state_changed(QueueRunState.RUNNING.value)
         return {
@@ -425,14 +456,15 @@ class QueueDispatcher:
             "mode": mode,
         }
 
-    async def _retry_attempt_handler(self, item: ItemRecord) -> None:
+    async def _retry_attempt_handler(self, item: ItemRecord, session_id: str) -> None:
         """Wait for the retry's loop run to finish and route the exit.
 
         Mirrors the shape of _resume_attempt — _await_and_handle only reads
         `item.id`, so the stale `state` / `attempts` on the captured item
-        object don't cause incorrect routing.
+        object don't cause incorrect routing. ``session_id`` is the retry's
+        (reused prior) session, threaded so loop reads target it.
         """
-        await self._await_and_handle(item)
+        await self._await_and_handle(item, session_id)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -502,69 +534,160 @@ class QueueDispatcher:
     # ------------------------------------------------------------------
 
     async def _dispatch_one(self, item: ItemRecord) -> None:
-        # First-time dispatch always runs against the default session. The
-        # queue is in RUNNING or IDLE state here; after a stop+resume cycle
-        # the dispatcher's resume() path handles session swaps explicitly
-        # via _resume_attempt rather than coming through _dispatch_one.
-        session = self._agent_manager.get_session(self._project_id)
-        if session is None:
-            logger.warning(
-                "dispatcher(%s): no agent session, waiting for one",
+        # The dispatcher is the project's session-lifecycle manager. Gate on
+        # onboarding: a project with no captured state must not be
+        # auto-started (same gate /queue/start applied before).
+        if not self._agent_manager.is_onboarding_complete(self._project_id):
+            logger.info(
+                "dispatcher(%s): onboarding incomplete; not auto-starting agent",
                 self._project_id,
             )
             await self._wait_idle()
             return
 
+        # Busy-slot guard: a project has exactly one active-loop slot. If
+        # another session already holds it (e.g. a long-running onboarding /
+        # research turn the user kicked off, or a still-draining attempt),
+        # minting a fresh session and injecting would race that turn and
+        # inject_message would reject — burning an attempt and (pre-fix)
+        # wedging the head item as a zombie RUNNING. Back off WITHOUT minting
+        # a session/attempt; the main loop re-polls every IDLE_WAIT_TIMEOUT_SEC
+        # and will dispatch once the slot is free. (Reuses the existing
+        # current_holder_session_id accessor — no new machinery.)
+        #
+        # getattr-guarded: the real AgentManager always defines this accessor;
+        # only lightweight test doubles that model a single ready session omit
+        # it. For those, "no holder" (slot free) is the correct semantic, so we
+        # default to a lambda returning None rather than crashing the dispatch.
+        _holder_fn = getattr(
+            self._agent_manager, "current_holder_session_id", lambda _pid: None,
+        )
+        holder = _holder_fn(self._project_id)
+        if holder is not None:
+            logger.info(
+                "dispatcher(%s): loop slot held by session %s; deferring "
+                "dispatch of item %s (no attempt minted)",
+                self._project_id, holder, item.id,
+            )
+            await self._wait_idle()
+            return
+
+        # Each queue item runs in its OWN fresh session — the same new_session
+        # the user gets from "+ new session", then an inject. No rotation, no
+        # reuse of a prior session, no action on whatever finished before.
+        # new_session mints the id; the session materializes (handle, loop,
+        # JSONL) on the inject below via inject_message Case 3.
+        try:
+            minted = await self._agent_manager.new_session(self._project_id)
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): new_session failed for item %s",
+                self._project_id, item.id,
+            )
+            await self._wait_idle()
+            return
+        session_id = minted["session_id"]
+
         # Compute attempt_number BEFORE append_attempt so the header reflects
         # the new attempt's 1-based index. First dispatch: len(attempts)==0
-        # → attempt_number=1. Concern-5 retries arrive with prior attempts
-        # already recorded, so the counter naturally increments.
+        # → attempt_number=1. Concern-5 retries arrive via _resume_attempt /
+        # the retry path (which reuse prior_session_id), not through here.
         attempt_number = len(item.attempts) + 1
 
         self._store.set_item_state(item.id, ItemState.RUNNING)
-        attempt = AttemptRecord(session_id=session.session_id)
-        self._store.append_attempt(item.id, attempt)
+        self._store.append_attempt(item.id, AttemptRecord(session_id=session_id))
 
         logger.info(
             "dispatcher(%s): dispatching item %s attempt=%d (session=%s)",
-            self._project_id, item.id, attempt_number, session.session_id,
+            self._project_id, item.id, attempt_number, session_id,
         )
 
-        loop_obj = self._agent_manager.get_loop(self._project_id)
-        if loop_obj is not None:
+        # Prepend the <attached_files> block for any staged file_refs, so a
+        # dispatched item carries attachments the same way a user's Send does.
+        attach_prefix = ""
+        if getattr(item, "file_refs", None):
             try:
-                loop_obj._queue_state = "running"
+                from agent_os.api.routes._attachment_formatter import (
+                    format_prefix_from_refs,
+                )
+                attach_prefix = format_prefix_from_refs(
+                    self._workspace, item.file_refs,
+                )
             except Exception:
-                pass
+                logger.warning(
+                    "dispatcher(%s): attachment prefix failed for item %s",
+                    self._project_id, item.id, exc_info=True,
+                )
 
         header = (
             f"[QUEUE ITEM | id={item.id} | attempt={attempt_number}]\n"
             + self.HEADER_CONTRACT
         )
-        wrapped_content = header + item.content
+        wrapped_content = attach_prefix + header + item.content
 
         try:
-            # F7: target the active session id (may be ``chat_<uuid>`` post-
-            # stop/resume, default after auto-start, or a parked attempt's
-            # id). ``session.session_id`` reflects whatever ``switch_session``
-            # most recently set on the handle, matching how it was re-keyed.
+            # Inject into the fresh session. inject_message Case 3 auto-starts
+            # a loop for this new session_id in queue mode (queue_state=
+            # "running"), so the completion contract is enforced from the
+            # first turn. This is the same inject the user's Send uses, plus
+            # the queue flag — there is no separate start, so no auto-start
+            # race to wait out.
             await self._agent_manager.inject_message(
                 self._project_id, wrapped_content,
-                session_id=session.session_id,
+                session_id=session_id, queue_state="running",
             )
         except Exception:
             logger.exception(
                 "dispatcher(%s): inject failed for item %s",
                 self._project_id, item.id,
             )
+            # Do NOT leave the item RUNNING — that strands the queue head as a
+            # zombie (RUNNING with no live attempt), wedging the dispatcher
+            # until daemon restart (observed live on item_cb75800b6b18 during
+            # the 2026-06-08 queue stress run). Close the attempt INTERRUPTED
+            # and reclaim it with the SAME poison-pill convention
+            # reclaim_on_startup uses: bump interrupted_count, re-queue at head
+            # under the cap, BLOCKED at the cap.
             self._store.close_latest_attempt(
                 item.id,
                 outcome=AttemptOutcome.INTERRUPTED,
                 block_reason="inject failed",
             )
+            self._reclaim_interrupted_item(item.id)
+            self._idle_event.set()
             return
 
-        await self._await_and_handle(item)
+        await self._await_and_handle(item, session_id)
+
+    # Poison-pill threshold for reclaiming an interrupted item. interrupted
+    # attempts >= this → BLOCKED instead of re-queued. Mirrors the constant
+    # baked into reclaim_on_startup so a runtime inject failure and a
+    # restart-time interruption are treated identically.
+    INTERRUPTED_REQUEUE_CAP = 2
+
+    def _reclaim_interrupted_item(self, item_id: str) -> None:
+        """Re-queue or BLOCK an item whose latest attempt was INTERRUPTED.
+
+        Shared by the inject-failure path in _dispatch_one and (in spirit) the
+        startup reconciler: increment interrupted_count, re-queue at head with
+        priority while under INTERRUPTED_REQUEUE_CAP, mark BLOCKED at the cap.
+        The attempt records are left intact for diagnosis.
+        """
+        new_count = self._store.increment_interrupted(item_id)
+        if new_count >= self.INTERRUPTED_REQUEUE_CAP:
+            self._store.set_item_state(item_id, ItemState.BLOCKED)
+            logger.warning(
+                "dispatcher(%s): item %s blocked after %d interruptions",
+                self._project_id, item_id, new_count,
+            )
+        else:
+            self._store.set_item_state(item_id, ItemState.QUEUED)
+            self._store.move_to_head(item_id)
+            logger.info(
+                "dispatcher(%s): item %s requeued at head after inject failure "
+                "(interruptions=%d)",
+                self._project_id, item_id, new_count,
+            )
 
     # ------------------------------------------------------------------
     # Contract delivery: header + corrective turn
@@ -601,11 +724,39 @@ class QueueDispatcher:
         "contract violation and the queue will advance past this item.]"
     )
 
-    async def _await_and_handle(self, item: ItemRecord) -> None:
+    @staticmethod
+    def _read_completion(loop_obj) -> "tuple[str, str | None, str | None]":
+        """Read (exit_reason, summary, block_reason) from the loop.
+
+        Prefers the formal AgentLoop.get_completion_state() accessor; falls back
+        to the raw _exit_* attributes for lightweight test doubles. Returns a
+        text-only exit when there is no loop.
+        """
+        if loop_obj is None:
+            return ("text", None, None)
+        getter = getattr(loop_obj, "get_completion_state", None)
+        if callable(getter):
+            return getter()
+        return (
+            getattr(loop_obj, "_exit_reason", "text"),
+            getattr(loop_obj, "_exit_summary", None),
+            getattr(loop_obj, "_exit_block_reason", None),
+        )
+
+    async def _await_and_handle(self, item: ItemRecord, session_id: str) -> None:
         """Wait for the in-flight loop task to finish then route the outcome
         based on AgentLoop._exit_reason. Honors watchdog, stop, and (CHANGE
         2 of the architecture amendments) gives the agent one corrective
         turn if it exits text-only on a queue item.
+
+        ``session_id`` is the session this item is running in (a fresh one per
+        item from _dispatch_one, or the parked/prior session on resume/retry).
+        All loop reads target it explicitly — a project may now hold several
+        sessions, so the first-handle ``_find_project_handle`` is ambiguous.
+
+        When an item finishes, the dispatcher takes NO action on the
+        now-idle session — it simply stays on disk, navigable, and the next
+        item gets its own fresh session. (There is no rotation step.)
 
         The corrective_turn_used flag is a local variable, so a retry of a
         blocked item (which calls _await_and_handle afresh from
@@ -614,14 +765,45 @@ class QueueDispatcher:
         corrective_turn_used = False
 
         while True:
-            loop_obj = self._agent_manager.get_loop(self._project_id)
+            loop_obj = self._agent_manager.get_loop(self._project_id, session_id=session_id)
             gen_at_start = self._stop_generation
 
             try:
                 await asyncio.wait_for(
-                    self._wait_for_loop_done(),
+                    self._wait_for_loop_done(session_id),
                     timeout=self._max_runtime_seconds,
                 )
+            except asyncio.CancelledError:
+                # B3: pause() halts the live attempt by calling terminate(),
+                # which does task.cancel() on the agent-loop task. That
+                # cancellation surfaces in _wait_for_loop_done (it awaits
+                # asyncio.shield(task)) as CancelledError and is re-raised; it
+                # then lands HERE. This is NOT a cancellation of the dispatcher
+                # task itself — _run / the dispatcher task is only ever
+                # cancelled via self._task.cancel() under self._shutting_down
+                # (see shutdown()). So if we are not shutting down, treat this
+                # exactly like the pause guard below: clean return, attempt
+                # preserved (no close, no advance, no rotation), letting _run
+                # continue and idle on PAUSED. Swallowing CancelledError is
+                # safe here precisely because the cancel target was the child
+                # loop task, not the _run task.
+                #
+                # Only a genuine dispatcher shutdown (self._shutting_down) — or
+                # a cancellation that arrived without a corresponding pause
+                # (no _stop_generation bump) — should propagate to kill _run.
+                if self._shutting_down:
+                    raise
+                if self._stop_generation != gen_at_start:
+                    logger.info(
+                        "dispatcher(%s): item %s loop cancelled by pause; "
+                        "attempt preserved (no close, no advance, no rotation)",
+                        self._project_id, item.id,
+                    )
+                    return
+                # A cancellation with no pause and no shutdown is unexpected —
+                # re-raise so it isn't silently swallowed (preserves asyncio
+                # cancellation semantics for any path we didn't anticipate).
+                raise
             except asyncio.TimeoutError:
                 logger.warning(
                     "dispatcher(%s): item %s exceeded runtime cap %ds; terminating",
@@ -645,11 +827,8 @@ class QueueDispatcher:
                     first_turn_signaled=False,
                     corrective_used=corrective_turn_used,
                 )
-                # Rotate BEFORE setting state to BLOCKED so a parallel main-loop
-                # tick can't pick up the next queued item while the rotation is
-                # still in flight. Belt-and-suspenders with the head-RUNNING
-                # guard in _run.
-                await self._rotate_session_for_advance()
+                # No rotation: the timed-out session stays idle on disk and
+                # remains navigable; the next item gets its own fresh session.
                 self._store.set_item_state(item.id, ItemState.BLOCKED)
                 self._broadcast_advance(item.id, "interrupted")
                 if self._store.auto_idle_if_empty():
@@ -670,12 +849,8 @@ class QueueDispatcher:
                 )
                 return
 
-            loop_obj = self._agent_manager.get_loop(self._project_id)
-            exit_reason = getattr(loop_obj, "_exit_reason", "text") if loop_obj else "text"
-            exit_summary = getattr(loop_obj, "_exit_summary", None) if loop_obj else None
-            exit_block_reason = (
-                getattr(loop_obj, "_exit_block_reason", None) if loop_obj else None
-            )
+            loop_obj = self._agent_manager.get_loop(self._project_id, session_id=session_id)
+            exit_reason, exit_summary, exit_block_reason = self._read_completion(loop_obj)
 
             # Cancelled out-of-band (e.g. via the /cancel HTTP endpoint while
             # a queue item is dispatching) — distinct from pause(), which
@@ -713,7 +888,6 @@ class QueueDispatcher:
                     first_turn_signaled=not corrective_turn_used,
                     corrective_used=corrective_turn_used,
                 )
-                await self._rotate_session_for_advance()
                 self._store.set_item_state(item.id, ItemState.DONE)
                 self._broadcast_advance(item.id, "completed")
                 if self._store.auto_idle_if_empty():
@@ -733,7 +907,6 @@ class QueueDispatcher:
                     corrective_used=corrective_turn_used,
                     reason=exit_block_reason,
                 )
-                await self._rotate_session_for_advance()
                 self._store.set_item_state(item.id, ItemState.BLOCKED)
                 self._broadcast_advance(item.id, "blocked")
                 if self._store.auto_idle_if_empty():
@@ -753,8 +926,14 @@ class QueueDispatcher:
                     self._project_id, item.id,
                 )
                 try:
+                    # Seam 3 / D1 (Root D): forward the item's session id.
+                    # inject_system_message is passthrough-None, so omitting it
+                    # keys (pid, None) → handle-miss → "no_session" and the
+                    # corrective message is silently dropped. The session this
+                    # item runs in is in scope; route the message to it.
                     await self._agent_manager.inject_system_message(
                         self._project_id, self.CORRECTIVE_TURN_PROMPT,
+                        session_id=session_id,
                     )
                 except Exception:
                     # If inject fails we cannot ask the agent again — fall
@@ -795,7 +974,6 @@ class QueueDispatcher:
                 corrective_used=corrective_turn_used,
                 reason=contract_reason,
             )
-            await self._rotate_session_for_advance()
             self._store.set_item_state(item.id, ItemState.BLOCKED)
             self._broadcast_advance(item.id, "blocked")
             if self._store.auto_idle_if_empty():
@@ -827,18 +1005,11 @@ class QueueDispatcher:
             first_turn_signaled, corrective_used, reason_snip,
         )
 
-    async def _rotate_session_for_advance(self) -> None:
-        try:
-            await self._agent_manager.new_session(self._project_id)
-        except Exception:
-            logger.exception(
-                "dispatcher(%s): new_session failed during advance",
-                self._project_id,
-            )
-
-    async def _wait_for_loop_done(self) -> None:
+    async def _wait_for_loop_done(self, session_id: str) -> None:
         while not self._shutting_down:
-            task = self._agent_manager.get_loop_task(self._project_id)
+            task = self._agent_manager.get_loop_task(
+                self._project_id, session_id=session_id,
+            )
             if task is None or task.done():
                 return
             try:

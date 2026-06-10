@@ -23,8 +23,10 @@ Tests:
   3. test_cancel_via_http_idle_loop — 200 {"status": "idle"} when task.done().
   4. test_cancel_then_send_continues — handle still in _handles after cancel,
      session not stopped, stop_all not called.
-  5. test_cancel_versus_stop_endpoint_isolation — /cancel keeps handle;
-     /stop pops handle.
+  5. test_cancel_versus_stop_endpoint_isolation — /cancel (HTTP) keeps
+     handle; stop_agent() (internal method) pops handle. The /stop HTTP
+     route has been removed; its removal is asserted in
+     tests/integration/test_stop_removed.py.
 """
 
 from __future__ import annotations
@@ -194,6 +196,8 @@ def _inject_mock_handle(mgr, project_id):
     session = MagicMock()
     session.is_stopped = MagicMock(return_value=False)
     session.stop = MagicMock()
+    # Explicitly not in approval pause (MagicMock auto-attr defaults to truthy).
+    session._paused_for_approval = False
 
     async def _never_done():
         await asyncio.sleep(9999)
@@ -296,7 +300,9 @@ async def test_cancel_via_http_during_stream():
     - returns {"status": "cancelled"} within 5s
     - session JSONL contains cancellation marker (cancelled_by_user=True)
     - agent task still alive in _handles (not popped)
-    - sub-agent stop_all NOT called (this is /cancel, not /stop)
+    - sub-agent stop_all IS called — /cancel now propagates to sub-agents
+      (TASK-cancel-propagates-to-subagents). The handle/session stay alive;
+      only the in-flight work is interrupted.
     - ws.broadcast called with agent.status: idle
     """
     with tempfile.TemporaryDirectory() as workspace:
@@ -357,8 +363,10 @@ async def test_cancel_via_http_during_stream():
             assert (project_id, "default") in mgr._handles
             assert mgr._handles[(project_id, "default")] is handle
 
-            # /cancel must NOT call stop_all (that's /stop's job).
-            mgr._sub_agent_manager.stop_all.assert_not_awaited()
+            # /cancel now propagates to sub-agents: stop_all is awaited (a
+            # no-op here since no sub-agents were dispatched, but the call
+            # must fire so any in-flight sub-agent is torn down).
+            mgr._sub_agent_manager.stop_all.assert_awaited()
         finally:
             # The cancel-only path leaves the loop running (by design — that's
             # what /cancel means). To tear down the test cleanly, mark the
@@ -401,7 +409,12 @@ async def test_cancel_via_http_idle_loop():
 
 @pytest.mark.asyncio
 async def test_cancel_then_send_continues():
-    """After /cancel, handle stays in _handles, session not stopped, stop_all not called."""
+    """After /cancel, handle stays in _handles and the session is not stopped.
+
+    stop_all IS called now (cancel propagates to sub-agents,
+    TASK-cancel-propagates-to-subagents) — but the handle/session survive so
+    the next message hot-resumes the same conversation.
+    """
     mgr, ws, sub_agent_mgr, _ = _make_manager_mock_only()
     pid = "proj-cancel-continue"
     handle, task = _inject_mock_handle(mgr, pid)
@@ -418,8 +431,8 @@ async def test_cancel_then_send_continues():
         # Session not stopped.
         handle.session.stop.assert_not_called()
 
-        # stop_all not called.
-        sub_agent_mgr.stop_all.assert_not_awaited()
+        # stop_all IS called — cancel propagates to sub-agents.
+        sub_agent_mgr.stop_all.assert_awaited()
     finally:
         client.close()
         _restore(saved)
@@ -432,10 +445,16 @@ async def test_cancel_then_send_continues():
 
 @pytest.mark.asyncio
 async def test_cancel_versus_stop_endpoint_isolation():
-    """/cancel keeps handle alive; /stop pops the handle.
+    """/cancel (HTTP) keeps handle alive; stop_agent() (internal) pops it.
 
-    Single AgentManager with two project handles — one hit with /cancel,
-    one with /stop. Verifies the two routes have isolated effects.
+    Single AgentManager with two project handles — one hit with the /cancel
+    HTTP route, one with the internal stop_agent() teardown method. Verifies
+    the two surfaces have isolated effects.
+
+    The /stop HTTP route has been removed entirely; the isolation here is
+    now between /cancel (HTTP, keeps handle) and stop_agent() (internal
+    method, pops handle). The /stop-route-removed assertion lives in
+    tests/integration/test_stop_removed.py.
     """
     mgr, ws, _, _ = _make_manager_mock_only()
     pid_cancel = "proj-iso-cancel"
@@ -452,18 +471,19 @@ async def test_cancel_versus_stop_endpoint_isolation():
         assert resp_cancel.json()["status"] == "cancelled"
         assert (pid_cancel, "default") in mgr._handles
 
-        # /stop — mark target task done first so stop_agent's shield-wait
-        # doesn't hang.
+        # stop_agent() — mark target task done first so the shield-wait
+        # doesn't hang. The /stop HTTP route no longer exists, so we invoke
+        # the internal teardown method directly. (The /stop-route-removed
+        # assertion lives in tests/integration/test_stop_removed.py.)
         task_stop.cancel()
         try:
             await task_stop
         except (asyncio.CancelledError, Exception):
             pass
 
-        resp_stop = client.post(f"/api/v2/agents/{pid_stop}/stop")
-        assert resp_stop.status_code == 200
+        await mgr.stop_agent(pid_stop, session_id="default")
 
-        # /stop'd agent: handle popped.
+        # stop_agent'd agent: handle popped.
         assert (pid_stop, "default") not in mgr._handles
         # /cancel'd agent: handle still alive.
         assert (pid_cancel, "default") in mgr._handles

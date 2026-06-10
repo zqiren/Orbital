@@ -48,6 +48,7 @@ class PromptContext:
     last_state_update_turn: int | None = None    # turn# of last state checkpoint
     last_state_update_ts: str | None = None      # ISO timestamp of last checkpoint
     turns_since_last_update: int | None = None   # turns elapsed since last checkpoint
+    cold_start: bool = False  # first-session import scan mode (Stage 1-3)
 
     def __post_init__(self):
         if self.active_sub_agents is None:
@@ -230,6 +231,7 @@ class PromptBuilder:
         cached = _SEP.join(filter(None, [
             self._identity(context),
             self._autonomy_directive(context),
+            self._workspace_persistence(context),
             self._tooling(context),
             self._safety(context),
             self._status_reporting(),
@@ -297,6 +299,45 @@ class PromptBuilder:
             ),
         }
         return directives[context.autonomy]
+
+    def _workspace_persistence(self, context: PromptContext) -> str | None:
+        """Establish that the agent is a persistent worker in a persistent
+        workspace, and that hard-won understanding belongs in durable
+        artifacts. Static across sessions → lives in the cached prefix.
+
+        Omitted for scratch projects: a quick-action assistant is not a
+        long-running persistent worker.
+        """
+        if context.is_scratch:
+            return None
+        return (
+            "## You Are a Persistent Worker\n\n"
+            "You are a persistent worker in a persistent workspace. Your context "
+            "window is temporary — it is summarized when it fills and reset between "
+            "sessions. Your workspace files are permanent and shared across every "
+            "session in this project. Anything valuable that exists only in your "
+            "context window will be lost. Anything you write to your workspace "
+            "survives.\n\n"
+            "You are not a one-shot assistant. This project may run across many "
+            "sessions over days or weeks. Work as if a future version of you — with "
+            "no memory of this conversation — will need to pick up where you left "
+            "off.\n\n"
+            "## Externalize Hard-Won Understanding\n\n"
+            "When you build up understanding that took real effort — analyzing "
+            "multiple files, researching an external API, mapping an architecture, "
+            "investigating a bug — write it down as a markdown file in the "
+            "workspace. Write these artifacts when the understanding would save "
+            "significant effort for a future session AND is relevant to this "
+            "project's objectives. Then record the file's location and one-line "
+            "purpose in CONTEXT.md so future sessions can find it.\n\n"
+            "Calibrate by importance: routine edits and simple tasks do not need an "
+            "artifact. Significant, reusable understanding does. The more central "
+            "the work is to the project's goals, the more worth preserving it is.\n\n"
+            "Do NOT write artifacts for: raw command output, trivial edits, "
+            "information already captured in existing project docs, or temporary "
+            "scratch work. There is no prescribed directory — write the artifact "
+            "wherever fits the project and record its path in CONTEXT.md."
+        )
 
     def _tooling(self, context: PromptContext) -> str:
         lines = ["You have the following tools available:"]
@@ -395,8 +436,34 @@ class PromptBuilder:
         from agent_os.agent.project_paths import ProjectPaths
         goals_path = ProjectPaths(context.workspace).project_goals
         content = self._read_truncated(goals_path)
-        if content is None:
+        if content is None and context.cold_start:
             return (
+                "## COLD-START WORKSPACE SCAN\n\n"
+                "This is an imported project with an existing workspace. The user has\n"
+                "consented to a one-time scan. A deterministic [WORKSPACE SKELETON] (every\n"
+                "gitignore-respected file + size) has been provided to you as a system\n"
+                "message. Work through three stages:\n\n"
+                "STAGE 2 — READ (informed by the skeleton sizes):\n"
+                "- Use the skeleton's sizes to plan BEFORE opening files. Small total →\n"
+                "  read broadly. Large total → read high-signal files (README, config,\n"
+                "  entry points, the largest meaningful sources) and sample the rest.\n"
+                "- You have NO precise token meter. You will see a coarse 'Context usage:'\n"
+                "  line each turn. When it crosses ~70%, STOP reading and move to Stage 3\n"
+                "  with what you have. State what you skipped.\n\n"
+                "STAGE 3 — PROPOSE → CONFIRM → WRITE:\n"
+                "- Propose, in chat, your read of the project (descriptive State) and a\n"
+                "  DRAFT of suggested Goals. Report which files you read and which you skipped.\n"
+                "- State is yours to assert. Goals are a SUGGESTION the user owns — invite edits.\n"
+                "- Do NOT propose or write prescriptive Instructions; a scan cannot infer intent.\n"
+                "- Write NOTHING until the user confirms (ok / yes / looks good / any affirmative).\n"
+                "- On confirmation: (1) write the agreed Goals to\n"
+                f"  {context.workspace}/orbital/instructions/project_goals.md using the `write`\n"
+                "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
+                "  (2) call the `checkpoint_state` tool to persist PROJECT_STATE.md and CONTEXT.md.\n"
+                "- After writing, announce readiness and begin working."
+            )
+        if content is None:
+            base = (
                 "## ONBOARDING MODE\n\n"
                 "This is a new project. No project_goals.md exists yet. Your priority is to understand\n"
                 "what the user wants before doing any work.\n\n"
@@ -416,10 +483,33 @@ class PromptBuilder:
                 "5. Once confirmed (user says ok/yes/looks good/any affirmative, OR you've hit 5 exchanges),\n"
                 f"   write project_goals.md to {context.workspace}/orbital/instructions/project_goals.md using the structure:\n"
                 "   Mission, Triggers, Scope, Rules, Preferences.\n"
-                "6. Keep project_goals.md under 1500 words. Distill, don't dump.\n\n"
-                "DO NOT use any tools (read, shell, write, edit, browser, etc.) until onboarding is complete.\n"
-                "The only tool call you make during onboarding is the final `write` to create project_goals.md.\n"
-                "After writing project_goals.md, announce that you're ready and begin working."
+                "6. Keep project_goals.md under 1500 words. Distill, don't dump.\n"
+            )
+            # Scratch (quick-action) projects skip workspace mapping — they are
+            # ephemeral and excluded from CONTEXT.md/persistence machinery
+            # (see _memory and _workspace_persistence).
+            if context.is_scratch:
+                return base + (
+                    "\nDO NOT use any tools (read, shell, write, edit, browser, etc.) until onboarding "
+                    "is complete.\n"
+                    "The only tool call you make during onboarding is the final `write` to create "
+                    "project_goals.md.\n"
+                    "After writing project_goals.md, announce that you're ready and begin working."
+                )
+            return base + (
+                "7. After writing project_goals.md, explore the workspace:\n"
+                "   - List the top-level directory structure\n"
+                "   - Read key files (README, config files, entry points) to understand the project\n"
+                "   - Create CONTEXT.md (in orbital/) with your understanding using the standard structure:\n"
+                "     Overview, Key Files, Architecture, Conventions, External Context\n"
+                "   - Keep CONTEXT.md under 1000 tokens\n"
+                "   - If the workspace is empty, still create CONTEXT.md: fill Overview from the\n"
+                "     project goals; Key Files and Architecture may state \"No files yet — will\n"
+                "     populate as the project develops.\"\n"
+                "8. Once CONTEXT.md is written, announce that you're ready and begin working.\n\n"
+                "DO NOT use any tools until goal-setting is complete. After writing project_goals.md,\n"
+                "use read/list tools to explore the workspace, then write CONTEXT.md. After CONTEXT.md\n"
+                "is written, announce readiness and begin working."
             )
         return (
             "## PROJECT DIRECTIVE\n\n"
@@ -484,8 +574,20 @@ class PromptBuilder:
             "- LESSONS.md: Force-injected every turn. Auto-consolidated at session end.\n"
             "  You may append mid-session when you recover from errors or discover non-obvious\n"
             "  workarounds. Keep entries under 100 words. Session-end routine handles dedup.\n"
+            "- CONTEXT.md: Your map of this project — overview, key files, architecture,\n"
+            "  conventions, and external context. This is injected into every turn. If it's\n"
+            "  empty or stale, you are working blind. Update it whenever you learn something\n"
+            "  structurally important about the project. Keep under 1000 tokens.\n"
             "These files are your memory across sessions. If you don't maintain them, you'll lose context\n"
             "when the session restarts. Update them proactively.\n\n"
+            "Update CONTEXT.md whenever your understanding of the project changes in a way\n"
+            "a future session would need to know — a new important file, a structural\n"
+            "insight, a new artifact you wrote, a corrected assumption. You do not need to\n"
+            "wait for a checkpoint. Use the edit tool to keep it current. Keep it under\n"
+            "1000 tokens; when detail outgrows that budget, move the detail into a separate\n"
+            "artifact and leave a pointer in CONTEXT.md.\n"
+            "The Key Files section is where you record artifacts you've written:\n"
+            "each line is a path plus a one-line purpose.\n\n"
             "When you produce deliverables the user will want to keep (reports, generated code,\n"
             "exports, summaries, documentation), place them in the workspace at a path that\n"
             "fits the project — e.g., docs/, src/, output/, or wherever the user already\n"
@@ -526,8 +628,10 @@ class PromptBuilder:
                 lines.append(f"  Routing hint: {routing_hint}")
         lines.append("")
         lines.append("To interact with sub-agents, use the agent_message tool:")
-        lines.append('- Start: agent_message(action="start", agent="<handle>")')
-        lines.append('- Send message: agent_message(action="send", agent="<handle>", message="your task here")')
+        lines.append('- Dispatch a task: agent_message(action="send", agent="<handle>", message="your task here")')
+        lines.append("  send is the ONLY dispatch verb: it spawns the agent automatically if it is not")
+        lines.append("  running, delivers the task, and you are resumed when the agent completes. There")
+        lines.append("  is no separate start step — a task is never delivered without a send.")
         lines.append('- Check status: agent_message(action="status", agent="<handle>")')
         lines.append('- Stop: agent_message(action="stop", agent="<handle>")')
         lines.append("")
@@ -561,10 +665,10 @@ class PromptBuilder:
 
         lines = ["## Sub-Agent Coordination\n"]
         lines.append("You coordinate sub-agents via the agent_message tool. Key behaviors:")
-        lines.append("- agent_message(send) returns IMMEDIATELY. It does NOT wait for the sub-agent to finish.")
+        lines.append("- agent_message(send) returns IMMEDIATELY and ENDS YOUR TURN. You cannot send another message or poll in the same turn.")
+        lines.append("- After dispatching, WAIT. You are AUTOMATICALLY RESUMED with a [Sub-agent] system message when the sub-agent completes or errors — you do not need to (and cannot) poll for it.")
         lines.append("- Sub-agent output goes directly to the user's chat. You do not see it in your conversation.")
-        lines.append("- You are notified via [Sub-agent] system messages when sub-agents complete or error.")
-        lines.append('- To check progress: agent_message(action="status", agent="handle")')
+        lines.append('- Do NOT call agent_message(action="status") in a loop to wait — that does nothing useful and wastes a turn. Use status only if the user explicitly asks about progress.')
         lines.append("- To see detailed output: read the transcript file path from the notification message.")
         lines.append("- Sub-agent results appear as file changes in the workspace. Use the read tool to inspect.\n")
 
@@ -636,12 +740,13 @@ class PromptBuilder:
         lines = [f"Context usage: ~{pct}%."]
         if context.context_usage_pct > 0.70:
             lines.append(
-                "You are using significant context. Consider updating PROJECT_STATE.md now.\n"
+                "You are using significant context. Consider updating PROJECT_STATE.md and CONTEXT.md now.\n"
                 "Reflection: did this session produce a multi-step workflow worth saving as a skill?"
             )
         if context.context_usage_pct > 0.85:
             lines.append(
                 "URGENT: Save all important state to PROJECT_STATE.md immediately. "
+                "Update CONTEXT.md if you learned anything structural about the project. "
                 "Context will be compacted soon."
             )
         return "\n".join(lines)
