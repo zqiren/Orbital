@@ -43,7 +43,22 @@ cd web && npx tsc --noEmit
 
 Must produce zero errors.
 
-### 3. Daemon Integration Test (MANDATORY)
+### 3. Frontend Unit Tests (Vitest)
+
+Vitest + React Testing Library is wired up in `web/`. Tests live at `web/src/**/*.test.{ts,tsx}`.
+
+```bash
+cd web && npm run test:run
+```
+
+When to run it:
+- **Required** when you touch code that has existing tests covering it.
+- **Encouraged** when you add non-trivial logic (hooks, utilities, parsers, state machines, message-shape transforms). Add a test alongside the change.
+- **Skip** for pure UI tweaks (styling, copy, layout) where there's nothing to assert beyond what the eye can see.
+
+Vitest runs in jsdom — it does **not** replace the daemon integration test or the QR-code mobile test. It cannot catch layout bugs, WebSocket behavior, real-device rendering, or backend integration. Treat it as a fast logic gate, not a substitute for end-to-end verification.
+
+### 4. Daemon Integration Test (MANDATORY)
 
 After unit tests pass, restart the daemon with new code and test the actual behavior:
 
@@ -61,7 +76,7 @@ Then verify the change works end-to-end:
 - For frontend changes: start Vite with `--host` and print the QR code so the user can test on mobile (see Frontend QR Code section below)
 - For chat/message changes: check `/api/v2/agents/{pid}/chat` to verify message shape in session
 
-### 4. What Counts as "Tested"
+### 5. What Counts as "Tested"
 
 - API endpoint returns expected response codes and body
 - Messages appear in session JSONL with correct `role`, `source`, `content`
@@ -149,6 +164,43 @@ After making code changes to the daemon or backend services, ALWAYS restart the 
 ## React Anti-Patterns to Avoid
 
 - **Never rely on closure variables mutated inside `setState` updaters.** React 19 batching makes the read timing unpredictable — the updater may be deferred to the render phase, so a local variable set inside the updater can still be `false` when read outside it. Use `flushSync` if you need synchronous state computation, or restructure to avoid cross-boundary communication entirely. See the `toggleDirectory` fix in `FileExplorer.tsx` for a concrete example.
+
+## Internationalization (i18n)
+
+The web UI is bilingual (English + Simplified Chinese). All user-facing strings
+go through `t('key')` from `web/src/i18n/useT.ts`, backed by the typed catalog
+`web/src/i18n/strings.ts` (the runtime source of truth, generated once from
+`docs/i18n/ui-terms.zh-Hans.csv`). The language dropdown lives in Global
+Settings; the choice persists in `localStorage['orbital.locale']` (per-device,
+no backend). Full rationale and the maintainability verdict on the CSV approach
+are in `docs/i18n/MAINTAINABILITY.md`.
+
+**When adding or changing UI, remember the translation surface:**
+
+- Use `t('your.key')` — never a bare string literal in JSX. Add a catalog entry
+  (`en` required, `zh` optional). Find a component's existing keys with
+  `node web/scripts/keys-for.mjs <File.tsx>`.
+- Missing `zh` renders English via the `zh → en → key` fallback. **Ship
+  English-first; never block a feature on translation.** Translate a surface
+  when it stabilizes, not on every churn.
+- Run `node web/scripts/check-i18n.mjs` before committing UI changes (warns on
+  missing zh, **errors** on placeholder mismatch / missing en).
+- **Never hand-edit `docs/i18n/ui-terms.zh-Hans.csv` in Excel** — it mangles
+  leading `+`/`=`/`-`/`@` cells into `#NAME?` (this corrupted 3 rows here). Edit
+  in a CSV-safe editor, then regenerate with `node web/scripts/gen-i18n.mjs`.
+- **Plurals:** use two keys (`.one` / `.other`) chosen in code — no ICU. See
+  `blocked.aria.one`/`.other` in `BlockedBadge.tsx`.
+- **Counts/word order:** bake `{n}` into the string (zh word order differs).
+- **Non-React code** (utils, module-level helpers, class components) can't call
+  the `useT()` hook — thread an **optional translator param defaulting to
+  English** (`(k, v) => translate('en', k, v)`) so callers/tests that omit it
+  get byte-identical output. See `chatTransform.ts` and `ChatView.tsx`'s
+  `capsuleSummaryText`. Bind it to `locale` in a `useMemo`, not the unstable `t`.
+- **Don't translate** dynamic/backend strings (provider notes, file paths, model
+  names, agent output) — those aren't UI chrome.
+- When touching layout-sensitive UI, verify Chinese fits via a Playwright
+  EN-baseline + ZH-overflow screenshot pass (long zh strings can overflow
+  fixed-width controls).
 
 ## Release Process
 
@@ -324,6 +376,149 @@ If any of these become priorities, add them as a separate section rather than in
 - **`com.apple.quarantine` xattrs should be stripped** (`xattr -cr dist/Orbital.app`) to avoid Gatekeeper nags. `com.apple.provenance` is a restricted kernel-added xattr on every Sequoia-built binary — it cannot be stripped by userspace and is **not** the cause of drag-install failures (the broken seal is).
 - The bundle is ad-hoc signed, so first launch triggers Gatekeeper. Users must right-click → **Open** once, or we need a Developer ID + notarization (stubs already in the script).
 - `create-dmg` (from Homebrew) produces nicer DMGs but isn't required; the `hdiutil` fallback path is what CI/users without brew hit — keep it correct.
+
+## Release Process
+
+Cutting an Orbital release means producing platform-specific installers (`.exe` for Windows, `.dmg` for macOS), tagging the SHA, and publishing to GitHub Releases. PyInstaller cannot cross-compile, so each platform is built on its native machine.
+
+### Pre-flight (run once, on either platform)
+
+1. **Confirm clean working tree:**
+   ```bash
+   git status      # must be clean
+   git rev-parse HEAD
+   ```
+
+2. **Bump version strings.** Six files currently hardcode the version and drift independently — update **all six**:
+   - `pyproject.toml` (`version` field, line 7)
+   - `web/package.json` (`version` field, line 4)
+   - `agent_os/desktop/agentos-macos.spec` (`CFBundleShortVersionString` and `CFBundleVersion`, lines 95–96)
+   - `installer/agentos-setup.iss` (`AppVersion`, line 6)
+   - `scripts/build-macos.sh` (`DMG_NAME="Orbital-{X.Y.Z}-macOS.dmg"`)
+   - `scripts/build-desktop.sh` (the `echo "Installer: installer/Output/Orbital-Setup-{X.Y.Z}.exe"` line)
+
+   `agent_os/desktop/agentos.spec` (Windows) does **not** hardcode a version — skip it. Commit with `chore: bump version to v{X.Y.Z}`.
+
+3. **Verify clean build from cold state** (catches `.tsbuildinfo`-cached failures like the v0.5.1 regression):
+   ```bash
+   rm -rf web/node_modules web/dist web/.tsbuildinfo
+   cd web && npm ci && npx tsc --noEmit && npm run build && cd ..
+   python -m pytest tests/unit/ -q
+   ```
+   All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
+
+### Windows build
+
+**Machine requirement:** Windows 10/11 with Python 3.x, Node.js, Git Bash (or WSL), and Inno Setup installed.
+
+1. From the repo root in Git Bash:
+   ```bash
+   bash scripts/build-desktop.sh
+   ```
+   This is the Windows build path — it uses `agentos.spec`, copies `icon.ico`, and invokes `iscc installer/agentos-setup.iss` if `iscc` is on PATH.
+
+2. Verify outputs exist:
+   - PyInstaller bundle at `dist/Orbital/Orbital.exe`, with PyInstaller 6.x onedir datas under `dist/Orbital/_internal/` (e.g. `dist/Orbital/_internal/agent_os/vendor/rg/rg.exe`, `dist/Orbital/_internal/patchright/`).
+   - The bundle must include `rg.exe` (ripgrep — required for the `grep` tool to work on user machines).
+
+3. The Inno Setup installer is produced by `iscc installer/agentos-setup.iss` (already invoked by step 1). Output: `installer/Output/Orbital-Setup-{X.Y.Z}.exe`.
+
+4. Smoke test on a clean Windows VM (or fresh user account):
+   - Install via the `.exe`
+   - Launch Orbital
+   - Create a test project
+   - Verify the SmartScreen warning is the only "scary" dialog (expected — installer is unsigned)
+   - Run an agent with a prompt that exercises `grep` to confirm ripgrep is bundled correctly
+
+**Output filename convention:** `Orbital-{version}-Windows-Setup.exe`
+
+### macOS build
+
+**Machine requirement:** Apple Silicon Mac (M1 or later), macOS 13+ (Ventura), Python 3.x, Node.js, `create-dmg` (or `hdiutil` fallback).
+
+**Note on architecture:** `agentos-macos.spec` sets no explicit `target_arch`, so PyInstaller produces a bundle matching the host architecture — building on Apple Silicon yields an arm64-only Python interpreter. The bundled *ripgrep* ships both arch variants (`macos-arm64`, `macos-x86_64`), but the app itself does not. Confirm at build time:
+```bash
+file dist/Orbital.app/Contents/MacOS/Orbital
+```
+
+1. From the repo root:
+   ```bash
+   bash scripts/build-macos.sh
+   ```
+
+2. Verify outputs exist:
+   ```bash
+   ls -lh dist/Orbital-{version}-macOS.dmg
+   ls -lh dist/Orbital.app/Contents/MacOS/Orbital
+   ```
+
+3. **Sanity-check that platform-specific assets are bundled** (these have caused regressions before):
+   ```bash
+   # ripgrep for grep tool — both arch subdirs must be present
+   ls dist/Orbital.app/Contents/Resources/agent_os/vendor/rg/
+   # expected: macos-arm64  macos-x86_64
+
+   # Patchright driver for browser automation
+   ls dist/Orbital.app/Contents/Resources/patchright/driver/ | head -3
+
+   # App Nap suppression code
+   grep -l "beginActivity\|app_nap" agent_os/platform/macos/provider.py
+
+   # Window close intercept
+   grep -l "miniaturize\|windowShouldClose" agent_os/desktop/main.py
+   ```
+
+4. Smoke test on a clean Mac (or new user account):
+   - Mount the `.dmg`, drag to Applications
+   - First launch: expect Gatekeeper warning ("cannot be opened because Apple cannot check it for malicious software"). User must Right-click → Open → Open to bypass. Document this in release notes.
+   - Verify agent runs, grep tool works, browser automation launches.
+
+**Output filename convention:** `Orbital-{version}-macOS.dmg`
+
+**Code signing:** Not currently configured. `scripts/build-macos.sh` contains commented-out `codesign` placeholders (Developer ID + notarytool) for future use. Defer until there is a signed Developer ID certificate available.
+
+### Tag and publish (run once, after both platform builds succeed)
+
+1. **Tag from the SHA that was built:**
+   ```bash
+   git tag -a v{X.Y.Z} -m "v{X.Y.Z}"
+   git push origin v{X.Y.Z}
+   ```
+
+2. **Create GitHub Release** tied to the tag:
+   - Title: `v{X.Y.Z}`
+   - Upload both `Orbital-{X.Y.Z}-Windows-Setup.exe` and `Orbital-{X.Y.Z}-macOS.dmg` as release assets
+   - Write release notes covering: user-visible changes, known issues (including the unsigned-installer warnings on both platforms), and the install instructions
+
+3. **Update the README install links** if they reference a specific version rather than `/releases/latest`.
+
+### Post-release verification
+
+Within 24 hours of publishing:
+
+- Download both installers from the public Releases page (not local artifacts) on a fresh machine each
+- Run through the smoke test in each platform section
+- If a regression is found: do **not** delete or modify the release; cut a v{X.Y.Z+1} patch instead
+
+### Hotfix workflow
+
+If a bug is reported on a tagged version while main has moved ahead:
+
+1. `git checkout -b hotfix/v{X.Y.Z+1} v{X.Y.Z}`
+2. Apply the fix
+3. Tag, build, publish v{X.Y.Z+1} via the steps above
+4. Cherry-pick the fix back to main
+5. Delete the hotfix branch
+
+### Out of scope (intentional)
+
+- CI / GitHub Actions automation — manual builds only for now (`.github/workflows/` does not exist).
+- Code signing (Windows or macOS).
+- Auto-update mechanisms.
+- Homebrew cask, winget, or other package-manager distribution.
+- Notarization (macOS) — gated on signing first.
+
+If any of these become priorities, add them as a separate section rather than inlining into the existing flow.
 
 ## Known Issues
 
