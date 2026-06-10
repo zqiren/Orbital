@@ -129,9 +129,9 @@ subAgentToggle.empty,No sub-agents installed. Install them from global Settings 
 global.title,Global Settings,heading,GlobalSettings.tsx,Page title for global settings,全局设置,
 global.language,Language,label,GlobalSettings.tsx,Label for the UI language dropdown,语言,
 global.back,Back,button,GlobalSettings.tsx; SubAgentSettings.tsx,Back button in global settings,返回,Dedupe target.
-global.intro,"Configure default LLM settings. These are used as fallback when a project does not specify its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,配置默认 LLM 设置。当项目空间未指定自己的 API 密钥、模型或 Base URL 时，将使用这些默认值作为回退。,"Keep LLM, API, Base URL."
+global.intro,"Defaults used when a project doesn't set its own API key, model, or base URL.",description,GlobalSettings.tsx,Intro paragraph for global settings,当项目空间未设置自己的 API 密钥、模型或 Base URL 时使用的默认值。,"Keep LLM, API, Base URL."
 global.aboutYou.label,About You,label,GlobalSettings.tsx,Field label for user preferences,你的偏好,
-global.aboutYou.hint,"Preferences that apply across all projects. E.g., ""I'm a senior Python developer"", ""I prefer concise responses""",description,GlobalSettings.tsx,Helper text for the About You field,"适用于所有项目空间。例如：""""我是一名资深 Python 开发者""""、""""我喜欢简洁的回复""""。",Keep Python.
+global.aboutYou.hint,"Applies to all projects. E.g. ""senior Python dev"", ""prefer concise replies"".",description,GlobalSettings.tsx,Helper text for the About You field,适用于所有项目空间。例如「资深 Python 开发者」「偏好简洁回复」。,Keep Python.
 global.aboutYou.placeholder,Tell your agents about yourself...,placeholder,GlobalSettings.tsx,Placeholder for the About You textarea,向你的Agent介绍一下你自己…,
 global.scratch.label,Quick Tasks Workspace,label,GlobalSettings.tsx,Field label for the scratch workspace path,快速任务工作目录,
 global.scratch.hint,Where Quick Tasks stores files,description,GlobalSettings.tsx,Helper for scratch workspace,快速任务存储文件的位置,
@@ -188,7 +188,7 @@ llm.saving,Saving...,status,LLMProviderSettings.tsx,Save button label while savi
 llm.saveError,Failed to save settings.,message_error,LLMProviderSettings.tsx,Error saving LLM settings,保存设置失败。,
 fallback.heading,Fallback Models,heading,FallbackModelsEditor.tsx,Collapsible header for fallback models,备用模型,
 fallback.configuredCount,({n} configured),misc,FallbackModelsEditor.tsx,Collapsed-header count of configured fallbacks,（已配置 {n} 个）,
-fallback.intro,"When the primary model fails with transient errors (rate limits, outages), the agent rotates through these fallback models. Leave empty to use default retry behavior.",description,FallbackModelsEditor.tsx,Explains fallback model behavior,当主模型因临时错误（限流、宕机）失败时，Agent会切换备用模型。留空则默认重试。,
+fallback.intro,"If the primary model hits transient errors, the agent tries these in order. Empty = default retry.",description,FallbackModelsEditor.tsx,Explains fallback model behavior,主模型遇到临时错误时，Agent 会依次尝试这些备用模型。留空则使用默认重试。,
 fallback.customKey,(custom key),misc,FallbackModelsEditor.tsx,Tag shown when an entry uses its own API key,（自定义密钥）,
 fallback.remove,Remove fallback,tooltip,FallbackModelsEditor.tsx,Title on the remove-fallback button,移除,
 fallback.model.placeholder,"e.g. gpt-4o, claude-sonnet-4-20250514",placeholder,FallbackModelsEditor.tsx,Example model names placeholder,例如 gpt-4o、claude-sonnet-4-20250514,Keep model id examples.
@@ -198,7 +198,7 @@ fallback.add,Add,button,FallbackModelsEditor.tsx,Confirms adding a fallback entr
 fallback.cancel,Cancel,button,FallbackModelsEditor.tsx,Cancels the add-fallback form,取消,Dedupe target.
 fallback.addCta,Add fallback model,button,FallbackModelsEditor.tsx,Opens the add-fallback form,添加备份模型,
 credStore.loading,Loading credentials...,status,CredentialStore.tsx,Loading state for credential list,正在加载密钥…,
-credStore.empty,"No saved credentials. When an agent needs to log into a website, it will request credentials through a secure modal.",empty_state,CredentialStore.tsx,Shown when no credentials saved,尚无已保存的密钥。Agent登录网站时，将会通过弹窗请求密钥。,
+credStore.empty,No saved credentials. Agents request them through a secure prompt when needed.,empty_state,CredentialStore.tsx,Shown when no credentials saved,暂无保存的凭据。Agent 需要时会通过安全弹窗请求。,
 credStore.addButton,Add credential,button,CredentialStore.tsx,Opens the new-credential form,添加密钥,
 credStore.form.title,New Credential,heading,CredentialStore.tsx,Title of the add-credential form,新建密钥,
 credStore.form.name.placeholder,Name (e.g. GitHub),placeholder,CredentialStore.tsx,Placeholder for credential name,名称（例如 GitHub）,Keep GitHub.
@@ -385,7 +385,7 @@ wizard.getStarted,Get Started →,button,SetupWizard.tsx,Finishes the wizard,开
 wizard.browser.opening,Browser open — sign in and close it...,status,SetupWizard.tsx,Button/status while warmup browser is open,浏览器已打开——请登录需要agent访问的帐号并关闭…,
 wizard.openBrowser,Open Browser,button,SetupWizard.tsx,Launches the warmup browser,打开浏览器,
 subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page title,子Agent,
-subAgentSettings.intro,Configure how Orbital invokes each sub-agent CLI. Settings here are daemon-level — they apply to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),配置 Orbital 调用子Agent方式。全局生效。,Do not translate Orbital; CLI as-is.
+subAgentSettings.intro,How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目空间。,Do not translate Orbital; CLI as-is.
 subAgentSettings.refreshing,Refreshing...,status,SubAgentSettings.tsx,Button label while refreshing,刷新中…,
 subAgentSettings.refresh,Refresh,button,SubAgentSettings.tsx,Refreshes the sub-agent list,刷新,
 subAgentSettings.credNote,"Sub-agent credentials are stored by the sub-agent itself, not by Orbital.",description,SubAgentSettings.tsx,Italic note about credential storage,子Agent密钥由子Agent自身存储。,Do not translate Orbital.
@@ -437,7 +437,7 @@ pairPhone.relay.step3,Confirm the connection on your phone,description,PairPhone
 pairPhone.relay.expiresIn,Expires in {time},status,PairPhone.tsx,Countdown until the pairing code expires,{time} 后过期,
 pairPhone.relay.newCode,New code,button,PairPhone.tsx,Generates a new pairing code,新建配对码,
 pairPhone.relay.useTitle,Use Orbital on your phone,heading,PairPhone.tsx,Idle-state heading,在手机上使用 Orbital,Do not translate Orbital.
-pairPhone.relay.useBody,"Pair your phone to monitor agents, approve actions, and send messages remotely. Your phone connects through a secure cloud relay.",description,PairPhone.tsx,Idle-state body,配对手机以远程监控Agent、批准操作和发送消息。你的手机通过安全的云中继连接。,cloud relay → 云中继.
+pairPhone.relay.useBody,"Monitor agents, approve actions, and message remotely — via a secure cloud relay.",description,PairPhone.tsx,Idle-state body,远程监控 Agent、批准操作并发送消息——通过安全云中继连接。,cloud relay → 云中继.
 pairPhone.relay.noRelayError,Cloud relay is not configured. Set the AGENT_OS_RELAY_URL environment variable and restart the daemon to enable remote pairing.,message_error,PairPhone.tsx,Error when relay not configured (503),未配置服务器。请设置 AGENT_OS_RELAY_URL 环境变量并重启进程以启用远程配对。,Do not translate AGENT_OS_RELAY_URL.
 pairPhone.relay.genCodeFailed,Failed to generate pairing code,message_error,PairPhone.tsx,Generic pairing-code failure,生成配对码失败,
 pairPhone.relay.generating,Generating...,status,PairPhone.tsx,Button label while generating code,生成中…,
