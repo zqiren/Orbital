@@ -4,6 +4,7 @@
 
 import { Send } from 'lucide-react';
 import { useState } from 'react';
+import { useT } from '../i18n/useT';
 
 interface QueueComposerProps {
   onSubmit: (content: string, opts: { priority: number; review: boolean }) => Promise<void> | void;
@@ -16,6 +17,7 @@ export default function QueueComposer({
   disabled,
   hint,
 }: QueueComposerProps) {
+  const t = useT();
   const [value, setValue] = useState('');
   const [pinned, setPinned] = useState(false);
   const [review, setReview] = useState(false);
@@ -52,7 +54,7 @@ export default function QueueComposer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Add to queue — describe a task or paste a brief"
+          placeholder={t('queue.composer.placeholder')}
           rows={1}
           disabled={disabled}
           className="flex-1 resize-none bg-transparent leading-5 text-[13px] text-primary placeholder:text-secondary/60 focus:outline-none disabled:opacity-50"
@@ -61,11 +63,11 @@ export default function QueueComposer({
         <button
           onClick={() => void handleSubmit()}
           disabled={!canSubmit}
-          aria-label="Add to queue"
+          aria-label={t('queue.composer.submit.aria')}
           data-testid="queue-composer-submit"
           className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-white text-[11.5px] font-medium px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors max-md:min-h-[40px]"
         >
-          <Send className="w-3 h-3" /> Queue
+          <Send className="w-3 h-3" /> {t('queue.composer.submit')}
         </button>
       </div>
       <div className="flex items-center gap-3 mt-2 text-xs text-secondary max-md:flex-wrap">
@@ -80,7 +82,7 @@ export default function QueueComposer({
               onChange={(e) => setPinned(e.target.checked)}
               className="w-3.5 h-3.5"
             />
-            Pin to top
+            {t('queue.composer.pinToTop')}
           </label>
           <label className="flex items-center gap-1 cursor-pointer select-none">
             <input
@@ -89,7 +91,7 @@ export default function QueueComposer({
               onChange={(e) => setReview(e.target.checked)}
               className="w-3.5 h-3.5"
             />
-            Review before advance
+            {t('queue.composer.reviewBeforeAdvance')}
           </label>
         </div>
       </div>

@@ -18,6 +18,7 @@ import {
 import { api, BASE_URL, isRelayMode } from '../config';
 import type { FileEntry, DirectoryListing, FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
+import { useT } from '../i18n/useT';
 
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -34,6 +35,7 @@ interface TreeNode {
 }
 
 export default function FileExplorer({ projectId }: FileExplorerProps) {
+  const t = useT();
   const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
   const [rootLoading, setRootLoading] = useState(true);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -172,7 +174,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
       e.target.value = '';
 
       if (file.size > MAX_UPLOAD_SIZE) {
-        setUploadError(`File too large (${formatSize(file.size)}). Maximum is 10 MB.`);
+        setUploadError(t('fileExplorer.tooLarge', { size: formatSize(file.size) }));
         return;
       }
 
@@ -208,17 +210,17 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
           } catch {
             detail = body;
           }
-          throw new Error(detail || 'Upload failed');
+          throw new Error(detail || t('fileExplorer.uploadFailed'));
         }
 
         refreshRoot();
       } catch (err) {
-        setUploadError(err instanceof Error ? err.message : 'Upload failed');
+        setUploadError(err instanceof Error ? err.message : t('fileExplorer.uploadFailed'));
       } finally {
         setUploading(false);
       }
     },
-    [projectId, refreshRoot],
+    [projectId, refreshRoot, t],
   );
 
   return (
@@ -235,7 +237,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
           {rootLoading ? (
             <TreeSkeleton />
           ) : rootNodes.length === 0 ? (
-            <p className="text-sm text-secondary px-2 py-1">No files found</p>
+            <p className="text-sm text-secondary px-2 py-1">{t('fileExplorer.noFiles')}</p>
           ) : (
             rootNodes.map((node) => (
               <TreeItem
@@ -285,7 +287,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
             ) : (
               <Plus size={18} />
             )}
-            <span className="hidden md:inline">{uploading ? 'Uploading...' : 'Upload File'}</span>
+            <span className="hidden md:inline">{uploading ? t('fileExplorer.uploading') : t('fileExplorer.uploadFile')}</span>
           </button>
         </div>
       </div>
@@ -303,7 +305,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
             className="md:hidden flex items-center gap-1.5 px-4 py-3 text-sm text-secondary hover:text-primary transition-colors border-b border-border w-full"
           >
             <ArrowLeft size={16} />
-            Back to files
+            {t('fileExplorer.backToFiles')}
           </button>
         )}
         <FilePreview
@@ -325,6 +327,7 @@ interface TreeItemProps {
 }
 
 function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItemProps) {
+  const t = useT();
   const isDirectory = node.entry.type === 'directory';
   const isSelected = node.path === selectedPath;
 
@@ -386,7 +389,7 @@ function TreeItem({ node, depth, selectedPath, onToggle, onFileClick }: TreeItem
               className="text-xs text-secondary py-1"
               style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
             >
-              Empty directory
+              {t('fileExplorer.emptyDir')}
             </p>
           )}
         </div>
@@ -402,6 +405,7 @@ interface FilePreviewProps {
 }
 
 function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const handleDownload = useCallback((content: string, mime: string, filename: string) => {
     const bytes = Uint8Array.from(atob(content), c => c.charCodeAt(0));
@@ -419,7 +423,7 @@ function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
   if (!selectedPath) {
     return (
       <div className="flex items-center justify-center h-full min-h-[200px]">
-        <p className="text-sm text-secondary">Select a file to preview</p>
+        <p className="text-sm text-secondary">{t('fileExplorer.selectFile')}</p>
       </div>
     );
   }
@@ -443,7 +447,7 @@ function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
   if (!fileContent) {
     return (
       <div className="flex items-center justify-center h-full min-h-[200px]">
-        <p className="text-sm text-secondary">Unable to load file</p>
+        <p className="text-sm text-secondary">{t('fileExplorer.unableToLoad')}</p>
       </div>
     );
   }
@@ -501,7 +505,7 @@ function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
                 className="inline-flex items-center gap-1.5 bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
               >
                 <Download size={14} />
-                Download
+                {t('fileExplorer.download')}
               </button>
             )}
           </div>
@@ -520,13 +524,13 @@ function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
           className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors ml-2 shrink-0"
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
         </button>
       </div>
       {fileContent.truncated && (
         <div className="px-4 py-2 bg-sidebar border-b border-border">
           <p className="text-xs text-secondary">
-            File truncated -- showing first 500KB
+            {t('fileExplorer.truncated')}
           </p>
         </div>
       )}

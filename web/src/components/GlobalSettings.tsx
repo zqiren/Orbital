@@ -11,6 +11,7 @@ import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
+import { useT } from '../i18n/useT';
 
 interface GlobalSettingsProps {
   onBack: () => void;
@@ -26,6 +27,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const { locale, setLocale } = useLocale();
+  const t = useT();
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v2/settings`)
@@ -64,12 +66,12 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-[720px] mx-auto py-10 px-6 max-md:px-4">
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-xl font-semibold text-primary">Global Settings</h1>
+          <h1 className="text-xl font-semibold text-primary">{t('global.title')}</h1>
           <button
             onClick={onBack}
             className="text-sm text-secondary hover:text-primary transition-all duration-150"
           >
-            Back
+            {t('global.back')}
           </button>
         </div>
 
@@ -90,8 +92,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         </div>
 
         <p className="text-sm text-secondary mb-6">
-          Configure default LLM settings. These are used as fallback when a project
-          does not specify its own API key, model, or base URL.
+          {t('global.intro')}
         </p>
 
         <LLMProviderSettings mode="global" />
@@ -109,16 +110,16 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         <div className="mt-8 pt-6 border-t border-border space-y-4">
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              About You
+              {t('global.aboutYou.label')}
             </label>
             <p className="text-xs text-secondary mb-2">
-              Preferences that apply across all projects. E.g., &quot;I&apos;m a senior Python developer&quot;, &quot;I prefer concise responses&quot;
+              {t('global.aboutYou.hint')}
             </p>
             <textarea
               rows={4}
               value={userPreferences}
               onChange={(e) => setUserPreferences(e.target.value)}
-              placeholder="Tell your agents about yourself..."
+              placeholder={t('global.aboutYou.placeholder')}
               disabled={loading}
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
             />
@@ -127,16 +128,16 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
           {/* Quick Tasks Workspace */}
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              Quick Tasks Workspace
+              {t('global.scratch.label')}
             </label>
             <p className="text-xs text-secondary mb-2">
-              Where Quick Tasks stores files
+              {t('global.scratch.hint')}
             </p>
             <input
               type="text"
               value={scratchWorkspace}
               onChange={(e) => setScratchWorkspace(e.target.value)}
-              placeholder="Default: ~/orbital/scratch/"
+              placeholder={t('global.scratch.placeholder')}
               disabled={loading}
               className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
             />
@@ -149,10 +150,10 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
               disabled={loading}
               className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
             >
-              Save
+              {t('settings.save')}
             </button>
             {saved && (
-              <span className="text-sm text-success">Saved</span>
+              <span className="text-sm text-success">{t('settings.saved')}</span>
             )}
           </div>
         </div>
@@ -161,10 +162,10 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         <div className="mt-8 pt-6 border-t border-border space-y-3">
           <div>
             <label className="block text-sm font-medium text-primary mb-1">
-              Saved Credentials
+              {t('global.credentials.label')}
             </label>
             <p className="text-xs text-secondary mb-3">
-              Website passwords stored in your system keychain. Agents always ask permission before using them.
+              {t('global.credentials.hint')}
             </p>
           </div>
           <CredentialStore />
@@ -172,7 +173,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
 
         {/* Sub-agents */}
         <div className="mt-10 pt-8 border-t border-border">
-          <h2 className="text-base font-semibold text-primary mb-3">Sub-agents</h2>
+          <h2 className="text-base font-semibold text-primary mb-3">{t('global.subAgents.heading')}</h2>
           <SubAgentSettings />
         </div>
 

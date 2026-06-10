@@ -4,6 +4,7 @@
 
 import { AlertTriangle } from 'lucide-react';
 import type { LastTerminalEvent } from '../types';
+import { useT } from '../i18n/useT';
 
 // SessionStatusGlyph
 //
@@ -21,18 +22,19 @@ export interface SessionStatusGlyphProps {
 }
 
 export function SessionStatusGlyph({ lastTerminalEvent }: SessionStatusGlyphProps) {
+  const t = useT();
   if (!lastTerminalEvent || lastTerminalEvent.type !== 'error') {
     return null;
   }
   const details = lastTerminalEvent.details;
   const title = details
-    ? `Session errored: ${details}`
-    : 'Session errored';
+    ? t('sessionGlyph.errored.withDetails', { details })
+    : t('sessionGlyph.errored');
   return (
     <AlertTriangle
       size={14}
       className="shrink-0 text-amber-500"
-      aria-label="Session errored"
+      aria-label={t('sessionGlyph.errored')}
       role="img"
       data-testid="session-error-glyph"
     >

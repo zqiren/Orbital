@@ -36,6 +36,7 @@
 import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
+import { useT } from '../i18n/useT';
 
 export interface SessionSidebarProps {
   projectId: string | null;
@@ -59,6 +60,7 @@ export function SessionSidebar({
   onSessionDeleted,
 }: SessionSidebarProps) {
   const { sessions, loading, renameSession, deleteSession } = useSessions(projectId);
+  const t = useT();
 
   // One unified list of ALL sessions, sorted by last-activity descending
   // (most recent first). Null/missing timestamps sort last. Sort a copy so we
@@ -117,7 +119,7 @@ export function SessionSidebar({
             textTransform: 'uppercase',
           }}
         >
-          Sessions
+          {t('sessionSidebar.header')}
         </span>
         <span
           className="font-mono text-secondary text-xs"
@@ -135,12 +137,12 @@ export function SessionSidebar({
       >
         {loading && sortedSessions.length === 0 && (
           <p className="text-xs text-secondary px-2 py-2" data-testid="session-loading">
-            Loading…
+            {t('sessionSidebar.loading')}
           </p>
         )}
         {!loading && sortedSessions.length === 0 && (
           <p className="text-xs text-secondary px-2 py-2" data-testid="session-empty">
-            No sessions
+            {t('sessionSidebar.empty')}
           </p>
         )}
         {sortedSessions.map((session) => (
@@ -164,7 +166,7 @@ export function SessionSidebar({
           className="w-full font-mono rounded-md border border-border text-secondary hover:text-primary hover:border-secondary/60 hover:bg-card-hover transition-colors text-sm py-1.5"
           style={{ fontSize: '12px' }}
         >
-          + new session
+          {t('sessionSidebar.newSession')}
         </button>
       </div>
     </aside>

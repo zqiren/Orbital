@@ -17,6 +17,8 @@ import FallbackModelsEditor from './FallbackModelsEditor';
 import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
+import { useT } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
 
 interface SkillMeta {
   name: string;
@@ -33,23 +35,23 @@ interface SettingsViewProps {
 
 const AUTONOMY_OPTIONS: {
   value: Autonomy;
-  title: string;
-  description: string;
+  titleKey: StringKey;
+  descriptionKey: StringKey;
 }[] = [
   {
     value: 'hands_off',
-    title: 'Hands-off',
-    description: 'Agent works freely. Asks only for new access.',
+    titleKey: 'autonomy.handsOff.title',
+    descriptionKey: 'autonomy.handsOff.desc',
   },
   {
     value: 'check_in',
-    title: 'Check-in',
-    description: 'Pauses for shell commands and file writes.',
+    titleKey: 'autonomy.checkIn.title',
+    descriptionKey: 'autonomy.checkIn.desc',
   },
   {
     value: 'supervised',
-    title: 'Supervised',
-    description: 'Pauses for most actions. Safe mode.',
+    titleKey: 'autonomy.supervised.title',
+    descriptionKey: 'autonomy.supervised.desc',
   },
 ];
 
@@ -58,6 +60,7 @@ export default function SettingsView({
   onSave,
   onDelete,
 }: SettingsViewProps) {
+  const t = useT();
   const [agentName, setAgentName] = useState(project.agent_name || project.name);
   const [projectGoals, setProjectGoals] = useState(project.project_goals_content || '');
   const [standingRules, setStandingRules] = useState(project.user_directives_content || '');
@@ -159,7 +162,7 @@ export default function SettingsView({
       );
       setMemoryEntries(data);
     } catch (e) {
-      setMemoryError(e instanceof ApiError ? e.detail : 'Failed to load sub-agent memories');
+      setMemoryError(e instanceof ApiError ? e.detail : t('settings.subAgentMemories.loadError'));
     }
   }, [pid, project.is_scratch]);
 
@@ -206,7 +209,7 @@ export default function SettingsView({
       });
       await fetchSkills();
     } catch (e) {
-      setSkillError(e instanceof ApiError ? e.detail : 'Failed to delete skill');
+      setSkillError(e instanceof ApiError ? e.detail : t('settings.skills.deleteError'));
     }
   }
 
@@ -226,14 +229,14 @@ export default function SettingsView({
       }
       const resp = await fetch(url, { method: 'POST', body: form, headers });
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({ detail: 'Upload failed' }));
+        const body = await resp.json().catch(() => ({ detail: t('settings.skills.uploadError') }));
         throw new Error(body.detail || `HTTP ${resp.status}`);
       }
-      setSkillSuccess('Skill added');
+      setSkillSuccess(t('settings.skills.added'));
       setTimeout(() => setSkillSuccess(''), 2000);
       await fetchSkills();
     } catch (e) {
-      setSkillError(e instanceof Error ? e.message : 'Upload failed');
+      setSkillError(e instanceof Error ? e.message : t('settings.skills.uploadError'));
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -282,7 +285,7 @@ export default function SettingsView({
   }
 
   async function handleResetSpend() {
-    if (!confirm('Reset accumulated spend to $0?')) return;
+    if (!confirm(t('settings.budget.resetConfirm'))) return;
     try {
       await api(`/api/v2/projects/${encodeURIComponent(pid)}`, {
         method: 'PUT',
@@ -312,13 +315,13 @@ export default function SettingsView({
         {/* Agent Name */}
         <div>
           <label className="block text-sm font-medium text-primary mb-1.5">
-            Agent Name
+            {t('createProject.agentName.label')}
           </label>
           <input
             type="text"
             value={agentName}
             onChange={(e) => setAgentName(e.target.value)}
-            placeholder="Display name for this agent"
+            placeholder={t('settings.agentName.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
           />
         </div>
@@ -327,14 +330,14 @@ export default function SettingsView({
         {!project.is_scratch && (
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              Project Goals
+              {t('settings.projectGoals.label')}
             </label>
             <textarea
               rows={6}
               value={projectGoals}
               onChange={(e) => setProjectGoals(e.target.value)}
               disabled={loadingDetail}
-              placeholder={loadingDetail ? 'Loading…' : 'Define the agent\'s mission, scope, and rules...'}
+              placeholder={loadingDetail ? t('settings.loading') : t('settings.projectGoals.placeholder')}
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
             />
           </div>
@@ -343,17 +346,17 @@ export default function SettingsView({
         {/* Project Instructions */}
         <div>
           <label className="block text-sm font-medium text-primary mb-1.5">
-            Project Instructions
+            {t('settings.projectInstructions.label')}
           </label>
           <p className="text-xs text-secondary mb-2">
-            Persistent instructions the agent always follows. E.g., &quot;always write tests&quot;, &quot;use PostgreSQL&quot;
+            {t('settings.projectInstructions.hint')}
           </p>
           <textarea
             rows={4}
             value={standingRules}
             onChange={(e) => setStandingRules(e.target.value)}
             disabled={loadingDetail}
-            placeholder={loadingDetail ? 'Loading…' : 'One rule per line...'}
+            placeholder={loadingDetail ? t('settings.loading') : t('settings.projectInstructions.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
           />
         </div>
@@ -365,7 +368,7 @@ export default function SettingsView({
         {!project.is_scratch && (
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              Sub-Agents
+              {t('settings.subAgents.label')}
               <span className="text-secondary font-normal"> — delegation targets &amp; their memory for this project</span>
             </label>
             <p className="text-xs text-secondary mb-2">
@@ -415,10 +418,10 @@ export default function SettingsView({
         {!project.is_scratch && (
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              Skills
+              {t('settings.skills.label')}
             </label>
             <p className="text-xs text-secondary mb-2">
-              Operational patterns the agent follows. Skills are read before each task.
+              {t('settings.skills.hint')}
             </p>
 
             {skillError && (
@@ -447,7 +450,7 @@ export default function SettingsView({
                       type="button"
                       onClick={() => handleDeleteSkill(s.dir_name || s.name)}
                       className="shrink-0 text-secondary hover:text-error transition-colors p-1 max-md:min-w-[44px] max-md:min-h-[44px] flex items-center justify-center"
-                      title={`Delete ${s.name}`}
+                      title={t('settings.skills.deleteTitle', { name: s.name })}
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="3 6 5 6 21 6" />
@@ -459,13 +462,13 @@ export default function SettingsView({
               </div>
             ) : (
               <p className="text-xs text-secondary/60 italic mb-3">
-                No skills installed. Add a SKILL.md file or zip below.
+                {t('settings.skills.empty')}
               </p>
             )}
 
             <label className="flex items-center justify-center border border-dashed border-border rounded-lg px-3 py-3 cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]">
               <span className="text-sm text-secondary">
-                {uploading ? 'Uploading...' : 'Add Skill (.md or .zip)'}
+                {uploading ? t('settings.skills.uploading') : t('settings.skills.uploadCta')}
               </span>
               <input
                 ref={fileInputRef}
@@ -486,18 +489,18 @@ export default function SettingsView({
         {!project.is_scratch && isRelayMode && (
           <div>
             <label className="block text-sm font-medium text-primary mb-1.5">
-              Notifications
+              {t('settings.notifications.label')}
             </label>
             <p className="text-xs text-secondary mb-2">
-              Push notifications for this project when the app is backgrounded.
+              {t('settings.notifications.hint')}
             </p>
             <div className="space-y-2">
               {([
-                { key: 'task_completed', label: 'Task completed' },
-                { key: 'errors', label: 'Errors & crashes' },
-                { key: 'agent_messages', label: 'Agent messages' },
-                { key: 'trigger_started', label: 'Scheduled run started' },
-              ] as const).map(({ key, label }) => (
+                { key: 'task_completed', labelKey: 'settings.notifications.taskCompleted' },
+                { key: 'errors', labelKey: 'settings.notifications.errors' },
+                { key: 'agent_messages', labelKey: 'settings.notifications.agentMessages' },
+                { key: 'trigger_started', labelKey: 'settings.notifications.triggerStarted' },
+              ] as const).map(({ key, labelKey }) => (
                 <label key={key} className="flex items-center gap-2 cursor-pointer max-md:min-h-[44px]">
                   <input
                     type="checkbox"
@@ -510,12 +513,12 @@ export default function SettingsView({
                     }}
                     className="rounded border-border accent-accent"
                   />
-                  <span className="text-sm text-primary">{label}</span>
+                  <span className="text-sm text-primary">{t(labelKey)}</span>
                 </label>
               ))}
             </div>
             <p className="text-xs text-secondary/60 mt-2 italic">
-              Approvals always notify — agents are waiting on you.
+              {t('settings.notifications.approvalNote')}
             </p>
           </div>
         )}
@@ -543,7 +546,7 @@ export default function SettingsView({
         {/* Autonomy Level */}
         <div>
           <label className="block text-sm font-medium text-primary mb-2">
-            Autonomy Level
+            {t('autonomy.level.label')}
           </label>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {AUTONOMY_OPTIONS.map((opt) => (
@@ -558,10 +561,10 @@ export default function SettingsView({
                 }`}
               >
                 <span className="text-sm font-medium text-primary block">
-                  {opt.title}
+                  {t(opt.titleKey)}
                 </span>
                 <span className="text-xs text-secondary mt-1 block">
-                  {opt.description}
+                  {t(opt.descriptionKey)}
                 </span>
               </button>
             ))}
@@ -571,12 +574,12 @@ export default function SettingsView({
         {/* Budget */}
         <div>
           <label className="block text-sm font-medium text-primary mb-1.5">
-            Budget
+            {t('settings.budget.label')}
           </label>
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-secondary mb-1">
-                Budget Limit (USD)
+                {t('createProject.budget.label')}
               </label>
               <input
                 type="number"
@@ -584,10 +587,10 @@ export default function SettingsView({
                 min="0"
                 value={budgetLimit}
                 onChange={(e) => setBudgetLimit(e.target.value)}
-                placeholder="e.g. 5.00"
+                placeholder={t('createProject.budget.placeholder')}
                 className="w-48 text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
               />
-              <p className="text-xs text-secondary mt-1">Leave empty for no limit</p>
+              <p className="text-xs text-secondary mt-1">{t('settings.budget.limitHint')}</p>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               {(() => {
@@ -598,16 +601,16 @@ export default function SettingsView({
                 return (
                   <>
                     <span className="text-xs text-secondary">
-                      Spent: <span className={`font-medium ${colorClass}`}>${budgetSpent.toFixed(2)}</span>
+                      {t('settings.budget.spent')} <span className={`font-medium ${colorClass}`}>${budgetSpent.toFixed(2)}</span>
                       {limit != null && (
                         <span className="text-secondary/60"> / ${limit.toFixed(2)}</span>
                       )}
                     </span>
                     {overBudget && (
-                      <span className="text-xs text-error font-medium">Over budget</span>
+                      <span className="text-xs text-error font-medium">{t('settings.budget.overBudget')}</span>
                     )}
                     {nearBudget && (
-                      <span className="text-xs text-warning font-medium">Nearing limit</span>
+                      <span className="text-xs text-warning font-medium">{t('settings.budget.nearingLimit')}</span>
                     )}
                   </>
                 );
@@ -618,7 +621,7 @@ export default function SettingsView({
                   onClick={handleResetSpend}
                   className="text-xs text-secondary hover:text-primary underline transition-colors duration-150"
                 >
-                  Reset
+                  {t('settings.budget.reset')}
                 </button>
               )}
             </div>
@@ -631,10 +634,10 @@ export default function SettingsView({
             type="submit"
             className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
           >
-            Save
+            {t('settings.save')}
           </button>
           {saved && (
-            <span className="text-sm text-success">Saved</span>
+            <span className="text-sm text-success">{t('settings.saved')}</span>
           )}
         </div>
       </form>
@@ -642,18 +645,16 @@ export default function SettingsView({
       {/* Danger zone */}
       {!project.is_scratch && (
         <div className="mt-12 border border-error/30 rounded-lg p-6">
-          <h3 className="text-sm font-semibold text-error mb-2">Danger Zone</h3>
+          <h3 className="text-sm font-semibold text-error mb-2">{t('settings.danger.title')}</h3>
           <p className="text-sm text-secondary mb-4">
-            Delete this project? Orbital data (sessions, screenshots, logs)
-            will be removed. Files you saved in your workspace folder will be
-            kept.
+            {t('settings.danger.body')}
           </p>
           {!confirmingDelete ? (
             <button
               onClick={() => setConfirmingDelete(true)}
               className="text-sm font-medium text-error border border-error/40 rounded-lg px-4 py-2 hover:bg-error/5 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
             >
-              Delete Project
+              {t('settings.danger.delete')}
             </button>
           ) : (
             <div className="flex gap-2">
@@ -661,13 +662,13 @@ export default function SettingsView({
                 onClick={handleDelete}
                 className="text-sm font-medium text-white bg-error rounded-lg px-4 py-2 hover:bg-error/90 transition-all duration-150 max-md:min-h-[44px]"
               >
-                Confirm Delete
+                {t('settings.danger.confirmDelete')}
               </button>
               <button
                 onClick={() => setConfirmingDelete(false)}
                 className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:bg-sidebar transition-all duration-150 max-md:min-h-[44px]"
               >
-                Cancel
+                {t('settings.danger.cancel')}
               </button>
             </div>
           )}

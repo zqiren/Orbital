@@ -19,6 +19,7 @@ import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import { useT } from '../i18n/useT';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -226,6 +227,7 @@ function finalizeLiveCapsule(
 type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
 
 function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const expandable = row.result_status !== 'pending';
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -252,7 +254,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         if (raw === null || raw === '') {
           return (
             <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-[12px] italic text-secondary/70">
-              no result content
+              {t('chat.toolRow.noResult')}
             </div>
           );
         }
@@ -393,6 +395,7 @@ interface PendingApproval {
 }
 
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
+  const t = useT();
   // FE-1 (transform-once): loaded chat history is stored as RAW messages
   // across all paginated pages (initial page + each "Load earlier" prepend),
   // then transformed in a SINGLE pass via the useMemo below. This eliminates
@@ -959,8 +962,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setRawMessages([]);
       setItems([{
         type: 'agent_notify' as const,
-        title: 'New session started',
-        body: 'Workspace memory preserved. The agent remembers your project.',
+        title: t('chat.notify.newSession.title'),
+        body: t('chat.notify.newSession.body'),
         urgency: 'low' as const,
         timestamp: new Date().toISOString(),
       }]);
@@ -980,7 +983,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (!isCancelling) return;
     const timer = setTimeout(() => {
       setIsCancelling(false);
-      setCancelTimeoutNotice('Cancel took longer than expected — try again if needed.');
+      setCancelTimeoutNotice(t('chat.cancelTimeout'));
     }, 10_000);
     return () => clearTimeout(timer);
   }, [isCancelling]);
@@ -1551,8 +1554,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (result.status === 'no_active_session') {
         setItems((prev) => [...prev, {
           type: 'agent_notify' as const,
-          title: 'No active session',
-          body: 'Start the agent first, then use /new to reset the session.',
+          title: t('chat.notify.noSession.title'),
+          body: t('chat.notify.noSession.body'),
           urgency: 'high' as const,
           timestamp: new Date().toISOString(),
         }]);
@@ -1600,7 +1603,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         );
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : 'Upload failed';
+          err instanceof Error ? err.message : t('chat.uploadError');
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === att.id
@@ -1619,12 +1622,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setAttachments((prev) => {
         const room = MAX_ATTACHMENTS - prev.length;
         if (room <= 0) {
-          setInjectError(`Maximum of ${MAX_ATTACHMENTS} attachments per message.`);
+          setInjectError(t('chat.maxAttachments', { n: MAX_ATTACHMENTS }));
           return prev;
         }
         const usable = files.slice(0, room);
         if (files.length > usable.length) {
-          setInjectError(`Only ${MAX_ATTACHMENTS} attachments allowed per message.`);
+          setInjectError(t('chat.onlyNAllowed', { n: MAX_ATTACHMENTS }));
         }
         const additions: PendingAttachment[] = usable.map((file) => {
           const id = genId();
@@ -1640,7 +1643,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             status: tooBig ? 'error' : 'pending',
             thumbnailUrl,
             errorMessage: tooBig
-              ? 'File exceeds 10 MB limit'
+              ? t('chat.fileTooLarge')
               : undefined,
           };
           return att;
@@ -1761,9 +1764,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     (hasText || anyDone) &&
     !(attachments.length > 0 && !hasText && !anyDone);
   const disabledReason = anyUploading
-    ? 'Waiting for uploads…'
+    ? t('chat.disabled.waitingUploads')
     : allError && !hasText
-      ? 'Remove failed attachments or retry'
+      ? t('chat.disabled.removeFailed')
       : '';
 
   async function handleSend() {
@@ -1917,7 +1920,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         });
       }
     } catch {
-      setInjectError('Failed to send message. Please try again.');
+      setInjectError(t('chat.injectError'));
     } finally {
       setSubAgentLoading(null);
     }
@@ -1993,7 +1996,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           className="absolute inset-0 z-50 bg-background/80 border-2 border-dashed border-accent rounded flex items-center justify-center pointer-events-none"
           data-testid="chat-drop-overlay"
         >
-          <span className="text-lg font-medium">Drop files to attach</span>
+          <span className="text-lg font-medium">{t('chat.dropFiles')}</span>
         </div>
       )}
       {claudemdWarning && (
@@ -2020,7 +2023,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             disabled={loadingMore}
             className="w-full py-2 text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
           >
-            {loadingMore ? 'Loading...' : `Load earlier messages (${totalMessages - loadedOffset} more)`}
+            {loadingMore ? t('chat.loadingMore') : t('chat.loadEarlier', { n: totalMessages - loadedOffset })}
           </button>
         )}
 
@@ -2030,7 +2033,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           !coldStartDismissed ? (
             <div className="mt-8">
               <ColdStartCard
-                folderName={(project.workspace || '').split('/').filter(Boolean).pop() || 'this folder'}
+                folderName={(project.workspace || '').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
                 busy={coldStartBusy}
                 onScan={async () => {
                   setColdStartBusy(true);
@@ -2047,7 +2050,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             </div>
           ) : (
             <div className="text-secondary text-sm text-center mt-12">
-              No messages yet. Send a message to get started.
+              {t('chat.empty')}
             </div>
           )
         )}
@@ -2064,10 +2067,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               const label =
-                item.action === 'started' ? 'started' :
-                item.action === 'sent' ? `sent: ${item.preview ?? ''}` :
-                item.action === 'completed' ? `completed${item.summary ? `: ${item.summary}` : ''}` :
-                /* failed */ `failed${item.error ? `: ${item.error}` : ''}`;
+                item.action === 'started' ? t('chat.subActivity.started') :
+                item.action === 'sent' ? t('chat.subActivity.sent', { preview: item.preview ?? '' }) :
+                item.action === 'completed'
+                  ? (item.summary
+                      ? t('chat.subActivity.completed', { summary: item.summary })
+                      : t('chat.subActivity.completed', { summary: '' }).replace(/[:：]\s*$/, ''))
+                  : /* failed */ (item.error
+                      ? t('chat.subActivity.failed', { error: item.error })
+                      : t('chat.subActivity.failed', { error: '' }).replace(/[:：]\s*$/, ''));
               const tone = item.action === 'failed' ? 'text-error/80' : 'text-secondary';
               rendered = (
                 <div
@@ -2085,7 +2093,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <div key={`sep-${index}`} className="flex items-center gap-3 px-2 opacity-50">
                   <div className="flex-1 border-t border-border" />
                   <span className="text-xs text-secondary whitespace-nowrap">
-                    Previous session
+                    {t('chat.previousSession')}
                   </span>
                   <div className="flex-1 border-t border-border" />
                 </div>
@@ -2329,7 +2337,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {showThinking && !stream && !subAgentLoading && (
           <div className="flex items-center gap-2 px-2 py-1 text-secondary text-sm">
             <Loader2 size={14} className="animate-spin" />
-            <span>Thinking...</span>
+            <span>{t('chat.thinking')}</span>
           </div>
         )}
 
@@ -2414,8 +2422,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     selectCommand(cmd.name);
                   }}
                 >
-                  <span className="font-medium text-zinc-200">{cmd.name}</span>
-                  <span className="ml-2 text-zinc-500">{cmd.description}</span>
+                  <span className="font-medium text-zinc-200">{cmd.name === '/new' ? t('chat.slash.new') : cmd.name}</span>
+                  <span className="ml-2 text-zinc-500">{cmd.name === '/new' ? t('chat.slash.new.desc') : cmd.description}</span>
                 </button>
               ))}
             </div>
@@ -2423,7 +2431,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           {showMentionDropdown && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredAgents.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-zinc-500">No agents available</div>
+                <div className="px-3 py-2 text-sm text-zinc-500">{t('chat.noAgents')}</div>
               ) : (
                 filteredAgents.map((agent, i) => (
                   <button
@@ -2475,7 +2483,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach files"
+              aria-label={t('chat.attachFiles')}
               className="shrink-0 p-2 text-secondary hover:text-primary rounded max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
             >
               <Plus size={18} />
@@ -2486,7 +2494,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Send a message..."
+              placeholder={t('chat.composer.placeholder')}
               rows={1}
               disabled={isCancelling}
               className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
@@ -2506,7 +2514,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       // optimistic state immediately so the user can retry
                       // instead of waiting for the 10s timeout.
                       setIsCancelling(false);
-                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                      setCancelTimeoutNotice(t('chat.cancelFailed'));
                     });
                   }}
                   onTouchEnd={(e) => {
@@ -2516,11 +2524,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     setIsCancelling(true);
                     cancelMessage(projectId, holderSessionId ?? sessionId).catch(() => {
                       setIsCancelling(false);
-                      setCancelTimeoutNotice('Cancel request failed — try again if needed.');
+                      setCancelTimeoutNotice(t('chat.cancelFailed'));
                     });
                   }}
                   disabled={isCancelling}
-                  aria-label={isCancelling ? 'Cancelling' : 'Stop'}
+                  aria-label={isCancelling ? t('chat.cancelling') : t('chat.stop')}
                   className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
                   {isCancelling
@@ -2539,7 +2547,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       : 'bg-secondary/20 text-secondary/40 cursor-default'
                   }`}
                 >
-                  Queue
+                  {t('chat.queue')}
                 </button>
               </>
             ) : (
@@ -2548,7 +2556,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 onClick={handleSend}
                 onTouchEnd={(e) => { e.preventDefault(); handleSend(); }}
                 aria-disabled={!canSend}
-                aria-label="Send"
+                aria-label={t('chat.send')}
                 disabled={!canSend}
                 title={disabledReason || undefined}
                 className={`shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${

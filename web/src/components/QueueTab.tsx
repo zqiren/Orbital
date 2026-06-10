@@ -4,6 +4,7 @@
 
 import { useMemo } from 'react';
 import { useQueue } from '../hooks/useQueue';
+import { useT } from '../i18n/useT';
 import type { QueueItem } from '../types';
 import AutomationsList from './AutomationsList';
 import QueueComposer from './QueueComposer';
@@ -16,18 +17,20 @@ interface QueueTabProps {
 
 function Section({
   title,
+  testId,
   items,
   onRemove,
   emptyHint,
 }: {
   title: string;
+  testId: string;
   items: QueueItem[];
   onRemove?: (itemId: string) => void;
   emptyHint?: string;
 }) {
   if (items.length === 0 && !emptyHint) return null;
   return (
-    <section className="flex flex-col gap-2" data-testid={`queue-section-${title.toLowerCase().replace(/\s+/g, '-')}`}>
+    <section className="flex flex-col gap-2" data-testid={`queue-section-${testId}`}>
       <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
         {title}
         <span className="ml-2 text-secondary/60 font-normal">{items.length}</span>
@@ -46,6 +49,7 @@ function Section({
 }
 
 export default function QueueTab({ projectId }: QueueTabProps) {
+  const t = useT();
   const { snapshot, loading, error, addItem, removeItem, stopQueue, resumeQueue } =
     useQueue(projectId);
 
@@ -76,23 +80,24 @@ export default function QueueTab({ projectId }: QueueTabProps) {
           </div>
         )}
         <Section
-          title="Now Running"
+          title={t('queue.section.nowRunning')}
+          testId="now-running"
           items={grouped.running}
           onRemove={removeItem}
           emptyHint={
             isPaused
-              ? 'Queue is paused. Resume to continue.'
+              ? t('queue.empty.paused')
               : grouped.queued.length === 0
-                ? 'Idle — add a task below.'
+                ? t('queue.empty.idle')
                 : undefined
           }
         />
-        <Section title="Needs Attention" items={grouped.blocked} onRemove={removeItem} />
-        <Section title="Queued" items={grouped.queued} onRemove={removeItem} />
-        <Section title="Completed" items={grouped.done} onRemove={removeItem} />
+        <Section title={t('queue.section.needsAttention')} testId="needs-attention" items={grouped.blocked} onRemove={removeItem} />
+        <Section title={t('queue.section.queued')} testId="queued" items={grouped.queued} onRemove={removeItem} />
+        <Section title={t('queue.section.completed')} testId="completed" items={grouped.done} onRemove={removeItem} />
         <section className="flex flex-col gap-2" data-testid="queue-section-automations">
           <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
-            Automations
+            {t('queue.section.automations')}
           </h2>
           <AutomationsList projectId={projectId} />
         </section>
@@ -103,8 +108,8 @@ export default function QueueTab({ projectId }: QueueTabProps) {
         }
         hint={
           isPaused
-            ? 'Chat freely — queue is paused'
-            : 'Steer the agent or queue a new task'
+            ? t('queue.composer.hint.paused')
+            : t('queue.composer.hint.active')
         }
       />
     </div>

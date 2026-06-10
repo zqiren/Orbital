@@ -4,6 +4,7 @@
 
 import MarkdownContent from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
+import { useT } from '../i18n/useT';
 
 interface StreamingMessageProps {
   text: string;
@@ -24,8 +25,9 @@ export default function StreamingMessage({
   source,
   isComplete,
 }: StreamingMessageProps) {
+  const t = useT();
   const isSubAgent = source !== 'management' && source !== 'user';
-  const senderLabel = isSubAgent ? source : 'agent';
+  const senderLabel = isSubAgent ? source : t('chat.message.agent');
 
   return (
     <div className="flex gap-[10px]">

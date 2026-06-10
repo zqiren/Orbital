@@ -10,6 +10,7 @@ import {
   MEMORY_TARGET_BYTES,
   type SubAgentMemoryEntry,
 } from './SubAgentMemoryCard';
+import { useT } from '../i18n/useT';
 
 interface Props {
   projectId: string;
@@ -51,13 +52,14 @@ export default function SubAgentCard({
   onToggle,
   onMemorySaved,
 }: Props) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
 
   const sizeBytes = memory?.size_bytes ?? 0;
   const lastModified = memory?.last_modified ?? null;
   const memorySummary =
     lastModified == null
-      ? 'never written'
+      ? t('subAgentMemory.timestamp.never')
       : `${formatTimestamp(lastModified)} · ${formatSize(sizeBytes)}`;
 
   // A fallback entry so the editor can render before the memory list loads

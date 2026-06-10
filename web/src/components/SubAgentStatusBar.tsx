@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useT } from '../i18n/useT';
 import type { SubAgentRunStatus, WebSocketEvent } from '../types';
 
 interface SubAgentInfo {
@@ -40,10 +41,10 @@ interface Props {
   sessionId?: string;
 }
 
-const BADGE_LABEL: Record<SubAgentInfo['status'], string> = {
-  running: 'Working',
-  'background-running': 'Background',
-  idle: 'Idle',
+const BADGE_LABEL_KEY: Record<SubAgentInfo['status'], 'subAgentBar.working' | 'subAgentBar.background' | 'subAgentBar.idle'> = {
+  running: 'subAgentBar.working',
+  'background-running': 'subAgentBar.background',
+  idle: 'subAgentBar.idle',
 };
 
 const BADGE_CLASS: Record<SubAgentInfo['status'], string> = {
@@ -53,6 +54,7 @@ const BADGE_CLASS: Record<SubAgentInfo['status'], string> = {
 };
 
 export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
+  const t = useT();
   const [agents, setAgents] = useState<SubAgentInfo[]>([]);
   const [confirming, setConfirming] = useState<SubAgentInfo | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
@@ -148,13 +150,13 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
             data-status={a.status}
             className={`rounded-full border px-1.5 py-px text-[10px] leading-4 ${BADGE_CLASS[a.status]}`}
           >
-            {BADGE_LABEL[a.status]}
+            {t(BADGE_LABEL_KEY[a.status])}
           </span>
           {a.status !== 'idle' && (
             <button
               data-testid={`sub-agent-stop-${a.handle}`}
-              title={`Stop ${a.display_name}`}
-              aria-label={`Stop ${a.display_name}`}
+              title={t('subAgentBar.stopTitle', { name: a.display_name })}
+              aria-label={t('subAgentBar.stopTitle', { name: a.display_name })}
               disabled={stopping === a.handle}
               onClick={() => setConfirming(a)}
               className="grid place-items-center h-5 w-5 rounded-full text-red-400 hover:bg-red-500/20 disabled:opacity-40"
@@ -167,9 +169,9 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
 
       {lastStop && (
         <span data-testid="sub-agent-stop-result" className="text-zinc-400 shrink-0">
-          Stopped {lastStop.handle}
+          {t('subAgentBar.stopped', { handle: lastStop.handle })}
           {lastStop.background_terminated.length > 0 &&
-            ` — ${lastStop.background_terminated.length} background process(es) terminated`}
+            t('subAgentBar.bgTerminated', { n: lastStop.background_terminated.length })}
         </span>
       )}
 
@@ -183,11 +185,11 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
             className="w-full max-w-sm rounded-lg border border-zinc-700 bg-zinc-900 p-4 text-sm text-zinc-200"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="font-medium mb-2">Stop {confirming.display_name}?</div>
+            <div className="font-medium mb-2">{t('subAgentBar.confirm.title', { name: confirming.display_name })}</div>
             <p className="text-zinc-400 mb-2">
               {confirming.status === 'running'
-                ? 'This cancels its current turn and terminates the agent.'
-                : 'The turn is finished, but tracked background work is still running and WILL be terminated:'}
+                ? t('subAgentBar.confirm.running')
+                : t('subAgentBar.confirm.background')}
             </p>
             {confirming.status === 'background-running' &&
               confirming.background_commands.length > 0 && (
@@ -198,8 +200,7 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
               </ul>
             )}
             <p data-testid="sub-agent-stop-warning" className="text-[11px] text-zinc-500 mb-3">
-              Work the agent detached via a raw shell '&amp;'/'nohup' runs outside
-              its process tree and cannot be guaranteed stopped.
+              {t('subAgentBar.confirm.warning')}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -207,14 +208,14 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
                 onClick={() => setConfirming(null)}
                 className="rounded px-3 py-1.5 text-zinc-300 hover:bg-zinc-800"
               >
-                Cancel
+                {t('subAgentBar.confirm.cancel')}
               </button>
               <button
                 data-testid="sub-agent-stop-confirm-button"
                 onClick={() => doStop(confirming)}
                 className="rounded bg-red-600 px-3 py-1.5 text-white hover:bg-red-500"
               >
-                Stop
+                {t('subAgentBar.confirm.stop')}
               </button>
             </div>
           </div>

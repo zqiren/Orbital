@@ -4,6 +4,7 @@
 
 import { AlertTriangle } from 'lucide-react';
 import { useBlockedCount } from '../hooks/useBlockedCount';
+import { useT } from '../i18n/useT';
 
 interface BlockedBadgeProps {
   onClick?: () => void;
@@ -20,6 +21,7 @@ interface BlockedBadgeProps {
  * When blockedCount > 0 the count pill is shown with warning styling.
  */
 export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
+  const t = useT();
   const { blockedCount, loading } = useBlockedCount();
 
   if (loading) return null;
@@ -29,7 +31,7 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
   return (
     <div
       role="region"
-      aria-label={`${blockedCount} session${blockedCount === 1 ? '' : 's'} blocked across all projects`}
+      aria-label={t(blockedCount === 1 ? 'blocked.aria.one' : 'blocked.aria.other', { n: blockedCount })}
       onClick={onClick}
       className={`flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[12.5px] transition-all duration-150 ${
         onClick ? 'cursor-pointer hover:bg-card-hover/50' : ''
@@ -40,7 +42,7 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
         className={`shrink-0 ${hasBlocked ? 'text-warning' : 'text-secondary'}`}
         aria-hidden="true"
       />
-      <span className="flex-1 font-medium">Blocked</span>
+      <span className="flex-1 font-medium">{t('sidebar.blocked')}</span>
       {hasBlocked && (
         <span
           data-testid="blocked-badge-pill"

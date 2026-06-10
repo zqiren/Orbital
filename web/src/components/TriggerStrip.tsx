@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Clock, Eye, Trash2 } from 'lucide-react';
 import type { Trigger } from '../types';
+import { useT } from '../i18n/useT';
 
 interface TriggerStripProps {
   triggers: Trigger[];
@@ -12,24 +13,25 @@ interface TriggerStripProps {
   onDelete?: (triggerId: string) => void;
 }
 
-function relativeTime(iso: string | null): string {
+function relativeTime(iso: string | null, t: ReturnType<typeof useT>): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t('trigger.relTime.justNow');
+  if (mins < 60) return t('trigger.relTime.minutes', { n: mins });
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return t('trigger.relTime.hours', { n: hrs });
   const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+  return t('trigger.relTime.days', { n: days });
 }
 
 /* Issue 1: Replace emoji icons with Lucide React icons */
 function TriggerIcon({ type }: { type: string }) {
+  const t = useT();
   if (type === 'file_watch') {
-    return <Eye size={16} className="text-secondary shrink-0" aria-label="File watch trigger" />;
+    return <Eye size={16} className="text-secondary shrink-0" aria-label={t('trigger.icon.fileWatch')} />;
   }
-  return <Clock size={16} className="text-secondary shrink-0" aria-label="Schedule trigger" />;
+  return <Clock size={16} className="text-secondary shrink-0" aria-label={t('trigger.icon.schedule')} />;
 }
 
 /* Issue 2: Extracted toggle component with fixed alignment */
@@ -71,9 +73,10 @@ function TriggerDetail({
   showName?: boolean;
   onDelete?: (triggerId: string) => void;
 }) {
+  const t = useT();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const lastFired = trigger.last_triggered ? relativeTime(trigger.last_triggered) : 'never';
+  const lastFired = trigger.last_triggered ? relativeTime(trigger.last_triggered, t) : t('trigger.never');
 
   const handleDelete = async () => {
     if (!onDelete) return;
@@ -92,7 +95,7 @@ function TriggerDetail({
 
       {/* Task section — header + body for breathing room */}
       <div>
-        <p className="font-semibold text-primary">Task</p>
+        <p className="font-semibold text-primary">{t('trigger.task')}</p>
         <p className="text-secondary mt-1 leading-relaxed">{trigger.task}</p>
       </div>
 
@@ -100,40 +103,40 @@ function TriggerDetail({
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 m-0">
         {trigger.type === 'schedule' && trigger.schedule && (
           <>
-            <dt className="font-semibold text-primary">Schedule</dt>
+            <dt className="font-semibold text-primary">{t('trigger.schedule')}</dt>
             <dd className="text-secondary m-0">{trigger.schedule.human}</dd>
           </>
         )}
         {trigger.type === 'file_watch' && (
           <>
-            <dt className="font-semibold text-primary">Watching</dt>
+            <dt className="font-semibold text-primary">{t('trigger.watching')}</dt>
             <dd className="text-secondary m-0">{trigger.watch_path}</dd>
             {trigger.patterns && trigger.patterns.length > 0 && (
               <>
-                <dt className="font-semibold text-primary">Patterns</dt>
+                <dt className="font-semibold text-primary">{t('trigger.patterns')}</dt>
                 <dd className="text-secondary m-0">{trigger.patterns.join(', ')}</dd>
               </>
             )}
             {trigger.recursive && (
               <>
-                <dt className="font-semibold text-primary">Recursive</dt>
-                <dd className="text-secondary m-0">Yes</dd>
+                <dt className="font-semibold text-primary">{t('trigger.recursive')}</dt>
+                <dd className="text-secondary m-0">{t('trigger.recursive.yes')}</dd>
               </>
             )}
           </>
         )}
-        <dt className="font-semibold text-primary">Last fired</dt>
+        <dt className="font-semibold text-primary">{t('trigger.lastFired')}</dt>
         <dd className="text-secondary m-0">{lastFired}</dd>
         {trigger.trigger_count > 0 && (
           <>
-            <dt className="font-semibold text-primary">Runs</dt>
+            <dt className="font-semibold text-primary">{t('trigger.runs')}</dt>
             <dd className="text-secondary m-0">{trigger.trigger_count}</dd>
           </>
         )}
       </dl>
 
       <p className="text-secondary italic">
-        To edit, tell the agent below &#8595;
+        {t('trigger.editHint')}
       </p>
 
       {/* Delete button */}
@@ -144,11 +147,11 @@ function TriggerDetail({
               onClick={() => setConfirmDelete(true)}
               className="text-xs text-secondary hover:text-error transition-colors"
             >
-              Delete trigger
+              {t('trigger.delete')}
             </button>
           ) : (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-secondary">Delete? Cannot be undone.</span>
+              <span className="text-xs text-secondary">{t('trigger.deleteConfirm')}</span>
               <button
                 onClick={() => setConfirmDelete(false)}
                 className="text-xs text-secondary hover:text-primary transition-colors"
@@ -161,7 +164,7 @@ function TriggerDetail({
                 className="text-xs text-error hover:text-error/80 transition-colors"
                 disabled={deleting}
               >
-                {deleting ? 'Deleting...' : 'Delete'}
+                {deleting ? t('trigger.deleting') : t('trigger.delete.confirmBtn')}
               </button>
             </div>
           )}
@@ -187,6 +190,7 @@ function BottomSheet({
   onDelete?: (triggerId: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -224,7 +228,7 @@ function BottomSheet({
                 type="button"
                 onClick={() => setConfirmDelete(true)}
                 className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center text-secondary hover:text-error transition-colors"
-                aria-label="Delete trigger"
+                aria-label={t('trigger.deleteAria')}
               >
                 <Trash2 size={18} />
               </button>
@@ -238,7 +242,7 @@ function BottomSheet({
         {/* Delete confirmation */}
         {confirmDelete && (
           <div className="flex items-center gap-2 mb-3 px-1">
-            <span className="text-xs text-secondary">Delete? Cannot be undone.</span>
+            <span className="text-xs text-secondary">{t('trigger.deleteConfirm')}</span>
             <button
               onClick={() => setConfirmDelete(false)}
               className="text-xs text-secondary hover:text-primary transition-colors"
@@ -251,7 +255,7 @@ function BottomSheet({
               className="text-xs text-error hover:text-error/80 transition-colors"
               disabled={deleting}
             >
-              {deleting ? 'Deleting...' : 'Delete'}
+              {deleting ? t('trigger.deleting') : t('trigger.delete.confirmBtn')}
             </button>
           </div>
         )}
@@ -277,15 +281,16 @@ function TriggerLine({
   expanded: boolean;
   onClickLine: () => void;
 }) {
+  const t = useT();
   const label =
     trigger.type === 'schedule' && trigger.schedule?.human
       ? trigger.schedule.human
       : trigger.type === 'file_watch' && trigger.watch_path
-        ? `Watching ${trigger.watch_path}`
+        ? t('trigger.watchingPrefix', { path: trigger.watch_path })
         : trigger.name;
 
   /* Issue 6: Only show relative time if the trigger has actually fired */
-  const lastFired = trigger.last_triggered ? relativeTime(trigger.last_triggered) : null;
+  const lastFired = trigger.last_triggered ? relativeTime(trigger.last_triggered, t) : null;
 
   return (
     <div>
@@ -316,6 +321,7 @@ function TriggerLine({
 }
 
 export default function TriggerStrip({ triggers, onToggle, onDelete }: TriggerStripProps) {
+  const t = useT();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -366,7 +372,7 @@ export default function TriggerStrip({ triggers, onToggle, onDelete }: TriggerSt
           onClick={() => setShowAll(true)}
           className="w-full text-xs text-accent px-6 py-1 hover:underline max-md:px-4"
         >
-          +{hiddenCount} more
+          {t('trigger.showMore', { n: hiddenCount })}
         </button>
       )}
       {showAll && hiddenCount > 0 && (
@@ -375,7 +381,7 @@ export default function TriggerStrip({ triggers, onToggle, onDelete }: TriggerSt
           onClick={() => setShowAll(false)}
           className="w-full text-xs text-accent px-6 py-1 hover:underline max-md:px-4"
         >
-          Show less
+          {t('trigger.showLess')}
         </button>
       )}
 

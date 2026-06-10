@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import type { Project, ProjectUpdateRequest } from '../types';
 import type { Route } from '../route';
 import SettingsView from './SettingsView';
+import { useT } from '../i18n/useT';
 
 interface SettingsModalPageProps {
   project: Project;
@@ -23,6 +24,7 @@ export default function SettingsModalPage({
   onSave,
   onDelete,
 }: SettingsModalPageProps) {
+  const t = useT();
   function handleBack() {
     setRoute({
       name: 'project',
@@ -43,13 +45,13 @@ export default function SettingsModalPage({
           className="flex items-center gap-1.5 text-sm text-secondary hover:text-primary transition-colors w-fit"
         >
           <ArrowLeft size={14} />
-          Back to {project.name}
+          {t('settingsModal.back', { project: project.name })}
         </button>
         <h1 className="text-lg font-semibold text-primary mt-1" data-testid="settings-modal-title">
-          Project settings — {project.name}
+          {t('settingsModal.title', { project: project.name })}
         </h1>
         <p className="text-sm text-secondary">
-          Configure agent behaviour, LLM provider, autonomy, and more for this project.
+          {t('settingsModal.subtitle')}
         </p>
       </div>
 

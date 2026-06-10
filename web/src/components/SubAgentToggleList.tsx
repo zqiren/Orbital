@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { useT } from '../i18n/useT';
+
 export interface InstalledSubAgent {
   slug: string;
   name: string;
@@ -28,10 +30,11 @@ interface Props {
  * global Sub-Agent settings; this only scopes visibility per project.
  */
 export default function SubAgentToggleList({ agents, disabled, onToggle }: Props) {
+  const t = useT();
   if (agents.length === 0) {
     return (
       <p className="text-xs text-secondary/60 italic">
-        No sub-agents installed. Install them from global Settings → Sub-Agents.
+        {t('subAgentToggle.empty')}
       </p>
     );
   }

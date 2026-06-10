@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { getAgentIcon } from '../utils/agentIcons';
+import { useT } from '../i18n/useT';
 
 interface MessageAvatarProps {
   variant: 'user' | 'agent';
@@ -27,6 +28,7 @@ interface MessageAvatarProps {
  * its brand-coloured monogram badge (same size/shape).
  */
 export default function MessageAvatar({ variant, label, agentHandle }: MessageAvatarProps) {
+  const t = useT();
   const isUser = variant === 'user';
 
   if (!isUser && agentHandle) {
@@ -67,7 +69,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
           : 'bg-background border border-border text-primary')
       }
     >
-      {isUser ? (label ?? 'ME') : '◐'}
+      {isUser ? (label ?? t('chat.avatar.me')) : '◐'}
     </div>
   );
 }

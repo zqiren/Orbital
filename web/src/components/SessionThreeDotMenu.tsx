@@ -11,18 +11,20 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-
-const BATCH4_TITLE = 'Coming in Batch 4';
+import { useT } from '../i18n/useT';
 
 export interface SessionThreeDotMenuProps {
   /** Accessible label for the trigger button. Defaults to "Session options". */
   ariaLabel?: string;
 }
 
-export function SessionThreeDotMenu({ ariaLabel = 'Session options' }: SessionThreeDotMenuProps) {
+export function SessionThreeDotMenu({ ariaLabel }: SessionThreeDotMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const t = useT();
+  const batch4Title = t('sessionThreeDot.batch4');
+  const resolvedAriaLabel = ariaLabel ?? t('sessionThreeDot.optionsAria');
 
   // Close on outside click.
   useEffect(() => {
@@ -56,7 +58,7 @@ export function SessionThreeDotMenu({ ariaLabel = 'Session options' }: SessionTh
       <button
         ref={btnRef}
         type="button"
-        aria-label={ariaLabel}
+        aria-label={resolvedAriaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
         data-testid="session-three-dot-trigger"
@@ -77,17 +79,20 @@ export function SessionThreeDotMenu({ ariaLabel = 'Session options' }: SessionTh
           data-testid="session-three-dot-dropdown"
           className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-white shadow-md py-1"
         >
-          {(['Rename', 'Delete'] as const).map((action) => (
+          {([
+            { id: 'rename', label: t('sessionThreeDot.rename') },
+            { id: 'delete', label: t('sessionThreeDot.delete') },
+          ] as const).map((action) => (
             <button
-              key={action}
+              key={action.id}
               type="button"
               role="menuitem"
               disabled
-              title={BATCH4_TITLE}
-              data-testid={`session-action-${action.toLowerCase()}`}
+              title={batch4Title}
+              data-testid={`session-action-${action.id}`}
               className="w-full text-left px-3 py-1.5 text-sm text-secondary cursor-not-allowed opacity-50"
             >
-              {action}
+              {action.label}
             </button>
           ))}
         </div>

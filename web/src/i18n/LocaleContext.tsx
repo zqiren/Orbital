@@ -48,8 +48,14 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Fallback used when a component renders outside a LocaleProvider (e.g. in unit
+// tests, or a stray render). Consistent with the i18n fallback philosophy: a
+// missing provider degrades to the default locale rather than crashing.
+const FALLBACK_CONTEXT: LocaleContextValue = {
+  locale: DEFAULT_LOCALE,
+  setLocale: () => {},
+};
+
 export function useLocale(): LocaleContextValue {
-  const ctx = useContext(LocaleContext);
-  if (!ctx) throw new Error('useLocale must be used within a LocaleProvider');
-  return ctx;
+  return useContext(LocaleContext) ?? FALLBACK_CONTEXT;
 }

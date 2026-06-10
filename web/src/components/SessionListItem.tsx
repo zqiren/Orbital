@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { SessionListEntry } from '../types';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
 import { getStatusDisplay } from './sessionStatus';
+import { useT } from '../i18n/useT';
 
 export interface SessionListItemProps {
   session: SessionListEntry;
@@ -41,20 +42,23 @@ export interface SessionListItemProps {
  * Format an ISO timestamp as a short relative time string.
  * Falls back to "—" when the value is null/undefined.
  */
-function formatRelativeTime(isoString?: string | null): string {
+function formatRelativeTime(
+  isoString: string | null | undefined,
+  t: ReturnType<typeof useT>,
+): string {
   if (!isoString) return '—';
   const date = new Date(isoString);
   if (isNaN(date.getTime())) return '—';
   const now = Date.now();
   const diffMs = now - date.getTime();
   const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 60) return t('sessionItem.relTime.seconds', { n: diffSec });
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffMin < 60) return t('sessionItem.relTime.minutes', { n: diffMin });
   const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
+  if (diffHr < 24) return t('sessionItem.relTime.hours', { n: diffHr });
   const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
+  return t('sessionItem.relTime.days', { n: diffDay });
 }
 
 /**
@@ -82,6 +86,7 @@ export function SessionListItem({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const t = useT();
   const display = getStatusDisplay(session.status);
 
   const label = displayLabel(session);
@@ -151,7 +156,7 @@ export function SessionListItem({
       role="button"
       tabIndex={0}
       aria-selected={selected}
-      aria-label={`Session ${label}`}
+      aria-label={t('sessionItem.aria', { label })}
       data-testid={`session-list-item-${session.session_id}`}
       onClick={() => {
         if (editing) return;
@@ -232,7 +237,7 @@ export function SessionListItem({
               data-testid="session-time"
               className="text-[10px] text-secondary shrink-0"
             >
-              {formatRelativeTime(session.last_activity_at)}
+              {formatRelativeTime(session.last_activity_at, t)}
             </span>
           </>
         )}
@@ -252,7 +257,7 @@ export function SessionListItem({
         >
           <button
             type="button"
-            aria-label={`Options for session ${label}`}
+            aria-label={t('sessionItem.optionsAria', { label })}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             data-testid="session-three-dot-trigger"
@@ -282,7 +287,7 @@ export function SessionListItem({
                 }}
                 className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
               >
-                Rename
+                {t('sessionItem.rename')}
               </button>
               <button
                 type="button"
@@ -295,7 +300,7 @@ export function SessionListItem({
                 }}
                 className="w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
               >
-                Delete
+                {t('sessionItem.delete')}
               </button>
             </div>
           )}
@@ -307,7 +312,7 @@ export function SessionListItem({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Delete session confirmation"
+          aria-label={t('sessionItem.deleteConfirm.aria')}
           data-testid="session-delete-confirm"
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
           onClick={(e) => {
@@ -319,10 +324,9 @@ export function SessionListItem({
             className="max-w-sm w-[320px] rounded-lg bg-white shadow-xl border border-border p-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-sm text-primary font-medium mb-1">Delete this session?</p>
+            <p className="text-sm text-primary font-medium mb-1">{t('sessionItem.deleteConfirm.title')}</p>
             <p className="text-xs text-secondary mb-4">
-              This action cannot be undone. The conversation history will be
-              permanently removed.
+              {t('sessionItem.deleteConfirm.body')}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -334,7 +338,7 @@ export function SessionListItem({
                 }}
                 className="px-3 py-1.5 text-sm rounded-md border border-border text-secondary hover:bg-card-hover"
               >
-                Cancel
+                {t('sessionItem.deleteConfirm.cancel')}
               </button>
               <button
                 type="button"
@@ -345,7 +349,7 @@ export function SessionListItem({
                 }}
                 className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"
               >
-                Delete
+                {t('sessionItem.delete')}
               </button>
             </div>
           </div>

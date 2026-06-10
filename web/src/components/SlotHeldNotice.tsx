@@ -22,6 +22,7 @@
 
 import { useState } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { useT } from '../i18n/useT';
 
 export interface SlotHeldNoticeProps {
   holdingSessionId: string;
@@ -44,6 +45,7 @@ export default function SlotHeldNotice({
 }: SlotHeldNoticeProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   async function handleCancelAndSend() {
     setBusy(true);
@@ -51,7 +53,7 @@ export default function SlotHeldNotice({
     try {
       await onCancelAndSend();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to cancel and resend.');
+      setError(e instanceof Error ? e.message : t('pairPhone.cancelResend.error'));
       setBusy(false);
     }
     // On success, the parent will unmount this notice (replacing it with
@@ -67,16 +69,11 @@ export default function SlotHeldNotice({
     >
       <div className="flex items-start gap-2">
         <AlertCircle size={14} className="mt-0.5 shrink-0 text-secondary" />
-        <p className="text-sm text-secondary">
-          Session{' '}
-          <span
-            data-testid="slot-held-notice-holder"
-            className="font-semibold text-primary"
-          >
-            {holdingSessionId}
-          </span>{' '}
-          is currently running. Wait for it to finish, or cancel it to send
-          this message now.
+        <p
+          className="text-sm text-secondary"
+          data-testid="slot-held-notice-holder"
+        >
+          {t('slotHeld.body', { id: holdingSessionId })}
         </p>
       </div>
       {error && (
@@ -95,7 +92,7 @@ export default function SlotHeldNotice({
           disabled={busy}
           className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
         >
-          Wait
+          {t('slotHeld.wait')}
         </button>
         <button
           type="button"
@@ -104,7 +101,7 @@ export default function SlotHeldNotice({
           disabled={busy}
           className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide border border-border bg-background text-secondary hover:bg-card-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
         >
-          {busy ? 'Cancelling…' : 'Cancel running session and send'}
+          {busy ? t('slotHeld.cancelling') : t('slotHeld.cancelAndSend')}
         </button>
       </div>
     </div>

@@ -9,6 +9,8 @@ import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
 import { useQueue } from '../hooks/useQueue';
+import { useT } from '../i18n/useT';
+import type { StringKey } from '../i18n/strings';
 
 interface ProjectDetailProps {
   project: Project;
@@ -28,10 +30,10 @@ interface ProjectDetailProps {
   children?: React.ReactNode;
 }
 
-const TABS: { key: 'queue' | 'chat' | 'files'; label: string }[] = [
-  { key: 'queue', label: 'Queue' },
-  { key: 'chat', label: 'Chat' },
-  { key: 'files', label: 'Files' },
+const TABS: { key: 'queue' | 'chat' | 'files'; labelKey: StringKey }[] = [
+  { key: 'queue', labelKey: 'projectDetail.tab.queue' },
+  { key: 'chat', labelKey: 'projectDetail.tab.chat' },
+  { key: 'files', labelKey: 'projectDetail.tab.files' },
 ];
 
 export default function ProjectDetail({
@@ -46,6 +48,8 @@ export default function ProjectDetail({
   globalDefaultModel,
   children,
 }: ProjectDetailProps) {
+  const t = useT();
+
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
 
@@ -100,21 +104,21 @@ export default function ProjectDetail({
 
       {/* Tab bar */}
       <div className="flex gap-1 px-6 border-b border-border max-md:px-4">
-        {TABS.map((t) => {
+        {TABS.map((tab) => {
           // Chat shows no count badge — the session count lives in the
           // sidebar header. Only the queue badge (pending/running items) shows.
-          const count = t.key === 'queue' ? queueCount : 0;
+          const count = tab.key === 'queue' ? queueCount : 0;
           return (
             <button
-              key={t.key}
-              onClick={() => handleTabChange(t.key)}
+              key={tab.key}
+              onClick={() => handleTabChange(tab.key)}
               className={`text-[12.5px] font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center gap-1.5 ${
-                activeTab === t.key
+                activeTab === tab.key
                   ? 'text-primary border-b-2 border-primary'
                   : 'text-secondary hover:text-primary'
               }`}
             >
-              {t.label}
+              {t(tab.labelKey)}
               {count > 0 && (
                 <span className="text-[10.5px] font-mono text-secondary">
                   {count}

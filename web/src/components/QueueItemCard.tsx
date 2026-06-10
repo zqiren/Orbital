@@ -4,6 +4,7 @@
 
 import { AlertCircle, CheckCheck, Paperclip, User, X, Zap } from 'lucide-react';
 import type { QueueItem } from '../types';
+import { useT } from '../i18n/useT';
 
 interface QueueItemCardProps {
   item: QueueItem;
@@ -33,10 +34,10 @@ function isTriggerItem(item: QueueItem): boolean {
  * reserved for a future "low" tier. Purely a display mapping — the stored
  * value is untouched.
  */
-function priorityMeta(priority: number): { label: string; cls: string } {
-  if (priority > 0) return { label: 'high', cls: 'text-warning' };
-  if (priority < 0) return { label: 'low', cls: 'text-muted' };
-  return { label: 'normal', cls: 'text-secondary' };
+function priorityMeta(priority: number): { labelKey: string; cls: string } {
+  if (priority > 0) return { labelKey: 'queue.item.priority.high', cls: 'text-warning' };
+  if (priority < 0) return { labelKey: 'queue.item.priority.low', cls: 'text-muted' };
+  return { labelKey: 'queue.item.priority.normal', cls: 'text-secondary' };
 }
 
 function SourceIcon({
@@ -57,28 +58,36 @@ function SourceIcon({
 }
 
 function SourceChip({ source }: { source: QueueItem['source'] }) {
-  const label = source === 'trigger' ? 'agent' : source === 'upload' ? 'attached' : 'you';
+  const t = useT();
+  const labelKey =
+    source === 'trigger'
+      ? 'queue.item.source.agent'
+      : source === 'upload'
+        ? 'queue.item.source.attached'
+        : 'queue.item.source.you';
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-border bg-sidebar text-[10px] font-mono font-medium text-secondary shrink-0">
       <SourceIcon source={source} className="w-2.5 h-2.5 shrink-0" />
-      {label}
+      {t(labelKey)}
     </span>
   );
 }
 
 function TriggerOrigin({ item }: { item: QueueItem }) {
+  const t = useT();
   if (!isTriggerItem(item)) return null;
   return (
     <div className="flex items-center gap-1 pl-6" data-testid="queue-item-trigger-origin">
       <Zap className="w-3 h-3 shrink-0 text-accent" aria-hidden="true" />
-      <span className="text-xs text-accent">from: {item.trigger_name ?? 'automation'}</span>
+      <span className="text-xs text-accent">{t('queue.item.from', { name: item.trigger_name ?? t('queue.item.automation') })}</span>
     </div>
   );
 }
 
 function InterruptedNote({ item }: { item: QueueItem }) {
+  const t = useT();
   if (item.interrupted_count <= 0) return null;
-  return <p className="text-xs text-warning pl-6">Interrupted {item.interrupted_count}×</p>;
+  return <p className="text-xs text-warning pl-6">{t('queue.item.interrupted', { n: item.interrupted_count })}</p>;
 }
 
 function RemoveButton({
@@ -88,6 +97,7 @@ function RemoveButton({
   item: QueueItem;
   onRemove?: (itemId: string) => void;
 }) {
+  const t = useT();
   if (!onRemove) return null;
   // LOCKED BEHAVIOR: a running item's delete control stays rendered but
   // DISABLED until the item idles — it is not a stop-first popup, just a
@@ -99,8 +109,8 @@ function RemoveButton({
       onClick={() => onRemove(item.id)}
       disabled={running}
       aria-disabled={running}
-      aria-label="Remove item"
-      title={running ? 'Stop the item before removing it' : undefined}
+      aria-label={t('queue.item.removeAria')}
+      title={running ? t('queue.item.removeBlockedTitle') : undefined}
       className={
         running
           ? 'text-secondary/40 shrink-0 p-1 -m-1 rounded cursor-not-allowed'
@@ -137,6 +147,7 @@ function RunningCard({
   item: QueueItem;
   onRemove?: (itemId: string) => void;
 }) {
+  const t = useT();
   const startedAt = item.attempts.length ? item.attempts[item.attempts.length - 1].started_at : null;
   const started = formatTime(startedAt);
   return (
@@ -150,9 +161,9 @@ function RunningCard({
           <span className="absolute inset-0 rounded-full bg-success" />
         </span>
         <span className="text-[10.5px] uppercase tracking-wide font-semibold text-success">
-          Running
+          {t('queue.item.running')}
         </span>
-        {started && <span className="text-[11px] text-muted font-mono">· started {started}</span>}
+        {started && <span className="text-[11px] text-muted font-mono">{t('queue.item.started', { time: started })}</span>}
         <div className="flex-1" />
         <SourceChip source={item.source} />
         {/* Disabled until the item idles — see RemoveButton's LOCKED BEHAVIOR note. */}
@@ -177,6 +188,7 @@ function QueuedRow({
   index?: number;
   onRemove?: (itemId: string) => void;
 }) {
+  const t = useT();
   const pri = priorityMeta(item.priority);
   const added = formatTime(item.created_at);
   return (
@@ -190,7 +202,7 @@ function QueuedRow({
         )}
         <SourceIcon source={item.source} />
         <span className="flex-1 min-w-0 text-[12.5px] text-primary truncate">{item.content}</span>
-        <span className={`text-[10.5px] font-mono shrink-0 ${pri.cls}`}>{pri.label}</span>
+        <span className={`text-[10.5px] font-mono shrink-0 ${pri.cls}`}>{t(pri.labelKey)}</span>
         {added && <span className="text-[10.5px] font-mono text-muted shrink-0">{added}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
@@ -208,6 +220,7 @@ function BlockedRow({
   item: QueueItem;
   onRemove?: (itemId: string) => void;
 }) {
+  const t = useT();
   const latest = item.attempts.length ? item.attempts[item.attempts.length - 1] : null;
   return (
     <Shell
@@ -218,7 +231,7 @@ function BlockedRow({
         <AlertCircle className="w-4 h-4 shrink-0 text-warning" aria-hidden />
         <span className="flex-1 min-w-0 text-[12.5px] text-primary break-words">{item.content}</span>
         <span className="px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[9.5px] font-mono font-semibold tracking-wide shrink-0">
-          needs you
+          {t('queue.item.needsYou')}
         </span>
         <RemoveButton item={item} onRemove={onRemove} />
       </div>

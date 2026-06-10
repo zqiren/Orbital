@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { Calendar, FolderOpen } from 'lucide-react';
 import { useTriggers } from '../hooks/useTriggers';
 import type { Trigger } from '../types';
+import { useT } from '../i18n/useT';
 
 interface AutomationsListProps {
   projectId: string;
@@ -23,11 +24,12 @@ function formatLastFired(last: string | null): string {
 }
 
 function TriggerCard({ trigger }: { trigger: Trigger }) {
+  const t = useT();
   const isSchedule = trigger.type === 'schedule';
   const condition = isSchedule
     ? (trigger.schedule?.cron ?? '—')
     : (trigger.watch_path ?? '—');
-  const conditionLabel = isSchedule ? 'cron' : 'path';
+  const conditionLabel = isSchedule ? t('automations.condition.cron') : t('automations.condition.path');
 
   return (
     <div
@@ -52,7 +54,7 @@ function TriggerCard({ trigger }: { trigger: Trigger }) {
           aria-label={trigger.enabled ? 'enabled' : 'disabled'}
           data-testid={`automation-status-${trigger.id}`}
         >
-          {trigger.enabled ? 'on' : 'off'}
+          {trigger.enabled ? t('automations.on') : t('automations.off')}
         </span>
       </div>
 
@@ -67,7 +69,7 @@ function TriggerCard({ trigger }: { trigger: Trigger }) {
         </p>
         <p className="text-xs text-secondary">
           <span className="uppercase tracking-wide text-[10px] text-secondary/60 mr-1">
-            last fired
+            {t('automations.lastFired')}
           </span>
           <span data-testid={`automation-last-fired-${trigger.id}`}>
             {formatLastFired(trigger.last_triggered)}
@@ -79,6 +81,7 @@ function TriggerCard({ trigger }: { trigger: Trigger }) {
 }
 
 export default function AutomationsList({ projectId }: AutomationsListProps) {
+  const t = useT();
   const { triggers, loading, fetchTriggers } = useTriggers(projectId);
 
   useEffect(() => {
@@ -88,7 +91,7 @@ export default function AutomationsList({ projectId }: AutomationsListProps) {
   if (loading && triggers.length === 0) {
     return (
       <p className="text-sm text-secondary px-1 italic" data-testid="automations-loading">
-        Loading…
+        {t('automations.loading')}
       </p>
     );
   }
@@ -96,7 +99,7 @@ export default function AutomationsList({ projectId }: AutomationsListProps) {
   if (triggers.length === 0) {
     return (
       <p className="text-sm text-secondary px-1 italic" data-testid="automations-empty">
-        No automations configured.
+        {t('automations.empty')}
       </p>
     );
   }

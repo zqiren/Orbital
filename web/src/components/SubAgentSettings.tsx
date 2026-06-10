@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../config';
+import { useT } from '../i18n/useT';
 
 // ---------------------------------------------------------------------------
 // Types — wire shape of /api/v2/settings/sub-agents
@@ -42,12 +43,12 @@ const PARAM_REQUEST_KEY: Record<string, string> = {
   'approval-mode': 'approval_mode',
 };
 
-// Friendly labels for known params.
-const PARAM_LABEL: Record<string, string> = {
-  'model': 'Model',
-  'effort': 'Thinking level',
-  'permission-mode': 'Permission mode',
-  'approval-mode': 'Approval mode',
+// Friendly labels for known params (catalog keys, resolved via t() at render).
+const PARAM_LABEL_KEY: Record<string, 'subAgentCard.param.model' | 'subAgentCard.param.effort' | 'subAgentCard.param.permissionMode' | 'subAgentCard.param.approvalMode'> = {
+  'model': 'subAgentCard.param.model',
+  'effort': 'subAgentCard.param.effort',
+  'permission-mode': 'subAgentCard.param.permissionMode',
+  'approval-mode': 'subAgentCard.param.approvalMode',
 };
 
 // Sub-agents that accept an API key via stdin (vs. an interactive OAuth flow).
@@ -61,6 +62,7 @@ interface Props {
 }
 
 export default function SubAgentSettings({ standalone = false, onBack }: Props) {
+  const t = useT();
   const [entries, setEntries] = useState<SubAgentEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,11 +113,10 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
     <>
       <div className="flex items-center justify-between mb-3">
         {standalone ? (
-          <h1 className="text-xl font-semibold text-primary">Sub-agents</h1>
+          <h1 className="text-xl font-semibold text-primary">{t('subAgentSettings.title')}</h1>
         ) : (
           <p className="text-sm text-secondary">
-            Configure how Orbital invokes each sub-agent CLI. Settings here are
-            daemon-level — they apply to every project.
+            {t('subAgentSettings.intro')}
           </p>
         )}
         <div className="flex items-center gap-2 ml-3 shrink-0">
@@ -124,14 +125,14 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
             disabled={refreshing}
             className="text-sm text-secondary hover:text-primary transition-all duration-150 disabled:opacity-50"
           >
-            {refreshing ? 'Refreshing...' : 'Refresh'}
+            {refreshing ? t('subAgentSettings.refreshing') : t('subAgentSettings.refresh')}
           </button>
           {standalone && onBack && (
             <button
               onClick={onBack}
               className="text-sm text-secondary hover:text-primary transition-all duration-150"
             >
-              Back
+              {t('global.back')}
             </button>
           )}
         </div>
@@ -141,7 +142,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         Don't see an agent? Install its CLI, then Refresh.
       </p>
       <p className="text-xs text-secondary mb-4 italic">
-        Sub-agent credentials are stored by the sub-agent itself, not by Orbital.
+        {t('subAgentSettings.credNote')}
       </p>
 
       {error && (
@@ -151,7 +152,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
       )}
 
       {loading && entries === null && (
-        <div className="text-sm text-secondary">Loading sub-agents...</div>
+        <div className="text-sm text-secondary">{t('subAgentSettings.loading')}</div>
       )}
 
       {installedEntries !== null && installedEntries.length === 0 && (
@@ -196,6 +197,7 @@ interface CardProps {
 }
 
 function SubAgentCard({ entry, onChanged }: CardProps) {
+  const t = useT();
   // Local copy of the config so the form is editable before save.
   const [draft, setDraft] = useState<Record<string, string>>({ ...entry.config });
   const [saving, setSaving] = useState(false);
@@ -304,11 +306,11 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
           </div>
           <div className="mt-1 flex items-center gap-3 text-xs">
             <StatusPill
-              label={entry.installed ? 'Installed' : 'Not installed'}
+              label={entry.installed ? t('subAgentCard.installed') : t('subAgentCard.notInstalled')}
               variant={entry.installed ? 'success' : 'warning'}
             />
             <StatusPill
-              label={entry.credentials_configured ? 'Logged in' : 'Not logged in'}
+              label={entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn')}
               variant={entry.credentials_configured ? 'success' : 'warning'}
             />
             {entry.version && (
@@ -320,7 +322,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
 
       {!entry.installed && entry.missing_dependencies.length > 0 && (
         <p className="text-xs text-secondary mt-1 mb-2">
-          Missing dependencies: {entry.missing_dependencies.join(', ')}
+          {t('subAgentCard.missingDeps', { list: entry.missing_dependencies.join(', ') })}
         </p>
       )}
 
@@ -332,7 +334,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             disabled={loginBusy || !entry.installed}
             className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
           >
-            {loginBusy ? 'Starting login...' : 'Login'}
+            {loginBusy ? t('subAgentCard.startingLogin') : t('subAgentCard.login')}
           </button>
         )}
         {!entry.credentials_configured && isApiKeyFlow && (
@@ -341,7 +343,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             disabled={!entry.installed}
             className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
           >
-            Set API Key
+            {t('subAgentCard.setApiKey')}
           </button>
         )}
         {entry.credentials_configured && (
@@ -350,7 +352,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             disabled={logoutBusy}
             className="text-xs bg-sidebar border border-border text-primary rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50"
           >
-            {logoutBusy ? 'Logging out...' : 'Logout'}
+            {logoutBusy ? t('subAgentCard.loggingOut') : t('subAgentCard.logout')}
           </button>
         )}
       </div>
@@ -358,14 +360,13 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
       {showApiKeyForm && isApiKeyFlow && (
         <div className="bg-sidebar/40 border border-border rounded p-3 mb-3 flex flex-col gap-2">
           <label className="text-xs text-secondary">
-            Paste your API key. It will be handed to {entry.slug} via stdin and stored
-            wherever {entry.slug} keeps its own credentials.
+            {t('subAgentCard.apiKeyHint', { slug: entry.slug })}
           </label>
           <input
             type="password"
             value={apiKeyDraft}
             onChange={e => setApiKeyDraft(e.target.value)}
-            placeholder="sk-..."
+            placeholder={t('llm.apiKey.placeholder')}
             className="w-full text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent"
           />
           <div className="flex gap-2">
@@ -374,13 +375,13 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
               disabled={loginBusy || !apiKeyDraft.trim()}
               className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 disabled:opacity-50"
             >
-              {loginBusy ? 'Sending...' : 'Submit'}
+              {loginBusy ? t('subAgentCard.sending') : t('subAgentCard.submit')}
             </button>
             <button
               onClick={() => { setShowApiKeyForm(false); setApiKeyDraft(''); }}
               className="text-xs text-secondary hover:text-primary"
             >
-              Cancel
+              {t('subAgentCard.cancel')}
             </button>
           </div>
         </div>
@@ -395,7 +396,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             return (
               <div key={paramKey} className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-primary">
-                  {PARAM_LABEL[paramKey] ?? paramKey}
+                  {PARAM_LABEL_KEY[paramKey] ? t(PARAM_LABEL_KEY[paramKey]) : paramKey}
                 </label>
                 {schema.allowed ? (
                   <select
@@ -404,7 +405,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                     disabled={!entry.installed}
                     className="text-sm bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent disabled:opacity-50"
                   >
-                    <option value="">(default)</option>
+                    <option value="">{t('subAgentCard.param.default')}</option>
                     {schema.allowed.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -415,7 +416,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                     value={value}
                     onChange={e => handleChange(paramKey, e.target.value)}
                     disabled={!entry.installed}
-                    placeholder="(use CLI default)"
+                    placeholder={t('subAgentCard.param.cliDefault')}
                     className="text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
                   />
                 )}
@@ -428,14 +429,14 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
               disabled={saving || !entry.installed}
               className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
             >
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? t('subAgentCard.saving') : t('subAgentCard.save')}
             </button>
-            {saved && <span className="text-xs text-success">Saved</span>}
+            {saved && <span className="text-xs text-success">{t('subAgentCard.saved')}</span>}
           </div>
         </div>
       ) : (
         <p className="text-xs text-secondary border-t border-border pt-3 mt-1">
-          No daemon-level parameters available for this sub-agent.
+          {t('subAgentCard.noParams')}
         </p>
       )}
 

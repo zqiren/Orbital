@@ -5,6 +5,7 @@
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import BlockedBadge from './BlockedBadge';
+import { useT } from '../i18n/useT';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -56,6 +57,7 @@ export default function Sidebar({
   onNewProject,
   onSettings,
 }: SidebarProps) {
+  const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
   function handleSelectProject(id: string) {
@@ -67,7 +69,7 @@ export default function Sidebar({
       {/* Wordmark */}
       <div className="px-4 pt-4 pb-3">
         <span className="font-mono text-sm font-semibold text-primary tracking-tight">
-          Orbital
+          {t('sidebar.wordmark')}
         </span>
       </div>
 
@@ -80,7 +82,7 @@ export default function Sidebar({
       {/* Projects section header */}
       <div className="flex items-center justify-between px-4 pt-2 pb-1">
         <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
-          Projects
+          {t('sidebar.projects')}
         </span>
         <span className="font-mono text-[9.5px] text-secondary">
           {projects.length}
@@ -177,7 +179,7 @@ export default function Sidebar({
           onClick={onNewProject}
           className="w-full text-sm font-medium text-primary border border-border rounded-[6px] px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
         >
-          + New Project
+          {t('app.newProject')}
         </button>
 
         <button
@@ -189,7 +191,7 @@ export default function Sidebar({
               : 'text-secondary hover:text-primary'
           }`}
         >
-          Settings
+          {t('sidebar.settings')}
         </button>
 
         {/* Connection indicator */}
@@ -211,12 +213,12 @@ export default function Sidebar({
             connectionState === 'disconnected' || connectionState === 'daemon_offline' ? 'text-error' : 'text-secondary'
           }`}>
             {connectionState === 'connected'
-              ? 'Connected'
+              ? t('sidebar.conn.connected')
               : connectionState === 'reconnecting'
-                ? 'Reconnecting…'
+                ? t('sidebar.conn.reconnecting')
                 : connectionState === 'daemon_offline'
-                  ? 'Desktop offline'
-                  : 'Disconnected'}
+                  ? t('sidebar.conn.daemonOffline')
+                  : t('sidebar.conn.disconnected')}
           </span>
         </div>
       </div>

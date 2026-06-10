@@ -31,6 +31,7 @@ import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
+import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 
 function mapConnectionState(
@@ -46,6 +47,7 @@ function mapConnectionState(
 }
 
 export default function App() {
+  const t = useT();
   const platform = usePlatform();
   const {
     projects,
@@ -229,15 +231,15 @@ export default function App() {
       // Browser notification when tab not focused
       if (!document.hasFocus()) {
         const project = projects.find((p) => p.project_id === e.project_id);
-        const name = project?.name ?? 'A project';
+        const name = project?.name ?? t('app.notify.fallbackName');
         if (Notification.permission === 'granted') {
-          new Notification(`Orbital: ${name} needs your approval`);
+          new Notification(t('app.notify.approval', { name }));
         } else if (Notification.permission !== 'denied') {
           Notification.requestPermission();
         }
       }
     },
-    [projects],
+    [projects, t],
   );
 
   const handleApprovalResolved = useCallback((event: WebSocketEvent) => {
@@ -403,7 +405,7 @@ export default function App() {
   if (setupComplete === null || needsWizard === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <span className="text-sm text-secondary">Loading...</span>
+        <span className="text-sm text-secondary">{t('app.loading')}</span>
       </div>
     );
   }
@@ -456,16 +458,15 @@ export default function App() {
             className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-[44px] text-sm text-secondary hover:text-primary transition-colors"
           >
             <ArrowLeft size={16} />
-            Back
+            {t('app.mobileBack')}
           </button>
         )}
 
         {platform.status && platform.status.platform !== 'null' && !platform.status.setup_complete && (
           <div className="bg-warning/10 border border-warning/20 rounded-lg px-4 py-3 mx-4 mt-4 text-sm">
-            <span className="text-warning font-medium">{'\u26A0'} Agent sandbox is not configured.</span>{' '}
+            <span className="text-warning font-medium">{t('app.sandboxWarning.title')}</span>{' '}
             <span className="text-secondary">
-              Agents will run with your full system permissions.
-              Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.
+              {t('app.sandboxWarning.body')}
             </span>
           </div>
         )}
@@ -543,15 +544,15 @@ export default function App() {
           <div className="flex flex-col items-center justify-center flex-1 min-h-0 gap-4">
             <p className="text-secondary text-sm">
               {projects.length === 0
-                ? 'No projects yet. Create your first one.'
-                : 'Select a project from the sidebar.'}
+                ? t('app.list.empty')
+                : t('app.list.selectPrompt')}
             </p>
             {projects.length === 0 && (
               <button
                 onClick={handleNewProject}
                 className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150"
               >
-                + New Project
+                {t('app.newProject')}
               </button>
             )}
           </div>

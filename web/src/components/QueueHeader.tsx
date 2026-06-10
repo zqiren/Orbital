@@ -4,11 +4,12 @@
 
 import { Pause, Play } from 'lucide-react';
 import type { QueueRunState, QueueSnapshot } from '../types';
+import { useT } from '../i18n/useT';
 
-const QUEUE_STATE_LABEL: Record<QueueRunState, string> = {
-  running: 'Running',
-  paused: 'Paused',
-  idle: 'Idle',
+const QUEUE_STATE_LABEL_KEY: Record<QueueRunState, string> = {
+  running: 'queue.header.running',
+  paused: 'queue.header.paused',
+  idle: 'queue.header.idle',
 };
 
 interface QueueHeaderProps {
@@ -24,6 +25,7 @@ export default function QueueHeader({
   onResume,
   disabled,
 }: QueueHeaderProps) {
+  const t = useT();
   if (!snapshot) {
     return null;
   }
@@ -50,17 +52,17 @@ export default function QueueHeader({
           }`}
           data-testid="queue-state-pill"
         >
-          {QUEUE_STATE_LABEL[snapshot.state] ?? snapshot.state}
+          {QUEUE_STATE_LABEL_KEY[snapshot.state] ? t(QUEUE_STATE_LABEL_KEY[snapshot.state]) : snapshot.state}
         </span>
-        <span data-testid="queue-count-running">{counts.running} running</span>
-        <span data-testid="queue-count-queued">{counts.queued} queued</span>
+        <span data-testid="queue-count-running">{t('queue.count.running', { n: counts.running })}</span>
+        <span data-testid="queue-count-queued">{t('queue.count.queued', { n: counts.queued })}</span>
         {counts.blocked > 0 && (
           <span className="text-warning" data-testid="queue-count-blocked">
-            {counts.blocked} blocked
+            {t('queue.count.blocked', { n: counts.blocked })}
           </span>
         )}
         {counts.done > 0 && (
-          <span data-testid="queue-count-done">{counts.done} done</span>
+          <span data-testid="queue-count-done">{t('queue.count.done', { n: counts.done })}</span>
         )}
       </div>
       <button
@@ -75,11 +77,11 @@ export default function QueueHeader({
       >
         {isPaused ? (
           <>
-            <Play className="w-3.5 h-3.5" /> Resume
+            <Play className="w-3.5 h-3.5" /> {t('queue.resume')}
           </>
         ) : (
           <>
-            <Pause className="w-3.5 h-3.5" /> Stop
+            <Pause className="w-3.5 h-3.5" /> {t('queue.stop')}
           </>
         )}
       </button>

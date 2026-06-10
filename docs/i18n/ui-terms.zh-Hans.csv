@@ -5,7 +5,7 @@ app.sandboxWarning.title,⚠ Agent sandbox is not configured.,message_error,App.
 app.sandboxWarning.body,"Agents will run with your full system permissions. Reinstall Orbital to set up the sandbox, or run Orbital.exe --setup-sandbox as administrator.",description,App.tsx — top warning banner,Explains the risk and remediation for missing sandbox,Agent将有你的全部系统权限。请重新安装 Orbital 以配置沙箱，或以管理员身份运行 Orbital.exe --setup-sandbox。,"Do not translate ""Orbital"", ""Orbital.exe"", ""--setup-sandbox""."
 app.list.empty,No projects yet. Create your first one.,empty_state,App.tsx — main empty list view,Shown in the content area when there are zero projects,尚未创建项目空间,
 app.list.selectPrompt,Select a project from the sidebar.,empty_state,App.tsx — main list view,Shown when projects exist but none is selected,左侧选择项目空间,
-app.newProject,#NAME?,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),#NAME?,"Keep leading """"+ """"."
+app.newProject,+ New Project,button,App.tsx; Sidebar.tsx,Primary create-project button (also in sidebar bottom),+ 新建项目空间,"Keep leading """"+ """". Recovered from Excel #NAME? corruption."
 app.notify.approval,Orbital: {name} needs your approval,message_error,App.tsx — browser Notification,Desktop browser notification when a project needs approval and tab is unfocused,Orbital：{name} 需要批准,"{name} is a project name placeholder; keep it. Do not translate ""Orbital""."
 app.notify.fallbackName,A project,misc,App.tsx — notification fallback,Fallback project name used in the approval notification when name is missing,某个项目空间,
 sidebar.wordmark,Orbital,heading,Sidebar.tsx — wordmark,App brand wordmark at top of sidebar,Orbital,DO NOT TRANSLATE — brand name.
@@ -17,7 +17,8 @@ sidebar.conn.connected,Connected,status,Sidebar.tsx — connection indicator,Web
 sidebar.conn.reconnecting,Reconnecting…,status,Sidebar.tsx — connection indicator,WebSocket reconnecting,重新连接中…,
 sidebar.conn.daemonOffline,Desktop offline,status,Sidebar.tsx — connection indicator,Relay connected but the desktop daemon tunnel is down,离线,"""Desktop"" = the desktop app/daemon."
 sidebar.conn.disconnected,Disconnected,status,Sidebar.tsx — connection indicator,WebSocket disconnected,断开连接,
-blocked.aria,{n} session(s) blocked across all projects,tooltip,BlockedBadge.tsx — aria-label,Accessible label announcing total blocked sessions,有 {n} 个会话被阻塞,Pluralization handled in code; translate generically. session = 会话.
+blocked.aria.one,{n} session blocked across all projects,tooltip,BlockedBadge.tsx — aria-label,Accessible label (singular) announcing total blocked sessions,有 {n} 个会话被阻塞,EN pluralization handled in code (one/other). session = 会话.
+blocked.aria.other,{n} sessions blocked across all projects,tooltip,BlockedBadge.tsx — aria-label,Accessible label (plural) announcing total blocked sessions,有 {n} 个会话被阻塞,EN pluralization handled in code (one/other). session = 会话.
 projectDetail.tab.queue,Queue,tab,ProjectDetail.tsx,Project tab: the task queue,任务,
 projectDetail.tab.chat,Chat,tab,ProjectDetail.tsx,Project tab: the chat conversation,会话,Could be 聊天; 对话 fits agent context better.
 projectDetail.tab.files,Files,tab,ProjectDetail.tsx,Project tab: the workspace file explorer,文件,
@@ -203,7 +204,7 @@ credStore.form.name.placeholder,Name (e.g. GitHub),placeholder,CredentialStore.t
 credStore.form.domain.placeholder,Domain (e.g. github.com),placeholder,CredentialStore.tsx,Placeholder for credential domain,域名（例如 github.com）,Keep github.com.
 credStore.form.fieldName.placeholder,Field name,placeholder,CredentialStore.tsx,Placeholder for a custom field key,字段名,
 credStore.form.value.placeholder,Value,placeholder,CredentialStore.tsx,Placeholder for a field value,值,
-credStore.form.addField,#NAME?,button,CredentialStore.tsx,Adds another credential field row,#NAME?,
+credStore.form.addField,+ Add field,button,CredentialStore.tsx,Adds another credential field row,+ 添加字段,Recovered from Excel #NAME? corruption.
 credStore.form.nameDomainRequired,Name and domain are required.,message_error,CredentialStore.tsx,Validation error,名称和域名为必填项。,
 credStore.form.fieldRequired,At least one field with a value is required.,message_error,CredentialStore.tsx,Validation error,至少需要填入一个字段。,
 credStore.form.storeError,Failed to store credential,message_error,CredentialStore.tsx,Error saving a credential,保存密钥失败,
@@ -318,7 +319,7 @@ trigger.showLess,Show less,button,TriggerStrip.tsx,Collapses the trigger list,�
 sessionSidebar.header,Sessions,heading,SessionSidebar.tsx,Uppercase section header for sessions,会话,
 sessionSidebar.loading,Loading…,status,SessionSidebar.tsx,Loading state for session list,加载中…,Dedupe with app.loading.
 sessionSidebar.empty,No sessions,empty_state,SessionSidebar.tsx,Empty state when no sessions,暂无会话,
-sessionSidebar.newSession,#NAME?,button,SessionSidebar.tsx,Creates a new chat session,#NAME?,
+sessionSidebar.newSession,+ new session,button,SessionSidebar.tsx,Creates a new chat session,+ 新建会话,Recovered from Excel #NAME? corruption.
 sessionItem.aria,Session {label},tooltip,SessionListItem.tsx,aria-label for a session row,会话 {label},
 sessionItem.optionsAria,Options for session {label},tooltip,SessionListItem.tsx,aria-label for the three-dot trigger,会话 {label} 的选项,
 sessionItem.rename,Rename,menu,SessionListItem.tsx,Rename action in session menu,重命名,

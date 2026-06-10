@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../config';
+import { useT } from '../i18n/useT';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +54,7 @@ export function formatSize(bytes: number): string {
 // ---------------------------------------------------------------------------
 
 export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
+  const t = useT();
   const [draft, setDraft] = useState(entry.content);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -93,7 +95,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
       if (e instanceof ApiError) {
         setError(e.detail);
       } else {
-        setError(e instanceof Error ? e.message : 'Save failed');
+        setError(e instanceof Error ? e.message : t('subAgentMemory.saveFailed'));
       }
     } finally {
       setSaving(false);
@@ -102,7 +104,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
 
   async function handleSave() {
     if (overMax) {
-      setError(`Content exceeds the ${MEMORY_MAX_BYTES} byte hard cap.`);
+      setError(t('subAgentMemory.overCapError', { n: MEMORY_MAX_BYTES }));
       return;
     }
     await persist(draft);
@@ -118,7 +120,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
     <div className="flex flex-col gap-3">
       {!entry.exists && (
         <p className="text-xs text-secondary italic">
-          memory not yet initialized — saving will create it
+          {t('subAgentMemory.notInitialized')}
         </p>
       )}
 
@@ -130,7 +132,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
           setSaved(false);
           setWarning(null);
         }}
-        placeholder="Free-form markdown. Sub-agents read this every dispatch — keep it concise."
+        placeholder={t('subAgentMemory.placeholder')}
         className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y font-mono"
       />
 
@@ -144,8 +146,8 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
                 : 'text-secondary'
           }
         >
-          {formatSize(draftBytes)} / {formatSize(MEMORY_TARGET_BYTES)} target
-          {overMax && ' — over hard cap'}
+          {t('subAgentMemory.sizeTarget', { size: formatSize(draftBytes), target: formatSize(MEMORY_TARGET_BYTES) })}
+          {overMax && t('subAgentMemory.overCap')}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -154,7 +156,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
             disabled={saving}
             className="text-xs text-secondary hover:text-primary border border-border rounded px-3 py-1.5 hover:bg-sidebar/80 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
           >
-            Reset
+            {t('subAgentMemory.reset')}
           </button>
           <button
             type="button"
@@ -162,13 +164,13 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
             disabled={saving || overMax}
             className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:min-h-[44px]"
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? t('subAgentMemory.saving') : t('settings.save')}
           </button>
         </div>
       </div>
 
       {saved && (
-        <p className="text-xs text-success">Saved</p>
+        <p className="text-xs text-success">{t('settings.saved')}</p>
       )}
       {warning && (
         <p className="text-xs text-warning">{warning}</p>
@@ -187,6 +189,7 @@ export function SubAgentMemoryEditor({ projectId, entry, onSaved }: Props) {
 // ---------------------------------------------------------------------------
 
 export default function SubAgentMemoryCard({ projectId, entry, onSaved }: Props) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -216,7 +219,7 @@ export default function SubAgentMemoryCard({ projectId, entry, onSaved }: Props)
                   : 'text-secondary'
               }
             >
-              {formatSize(entry.size_bytes)} / {formatSize(MEMORY_TARGET_BYTES)} target
+              {t('subAgentMemory.sizeTarget', { size: formatSize(entry.size_bytes), target: formatSize(MEMORY_TARGET_BYTES) })}
             </span>
           </div>
         </div>

@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useT } from '../i18n/useT';
 
 interface ComposerDisabledPromptProps {
   onPauseQueue: () => void | Promise<void>;
@@ -17,6 +18,7 @@ interface ComposerDisabledPromptProps {
 export default function ComposerDisabledPrompt({
   onPauseQueue,
 }: ComposerDisabledPromptProps) {
+  const t = useT();
   const [pausing, setPausing] = useState(false);
 
   async function handlePause() {
@@ -32,12 +34,12 @@ export default function ComposerDisabledPrompt({
   return (
     <div
       role="region"
-      aria-label="Composer unavailable — queue is active"
+      aria-label={t('composerDisabled.aria')}
       className="flex items-center justify-between gap-3 px-3 py-2.5 bg-background border border-border rounded-[6px] shadow-lg"
       data-testid="composer-disabled-prompt"
     >
       <span className="text-sm text-secondary">
-        Pause queue to start chatting.
+        {t('composerDisabled.prompt')}
       </span>
       <button
         type="button"
@@ -53,10 +55,10 @@ export default function ComposerDisabledPrompt({
         {pausing ? (
           <span className="flex items-center gap-1.5">
             <Loader2 size={12} className="animate-spin" />
-            Pausing…
+            {t('composerDisabled.pausing')}
           </span>
         ) : (
-          'Pause queue'
+          t('composerDisabled.pauseQueue')
         )}
       </button>
     </div>

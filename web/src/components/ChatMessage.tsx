@@ -7,6 +7,7 @@ import { parseAttachmentsBlock } from '../lib/attachment-parsing';
 import AttachmentChip from './AttachmentChip';
 import MarkdownContent from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
+import { useT } from '../i18n/useT';
 
 type MessageItem = Extract<
   DisplayItem,
@@ -70,17 +71,20 @@ function userInitials(source?: string): string {
  * left-aligned layout.
  */
 export default function ChatMessage({ message, agentName }: ChatMessageProps) {
+  const t = useT();
   const time = formatTime(message.timestamp);
 
   if (message.type === 'user_message') {
     const { strippedContent, attachments } = parseAttachmentsBlock(message.content);
     const hasChips = attachments.length > 0;
     const hasText = strippedContent.length > 0;
-    const senderLabel = message.target ? `you → @${message.target}` : 'you';
+    const senderLabel = message.target
+      ? t('chat.message.youTo', { target: message.target })
+      : t('chat.message.you');
 
     return (
       <div className="flex gap-[10px]" title={message.timestamp}>
-        <MessageAvatar variant="user" label={userInitials()} />
+        <MessageAvatar variant="user" label={userInitials() === 'ME' ? undefined : userInitials()} />
         <div className="flex-1 min-w-0">
           <div className="font-mono text-[11px] mb-1">
             <span className="text-secondary">{senderLabel}</span>
@@ -113,7 +117,7 @@ export default function ChatMessage({ message, agentName }: ChatMessageProps) {
     (message.type === 'agent_message' && message.source && message.source !== 'management' && message.source !== 'user');
   const senderLabel = isSubAgent && message.source
     ? message.source
-    : (agentName && agentName.trim() ? agentName : 'agent');
+    : (agentName && agentName.trim() ? agentName : t('chat.message.agent'));
 
   // FE-A3: header-only mode. Emitted for content-null assistant turns so the
   // capsule that follows has a visible agent anchor (avatar + sender · HH:MM)
