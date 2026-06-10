@@ -13,8 +13,13 @@
   --color-warning: #F59E0B;
   --color-error: #EF4444;
   --color-idle: #A1A1AA;
-  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Latin glyphs render in Geist / JetBrains Mono (unchanged). CJK glyphs,
+     which those Latin-only faces don't cover, fall through to a professional
+     system Chinese font — PingFang SC (Apple), Microsoft YaHei (Windows),
+     Source Han / Noto Sans SC (Linux). System fonts only: no CDN, works
+     offline and in China, consistent with the self-hosted-Latin approach. */
+  --font-sans: 'Geist', 'Inter', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans SC', ui-monospace, monospace;
 }
 
 /* Self-hosted fonts (woff2, latin subset). Bundled under web/public/fonts so
