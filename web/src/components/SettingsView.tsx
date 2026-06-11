@@ -17,6 +17,7 @@ import FallbackModelsEditor from './FallbackModelsEditor';
 import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
+import BudgetSection from './BudgetSection';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -31,6 +32,12 @@ interface SettingsViewProps {
   project: Project;
   onSave: (data: ProjectUpdateRequest) => void;
   onDelete: () => void;
+  /**
+   * Navigate to the pricing-table editor. Placeholder hook — the editor itself
+   * ships in P3-I; until then this defaults to a no-op so the link renders and
+   * the editor task can plug a real navigation in here.
+   */
+  onEditPricing?: () => void;
 }
 
 const AUTONOMY_OPTIONS: {
@@ -59,6 +66,7 @@ export default function SettingsView({
   project,
   onSave,
   onDelete,
+  onEditPricing = () => {},
 }: SettingsViewProps) {
   const t = useT();
   const [agentName, setAgentName] = useState(project.agent_name || project.name);
@@ -90,11 +98,21 @@ export default function SettingsView({
     project.disabled_sub_agents ?? [],
   );
 
-  // Budget state
+  // Budget state. Spend is NOT tracked here anymore — the Budget section reads
+  // it exclusively from GET /cost via useCost (P3-F coupled removal of the
+  // legacy budget_spent_usd accumulator).
   const [budgetLimit, setBudgetLimit] = useState<string>(
     project.budget_limit_usd != null ? String(project.budget_limit_usd) : '',
   );
-  const [budgetSpent, setBudgetSpent] = useState<number>(project.budget_spent_usd ?? 0);
+  const [budgetCurrency, setBudgetCurrency] = useState<string>(
+    project.budget_currency || 'USD',
+  );
+  const [budgetPeriod, setBudgetPeriod] = useState<
+    'daily' | 'weekly' | 'monthly' | 'total'
+  >(project.budget_period || 'daily');
+  const [budgetAction, setBudgetAction] = useState<'pause' | 'stop'>(
+    project.budget_action === 'stop' ? 'stop' : 'pause',
+  );
 
   // Fallback models state
   const [fallbackModels, setFallbackModels] = useState<FallbackModelEntry[]>(
@@ -122,8 +140,10 @@ export default function SettingsView({
         if (cancelled) return;
         setProjectGoals(detail.project_goals_content || '');
         setStandingRules(detail.user_directives_content || '');
-        setBudgetSpent(detail.budget_spent_usd ?? 0);
         setBudgetLimit(detail.budget_limit_usd != null ? String(detail.budget_limit_usd) : '');
+        if (detail.budget_currency) setBudgetCurrency(detail.budget_currency);
+        if (detail.budget_period) setBudgetPeriod(detail.budget_period);
+        setBudgetAction(detail.budget_action === 'stop' ? 'stop' : 'pause');
       })
       .catch(() => {
         // On error, leave textareas with current (likely empty) values
@@ -274,6 +294,9 @@ export default function SettingsView({
       sdk: llm.sdk,
       llm_fallback_models: fallbackModelsRef.current,
       budget_limit_usd: budgetLimit ? parseFloat(budgetLimit) : null,
+      budget_currency: budgetCurrency,
+      budget_period: budgetPeriod,
+      budget_action: budgetAction,
       disabled_sub_agents: disabledSubAgents,
     };
     if (llm.api_key) {
@@ -282,20 +305,6 @@ export default function SettingsView({
     onSave(data);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  }
-
-  async function handleResetSpend() {
-    if (!confirm(t('settings.budget.resetConfirm'))) return;
-    try {
-      await api(`/api/v2/projects/${encodeURIComponent(pid)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ budget_spent_usd: 0 }),
-      });
-      setBudgetSpent(0);
-    } catch {
-      // silently ignore
-    }
   }
 
   function handleDelete() {
@@ -571,62 +580,21 @@ export default function SettingsView({
           </div>
         </div>
 
-        {/* Budget */}
-        <div>
-          <label className="block text-sm font-medium text-primary mb-1.5">
-            {t('settings.budget.label')}
-          </label>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs text-secondary mb-1">
-                {t('createProject.budget.label')}
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={budgetLimit}
-                onChange={(e) => setBudgetLimit(e.target.value)}
-                placeholder={t('createProject.budget.placeholder')}
-                className="w-48 text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
-              />
-              <p className="text-xs text-secondary mt-1">{t('settings.budget.limitHint')}</p>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              {(() => {
-                const limit = budgetLimit ? parseFloat(budgetLimit) : null;
-                const overBudget = limit != null && budgetSpent >= limit;
-                const nearBudget = limit != null && !overBudget && budgetSpent >= limit * 0.8;
-                const colorClass = overBudget ? 'text-error' : nearBudget ? 'text-warning' : 'text-primary';
-                return (
-                  <>
-                    <span className="text-xs text-secondary">
-                      {t('settings.budget.spent')} <span className={`font-medium ${colorClass}`}>${budgetSpent.toFixed(2)}</span>
-                      {limit != null && (
-                        <span className="text-secondary/60"> / ${limit.toFixed(2)}</span>
-                      )}
-                    </span>
-                    {overBudget && (
-                      <span className="text-xs text-error font-medium">{t('settings.budget.overBudget')}</span>
-                    )}
-                    {nearBudget && (
-                      <span className="text-xs text-warning font-medium">{t('settings.budget.nearingLimit')}</span>
-                    )}
-                  </>
-                );
-              })()}
-              {budgetSpent > 0 && (
-                <button
-                  type="button"
-                  onClick={handleResetSpend}
-                  className="text-xs text-secondary hover:text-primary underline transition-colors duration-150"
-                >
-                  {t('settings.budget.reset')}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        {/* Budget — limit-as-sentence, behavior cards, spend meter, breakdown.
+            Spend is read EXCLUSIVELY from GET /cost (useCost), refreshed on the
+            budget.spend_updated WS event. */}
+        <BudgetSection
+          project={project}
+          limit={budgetLimit}
+          onLimitChange={setBudgetLimit}
+          currency={budgetCurrency}
+          onCurrencyChange={setBudgetCurrency}
+          period={budgetPeriod}
+          onPeriodChange={setBudgetPeriod}
+          action={budgetAction}
+          onActionChange={setBudgetAction}
+          onEditPricing={onEditPricing}
+        />
 
         {/* Save */}
         <div className="flex items-center gap-3 pt-2">

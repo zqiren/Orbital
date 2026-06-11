@@ -210,6 +210,35 @@ class TestCostRoute:
         after = json.dumps(store.get_project(pid), sort_keys=True, default=str)
         assert before == after
 
+    def test_fx_rates_surfaced_codes_only(self, store, tmp_path, make_client,
+                                          override_file):
+        """P3-F footnote: the response carries the daemon's static FX table so
+        the client can render the rate the total was converted at. Pair-code
+        keys with numeric values ONLY — non-numeric junk in settings is
+        filtered, and no display strings appear (binding i18n rule)."""
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        client = make_client(store, fx_rates={
+            "CNY_per_USD": 7.2,
+            "junk": "not-a-number",   # filtered
+            "flag": True,             # bools are not rates — filtered
+        })
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+        assert body["fx_rates"] == {"CNY_per_USD": pytest.approx(7.2)}
+        assert all(isinstance(v, float) for v in body["fx_rates"].values())
+
+    def test_fx_rates_empty_when_no_numeric_rates(self, store, tmp_path,
+                                                  make_client, override_file):
+        """A table with no usable numeric rates surfaces as an empty dict (the
+        client then never shows a rate — it is never invented)."""
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        # NOTE: make_client substitutes a default table for a falsy {} — use a
+        # non-empty all-junk table to exercise the filter down to {}.
+        client = make_client(store, fx_rates={"junk": "not-a-number"})
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+        assert body["fx_rates"] == {}
+
 
 # ---------------------------------------------------------------------------
 # GET /cost — the P3-B subagents block reshape

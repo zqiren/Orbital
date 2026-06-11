@@ -388,8 +388,9 @@ def test_D6_reset_total_mode_sets_anchor_and_honors_window(tmp_path):
     before = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
     assert before["converted_total"]["amount"] > 0
 
-    # Legacy reset surface: the existing UI sends {budget_spent_usd: 0}.
-    r = client.put(f"/api/v2/projects/{pid}", json={"budget_spent_usd": 0})
+    # P3-F: the reset surface is reset_budget_anchor:true (the legacy
+    # {budget_spent_usd: 0} sentinel is gone).
+    r = client.put(f"/api/v2/projects/{pid}", json={"reset_budget_anchor": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["budget_reset"]["applied"] is True
@@ -411,7 +412,9 @@ def test_D6_reset_non_total_mode_is_noop_with_code(tmp_path):
     pid = _create_project(client, ws, budget_period="daily",
                           budget_limit_usd=100.0)
 
-    r = client.put(f"/api/v2/projects/{pid}", json={"budget_spent_usd": 0})
+    # P3-F: reset_budget_anchor is the only reset surface; in daily mode it is
+    # a no-op returning the not_total_mode code.
+    r = client.put(f"/api/v2/projects/{pid}", json={"reset_budget_anchor": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["budget_reset"]["applied"] is False
@@ -444,8 +447,9 @@ def test_D6_no_reset_field_means_no_budget_reset_key(tmp_path):
     r = client.put(f"/api/v2/projects/{pid}", json={"name": "Renamed"})
     assert r.status_code == 200, r.text
     assert "budget_reset" not in r.json()
-    # The legacy budget_spent_usd flatten is PRESERVED (frontend reads it).
-    assert r.json()["budget_spent_usd"] == 0.0
+    # P3-F: the legacy budget_spent_usd flatten is REMOVED — no spend key on the
+    # response (the ledger is the single source of recorded spend via GET /cost).
+    assert "budget_spent_usd" not in r.json()
 
 
 def test_D6_reset_while_running_no_conflict(tmp_path):
@@ -458,7 +462,7 @@ def test_D6_reset_while_running_no_conflict(tmp_path):
                           budget_limit_usd=100.0)
     # No live agent needed: the reset path is pure config; this asserts the
     # route returns cleanly and applies the anchor regardless of run state.
-    r = client.put(f"/api/v2/projects/{pid}", json={"budget_spent_usd": 0})
+    r = client.put(f"/api/v2/projects/{pid}", json={"reset_budget_anchor": True})
     assert r.status_code == 200
     assert r.json()["budget_reset"]["applied"] is True
 

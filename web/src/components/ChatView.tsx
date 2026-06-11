@@ -378,7 +378,7 @@ interface ChatViewProps {
    */
   sessionId?: string;
   /**
-   * Re-fetch this project's runtime fields (e.g. `budget_spent_usd`) and merge
+   * Re-fetch this project's runtime fields and merge
    * them into the App-level projects list. Called on the running→idle
    * transition so the header's budget/cost reflects the just-finished turn.
    */
@@ -945,7 +945,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         // live overlay items get wiped on the next seed without a backing
         // history line to replace them.
         refreshRawMessages();
-        // Refresh the project's runtime fields (budget_spent_usd) so the
+        // Refresh the project's runtime fields so the
         // header reflects the spend from the just-completed turn.
         onRefreshProject?.(projectId);
       }

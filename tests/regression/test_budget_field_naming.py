@@ -4,12 +4,16 @@
 
 """Regression: budget field naming and wiring.
 
+P3-F coupled removal: the legacy ``budget_spent_usd`` /
+``runtime_budget_spent_usd`` surface is GONE on both request and response sides.
+
 Covers:
-- the legacy budget_spent_usd / runtime_budget_spent_usd PUT fields are now
-  INERT (Budget Piece 2 deleted the spend-write); they are accepted but do not
-  persist a dollar value
-- budget_limit_usd accepted on POST /api/v2/projects (creation)
-- GET returns both budget_spent_usd (always 0.0 now) and budget_limit_usd
+- GET / PUT project responses contain NO ``budget_spent_usd`` key (the ledger
+  is the single source of recorded spend; the frontend reads it via GET /cost)
+- the legacy ``budget_spent_usd`` / ``runtime_budget_spent_usd`` PUT *request*
+  aliases no longer trigger a spend-window reset (the only reset surface is
+  ``reset_budget_anchor: true``); they are ignored as bogus config keys
+- budget_limit_usd accepted on POST /api/v2/projects (creation) and GET
 """
 
 import pytest
@@ -42,39 +46,53 @@ def _create_project(client, workspace):
     return resp.json()["project_id"]
 
 
-class TestBudgetFieldNaming:
-    """Budget Piece 2: the legacy spend-write PUT fields are accepted but INERT
-    — they no longer persist a dollar accumulator (the ledger owns spend)."""
+class TestBudgetSpentUsdRemoved:
+    """P3-F: ``budget_spent_usd`` is removed from BOTH the GET and PUT response
+    shapes, and the legacy request aliases no longer reset the spend window."""
 
-    def test_runtime_budget_spent_usd_is_inert(self, client, workspace):
-        """'runtime_budget_spent_usd' is accepted (200) but does not persist a
-        dollar value — spend stays 0.0 (the legacy write is gone)."""
+    def test_get_response_has_no_budget_spent_usd_key(self, client, workspace):
         pid = _create_project(client, workspace)
-        resp = client.put(f"/api/v2/projects/{pid}", json={
-            "runtime_budget_spent_usd": 3.50,
-        })
-        assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 0.0
+        detail = client.get(f"/api/v2/projects/{pid}").json()
+        assert "budget_spent_usd" not in detail
+        assert "runtime_budget_spent_usd" not in detail
 
-    def test_budget_spent_usd_alias_is_inert(self, client, workspace):
-        """The 'budget_spent_usd' alias is likewise accepted but inert."""
+    def test_put_response_has_no_budget_spent_usd_key(self, client, workspace):
+        pid = _create_project(client, workspace)
+        body = client.put(
+            f"/api/v2/projects/{pid}", json={"budget_limit_usd": 10.0},
+        ).json()
+        assert "budget_spent_usd" not in body
+        assert "runtime_budget_spent_usd" not in body
+
+    def test_legacy_spent_alias_does_not_reset_window(self, client, workspace):
+        """Sending the dead ``budget_spent_usd`` field is accepted (200) but is
+        NOT a reset surface anymore — no ``budget_reset`` outcome is produced."""
         pid = _create_project(client, workspace)
         resp = client.put(f"/api/v2/projects/{pid}", json={
             "budget_spent_usd": 2.25,
         })
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 0.0
+        assert "budget_reset" not in resp.json()
+        assert "budget_spent_usd" not in resp.json()
 
-    def test_both_fields_together_still_inert(self, client, workspace):
-        """Sending both legacy fields is accepted without error and persists
-        nothing (no dollar accumulator)."""
+    def test_legacy_runtime_alias_does_not_reset_window(self, client, workspace):
         pid = _create_project(client, workspace)
         resp = client.put(f"/api/v2/projects/{pid}", json={
-            "runtime_budget_spent_usd": 5.00,
-            "budget_spent_usd": 1.00,
+            "runtime_budget_spent_usd": 3.50,
         })
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 0.0
+        assert "budget_reset" not in resp.json()
+
+    def test_reset_only_via_reset_budget_anchor(self, client, workspace):
+        """The ONLY reset surface is ``reset_budget_anchor: true`` (total mode)."""
+        pid = _create_project(client, workspace)
+        # Put the project in total mode first (anchor only bounds that window).
+        client.put(f"/api/v2/projects/{pid}", json={"budget_period": "total"})
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"reset_budget_anchor": True})
+        assert resp.status_code == 200
+        assert resp.json()["budget_reset"]["applied"] is True
+        assert resp.json()["budget_reset"]["code"] is None
 
 
 class TestBudgetLimitOnCreate:
@@ -94,7 +112,8 @@ class TestBudgetLimitOnCreate:
 
         detail = client.get(f"/api/v2/projects/{pid}").json()
         assert detail["budget_limit_usd"] == 10.00
-        assert detail["budget_spent_usd"] == 0.0
+        # P3-F: no spend field on the response.
+        assert "budget_spent_usd" not in detail
 
     def test_create_project_without_budget_limit(self, client, workspace):
         """POST without budget_limit_usd defaults to no limit."""
@@ -110,9 +129,12 @@ class TestBudgetLimitOnCreate:
         detail = client.get(f"/api/v2/projects/{pid}").json()
         assert detail.get("budget_limit_usd") is None
 
-    def test_get_returns_consistent_field_names(self, client, workspace):
-        """GET /api/v2/projects/{pid} returns budget_spent_usd (not runtime_ prefix)."""
+    def test_get_returns_limit_without_spent_field(self, client, workspace):
+        """GET /api/v2/projects/{pid} returns the set budget_limit_usd and NO
+        spend field."""
         pid = _create_project(client, workspace)
+        client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 7.0})
         detail = client.get(f"/api/v2/projects/{pid}").json()
-        assert "budget_spent_usd" in detail
+        assert detail["budget_limit_usd"] == 7.0
+        assert "budget_spent_usd" not in detail
         assert "runtime_budget_spent_usd" not in detail

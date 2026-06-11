@@ -100,13 +100,15 @@ describe('ProjectDetail — gear icon in header', () => {
   });
 });
 
-describe('ProjectDetail — model + budget header label', () => {
+describe('ProjectDetail — model header label', () => {
+  // P3-F coupled removal: the header spend segment (the old budget_spent_usd
+  // "$X.XX" suffix) is GONE. The GET /cost-backed spend corner ships in P3-G.
+  // The header now renders the model label alone.
   it('Test 4: model label uses the global default (not agent_name) when project.model is empty', () => {
     const project: Project = {
       ...mockProject,
       model: '',
       agent_name: 'Research Bot',
-      budget_spent_usd: 0,
     };
     render(
       <ProjectDetail
@@ -117,16 +119,17 @@ describe('ProjectDetail — model + budget header label', () => {
         globalDefaultModel="deepseek-chat"
       />,
     );
-    expect(screen.getByText('deepseek-chat · $0.00')).toBeInTheDocument();
+    expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
     expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
+    // No fabricated $0.00 cost suffix.
+    expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
   });
 
-  it('Test 5: with no model anywhere, the header shows the cost only', () => {
+  it('Test 5: with no model anywhere, the header renders no model/cost label', () => {
     const project: Project = {
       ...mockProject,
       model: '',
       agent_name: 'Research Bot',
-      budget_spent_usd: 0,
     };
     render(
       <ProjectDetail
@@ -137,21 +140,22 @@ describe('ProjectDetail — model + budget header label', () => {
         globalDefaultModel=""
       />,
     );
-    expect(screen.getByText('$0.00')).toBeInTheDocument();
     expect(screen.queryByText(/Research Bot/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/·/)).not.toBeInTheDocument();
   });
 
   it('prefers the project-pinned model over the global default', () => {
     render(
       <ProjectDetail
-        project={{ ...mockProject, model: 'gpt-4o', budget_spent_usd: 1.5 }}
+        project={{ ...mockProject, model: 'gpt-4o' }}
         agentStatus="idle"
         route={baseRoute}
         setRoute={vi.fn()}
         globalDefaultModel="deepseek-chat"
       />,
     );
-    expect(screen.getByText('gpt-4o · $1.50')).toBeInTheDocument();
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
   });
 });

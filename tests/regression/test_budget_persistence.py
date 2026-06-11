@@ -265,42 +265,43 @@ class TestBudgetAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["budget_limit_usd"] == 5.0
-        assert data["budget_spent_usd"] == 0.0
+        # P3-F: no spend flatten on the response.
+        assert "budget_spent_usd" not in data
 
-    def test_legacy_spend_write_is_retired(self, client, workspace):
-        """Budget Piece 2: PUT runtime_budget_spent_usd no longer WRITES a
-        persisted dollar counter. The field is accepted (200) but inert — the
-        endpoint's spend-reset repurpose (anchor reset) is P2-D's job. Until
-        then, a PUT carrying it does not mutate budget_spent_usd, which stays 0."""
+    def test_legacy_spend_alias_is_inert_and_unsurfaced(self, client, workspace):
+        """P3-F: the legacy ``runtime_budget_spent_usd`` PUT alias is accepted
+        (200) but inert — it persists nothing and is NOT surfaced on the
+        response (the flatten is removed). The ledger owns recorded spend."""
         pid = _create_project(client, workspace)
 
-        # PUT the legacy field — must NOT 500, must NOT persist a dollar value.
         resp = client.put(
             f"/api/v2/projects/{pid}",
             json={"runtime_budget_spent_usd": 2.75},
         )
         assert resp.status_code == 200
-        # The legacy write is gone — spend stays at the default 0.0.
-        assert resp.json()["budget_spent_usd"] == 0.0
+        # The flatten is gone — no spend key on the PUT response.
+        assert "budget_spent_usd" not in resp.json()
+        # And no reset was triggered by the legacy alias.
+        assert "budget_reset" not in resp.json()
 
-        # Confirm via GET as well (no persisted runtime accumulator).
+        # Confirm via GET as well (no spend flatten).
         resp = client.get(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 0.0
+        assert "budget_spent_usd" not in resp.json()
 
-    def test_budget_spent_read_shape_preserved(self, client, workspace):
-        """GET /projects/:id still surfaces budget_spent_usd (tolerated READ of
-        the persisted field for back-compat); it defaults to 0.0 since nothing
-        writes it anymore."""
+    def test_get_does_not_surface_budget_spent_usd(self, client, workspace):
+        """P3-F: GET /projects/:id no longer surfaces ``budget_spent_usd``. Any
+        persisted ``runtime.budget_spent_usd`` in old project files is
+        tolerated-on-read but never flattened onto the response."""
         pid = _create_project(client, workspace)
         resp = client.get(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
-        assert "budget_spent_usd" in resp.json()
-        assert resp.json()["budget_spent_usd"] == 0.0
+        assert "budget_spent_usd" not in resp.json()
+        assert "runtime_budget_spent_usd" not in resp.json()
 
-    def test_new_project_has_zero_spent(self, client, workspace):
-        """New project starts with budget_spent_usd=0."""
+    def test_new_project_has_no_spend_field(self, client, workspace):
+        """A new project's GET response carries no spend field (P3-F)."""
         pid = _create_project(client, workspace)
         resp = client.get(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 0.0
+        assert "budget_spent_usd" not in resp.json()

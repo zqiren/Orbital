@@ -43,7 +43,7 @@ export function useProjects() {
 
   /**
    * Re-fetch a single project and merge it into the list. Used to refresh
-   * runtime fields (e.g. `budget_spent_usd`) after a turn completes, without
+   * runtime fields after a turn completes, without
    * re-listing every project. No-op on fetch error (keeps the prior value).
    */
   const refreshProject = useCallback(async (id: string) => {

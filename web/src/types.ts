@@ -44,8 +44,14 @@ export interface Project {
   notification_prefs?: NotificationPrefs;
   llm_fallback_models?: FallbackModelEntry[];
   budget_limit_usd?: number | null;
-  budget_action?: 'stop' | 'ask';
-  budget_spent_usd?: number;
+  /** Enforcement behavior at the limit. "pause" auto-resumes; "stop" is hard. */
+  budget_action?: 'pause' | 'stop';
+  /** ISO 4217 currency the limit is denominated in (set-once, user-overridable). */
+  budget_currency?: string;
+  /** Spend window the limit applies over. */
+  budget_period?: 'daily' | 'weekly' | 'monthly' | 'total';
+  /** ISO timestamp the "total" window counts from (the reset anchor). */
+  budget_anchor_ts?: string | null;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
 }
@@ -79,9 +85,22 @@ export interface ProjectUpdateRequest {
   notification_prefs?: NotificationPrefs;
   llm_fallback_models?: FallbackModelEntry[];
   budget_limit_usd?: number | null;
-  budget_spent_usd?: number;
+  budget_action?: 'pause' | 'stop';
+  budget_currency?: string;
+  budget_period?: 'daily' | 'weekly' | 'monthly' | 'total';
+  budget_anchor_ts?: string | null;
+  /** P3-F: total-mode spend-window reset. Replaces the legacy budget_spent_usd
+   *  reset sentinel — sets budget_anchor_ts = now (server-side). */
+  reset_budget_anchor?: boolean;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+}
+
+/** PUT /projects response field carrying the reset outcome (codes only). */
+export interface BudgetResetOutcome {
+  applied: boolean;
+  code: 'not_total_mode' | null;
+  budget_anchor_ts: string | null;
 }
 
 export interface ToolCallFunction {
@@ -418,8 +437,26 @@ export interface BlockedCountChangedEvent {
   blocked_sessions: BlockedSessionEntry[];
 }
 
+/**
+ * Management spend crossed the debounce threshold (≥1s) for a project's
+ * current window. Display-only nudge: the Budget surface re-fetches GET /cost
+ * rather than trusting the inline numbers. Carries the window + the
+ * management spend/limit (ISO currency code) so a header corner can render
+ * without a fetch if it wants. Sub-agent spend is NOT included (never
+ * enforced).
+ */
+export interface BudgetSpendUpdatedEvent {
+  type: 'budget.spend_updated';
+  project_id: string;
+  window: 'daily' | 'weekly' | 'monthly' | 'total';
+  spend: number;
+  limit: number | null;
+  currency: string;
+}
+
 export type WebSocketEvent =
   | AgentStatusEvent
+  | BudgetSpendUpdatedEvent
   | StreamDeltaEvent
   | ActivityEvent
   | StatusSummaryEvent

@@ -88,8 +88,10 @@ class ProjectUpdate(BaseModel):
     llm_fallback_models: list[dict] | None = None
     budget_limit_usd: float | None = None
     budget_action: str | None = None
-    runtime_budget_spent_usd: float | None = None
-    budget_spent_usd: float | None = None  # Alias for runtime_budget_spent_usd
+    # P3-F coupled removal: the legacy ``budget_spent_usd`` /
+    # ``runtime_budget_spent_usd`` PUT request aliases are GONE. The ledger owns
+    # spend; the only reset surface is ``reset_budget_anchor: true`` (total
+    # mode). The release rule guarantees no shipped frontend depends on these.
     # Budget Piece 1, Task 4 — additive derived-cost window config.
     budget_period: str | None = None  # "daily"|"weekly"|"monthly"|"total"
     budget_currency: str | None = None  # ISO 4217; explicit set overrides the
@@ -561,8 +563,10 @@ async def get_project(project_id: str):
     _enrich_with_disk_content(result, workspace)
     result.setdefault("agent_name", result.get("name", ""))
     result.setdefault("is_scratch", False)
-    # Flatten runtime budget spend for frontend consumption
-    result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
+    # P3-F coupled removal: the legacy ``budget_spent_usd`` flatten is GONE. The
+    # token ledger is the single source of recorded spend; the frontend reads it
+    # via GET /cost. Any persisted ``runtime.budget_spent_usd`` in old project
+    # files is tolerated-on-read but never surfaced.
     return result
 
 
@@ -571,33 +575,15 @@ async def update_project(project_id: str, body: ProjectUpdate):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Inspect the RAW body (pre-None-filter) so we can detect a reset request
-    # that arrives as the legacy ``budget_spent_usd: 0`` sentinel — 0 is not
-    # None, but the None-filter below would still keep it; we read presence here
-    # to decide reset intent before that field is popped as config.
     raw_body = body.model_dump()
     updates = {k: v for k, v in raw_body.items() if v is not None}
-    # Budget Piece 2 / P2-D: the legacy ``budget_spent_usd`` runtime accumulator
-    # is GONE — the token ledger is now the single source of recorded spend and
-    # nothing writes ``runtime.budget_spent_usd`` anymore. The legacy "reset
-    # spend" request fields are now REPURPOSED, not retired: the existing UI's
-    # reset button still PUTs ``{budget_spent_usd: 0}`` (see web/src/components/
-    # SettingsView.tsx:293), and that must keep working. We UNIFY the three reset
-    # surfaces — ``reset_budget_anchor: true`` (Piece 1), legacy
-    # ``budget_spent_usd``, legacy ``runtime_budget_spent_usd`` — into a single
-    # "reset the ledger spend WINDOW" operation: set ``budget_anchor_ts = now``,
-    # but ONLY in ``budget_period == "total"`` mode (the only window an anchor
-    # affects). In any non-total mode the reset is a NO-OP that surfaces the
-    # machine code ``not_total_mode`` (codes only, no sentences — i18n rule).
-    #
-    # The fields are mapped-and-consumed here so they never fall through to
-    # ``update_project`` as bogus config keys.
-    legacy_reset_requested = (
-        raw_body.get("budget_spent_usd") is not None
-        or raw_body.get("runtime_budget_spent_usd") is not None
-    )
-    updates.pop("runtime_budget_spent_usd", None)
-    updates.pop("budget_spent_usd", None)
+    # P3-F coupled removal: the legacy ``budget_spent_usd`` /
+    # ``runtime_budget_spent_usd`` reset sentinels are GONE. The token ledger is
+    # the single source of recorded spend; the ONLY reset surface is
+    # ``reset_budget_anchor: true``, which sets ``budget_anchor_ts = now`` in
+    # ``budget_period == "total"`` mode (the only window an anchor affects). In
+    # any non-total mode the reset is a NO-OP that surfaces the machine code
+    # ``not_total_mode`` (codes only, no sentences — i18n rule).
 
     # Budget Piece 2 migration: normalize budget_action on SAVE so persisted
     # configs converge ("ask"→"pause", unknown→"pause", "stop" stays).
@@ -611,7 +597,7 @@ async def update_project(project_id: str, body: ProjectUpdate):
     # is an explicit anchor set, not the reset operation). The bool flag is a
     # control input, not a persisted field — pop it either way.
     reset_anchor_flag = updates.pop("reset_budget_anchor", None)
-    reset_requested = bool(reset_anchor_flag) or legacy_reset_requested
+    reset_requested = bool(reset_anchor_flag)
     # The effective window after this PUT (an incoming period change wins over
     # the stored one, so a single PUT that sets total + resets behaves sanely).
     eff_period = updates.get("budget_period", project.get("budget_period")) or "daily"
@@ -707,7 +693,7 @@ async def update_project(project_id: str, body: ProjectUpdate):
     updated = _project_store.get_project(project_id)
     result = _redact_project(updated)
     _enrich_with_disk_content(result, workspace)
-    result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
+    # P3-F coupled removal: no ``budget_spent_usd`` flatten in the PUT response.
     # P2-D: surface the reset outcome (codes only) so the frontend can read the
     # ``not_total_mode`` no-op code. None when no reset was requested this PUT.
     if budget_reset is not None:
@@ -812,6 +798,14 @@ async def get_project_cost(project_id: str, window: Optional[str] = Query(defaul
     result["subagents"] = [
         _subagent_entry(row) for row in sub["breakdown"]
     ]
+    # P3-F footnote: surface the daemon's static FX table (the same one the
+    # conversion above used) so the client can render the rate it converted at.
+    # Codes/numbers only — pair keys like "CNY_per_USD" with numeric values;
+    # non-numeric junk in settings is filtered, never surfaced.
+    result["fx_rates"] = {
+        k: float(v) for k, v in fx_rates.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
     return result
 
 

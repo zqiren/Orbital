@@ -78,12 +78,14 @@ export default function ProjectDetail({
         <div className="flex items-center gap-3 shrink-0">
           {(() => {
             // Model label: the project's pinned model, else the global default.
-            // NEVER agent_name (an identity, not a model). Empty → cost only.
+            // NEVER agent_name (an identity, not a model). The header SPEND
+            // corner moved out with the P3-F budget_spent_usd removal — the real
+            // GET /cost-backed corner ships in P3-G. Until then the header shows
+            // the model label alone (no fabricated $0.00 from a dead field).
             const modelName = project.model || globalDefaultModel || '';
-            const cost = `$${(project.budget_spent_usd ?? 0).toFixed(2)}`;
-            const label = modelName ? `${modelName} · ${cost}` : cost;
+            if (!modelName) return null;
             return (
-              <span className="font-mono text-[11px] text-secondary">{label}</span>
+              <span className="font-mono text-[11px] text-secondary">{modelName}</span>
             );
           })()}
           <SettingsIcon onClick={handleSettingsClick} />
