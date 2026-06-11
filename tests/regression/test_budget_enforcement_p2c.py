@@ -407,7 +407,7 @@ class TestActionMigration:
         from agent_os.budget.guard import evaluate_budget, ACTION_PAUSE
 
         def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-                   now=None, anchor_ts=None):
+                   now=None, anchor_ts=None, sources=None):
             return {"converted_total": {"amount": 10.0, "currency": "USD"}}
 
         d = evaluate_budget(

@@ -99,7 +99,7 @@ def _stub_spend(amount):
     """Patch the ledger.spend symbol notify imports so spend is deterministic
     (decoupled from the real rate table)."""
     def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-               now=None, anchor_ts=None):
+               now=None, anchor_ts=None, sources=None):
         return {
             "window": window,
             "by_currency": {},
@@ -277,7 +277,7 @@ async def test_loop_trip_emitted_via_ledger_append(tmp_path, monkeypatch):
     amounts = iter([0.0, 8.5, 8.5, 11.0, 11.0, 11.0])
 
     def _climbing_spend(project_dir, window, *, target_currency=None,
-                        fx_rates=None, now=None, anchor_ts=None):
+                        fx_rates=None, now=None, anchor_ts=None, sources=None):
         try:
             amt = next(amounts)
         except StopIteration:
@@ -453,7 +453,7 @@ async def test_append_trip_then_guard_trip_no_refire(tmp_path, monkeypatch):
     amounts = iter([0.0, 11.0])
 
     def _climbing_spend(project_dir, window, *, target_currency=None,
-                        fx_rates=None, now=None, anchor_ts=None):
+                        fx_rates=None, now=None, anchor_ts=None, sources=None):
         try:
             amt = next(amounts)
         except StopIteration:

@@ -24,7 +24,7 @@ from agent_os.budget.guard import (
 def _spend_returning(amount, *, currency="USD", unconverted=None):
     """A stub spend() that returns a fixed converted total."""
     def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-               now=None, anchor_ts=None):
+               now=None, anchor_ts=None, sources=None):
         ct = {"currency": target_currency or currency, "amount": amount,
               "estimated": True}
         if unconverted:
@@ -122,10 +122,11 @@ class TestEvaluateBudget:
         captured = {}
 
         def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-                   now=None, anchor_ts=None):
+                   now=None, anchor_ts=None, sources=None):
             captured["window"] = window
             captured["currency"] = target_currency
             captured["anchor"] = anchor_ts
+            captured["sources"] = sources
             return {"converted_total": {"amount": 0.0, "currency": target_currency}}
 
         evaluate_budget(
@@ -139,6 +140,8 @@ class TestEvaluateBudget:
             spend_fn=_spend,
         )
         assert captured["window"] == "monthly"
+        # P3-A: the guard isolates enforcement to management spend.
+        assert captured["sources"] == ["management"]
         assert captured["currency"] == "CNY"
         assert captured["anchor"] == "2026-01-01T00:00:00+00:00"
 
@@ -197,7 +200,7 @@ class TestEvaluateBudget:
         spend QUERY itself."""
         # Missing the converted_total key entirely.
         def _missing_key(project_dir, window, *, target_currency=None,
-                         fx_rates=None, now=None, anchor_ts=None):
+                         fx_rates=None, now=None, anchor_ts=None, sources=None):
             return {"window": window, "by_currency": {}, "breakdown": []}
 
         with pytest.raises(KeyError):
@@ -209,7 +212,7 @@ class TestEvaluateBudget:
 
         # Wrong type: converted_total is not a mapping.
         def _wrong_type(project_dir, window, *, target_currency=None,
-                        fx_rates=None, now=None, anchor_ts=None):
+                        fx_rates=None, now=None, anchor_ts=None, sources=None):
             return {"converted_total": None}
 
         with pytest.raises(TypeError):
@@ -221,7 +224,7 @@ class TestEvaluateBudget:
 
         # Non-numeric amount.
         def _bad_amount(project_dir, window, *, target_currency=None,
-                        fx_rates=None, now=None, anchor_ts=None):
+                        fx_rates=None, now=None, anchor_ts=None, sources=None):
             return {"converted_total": {"amount": "not-a-number"}}
 
         with pytest.raises(ValueError):

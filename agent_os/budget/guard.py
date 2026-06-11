@@ -141,6 +141,10 @@ def evaluate_budget(
             fx_rates=fx_rates or {},
             now=now,
             anchor_ts=anchor_ts,
+            # Enforcement counts MANAGEMENT spend only. Sub-agent usage is
+            # captured to the ledger (display) but must never trip the guard
+            # nor block the user (P3-A guard isolation).
+            sources=["management"],
         )
     except Exception as e:  # noqa: BLE001 — fail-open scope: the spend QUERY only
         # A spend-query failure (ledger I/O, rate resolution) must never crash

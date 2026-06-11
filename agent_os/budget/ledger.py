@@ -314,6 +314,7 @@ def spend(
     now: datetime | None = None,
     anchor_ts: str | None = None,
     override_path: str | None = None,
+    sources: list[str] | None = None,
 ) -> dict:
     """Aggregate token usage + derived cost for a project over a window.
 
@@ -335,6 +336,12 @@ def spend(
         anchor_ts: ISO8601 anchor for the ``total`` window.
         override_path: Pricing-override file path forwarded to ``resolve_rates``
             (tests inject a temp file here).
+        sources: Event-source filter. ``None`` (default) means ALL sources —
+            the GET /cost display view aggregates everything. A non-None list
+            keeps ONLY events whose ``source`` exactly matches a list member
+            (e.g. ``["management"]`` so the pre-flight guard and threshold
+            detector never count sub-agent usage toward enforcement). Empty
+            list → matches nothing (everything excluded).
 
     Returns:
         A dict with ``window``, ``by_currency``, ``converted_total`` (carrying
@@ -355,6 +362,12 @@ def spend(
     start_utc = window_start(window, now=now, anchor_ts=anchor_ts)
     path = ledger_path(project_dir)
 
+    # Optional exact-match source filter. ``None`` → keep everything (display
+    # view); a list → keep only the listed sources (the guard/notify pass
+    # ``["management"]`` so sub-agent usage never counts toward enforcement).
+    # A set membership test keeps the per-line check O(1).
+    source_filter = None if sources is None else set(sources)
+
     # Aggregate token counts by (provider, model, source). Cost is derived AFTER
     # accumulation so we never round mid-sum.
     groups: dict[tuple[str, str, str], dict[str, int]] = {}
@@ -364,6 +377,8 @@ def spend(
         except (ValueError, TypeError):
             continue  # already filtered in _iter_events, but be defensive
         if ts < start_utc:
+            continue
+        if source_filter is not None and rec["source"] not in source_filter:
             continue
         key = (rec["provider"], rec["model"], rec["source"])
         bucket = groups.setdefault(key, {f: 0 for f in _TOKEN_FIELDS})

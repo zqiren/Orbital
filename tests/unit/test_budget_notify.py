@@ -43,7 +43,7 @@ from agent_os.budget.notify import (
 def _spend_returning(amount, *, currency="USD"):
     """A stub spend() returning a fixed converted total (mirrors guard tests)."""
     def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-               now=None, anchor_ts=None):
+               now=None, anchor_ts=None, sources=None):
         return {
             "window": window,
             "by_currency": {},

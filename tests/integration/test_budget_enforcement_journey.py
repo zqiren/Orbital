@@ -693,7 +693,7 @@ async def test_threshold_fires_once_with_codes_only_across_two_responses(
     }
     # 8.5 / 10 = 85% → crosses 80%, under 100% → threshold ONLY, both appends.
     def _spend(project_dir, window, *, target_currency=None, fx_rates=None,
-               now=None, anchor_ts=None):
+               now=None, anchor_ts=None, sources=None):
         return {
             "window": window, "by_currency": {},
             "converted_total": {"currency": target_currency or "USD",

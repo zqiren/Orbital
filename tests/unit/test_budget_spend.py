@@ -209,6 +209,88 @@ class TestAnchorReset:
 
 
 # ---------------------------------------------------------------------------
+# spend: ``sources`` filter (P3-A guard isolation)
+#
+# ``None`` (default) aggregates ALL sources — the GET /cost display view keeps
+# returning everything. A non-None list filters by EXACT source match so the
+# pre-flight guard / threshold detector can count management spend ONLY.
+# Sub-agent ledger lines (``source="subagent:*"``) are valid on read (the schema
+# allows any source string) and reserved for a later display piece.
+# ---------------------------------------------------------------------------
+
+class TestSourcesFilter:
+    def _plant_mixed(self, project):
+        """One management + two subagent rows, all in the total window."""
+        _append_raw(project, _event_record(
+            "2026-06-02T01:00:00+00:00", source="management", output=1_000_000))
+        _append_raw(project, _event_record(
+            "2026-06-02T02:00:00+00:00", source="subagent:claude-code",
+            output=2_000_000))
+        _append_raw(project, _event_record(
+            "2026-06-02T03:00:00+00:00", source="subagent:codex",
+            output=3_000_000))
+
+    def test_none_aggregates_all_sources(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        # Default (no sources kwarg) → every row counts. spend() groups by
+        # source, so three distinct source values → three breakdown rows.
+        r = spend(project, "total", override_path=override_file)
+        sources = sorted(b["source"] for b in r["breakdown"])
+        assert sources == ["management", "subagent:claude-code", "subagent:codex"]
+        total_output = sum(b["tokens"]["output"] for b in r["breakdown"])
+        assert total_output == 6_000_000
+        # 6M output × $15/1M = $90.
+        assert r["by_currency"]["USD"] == pytest.approx(90.0)
+
+    def test_management_only_excludes_subagent_rows(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        r = spend(project, "total", override_path=override_file,
+                  sources=["management"])
+        assert [b["source"] for b in r["breakdown"]] == ["management"]
+        assert r["breakdown"][0]["tokens"]["output"] == 1_000_000
+        # Only the 1M management row → $15. Subagent's 5M ($75) excluded.
+        assert r["by_currency"]["USD"] == pytest.approx(15.0)
+
+    def test_explicit_none_matches_default(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        r_default = spend(project, "total", override_path=override_file)
+        r_none = spend(project, "total", override_path=override_file, sources=None)
+        assert r_default == r_none
+
+    def test_multiple_sources_keeps_each_listed(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        r = spend(project, "total", override_path=override_file,
+                  sources=["management", "subagent:codex"])
+        sources = sorted(b["source"] for b in r["breakdown"])
+        assert sources == ["management", "subagent:codex"]
+        total_output = sum(b["tokens"]["output"] for b in r["breakdown"])
+        # 1M management + 3M codex = 4M; the 2M claude-code row excluded.
+        assert total_output == 4_000_000
+        assert r["by_currency"]["USD"] == pytest.approx(60.0)
+
+    def test_unmatched_source_yields_empty(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        r = spend(project, "total", override_path=override_file,
+                  sources=["nonexistent"])
+        assert r["breakdown"] == []
+        assert r["by_currency"] == {}
+        assert r["converted_total"]["amount"] == 0.0
+
+    def test_empty_list_excludes_everything(self, tmp_path, override_file):
+        project = str(tmp_path)
+        self._plant_mixed(project)
+        # Empty list is a list (not None) → matches nothing.
+        r = spend(project, "total", override_path=override_file, sources=[])
+        assert r["breakdown"] == []
+        assert r["by_currency"] == {}
+
+
+# ---------------------------------------------------------------------------
 # spend: per-model × per-tier × per-source aggregation + cost math
 # ---------------------------------------------------------------------------
 

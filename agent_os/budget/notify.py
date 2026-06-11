@@ -187,6 +187,10 @@ def maybe_emit_budget_event(
             fx_rates=fx_rates or {},
             now=now,
             anchor_ts=anchor_ts,
+            # Threshold/trip detection mirrors the guard: MANAGEMENT spend only.
+            # Sub-agent ledger lines never cross 80%/100% nor fire a push
+            # (P3-A guard isolation).
+            sources=["management"],
         )
         spend_amount = float(result["converted_total"]["amount"])
     except Exception:  # noqa: BLE001 — never crash the ledger-append site
