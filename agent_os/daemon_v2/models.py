@@ -139,6 +139,12 @@ class AgentConfig:
     agent_name: str = ""
     global_preferences_path: str = ""
     llm_fallback_models: list[FallbackModelEntry] = field(default_factory=list)
+    # Budget Piece 1, Task 4 — derived-cost window config. Additive; the legacy
+    # budget fields above (budget_limit_usd / budget_action / budget_spent_usd)
+    # are unchanged and stay. Codes/enums/ISO codes only — no display strings.
+    budget_period: str = "daily"  # "daily" | "weekly" | "monthly" | "total"
+    budget_anchor_ts: str | None = None  # ISO8601; lower bound for the "total" window
+    budget_currency: str | None = None  # ISO 4217; the LIMIT owns its currency
 
 
 def resolve_api_key(project_config: dict) -> str:

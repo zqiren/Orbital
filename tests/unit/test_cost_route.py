@@ -1,0 +1,291 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Route tests for GET /api/v2/projects/{pid}/cost (Budget Piece 1, Task 4).
+
+Also covers the PUT /projects/{pid} budget_currency set-once semantics and the
+anchor-reset flag, since those live in the same router and are part of this
+task's contract.
+
+Uses FastAPI's TestClient against a real router + a real ProjectStore on a
+temp dir (so the set-once/anchor logic exercises actual persistence). The
+ledger is written directly to the project workspace so spend() reads real
+events. Rates are injected via a temp pricing-override file.
+"""
+
+import json
+import os
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import agent_os.agent.pricing as pricing_mod
+from agent_os.api.routes.agents_v2 import router, configure
+from agent_os.budget.ledger import ledger_path
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_pricing_caches():
+    pricing_mod._pricing_cache = None
+    pricing_mod._full_providers_cache = None
+    pricing_mod._override_cache = None
+    pricing_mod._override_mtime = None
+    yield
+    pricing_mod._pricing_cache = None
+    pricing_mod._full_providers_cache = None
+    pricing_mod._override_cache = None
+    pricing_mod._override_mtime = None
+
+
+@pytest.fixture
+def override_file(tmp_path):
+    path = str(tmp_path / "ov.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({
+            "anthropic": {
+                "_currency": "USD",
+                "claude-x": {"input_per_1m": 3.0, "output_per_1m": 15.0},
+            },
+            "moonshot": {
+                "_currency": "CNY",
+                "kimi-x": {"input_per_1m": 12.0, "output_per_1m": 12.0},
+            },
+        }, f)
+    # Point the module default at this temp file so the route's spend() call
+    # (which does not pass override_path) resolves these rates.
+    pricing_mod._OVERRIDE_FILE = path
+    yield path
+    pricing_mod._OVERRIDE_FILE = pricing_mod._default_override_path()
+
+
+@pytest.fixture
+def store(tmp_path):
+    from agent_os.daemon_v2.project_store import ProjectStore
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir, exist_ok=True)
+    return ProjectStore(data_dir)
+
+
+class _FakeSettings:
+    def __init__(self, fx_rates):
+        self.fx_rates = fx_rates
+
+
+class _FakeSettingsStore:
+    def __init__(self, fx_rates):
+        self._s = _FakeSettings(fx_rates)
+
+    def get(self):
+        return self._s
+
+
+@pytest.fixture
+def make_client():
+    """Factory: build a TestClient wired to a given store + settings store."""
+    def _make(store, fx_rates=None):
+        from unittest.mock import MagicMock
+        app = FastAPI()
+        configure(
+            project_store=store,
+            agent_manager=MagicMock(),
+            ws_manager=MagicMock(),
+            settings_store=_FakeSettingsStore(fx_rates or {"CNY_per_USD": 7.2}),
+            provider_registry=None,
+        )
+        app.include_router(router)
+        return TestClient(app)
+    return _make
+
+
+def _write_event(workspace: str, record: dict) -> None:
+    path = ledger_path(workspace)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _evt(ts="2026-06-10T12:00:00+00:00", provider="anthropic", model="claude-x",
+         source="management", uncached=0, output=0):
+    return {
+        "ts": ts, "session_id": "s", "source": source,
+        "provider": provider, "model": model,
+        "uncached_input": uncached, "cache_read": 0,
+        "cache_write": 0, "output": output,
+    }
+
+
+def _new_project(store, tmp_path, **extra):
+    workspace = str(tmp_path / "ws")
+    os.makedirs(workspace, exist_ok=True)
+    config = {
+        "name": "proj", "workspace": workspace, "model": "claude-x",
+        "api_key": "k", "provider": "anthropic",
+    }
+    config.update(extra)
+    return store.create_project(config), workspace
+
+
+# ---------------------------------------------------------------------------
+# GET /cost
+# ---------------------------------------------------------------------------
+
+class TestCostRoute:
+    def test_returns_breakdown_and_totals(self, store, tmp_path, make_client,
+                                          override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        _write_event(ws, _evt(output=1_000_000))           # $15 USD
+        _write_event(ws, _evt(provider="moonshot", model="kimi-x",
+                              output=1_000_000))            # 12 CNY
+        client = make_client(store, fx_rates={"CNY_per_USD": 7.2})
+        resp = client.get(f"/api/v2/projects/{pid}/cost?window=total")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["window"] == "total"
+        assert body["by_currency"]["USD"] == pytest.approx(15.0)
+        assert body["by_currency"]["CNY"] == pytest.approx(12.0)
+        # 12 CNY / 7.2 = 1.6667 USD + 15 = 16.6667
+        assert body["converted_total"]["currency"] == "USD"
+        assert body["converted_total"]["estimated"] is True
+        assert body["converted_total"]["amount"] == pytest.approx(16.666667, abs=1e-5)
+        assert len(body["breakdown"]) == 2
+
+    def test_window_defaults_to_project_budget_period(self, store, tmp_path,
+                                                      make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        _write_event(ws, _evt(ts="2020-01-01T00:00:00+00:00", output=1_000_000))
+        client = make_client(store)
+        # No ?window → uses budget_period="total", which includes the old event.
+        resp = client.get(f"/api/v2/projects/{pid}/cost")
+        assert resp.status_code == 200
+        assert resp.json()["window"] == "total"
+        assert len(resp.json()["breakdown"]) == 1
+
+    def test_bad_window_returns_400_with_code(self, store, tmp_path, make_client,
+                                              override_file):
+        pid, ws = _new_project(store, tmp_path)
+        client = make_client(store)
+        resp = client.get(f"/api/v2/projects/{pid}/cost?window=yearly")
+        assert resp.status_code == 400
+        # i18n rule: machine code, not a human sentence.
+        detail = resp.json()["detail"]
+        assert detail["code"] == "invalid_window"
+        assert set(detail["allowed"]) == {"daily", "weekly", "monthly", "total"}
+
+    def test_unknown_project_returns_404(self, store, make_client, override_file):
+        client = make_client(store)
+        resp = client.get("/api/v2/projects/nope/cost?window=daily")
+        assert resp.status_code == 404
+
+    def test_target_currency_defaults_to_usd_when_unset(self, store, tmp_path,
+                                                        make_client, override_file):
+        # No budget_currency set on the project → converted_total defaults USD.
+        pid, ws = _new_project(store, tmp_path, budget_period="total")
+        _write_event(ws, _evt(output=1_000_000))
+        client = make_client(store)
+        body = client.get(f"/api/v2/projects/{pid}/cost").json()
+        assert body["converted_total"]["currency"] == "USD"
+
+    def test_read_only_no_side_effects(self, store, tmp_path, make_client,
+                                       override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="daily")
+        before = json.dumps(store.get_project(pid), sort_keys=True, default=str)
+        client = make_client(store)
+        client.get(f"/api/v2/projects/{pid}/cost")
+        after = json.dumps(store.get_project(pid), sort_keys=True, default=str)
+        assert before == after
+
+
+# ---------------------------------------------------------------------------
+# PUT budget_currency set-once + anchor reset
+# ---------------------------------------------------------------------------
+
+class TestBudgetCurrencySetOnce:
+    def test_setting_limit_defaults_currency_from_provider(self, store, tmp_path,
+                                                           make_client, override_file):
+        # Project on moonshot (CNY). Setting a limit with no explicit currency
+        # defaults budget_currency from the provider → CNY.
+        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 10.0})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_currency"] == "CNY"
+
+    def test_changing_provider_does_not_redenominate(self, store, tmp_path,
+                                                     make_client, override_file):
+        # Limit set on moonshot → CNY. Then switch provider to anthropic (USD)
+        # WITHOUT touching the limit → currency must stay CNY.
+        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        client = make_client(store)
+        client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 10.0})
+        assert store.get_project(pid)["budget_currency"] == "CNY"
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"provider": "anthropic", "model": "claude-x"})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_currency"] == "CNY"  # unchanged
+
+    def test_explicit_currency_in_put_is_honored(self, store, tmp_path,
+                                                make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"budget_limit_usd": 10.0, "budget_currency": "USD"})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_currency"] == "USD"
+
+    def test_explicit_currency_can_change_existing(self, store, tmp_path,
+                                                  make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, provider="moonshot",
+                               model="kimi-x", budget_currency="CNY")
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}", json={"budget_currency": "USD"})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_currency"] == "USD"
+
+    def test_setting_limit_when_currency_exists_keeps_it(self, store, tmp_path,
+                                                        make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, provider="anthropic",
+                               model="claude-x", budget_currency="CNY")
+        client = make_client(store)
+        # Re-setting the limit must NOT re-derive currency (already set → CNY).
+        resp = client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 99.0})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_currency"] == "CNY"
+
+
+class TestAnchorReset:
+    def test_reset_flag_sets_anchor_to_now(self, store, tmp_path, make_client,
+                                           override_file):
+        pid, ws = _new_project(store, tmp_path)
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"reset_budget_anchor": True})
+        assert resp.status_code == 200
+        anchor = store.get_project(pid).get("budget_anchor_ts")
+        assert anchor is not None
+        # Parseable ISO8601.
+        from datetime import datetime
+        datetime.fromisoformat(anchor)
+
+    def test_direct_anchor_value_honored(self, store, tmp_path, make_client,
+                                         override_file):
+        pid, ws = _new_project(store, tmp_path)
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"budget_anchor_ts": "2026-03-01T00:00:00+00:00"})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_anchor_ts"] == "2026-03-01T00:00:00+00:00"
+
+    def test_budget_period_persists(self, store, tmp_path, make_client, override_file):
+        pid, ws = _new_project(store, tmp_path)
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}", json={"budget_period": "weekly"})
+        assert resp.status_code == 200
+        assert store.get_project(pid)["budget_period"] == "weekly"

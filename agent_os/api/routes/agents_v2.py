@@ -63,6 +63,8 @@ class CreateProjectRequest(BaseModel):
     llm_fallback_models: list[dict] | None = None
     budget_limit_usd: float | None = None
     budget_action: str | None = None
+    budget_period: str | None = None
+    budget_currency: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -88,6 +90,14 @@ class ProjectUpdate(BaseModel):
     budget_action: str | None = None
     runtime_budget_spent_usd: float | None = None
     budget_spent_usd: float | None = None  # Alias for runtime_budget_spent_usd
+    # Budget Piece 1, Task 4 — additive derived-cost window config.
+    budget_period: str | None = None  # "daily"|"weekly"|"monthly"|"total"
+    budget_currency: str | None = None  # ISO 4217; explicit set overrides the
+    #                                     provider-derived default
+    # "reset spend window" = set budget_anchor_ts to now. A direct ISO value is
+    # also honored (mirrors the legacy runtime reset's direct-value pattern).
+    reset_budget_anchor: bool | None = None
+    budget_anchor_ts: str | None = None
 
 
 class StartAgentRequest(BaseModel):
@@ -302,6 +312,25 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
     _lifecycle_observer = lifecycle_observer
 
 
+def _provider_currency(provider: str, model: str) -> str:
+    """Resolve the ISO-4217 currency for a project's primary provider/model.
+
+    Used when a budget limit is set without an explicit ``budget_currency`` —
+    the limit defaults to the provider's currency at that moment and is never
+    auto-changed afterward. Resolves via the tiered-rates table (which already
+    carries the override-aware currency) and falls back to USD on any failure.
+    """
+    try:
+        from agent_os.agent.pricing import resolve_rates
+        return resolve_rates(provider, model).currency
+    except Exception:  # noqa: BLE001 — currency default must never 500 a save
+        logger.warning(
+            "currency resolution failed for provider=%s model=%s; defaulting USD",
+            provider, model, exc_info=True,
+        )
+        return "USD"
+
+
 # ---- Session cache for sub-agent-only projects ----
 _sub_agent_sessions: dict = {}  # project_id -> Session
 
@@ -463,6 +492,17 @@ async def create_project(req: CreateProjectRequest):
         project_data["budget_limit_usd"] = req.budget_limit_usd
     if req.budget_action is not None:
         project_data["budget_action"] = req.budget_action
+    if req.budget_period is not None:
+        project_data["budget_period"] = req.budget_period
+    # The limit owns its currency. If a limit is set at creation and no explicit
+    # currency was supplied, default it from the primary provider's currency
+    # (resolved once, here). It is NEVER auto-changed afterward.
+    if req.budget_currency is not None:
+        project_data["budget_currency"] = req.budget_currency
+    elif req.budget_limit_usd is not None:
+        project_data["budget_currency"] = _provider_currency(
+            project_data.get("provider", "custom"), project_data.get("model", "")
+        )
     try:
         pid = _project_store.create_project(project_data)
     except ValueError as e:
@@ -530,6 +570,29 @@ async def update_project(project_id: str, body: ProjectUpdate):
         runtime_budget_reset = budget_spent_alias
     if runtime_budget_reset is not None:
         _project_store.update_runtime(project_id, {"budget_spent_usd": runtime_budget_reset})
+
+    # --- Budget Piece 1, Task 4: derived-cost window config ---
+    # "reset spend window" = set budget_anchor_ts to now (used only by the
+    # "total" window). A direct ISO budget_anchor_ts value is also honored. The
+    # bool flag is a control input, not a persisted field — pop it either way.
+    reset_anchor = updates.pop("reset_budget_anchor", None)
+    if reset_anchor:
+        updates["budget_anchor_ts"] = datetime.now(timezone.utc).isoformat()
+    # The limit owns its currency (set-once semantics):
+    #   - An explicit budget_currency in the PUT body always wins (user owns it).
+    #   - Otherwise, when this update SETS a budget limit and the project has no
+    #     budget_currency yet, default it from the project's primary provider's
+    #     currency. The provider may have just changed in this same PUT, so read
+    #     it from the merged view (incoming update first, else stored).
+    #   - Switching provider WITHOUT (re)setting a limit must NEVER touch it.
+    if "budget_currency" not in updates:
+        setting_limit = "budget_limit_usd" in updates
+        already_has_currency = bool(project.get("budget_currency"))
+        if setting_limit and not already_has_currency:
+            eff_provider = updates.get("provider", project.get("provider", "custom"))
+            eff_model = updates.get("model", project.get("model", ""))
+            updates["budget_currency"] = _provider_currency(eff_provider, eff_model)
+
     # Handle workspace file content fields separately
     workspace = project.get("workspace", "")
     goals_content = updates.pop("project_goals_content", None)
@@ -564,6 +627,67 @@ async def update_project(project_id: str, body: ProjectUpdate):
     result = _redact_project(updated)
     _enrich_with_disk_content(result, workspace)
     result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
+    return result
+
+
+@router.get("/projects/{project_id}/cost")
+async def get_project_cost(project_id: str, window: Optional[str] = Query(default=None)):
+    """Derived cost view for a project over a spend window (read-only).
+
+    ``window`` defaults to the project's ``budget_period`` (itself defaulting to
+    ``daily``). Cost is computed at QUERY time (tokens × current resolved rate),
+    so editing the rates table changes historical cost — intended.
+
+    The response carries codes / enums / ISO currency codes only (no display
+    strings), per the binding i18n rule. A bad ``window`` returns 400 with a
+    machine code in ``detail`` (not a sentence). Unknown project → 404.
+    """
+    from agent_os.budget.ledger import spend, WINDOWS
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        # Match existing 404 shape in this module.
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    resolved_window = window or project.get("budget_period") or "daily"
+    if resolved_window not in WINDOWS:
+        # i18n rule: machine code, not a human sentence. Client renders the
+        # message. ``allowed`` lets the client build a precise hint.
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_window", "allowed": list(WINDOWS)},
+        )
+
+    workspace = project.get("workspace", "")
+    # Target currency defaults to the project's budget_currency, falling back to
+    # USD if unset (spec). budget_currency is never auto-derived here — only the
+    # limit-set path defaults it.
+    target_currency = project.get("budget_currency") or "USD"
+    anchor_ts = project.get("budget_anchor_ts")
+
+    # FX rates are daemon-level config (settings.json). Static, user-editable.
+    fx_rates: dict = {}
+    if _settings_store is not None:
+        try:
+            fx_rates = dict(_settings_store.get().fx_rates or {})
+        except Exception:  # noqa: BLE001 — a bad settings read must not 500 a read-only view
+            logger.warning("failed to read fx_rates from settings; using none",
+                           exc_info=True)
+
+    try:
+        result = spend(
+            workspace,
+            resolved_window,
+            target_currency=target_currency,
+            fx_rates=fx_rates,
+            anchor_ts=anchor_ts,
+        )
+    except ValueError:
+        # Defensive: spend() validates the window too; we already gated it.
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_window", "allowed": list(WINDOWS)},
+        )
     return result
 
 

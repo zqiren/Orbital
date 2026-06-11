@@ -27,10 +27,18 @@ class GlobalLLMSettings(BaseModel):
     fallback_models: list[FallbackModelConfig] = []
 
 
+# Default FX pair rates. User-editable, static — NEVER fetched live. Keyed
+# "{TARGET}_per_{BASE}". Only USD↔CNY is meaningful today.
+DEFAULT_FX_RATES: dict[str, float] = {"CNY_per_USD": 7.2}
+
+
 class GlobalSettings(BaseModel):
     llm: GlobalLLMSettings = GlobalLLMSettings()
     scratch_workspace: str | None = None
     user_preferences_path: str | None = None
+    # Budget Piece 1, Task 4 — static FX rates for cross-currency cost totals.
+    # User-editable; no live lookups anywhere. Codes/numbers only.
+    fx_rates: dict[str, float] = DEFAULT_FX_RATES.copy()
 
 
 class SettingsStore:
