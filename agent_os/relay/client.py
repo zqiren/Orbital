@@ -280,9 +280,16 @@ class RelayClient:
         """Return {title, body} for push-worthy events, else None.
 
         Three tiers:
-        - Tier 1 (always push): approval.request, budget.exhausted
+        - Tier 1 (always push): approval.request, budget.exhausted,
+          budget.threshold
         - Tier 2 (check prefs): agent.status, agent.notify
         - Tier 3 (never push): everything else
+
+        ``budget.threshold`` (80% warning) and ``budget.exhausted`` (the trip)
+        are the producer side of Budget Piece 2 — Task E. Their bodies are built
+        from the event's CODES/NUMBERS (pct/spend/limit/currency) — the payload
+        itself carries no display strings (i18n rule); the title/body here are
+        the push-notification chrome, not part of the forwarded event.
         """
         event_type = event.get("type", "")
         is_scheduled = event.get("trigger_source") == "schedule"
@@ -298,6 +305,12 @@ class RelayClient:
             return {
                 "title": "Budget exhausted",
                 "body": "Agent paused — budget limit reached",
+            }
+        if event_type == "budget.threshold":
+            pct = event.get("pct", 80)
+            return {
+                "title": "Budget warning",
+                "body": f"Agent has used {pct}% of the budget limit",
             }
 
         # Tier 3: never push

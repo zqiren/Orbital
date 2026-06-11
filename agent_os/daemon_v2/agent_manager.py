@@ -661,6 +661,23 @@ class AgentManager:
             # drift between the two guard call sites.
             return self.build_budget_config(project_id)
 
+        # 11c. Budget threshold/trip emitter sink (Budget Piece 2 — Task E).
+        #
+        # The loop calls this after each ledger append (the causal moment a
+        # spend crosses 80%/100% of the window limit). It routes a CODES-ONLY
+        # event through the SAME WS broadcast path every other event uses; the
+        # relay client's broadcast hook forwards it and ``_should_push`` pushes
+        # ``budget.threshold`` / ``budget.exhausted`` as Tier-1. Relay absent →
+        # the hook is a silent no-op (forward_event drops when no WS).
+        def emit_budget_event(payload: dict) -> None:
+            try:
+                self._broadcast(project_id, dict(payload), session_id=session_id)
+            except Exception:  # noqa: BLE001 — emission must never break the loop
+                logger.warning(
+                    "budget event broadcast failed (project=%s)",
+                    project_id, exc_info=True,
+                )
+
         # 12. Loop
         loop = AgentLoop(
             session, provider, registry, context_manager, interceptor,
@@ -678,6 +695,9 @@ class AgentManager:
             # {workspace}/orbital/ledger/usage.jsonl. Also the dir the
             # pre-flight guard reads ledger spend from.
             project_dir=config.workspace,
+            # Budget threshold/trip emitter sink (Task E) — routes codes-only
+            # events through the WS broadcast → relay forward path.
+            on_budget_event=emit_budget_event,
         )
 
         # 12-queue. When the dispatcher starts a session to run a queue item it

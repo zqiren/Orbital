@@ -31,6 +31,8 @@ _APPROVAL_HISTORY = "approval_history.jsonl"
 _QUEUE = "queue.json"
 _LEDGER = "ledger"
 _USAGE_LEDGER = "usage.jsonl"
+_BUDGET = "budget"
+_BUDGET_NOTIFY_STATE = "notify_state.json"
 
 
 class ProjectPaths:
@@ -192,3 +194,20 @@ class ProjectPaths:
     def ledger_file(self) -> str:
         """Append-only token-usage ledger: ``orbital/ledger/usage.jsonl``."""
         return os.path.join(self.ledger_dir, _USAGE_LEDGER)
+
+    # ------------------------------------------------------------------
+    # Budget threshold notifier (Budget Piece 2 — Task E)
+    # ------------------------------------------------------------------
+
+    @property
+    def budget_dir(self) -> str:
+        return os.path.join(self.orbital_dir, _BUDGET)
+
+    @property
+    def budget_notify_state(self) -> str:
+        """Last-fired marker for the budget threshold/trip emitter.
+
+        ``orbital/budget/notify_state.json``. A tiny JSON file keyed by window
+        identity so a daemon restart doesn't re-fire and a new window re-arms.
+        """
+        return os.path.join(self.budget_dir, _BUDGET_NOTIFY_STATE)

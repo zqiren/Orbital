@@ -93,6 +93,7 @@ class AgentLoop:
         on_session_end=None,
         on_session_end_refresh=None,
         project_dir: str | None = None,
+        on_budget_event=None,
     ):
         self._session = session
         self._provider = provider
@@ -112,6 +113,11 @@ class AgentLoop:
         # fresh on EVERY guard evaluation — never snapshotted (the B5 fix). When
         # None, the pre-flight guard is a no-op (e.g. lightweight test loops).
         self._get_budget_config = get_budget_config
+        # Budget threshold/trip emitter sink (Budget Piece 2 — Task E). An
+        # optional callable ``on_budget_event(payload: dict)`` that routes a
+        # codes-only budget event through the relay/WS broadcast path. When None
+        # (lightweight test loops, no relay wiring), the emitter is a no-op.
+        self._on_budget_event = on_budget_event
         # Per-project token ledger root: the workspace, resolved to
         # {workspace}/orbital/ledger/usage.jsonl via ProjectPaths. When None,
         # ledger emission is skipped (loop runs unchanged). Also the project_dir
@@ -249,6 +255,14 @@ class AgentLoop:
         ``budget_action`` ("pause" | "stop") is normalized by the guard. It is
         carried on ``_exit_block_reason`` so the dispatcher can route pause vs
         stop without re-reading config (``get_completion_state`` surfaces it).
+
+        Also the SECOND trip-emission site (coordinator ruling, Task E): emits
+        the ``budget.exhausted`` relay event through the same notify module and
+        same marker as the crossing-append site, so the trip push fires at
+        whichever happens first — crossing append or guard trip — exactly once
+        per (project, window). This covers trips with NO new append (limit
+        lowered below current spend; fresh run on an already-over project with
+        an absent/stale marker).
         """
         self._exit_reason = "budget_blocked"
         self._exit_block_reason = decision.action
@@ -264,7 +278,52 @@ class AgentLoop:
                 "currency": decision.currency,
             },
         })
+        self._emit_trip_notify(decision)
         self._note_exit("budget_blocked", iteration)
+
+    def _emit_trip_notify(self, decision) -> None:
+        """Emit the trip relay event from the guard-trip site (dedup'd).
+
+        Delegates to ``budget.notify.maybe_emit_trip`` with the tripped
+        ``BudgetDecision``'s own numbers (no spend re-query). The shared marker
+        key makes this a no-op when the crossing-append site already fired this
+        window. Never raises. No-op when the emitter sink or project_dir was
+        not plumbed (lightweight test loops).
+        """
+        if self._on_budget_event is None or self._project_dir is None:
+            return
+        try:
+            # anchor_ts only matters for the "total" window's identity; read it
+            # from the live config (same resolver the guard used).
+            anchor_ts = None
+            if self._get_budget_config is not None:
+                try:
+                    cfg = self._get_budget_config()
+                    if isinstance(cfg, dict):
+                        anchor_ts = cfg.get("budget_anchor_ts")
+                except Exception as e:  # noqa: BLE001 — config read must not block emit
+                    # Degrades the "total" window identity to epoch-keyed, which
+                    # can re-fire one duplicate trip push — observable, not silent.
+                    logger.warning(
+                        "budget notify: anchor_ts read failed; using None: %s",
+                        e, exc_info=True,
+                    )
+            from agent_os.budget.notify import maybe_emit_trip
+            maybe_emit_trip(
+                self._project_dir,
+                window=decision.window,
+                spend=decision.spend,
+                limit=decision.limit,
+                currency=decision.currency,
+                anchor_ts=anchor_ts,
+                emit=self._on_budget_event,
+            )
+        except Exception:  # noqa: BLE001 — never break the loop on notify errors
+            logger.warning(
+                "budget trip notify failed (session=%s); continuing.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
 
     def _emit_ledger_event(self, active_provider, usage) -> None:
         """Append one token-ledger event for a management LLM response.
@@ -307,6 +366,43 @@ class AgentLoop:
         except Exception:  # noqa: BLE001 — never break the loop on ledger errors
             logger.warning(
                 "Token-ledger emission failed (session=%s); continuing.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
+            return
+        # Ledger-append is the CAUSAL moment a spend crosses 80%/100% of the
+        # window limit (Budget Piece 2 — Task E). Check the threshold/trip
+        # crossings here — separately guarded so a notify failure can never
+        # affect the ledger append above nor the loop. No-op when no budget
+        # config resolver or no emitter sink was plumbed.
+        self._check_budget_notify()
+
+    def _check_budget_notify(self) -> None:
+        """Run the budget threshold/trip emitter after a ledger append.
+
+        Reads the LIVE budget config (same resolver the pre-flight guard uses)
+        and delegates to ``budget.notify.maybe_emit_budget_event``, which emits
+        AT MOST ONCE per (project, window) for the 80% threshold and the trip.
+        Never raises. No-op when ``on_budget_event``/``get_budget_config``/
+        ``project_dir`` were not plumbed (e.g. lightweight test loops).
+        """
+        if (self._on_budget_event is None
+                or self._get_budget_config is None
+                or self._project_dir is None):
+            return
+        try:
+            cfg = self._get_budget_config()
+            fx_rates = (cfg or {}).get("fx_rates") if isinstance(cfg, dict) else None
+            from agent_os.budget.notify import maybe_emit_budget_event
+            maybe_emit_budget_event(
+                self._project_dir,
+                cfg,
+                emit=self._on_budget_event,
+                fx_rates=fx_rates,
+            )
+        except Exception:  # noqa: BLE001 — never break the loop on notify errors
+            logger.warning(
+                "budget threshold/trip notify failed (session=%s); continuing.",
                 getattr(self._session, "session_id", "?"),
                 exc_info=True,
             )
