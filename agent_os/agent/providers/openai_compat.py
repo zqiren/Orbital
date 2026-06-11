@@ -52,10 +52,14 @@ def _make_token_usage(usage_obj) -> TokenUsage:
     # Coerce to 0 so downstream int math (_log_cache_audit, cumulative token
     # tracking, budget) never hits "'>' not supported between NoneType and int",
     # which previously crashed the whole turn mid-stream.
+    # cache_write_tokens is always 0 for OpenAI-compat providers: none of them
+    # expose a cache-write field (cached_tokens/prompt_cache_hit_tokens are
+    # read-hit counts only).
     return TokenUsage(
         input_tokens=getattr(usage_obj, "prompt_tokens", 0) or 0,
         output_tokens=getattr(usage_obj, "completion_tokens", 0) or 0,
         cache_read_tokens=_extract_cache_read_tokens(usage_obj),
+        cache_write_tokens=0,
     )
 
 

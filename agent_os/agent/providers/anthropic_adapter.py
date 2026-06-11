@@ -255,6 +255,7 @@ def translate_response_to_openai(response) -> dict:
             input_tokens=getattr(usage_obj, "input_tokens", 0),
             output_tokens=getattr(usage_obj, "output_tokens", 0),
             cache_read_tokens=getattr(usage_obj, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(usage_obj, "cache_creation_input_tokens", 0) or 0,
         )
     else:
         usage = TokenUsage(0, 0)
@@ -287,6 +288,7 @@ class StreamState:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     stop_reason: str | None = None
 
 
@@ -312,6 +314,9 @@ def translate_stream_event(event, state: StreamState) -> StreamChunk | None:
                 state.output_tokens = getattr(usage, "output_tokens", 0)
                 state.cache_read_tokens = (
                     getattr(usage, "cache_read_input_tokens", 0) or 0
+                )
+                state.cache_write_tokens = (
+                    getattr(usage, "cache_creation_input_tokens", 0) or 0
                 )
         return None
 
@@ -381,6 +386,7 @@ def translate_stream_event(event, state: StreamState) -> StreamChunk | None:
                 input_tokens=state.input_tokens,
                 output_tokens=state.output_tokens,
                 cache_read_tokens=state.cache_read_tokens,
+                cache_write_tokens=state.cache_write_tokens,
             ),
         )
 
