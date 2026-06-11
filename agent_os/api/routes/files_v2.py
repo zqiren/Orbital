@@ -16,6 +16,8 @@ import os
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from agent_os.queue.models import ItemState, QueueRunState
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2")
@@ -196,19 +198,27 @@ async def upload_file(
     # explorer / drag-to-project keep the default (notify=true) — there the
     # queue item IS the intent.
     if notify:
-        _notify_upload(project_id, rel_path, safe_name, len(data))
+        await _notify_upload(project_id, rel_path, safe_name, len(data))
 
     return {"path": rel_path, "size": len(data)}
 
 
-def _notify_upload(project_id: str, rel_path: str, filename: str, size: int) -> None:
-    """Enqueue an 'upload' queue item so the running/queued agent is notified.
+async def _notify_upload(project_id: str, rel_path: str, filename: str, size: int) -> None:
+    """Enqueue an 'upload' queue item so the agent is notified.
 
     Idempotency key is ``upload:{rel_path}:{size}`` (no wall-clock component):
     re-uploading the same file — e.g. a network retry — must dedup to a single
     queue item rather than spamming the agent. (The TASK draft suggested adding
     a timestamp, but that would defeat dedup on retry, which its own
     integration test requires; dropped deliberately.)
+
+    Wake semantics (product decision 2026-06-11): the upload itself is user
+    intent, so it may WAKE an IDLE queue that holds no other queueable item
+    (via dispatcher.resume(), same as POST /queue/start). It must NOT wake a
+    PAUSED queue (pause is a consent boundary) and must NOT start an idle
+    queue holding staged user items (those keep explicit-start semantics) —
+    in both cases the item stages and the dispatcher is merely poked.
+    Onboarding-incomplete projects never wake (mirrors /queue/start's gate).
     """
     if _agent_manager is None:
         # Minimal/unit configuration without an agent manager — nothing to
@@ -232,10 +242,32 @@ def _notify_upload(project_id: str, rel_path: str, filename: str, size: int) -> 
             review_before_advance=False,
             idempotency_key=f"upload:{rel_path}:{size}",
         )
-        # Wake the dispatcher if one is already running so it can pick this up.
+
+        qstate = store.load()
+        queueable = (ItemState.QUEUED, ItemState.RUNNING, ItemState.BLOCKED)
+        others = [
+            it for it in qstate.items
+            if it.id != item.id and it.state in queueable
+        ]
+        should_wake = (
+            qstate.state == QueueRunState.IDLE
+            and not others
+            and item.state == ItemState.QUEUED  # dedup hit on a DONE item must not wake
+            and _agent_manager.is_onboarding_complete(project_id)
+        )
+
         dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is None and should_wake:
+            await _agent_manager._ensure_dispatcher(project_id, workspace)
+            dispatcher = _agent_manager.get_dispatcher(project_id)
         if dispatcher is not None:
-            dispatcher.notify_new_item()
+            # Re-check IDLE right before resuming: an interleaved pause (the
+            # awaits above can yield) must win — an upload never overrides
+            # PAUSED.
+            if should_wake and store.load().state == QueueRunState.IDLE:
+                await dispatcher.resume()
+            else:
+                dispatcher.notify_new_item()
         if _ws_manager is not None:
             _ws_manager.broadcast(project_id, {
                 "type": "queue.item_added",
