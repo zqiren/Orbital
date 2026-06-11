@@ -112,10 +112,18 @@ export function useQueue(projectId: string | null) {
     [projectId],
   );
 
-  const stopQueue = useCallback(async () => {
-    if (!projectId) return;
-    await api(`/api/v2/projects/${projectId}/queue/stop`, { method: 'POST' });
-  }, [projectId]);
+  const stopQueue = useCallback(
+    async (durationSeconds?: number) => {
+      if (!projectId) return;
+      await api(`/api/v2/projects/${projectId}/queue/stop`, {
+        method: 'POST',
+        ...(durationSeconds != null
+          ? { body: JSON.stringify({ duration_seconds: durationSeconds }) }
+          : {}),
+      });
+    },
+    [projectId],
+  );
 
   const resumeQueue = useCallback(async () => {
     if (!projectId) return;

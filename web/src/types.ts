@@ -498,6 +498,8 @@ export interface QueueSnapshot {
   state: QueueRunState;
   items: QueueItem[];
   chat_session_id: string | null;
+  /** UTC ISO deadline for a timed pause; null/absent = paused until resumed. */
+  paused_until?: string | null;
 }
 
 export interface FileEntry {
