@@ -361,10 +361,21 @@ class QueueStore:
     # Queue-level state
     # ------------------------------------------------------------------
 
-    def set_queue_state(self, new_state: QueueRunState) -> None:
+    def set_queue_state(
+        self,
+        new_state: QueueRunState,
+        *,
+        paused_until: Optional[str] = None,
+    ) -> None:
+        """Set the queue run state. ``paused_until`` only applies when
+        entering PAUSED (timed pause); any other state clears it — the
+        deadline is meaningless outside PAUSED."""
         state = self.load()
         with self._lock:
             state.state = new_state
+            state.paused_until = (
+                paused_until if new_state == QueueRunState.PAUSED else None
+            )
             self._save_locked()
 
     def auto_idle_if_empty(self) -> bool:
@@ -389,6 +400,7 @@ class QueueStore:
                 return False
             if state.state == QueueRunState.IDLE:
                 return False
+            state.paused_until = None
             state.state = QueueRunState.IDLE
             self._save_locked()
             return True

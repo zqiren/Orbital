@@ -21,7 +21,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
@@ -1092,6 +1094,12 @@ async def new_session(project_id: str, req: SessionScopedRequest | None = None):
 
 # ---- Queue routes (Phase 1) ----
 
+class QueueStopRequest(BaseModel):
+    # Snooze duration in seconds; omitted/None = pause until explicitly
+    # resumed. gt=0 → 422 on zero/negative.
+    duration_seconds: Optional[float] = Field(default=None, gt=0)
+
+
 class QueueAddItemRequest(BaseModel):
     content: str
     file_refs: list[str] | None = None
@@ -1317,19 +1325,22 @@ async def reorder_queue(project_id: str, req: QueueReorderRequest) -> dict:
 
 
 @router.post("/projects/{project_id}/queue/stop")
-async def stop_queue(project_id: str) -> dict:
+async def stop_queue(project_id: str, req: Optional[QueueStopRequest] = None) -> dict:
     """Pause the queue and bring the active session to rest.
 
     Thin: the dispatcher is project-scoped and always exists, so this no longer
     409s on "no dispatcher" — pausing an agentless/empty queue just records the
     pause intent and returns.
+
+    Body {"duration_seconds": N} = timed pause (auto-resumes after N seconds);
+    no body = pause until resumed.
     """
     if _agent_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager not ready")
     dispatcher = await _ensure_dispatcher_for(project_id)
     if dispatcher is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    return await dispatcher.stop()
+    return await dispatcher.stop(duration_seconds=req.duration_seconds if req else None)
 
 
 def _project_has_completed_onboarding(project: dict) -> bool:

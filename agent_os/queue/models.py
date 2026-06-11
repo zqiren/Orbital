@@ -84,3 +84,8 @@ class QueueState(BaseModel):
     version: int = 1
     state: QueueRunState = QueueRunState.RUNNING
     items: List[ItemRecord] = Field(default_factory=list)
+    # When state == PAUSED and the user chose a snooze duration, the absolute
+    # UTC ISO deadline after which the dispatcher auto-resumes. None means
+    # "paused until explicitly resumed" (the default). Cleared on any
+    # transition out of PAUSED.
+    paused_until: Optional[str] = None

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from agent_os.queue.models import (
@@ -35,6 +35,7 @@ from agent_os.queue.models import (
     ItemRecord,
     ItemState,
     QueueRunState,
+    QueueState,
 )
 from agent_os.queue.store import QueueStore
 
@@ -196,7 +197,7 @@ class QueueDispatcher:
     # Phase 4: stop / resume
     # ------------------------------------------------------------------
 
-    async def stop(self) -> dict:
+    async def stop(self, duration_seconds: Optional[float] = None) -> dict:
         """Pause queue draining. Cancel the live attempt's turn so the agent
         comes to rest on the parked attempt's session — without rotating or
         swapping sessions. User chat messages while paused land in that same
@@ -205,10 +206,22 @@ class QueueDispatcher:
         The in-flight attempt is NOT closed and the queue is NOT advanced —
         both will happen on resume via _await_and_handle's cancelled-branch
         early-return preserving the attempt for resume to pick up.
+
+        Body {"duration_seconds": N} = timed pause (auto-resumes after N
+        seconds); no body = pause until resumed.
         """
         self._stop_generation += 1
+        paused_until: Optional[str] = None
+        # The route already enforces gt=0 (422 on zero/negative); this guard
+        # covers direct callers — the redundancy is intentional.
+        if duration_seconds is not None and duration_seconds > 0:
+            paused_until = (
+                datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+            ).isoformat()
         # Set queue state first so the main loop sees PAUSED on its next tick.
-        self._store.set_queue_state(QueueRunState.PAUSED)
+        self._store.set_queue_state(
+            QueueRunState.PAUSED, paused_until=paused_until,
+        )
 
         # Terminate any sub-agents under a budget so they don't keep churning
         # against the user while the dispatcher is paused.
@@ -255,7 +268,7 @@ class QueueDispatcher:
             "dispatcher(%s): paused; parked attempt session preserved",
             self._project_id,
         )
-        return {"status": "paused"}
+        return {"status": "paused", "paused_until": paused_until}
 
     async def resume(self) -> dict:
         """Re-activate queue draining. If a parked attempt exists, start a
@@ -479,10 +492,17 @@ class QueueDispatcher:
                     # advance event to trigger the helper.
                     self._store.auto_idle_if_empty()
                     qstate = self._store.load()
-                    if qstate.state in (
-                        QueueRunState.PAUSED,
-                        QueueRunState.IDLE,
-                    ):
+                    if qstate.state == QueueRunState.PAUSED:
+                        if self._timed_pause_expired(qstate):
+                            logger.info(
+                                "dispatcher(%s): timed pause expired; auto-resuming",
+                                self._project_id,
+                            )
+                            await self.resume()
+                        else:
+                            await self._wait_idle()
+                        continue
+                    if qstate.state == QueueRunState.IDLE:
                         await self._wait_idle()
                         continue
 
@@ -528,6 +548,27 @@ class QueueDispatcher:
             pass
         finally:
             self._idle_event.clear()
+
+    def _timed_pause_expired(self, qstate: QueueState) -> bool:
+        """True when a snooze deadline exists and has passed. Malformed
+        deadlines are cleared (stay paused, drop the timer) so a corrupt
+        value can't trip a resume loop or spam the log every tick."""
+        if qstate.paused_until is None:
+            return False
+        try:
+            deadline = datetime.fromisoformat(qstate.paused_until)
+            if deadline.tzinfo is None:
+                # Hand-edited / legacy value without an offset: our own writes
+                # are always UTC-aware, so interpret naive as UTC.
+                deadline = deadline.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            logger.warning(
+                "dispatcher(%s): malformed paused_until %r; clearing",
+                self._project_id, qstate.paused_until,
+            )
+            self._store.set_queue_state(QueueRunState.PAUSED, paused_until=None)
+            return False
+        return datetime.now(timezone.utc) >= deadline
 
     # ------------------------------------------------------------------
     # Per-item dispatch

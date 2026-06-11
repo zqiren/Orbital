@@ -223,3 +223,33 @@ def test_snapshot_serializes_enums(tmp_path):
     assert parsed["state"] == "running"
     assert parsed["items"][0]["state"] == "queued"
     assert parsed["items"][0]["source"] == "user"
+
+
+def test_paused_until_round_trip(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, paused_until="2026-06-11T09:00:00+00:00")
+    store2 = QueueStore(tmp_path / "queue.json")
+    state = store2.load()
+    assert state.state == QueueRunState.PAUSED
+    assert state.paused_until == "2026-06-11T09:00:00+00:00"
+
+
+def test_paused_until_cleared_on_leaving_paused(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, paused_until="2026-06-11T09:00:00+00:00")
+    store.set_queue_state(QueueRunState.RUNNING)
+    assert store.load().paused_until is None
+
+
+def test_pause_without_duration_has_no_deadline(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED)
+    assert store.load().paused_until is None
+
+
+def test_auto_idle_clears_paused_until(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, paused_until="2026-06-11T09:00:00+00:00")
+    changed = store.auto_idle_if_empty()
+    assert changed is True
+    assert store.load().paused_until is None
