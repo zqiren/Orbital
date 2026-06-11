@@ -451,3 +451,95 @@ class TestOpenAICompatCacheWriteTokens:
 
         result = _make_token_usage(usage_obj)
         assert result.cache_write_tokens == 0
+
+
+# ===========================================================================
+# _extract_cache_read_tokens: nested prompt_tokens_details.cached_tokens
+# ===========================================================================
+
+class TestExtractCacheReadTokensNestedDetails:
+    """Official OpenAI usage objects report cache hits at
+    usage.prompt_tokens_details.cached_tokens (nested), not top-level.
+    The fallback probe must handle every details shape without raising.
+    """
+
+    def test_malformed_details_never_raises(self):
+        """A provider sending garbage in prompt_tokens_details must yield 0,
+        never an exception (the extractor sits on the hot response path)."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        for bad in ("garbage", 12345, {"cached_tokens": None},
+                    {"cached_tokens": -5}, {"cached_tokens": "abc"}):
+            usage_obj = MagicMock()
+            del usage_obj.cache_read_input_tokens
+            del usage_obj.prompt_cache_hit_tokens
+            del usage_obj.cached_tokens
+            usage_obj.prompt_tokens_details = bad
+            assert _extract_cache_read_tokens(usage_obj) == 0
+
+    def test_nested_object_shape(self):
+        """prompt_tokens_details is an attribute-access object with cached_tokens."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        details = MagicMock()
+        details.cached_tokens = 75
+
+        usage_obj = MagicMock()
+        # No top-level cache fields
+        del usage_obj.cache_read_input_tokens
+        del usage_obj.prompt_cache_hit_tokens
+        del usage_obj.cached_tokens
+        usage_obj.prompt_tokens_details = details
+
+        assert _extract_cache_read_tokens(usage_obj) == 75
+
+    def test_nested_dict_shape(self):
+        """prompt_tokens_details is a plain dict (some OpenAI-compat servers)."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        usage_obj = MagicMock()
+        del usage_obj.cache_read_input_tokens
+        del usage_obj.prompt_cache_hit_tokens
+        del usage_obj.cached_tokens
+        usage_obj.prompt_tokens_details = {"cached_tokens": 42}
+
+        assert _extract_cache_read_tokens(usage_obj) == 42
+
+    def test_absent_details_returns_zero(self):
+        """prompt_tokens_details absent entirely — must return 0 without raising."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        usage_obj = MagicMock()
+        del usage_obj.cache_read_input_tokens
+        del usage_obj.prompt_cache_hit_tokens
+        del usage_obj.cached_tokens
+        del usage_obj.prompt_tokens_details
+
+        assert _extract_cache_read_tokens(usage_obj) == 0
+
+    def test_details_none_returns_zero(self):
+        """prompt_tokens_details present but None — must return 0 without raising."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        usage_obj = MagicMock()
+        del usage_obj.cache_read_input_tokens
+        del usage_obj.prompt_cache_hit_tokens
+        del usage_obj.cached_tokens
+        usage_obj.prompt_tokens_details = None
+
+        assert _extract_cache_read_tokens(usage_obj) == 0
+
+    def test_top_level_wins_over_nested(self):
+        """Top-level cache field takes precedence over nested path."""
+        from agent_os.agent.providers.openai_compat import _extract_cache_read_tokens
+
+        details = MagicMock()
+        details.cached_tokens = 99  # nested value — must be ignored
+
+        usage_obj = MagicMock()
+        usage_obj.cache_read_input_tokens = None
+        usage_obj.prompt_cache_hit_tokens = None
+        usage_obj.cached_tokens = 200  # top-level wins
+        usage_obj.prompt_tokens_details = details
+
+        assert _extract_cache_read_tokens(usage_obj) == 200

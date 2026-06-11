@@ -38,11 +38,33 @@ def _extract_status(text: str | None) -> str | None:
 
 
 def _extract_cache_read_tokens(usage_obj) -> int:
-    """Extract cached token count — handles Anthropic, OpenAI, and Kimi field names."""
+    """Extract cached token count — handles Anthropic, OpenAI, and Kimi field names.
+
+    Probe order (first positive hit wins):
+    1. Top-level: cache_read_input_tokens, prompt_cache_hit_tokens, cached_tokens
+       (Anthropic / Kimi / older OpenAI-compat servers).
+    2. Nested: usage.prompt_tokens_details.cached_tokens
+       (official OpenAI API — cache hits live here, not at top level).
+
+    The nested probe handles three shapes without raising:
+    - prompt_tokens_details absent or None  → skip
+    - prompt_tokens_details is an attribute-access object → getattr
+    - prompt_tokens_details is a plain dict  → dict.get
+    """
     for attr in ("cache_read_input_tokens", "prompt_cache_hit_tokens", "cached_tokens"):
         val = getattr(usage_obj, attr, None)
         if isinstance(val, (int, float)) and val > 0:
             return int(val)
+    # Fallback: official OpenAI nested path
+    details = getattr(usage_obj, "prompt_tokens_details", None)
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        val = details.get("cached_tokens")
+    else:
+        val = getattr(details, "cached_tokens", None)
+    if isinstance(val, (int, float)) and val > 0:
+        return int(val)
     return 0
 
 
