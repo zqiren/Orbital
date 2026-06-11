@@ -193,6 +193,21 @@ class TestMisc:
 
 
 # ---------------------------------------------------------------------------
+# Token ledger (Budget Piece 1)
+# ---------------------------------------------------------------------------
+
+class TestLedger:
+    def setup_method(self):
+        self.pp = ProjectPaths(WS)
+
+    def test_ledger_dir(self):
+        assert os.path.normpath(self.pp.ledger_dir) == p("orbital", "ledger")
+
+    def test_ledger_file(self):
+        assert os.path.normpath(self.pp.ledger_file) == p("orbital", "ledger", "usage.jsonl")
+
+
+# ---------------------------------------------------------------------------
 # Platform correctness: os.path.join usage (no manual slash concatenation)
 # ---------------------------------------------------------------------------
 

@@ -29,6 +29,8 @@ _PROJECT_GOALS = "project_goals.md"
 _USER_DIRECTIVES = "user_directives.md"
 _APPROVAL_HISTORY = "approval_history.jsonl"
 _QUEUE = "queue.json"
+_LEDGER = "ledger"
+_USAGE_LEDGER = "usage.jsonl"
 
 
 class ProjectPaths:
@@ -177,3 +179,16 @@ class ProjectPaths:
     @property
     def queue_file(self) -> str:
         return os.path.join(self.orbital_dir, _QUEUE)
+
+    # ------------------------------------------------------------------
+    # Token ledger (Budget Piece 1)
+    # ------------------------------------------------------------------
+
+    @property
+    def ledger_dir(self) -> str:
+        return os.path.join(self.orbital_dir, _LEDGER)
+
+    @property
+    def ledger_file(self) -> str:
+        """Append-only token-usage ledger: ``orbital/ledger/usage.jsonl``."""
+        return os.path.join(self.ledger_dir, _USAGE_LEDGER)

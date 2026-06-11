@@ -677,6 +677,9 @@ class AgentManager:
             cost_per_1k_output=cost_per_1k_output,
             on_session_end=session_end_callback,
             on_session_end_refresh=session_end_refresh_callback,
+            # Per-project token ledger root: resolved by ProjectPaths to
+            # {workspace}/orbital/ledger/usage.jsonl.
+            project_dir=config.workspace,
         )
 
         # 12-queue. When the dispatcher starts a session to run a queue item it

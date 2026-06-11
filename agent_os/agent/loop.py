@@ -32,6 +32,11 @@ from agent_os.agent.providers.types import (
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.tool_result_filters import dispatch_prefilter
 from agent_os.agent.tool_result_lifecycle import truncate_consumed_tool_results
+from agent_os.budget.ledger import (
+    LedgerEvent,
+    SOURCE_MANAGEMENT,
+    append_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +110,7 @@ class AgentLoop:
         cost_per_1k_output: float = _DEFAULT_COST_PER_1K_OUTPUT,
         on_session_end=None,
         on_session_end_refresh=None,
+        project_dir: str | None = None,
     ):
         self._session = session
         self._provider = provider
@@ -121,6 +127,11 @@ class AgentLoop:
         self._on_cost_update = on_cost_update
         self._cost_per_1k_input = cost_per_1k_input
         self._cost_per_1k_output = cost_per_1k_output
+        # Per-project token ledger root: the workspace, resolved to
+        # {workspace}/orbital/ledger/usage.jsonl via ProjectPaths. When None,
+        # ledger emission is skipped (loop runs unchanged). The legacy
+        # on_cost_update / budget_spent_usd path is independent of this.
+        self._project_dir = project_dir
         self._running = False
         self._llm_failed = False
         self._on_session_end = on_session_end
@@ -210,6 +221,51 @@ class AgentLoop:
         """Record the named loop-exit/continue path taken this iteration."""
         self._loop_exit_path = name
         self._diag("loop_exit", iteration=iteration, exit=name)
+
+    def _emit_ledger_event(self, active_provider, usage) -> None:
+        """Append one token-ledger event for a management LLM response.
+
+        ``active_provider`` is the provider that ACTUALLY served this response
+        (post-rotation), so its ``provider`` / ``model`` / ``sdk`` give correct
+        attribution. Usage is normalized into the four disjoint token fields via
+        the ONLY normalization entry point (``ProviderSemantics.from_sdk`` +
+        ``normalize_usage``).
+
+        No-ops when ``project_dir`` was not plumbed. Never raises: this is wrapped
+        in its own guard AND ``append_event`` is itself resilient, so a ledger
+        failure cannot crash or alter the agent loop. The legacy budget path is
+        completely independent of this method.
+        """
+        if self._project_dir is None:
+            return
+        try:
+            # Imported lazily: budget.normalize -> providers.types pulls in the
+            # agent package __init__ (which eagerly imports this module), so a
+            # module-level import here would be a circular import.
+            from agent_os.budget.normalize import (
+                ProviderSemantics,
+                normalize_usage,
+            )
+
+            sdk = getattr(active_provider, "sdk", None)
+            semantics = ProviderSemantics.from_sdk(sdk)
+            normalized = normalize_usage(usage, semantics)
+            append_event(
+                self._project_dir,
+                LedgerEvent(
+                    session_id=getattr(self._session, "session_id", "") or "",
+                    source=SOURCE_MANAGEMENT,
+                    provider=getattr(active_provider, "provider", "unknown"),
+                    model=getattr(active_provider, "model", "unknown"),
+                    usage=normalized,
+                ),
+            )
+        except Exception:  # noqa: BLE001 — never break the loop on ledger errors
+            logger.warning(
+                "Token-ledger emission failed (session=%s); continuing.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
         """Stream LLM response from the primary provider.
@@ -578,6 +634,16 @@ class AgentLoop:
                     self._prompt_input_tokens_total += response.usage.input_tokens
                     self._cache_read_tokens_total += response.usage.cache_read_tokens
                     self._llm_call_count += 1
+
+                # Token ledger (Budget Piece 1): append one disjoint-token event
+                # per management LLM response. Attribution uses `active_provider`
+                # — the post-rotation provider that ACTUALLY served THIS response
+                # (re-read at the top of every iteration from _all_providers[
+                # _current_idx]) — never the project's configured model. Wholly
+                # additive to and independent of the legacy budget path below;
+                # a failure here cannot alter loop behavior (guarded twice).
+                if response.usage:
+                    self._emit_ledger_event(active_provider, response.usage)
 
                 # Budget tracking (always active for spend persistence)
                 if response.usage:
@@ -994,6 +1060,18 @@ class AgentLoop:
                         flush_llm = self._utility_provider or self._provider
                         flush_context = self._context_manager.prepare()
                         flush_response = await flush_llm.complete(flush_context)
+                        # Token ledger (Budget Piece 1): the pre-compaction
+                        # flush is a real management-LLM response with real
+                        # spend. It is served by flush_llm (the utility
+                        # provider when configured, else the primary) — NOT
+                        # the rotated active_provider — so attribute to
+                        # flush_llm. Purely additive: the legacy budget path
+                        # deliberately does not count the flush, and that
+                        # stays unchanged.
+                        if getattr(flush_response, "usage", None):
+                            self._emit_ledger_event(
+                                flush_llm, flush_response.usage,
+                            )
                         flush_text = flush_response.text or ""
                         if not compaction_mod.is_silent_response(flush_text):
                             # Agent wants to save state — execute any tool calls.
