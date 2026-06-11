@@ -52,8 +52,14 @@ def _clear_pricing_cache():
     """Reset the pricing module cache between tests."""
     import agent_os.agent.pricing as pricing_mod
     pricing_mod._pricing_cache = None
+    pricing_mod._full_providers_cache = None
+    pricing_mod._override_cache = None
+    pricing_mod._override_mtime = None
     yield
     pricing_mod._pricing_cache = None
+    pricing_mod._full_providers_cache = None
+    pricing_mod._override_cache = None
+    pricing_mod._override_mtime = None
 
 
 def _create_project(client, workspace, **overrides):
@@ -240,9 +246,9 @@ class TestPricingLookup:
     def test_provider_default_fallback(self):
         """Unknown model uses provider _default."""
         input_rate, output_rate = get_cost_rates("unknown-model-xyz", "openai")
-        # openai _default => 2.00/8.00 per 1M
-        assert abs(input_rate - 0.002) < 0.00001
-        assert abs(output_rate - 0.008) < 0.00001
+        # openai _default => 2.5/15.0 per 1M (providers.json, verified 2026-06-11)
+        assert abs(input_rate - 0.0025) < 0.00001
+        assert abs(output_rate - 0.015) < 0.00001
 
     def test_unknown_provider_global_fallback(self):
         """Unknown provider falls back to global default."""
