@@ -369,6 +369,215 @@ def resolve_rates(
 
 
 # ---------------------------------------------------------------------------
+# Per-field origin (additive — shares ALL internals with resolve_rates)
+#
+# Consumed by the pricing-table API (GET /api/v2/pricing) so the editor UI can
+# render which fields are user overrides vs. checked-in defaults, and offer a
+# per-field revert. This does NOT reimplement the merge: it calls the same
+# _load_full_providers / _load_override / _find_entry internals and derives the
+# origin from which layer supplied each field. The numeric value it reports for
+# every field is byte-identical to what resolve_rates() returns.
+# ---------------------------------------------------------------------------
+
+# The four per-1M rate field names, in editor-grid order.
+RATE_FIELDS = (
+    "input_per_1m",
+    "cached_input_per_1m",
+    "cache_write_per_1m",
+    "output_per_1m",
+)
+
+
+def resolve_rates_with_origin(
+    provider: str,
+    model: str,
+    override_path: str | None = None,
+) -> tuple[ResolvedRates, dict]:
+    """Resolve rates AND report the per-field origin (default vs override).
+
+    Returns ``(rates, origin)`` where ``rates`` is byte-identical to
+    ``resolve_rates(provider, model, override_path)`` and ``origin`` is::
+
+        {
+          "input_per_1m": "default" | "override",
+          "cached_input_per_1m": ...,
+          "cache_write_per_1m": ...,
+          "output_per_1m": ...,
+          "currency": "default" | "override",
+        }
+
+    A field's origin is ``"override"`` iff the override layer's resolved entry
+    (exact → prefix → ``_default`` chain) supplies that exact field — i.e. the
+    field key is present in the override entry that wins the per-field merge in
+    ``resolve_rates``. Because the two layers resolve independently and merge
+    per-field, an override ``_default`` carrying a single field marks ONLY that
+    field as ``"override"`` for every model of the provider (blanket per-field
+    override); the remaining fields keep ``"default"`` origin. The cache-rate
+    fallback (``cached_input_per_1m`` / ``cache_write_per_1m`` → ``input_per_1m``
+    when absent in both layers) is treated as ``"default"`` origin, since the
+    value derives from the defaults layer's ``input_per_1m``, not a user edit.
+
+    ``currency`` origin is ``"override"`` iff the provider's ``_currency``
+    meta-key is set in the override file.
+    """
+    path = override_path if override_path is not None else _OVERRIDE_FILE
+
+    full = _load_full_providers()
+    provider_data = full.get(provider, {})
+    default_pricing = provider_data.get("pricing", {})
+    default_currency = provider_data.get("currency", _GLOBAL_DEFAULT_CURRENCY)
+
+    overrides = _load_override(path)
+    override_provider = overrides.get(provider, {})
+    override_pricing = {k: v for k, v in override_provider.items() if k != "_currency"}
+    override_currency = override_provider.get("_currency")
+
+    currency = override_currency if override_currency else default_currency
+
+    default_entry = _find_entry(default_pricing, model) or {}
+    override_entry = _find_entry(override_pricing, model) if override_pricing else {}
+    if override_entry is None:
+        override_entry = {}
+
+    merged = {**default_entry, **override_entry}
+
+    input_per_1m = merged.get("input_per_1m", _GLOBAL_DEFAULT_INPUT_PER_1M)
+    output_per_1m = merged.get("output_per_1m", _GLOBAL_DEFAULT_OUTPUT_PER_1M)
+    cached_input_per_1m = merged.get("cached_input_per_1m", input_per_1m)
+    cache_write_per_1m = merged.get("cache_write_per_1m", input_per_1m)
+
+    rates = ResolvedRates(
+        input_per_1m=input_per_1m,
+        cached_input_per_1m=cached_input_per_1m,
+        cache_write_per_1m=cache_write_per_1m,
+        output_per_1m=output_per_1m,
+        currency=currency,
+    )
+
+    origin = {
+        field: ("override" if field in override_entry else "default")
+        for field in RATE_FIELDS
+    }
+    origin["currency"] = "override" if override_currency else "default"
+    return rates, origin
+
+
+def pricing_table_with_origin(override_path: str | None = None) -> dict:
+    """Build the resolved pricing table with per-field origin for every model.
+
+    Covers EVERY provider/model that has pricing in providers.json PLUS any
+    extra provider/model keys present only in the override file (forward-compat
+    — a user may pin a snapshot model name not yet in the checked-in defaults).
+    Resolution for each (provider, model) goes through
+    ``resolve_rates_with_origin``, so values agree exactly with
+    ``resolve_rates``.
+
+    Shape (codes only, designed for the editor consumer)::
+
+        {
+          "providers": {
+            "anthropic": {
+              "currency": "USD",
+              "currency_origin": "default" | "override",
+              "models": {
+                "claude-sonnet-4-6": {
+                  "input_per_1m":        {"value": 3.0,  "origin": "default"},
+                  "cached_input_per_1m": {"value": 0.3,  "origin": "default"},
+                  "cache_write_per_1m":  {"value": 3.75, "origin": "default"},
+                  "output_per_1m":       {"value": 15.0, "origin": "default"}
+                },
+                "_default": { ...same 4-field grid... }
+              }
+            }
+          }
+        }
+
+    The ``_default`` pseudo-model is included verbatim as a model key so the
+    editor can present (and override) the provider-wide fallback row. Model
+    keys are sorted with ``_default`` last for stable rendering.
+    """
+    full = _load_full_providers()
+    path = override_path if override_path is not None else _OVERRIDE_FILE
+    overrides = _load_override(path)
+
+    # Union of provider keys: defaults ∪ override file.
+    provider_keys = set(full.keys()) | set(
+        k for k in overrides.keys() if isinstance(overrides.get(k), dict)
+    )
+
+    out: dict = {"providers": {}}
+    for provider in sorted(provider_keys):
+        default_pricing = full.get(provider, {}).get("pricing", {})
+        override_provider = overrides.get(provider, {})
+        if not isinstance(override_provider, dict):
+            override_provider = {}
+        override_pricing = {
+            k: v for k, v in override_provider.items() if k != "_currency"
+        }
+
+        # Union of model keys: defaults ∪ override (forward-compat for
+        # override-only model names, including a pinned snapshot).
+        model_keys = set(default_pricing.keys()) | set(override_pricing.keys())
+
+        models_out: dict = {}
+        for model in _sorted_model_keys(model_keys):
+            rates, origin = resolve_rates_with_origin(
+                provider, model, override_path=path
+            )
+            models_out[model] = {
+                "input_per_1m": {
+                    "value": rates.input_per_1m,
+                    "origin": origin["input_per_1m"],
+                },
+                "cached_input_per_1m": {
+                    "value": rates.cached_input_per_1m,
+                    "origin": origin["cached_input_per_1m"],
+                },
+                "cache_write_per_1m": {
+                    "value": rates.cache_write_per_1m,
+                    "origin": origin["cache_write_per_1m"],
+                },
+                "output_per_1m": {
+                    "value": rates.output_per_1m,
+                    "origin": origin["output_per_1m"],
+                },
+            }
+
+        # Currency: resolve once at provider level (model-independent).
+        _, prov_origin = resolve_rates_with_origin(
+            provider, "_default", override_path=path
+        )
+        default_currency = full.get(provider, {}).get(
+            "currency", _GLOBAL_DEFAULT_CURRENCY
+        )
+        override_currency = override_provider.get("_currency")
+        out["providers"][provider] = {
+            "currency": override_currency if override_currency else default_currency,
+            "currency_origin": prov_origin["currency"],
+            "models": models_out,
+        }
+    return out
+
+
+def _sorted_model_keys(model_keys) -> list[str]:
+    """Sort model keys alphabetically with ``_default`` pinned last."""
+    real = sorted(k for k in model_keys if k != "_default")
+    if "_default" in model_keys:
+        real.append("_default")
+    return real
+
+
+def override_file_path() -> str:
+    """Return the resolved override-file path currently in effect.
+
+    Exposes the module-level ``_OVERRIDE_FILE`` (set from ``AGENT_OS_DATA_DIR``
+    at import, injectable by tests). The pricing API surfaces this as a
+    read-only debug field so operators can see which file a write targets.
+    """
+    return _OVERRIDE_FILE
+
+
+# ---------------------------------------------------------------------------
 # Legacy interface (unchanged)
 # ---------------------------------------------------------------------------
 

@@ -344,6 +344,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     platform_routes.configure(platform_provider, agent_manager=agent_manager, browser_manager=browser_manager)
     app.include_router(platform_routes.router)
 
+    # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
+    # validated override PUT). Stateless — reads providers.json defaults and
+    # the module-level override path resolved from AGENT_OS_DATA_DIR.
+    from agent_os.api.routes import pricing_v2
+    pricing_v2.configure()
+    app.include_router(pricing_v2.router)
+
     # 7d. Cloud relay (opt-in via AGENT_OS_RELAY_URL env var)
     relay_url = os.environ.get("AGENT_OS_RELAY_URL")
     if relay_url:
