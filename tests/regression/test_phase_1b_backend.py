@@ -677,6 +677,112 @@ class TestBlockedEndpoint:
 
 
 # ===========================================================================
+# 4b. Budget-paused projects in the Blocked surface (P3-G)
+# ===========================================================================
+
+class TestBlockedBudgetProjects:
+    """list_blocked_budget_projects() + GET /api/v2/blocked budget_paused_projects.
+
+    Codes-only addition to the existing cross-project blocked endpoint: lists
+    projects whose persisted queue state is PAUSED with pause_reason="budget".
+    Reads the persisted queue.json so it works without a live dispatcher.
+    """
+
+    @staticmethod
+    def _store_with_projects(tmp_path):
+        from agent_os.daemon_v2.project_store import ProjectStore
+        from agent_os.queue.store import QueueStore
+        from agent_os.queue.models import QueueRunState
+        from agent_os.agent.project_paths import ProjectPaths
+
+        data_dir = str(tmp_path / "data")
+        os.makedirs(data_dir, exist_ok=True)
+        ps = ProjectStore(data_dir=data_dir)
+
+        def make(name, run_state, reason=None):
+            ws = str(tmp_path / name)
+            os.makedirs(ws, exist_ok=True)
+            pid = ps.create_project({"name": name, "workspace": ws})
+            store = QueueStore(ProjectPaths(ws).queue_file)
+            store.set_queue_state(run_state, reason=reason)
+            return pid
+
+        return ps, make
+
+    def _manager_with_store(self, project_store):
+        ws = MagicMock()
+        ws.broadcast = MagicMock()
+        ws.broadcast_global = MagicMock()
+        sub_agent_mgr = MagicMock()
+        sub_agent_mgr.list_active = MagicMock(return_value=[])
+        sub_agent_mgr.stop_all = AsyncMock()
+        return AgentManager(
+            project_store=project_store,
+            ws_manager=ws,
+            sub_agent_manager=sub_agent_mgr,
+            activity_translator=MagicMock(),
+            process_manager=MagicMock(),
+        ), ws
+
+    def test_empty_when_no_budget_pauses(self, tmp_path):
+        from agent_os.queue.models import QueueRunState
+        ps, make = self._store_with_projects(tmp_path)
+        make("running_proj", QueueRunState.RUNNING)
+        make("user_paused", QueueRunState.PAUSED, reason="user")
+        mgr, _ = self._manager_with_store(ps)
+        assert mgr.list_blocked_budget_projects() == []
+
+    def test_lists_only_budget_paused_projects(self, tmp_path):
+        from agent_os.queue.models import QueueRunState
+        ps, make = self._store_with_projects(tmp_path)
+        pid_budget = make("budget_paused", QueueRunState.PAUSED, reason="budget")
+        make("user_paused", QueueRunState.PAUSED, reason="user")
+        make("running_proj", QueueRunState.RUNNING)
+        mgr, _ = self._manager_with_store(ps)
+        result = mgr.list_blocked_budget_projects()
+        assert [r["project_id"] for r in result] == [pid_budget]
+
+    def test_multiple_budget_paused(self, tmp_path):
+        from agent_os.queue.models import QueueRunState
+        ps, make = self._store_with_projects(tmp_path)
+        a = make("budget_a", QueueRunState.PAUSED, reason="budget")
+        b = make("budget_b", QueueRunState.PAUSED, reason="budget")
+        mgr, _ = self._manager_with_store(ps)
+        pids = {r["project_id"] for r in mgr.list_blocked_budget_projects()}
+        assert pids == {a, b}
+
+    def test_endpoint_includes_budget_paused_projects(self, tmp_path):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from agent_os.api.routes import agents_v2
+        from agent_os.queue.models import QueueRunState
+
+        ps, make = self._store_with_projects(tmp_path)
+        pid_budget = make("budget_paused", QueueRunState.PAUSED, reason="budget")
+        make("running_proj", QueueRunState.RUNNING)
+        mgr, ws = self._manager_with_store(ps)
+
+        agents_v2.configure(
+            project_store=ps, agent_manager=mgr, ws_manager=ws,
+            sub_agent_manager=MagicMock(), setup_engine=MagicMock(),
+            settings_store=MagicMock(), credential_store=MagicMock(),
+            trigger_manager=MagicMock(), provider_registry=MagicMock(),
+        )
+        app = FastAPI()
+        app.include_router(agents_v2.router)
+        client = TestClient(app)
+
+        resp = client.get("/api/v2/blocked")
+        assert resp.status_code == 200
+        body = resp.json()
+        # Approval count is untouched (no pending_approval handles here).
+        assert body["blocked_count"] == 0
+        assert body["blocked_sessions"] == []
+        # Budget-paused project surfaces under the new codes-only field.
+        assert body["budget_paused_projects"] == [{"project_id": pid_budget}]
+
+
+# ===========================================================================
 # 5. WS blocked-count-changed event
 # ===========================================================================
 
@@ -727,6 +833,11 @@ class TestBlockedCountWsEvent:
             s["project_id"] == "proj_enter" and s["session_id"] == "sess_e"
             for s in payload["blocked_sessions"]
         )
+        # P3-G: the broadcast must also carry the budget-paused project list so
+        # the sidebar Blocked surface stays live without a separate fetch. The
+        # mocked project_store yields no projects here, so the field is present
+        # and empty — pinning the payload contract, not the contents.
+        assert payload["budget_paused_projects"] == []
 
     def test_no_blocked_count_broadcast_on_normal_exit(self):
         """_on_loop_done for a normal (non-approval) idle exit must NOT emit

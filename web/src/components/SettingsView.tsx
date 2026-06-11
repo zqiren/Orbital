@@ -38,6 +38,11 @@ interface SettingsViewProps {
    * the editor task can plug a real navigation in here.
    */
   onEditPricing?: () => void;
+  /**
+   * Optional section to scroll into view on mount (P3-G: the header budget
+   * corner deep-links here with 'budget'). Consumed once via a ref scroll.
+   */
+  scrollToSection?: 'budget';
 }
 
 const AUTONOMY_OPTIONS: {
@@ -67,8 +72,18 @@ export default function SettingsView({
   onSave,
   onDelete,
   onEditPricing = () => {},
+  scrollToSection,
 }: SettingsViewProps) {
   const t = useT();
+  const budgetSectionRef = useRef<HTMLDivElement>(null);
+
+  // Deep-link: when opened with the 'budget' anchor (header corner click),
+  // scroll the Budget section into view once. Best-effort — no-op in jsdom.
+  useEffect(() => {
+    if (scrollToSection === 'budget' && budgetSectionRef.current) {
+      budgetSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [scrollToSection]);
   const [agentName, setAgentName] = useState(project.agent_name || project.name);
   const [projectGoals, setProjectGoals] = useState(project.project_goals_content || '');
   const [standingRules, setStandingRules] = useState(project.user_directives_content || '');
@@ -582,19 +597,22 @@ export default function SettingsView({
 
         {/* Budget — limit-as-sentence, behavior cards, spend meter, breakdown.
             Spend is read EXCLUSIVELY from GET /cost (useCost), refreshed on the
-            budget.spend_updated WS event. */}
-        <BudgetSection
-          project={project}
-          limit={budgetLimit}
-          onLimitChange={setBudgetLimit}
-          currency={budgetCurrency}
-          onCurrencyChange={setBudgetCurrency}
-          period={budgetPeriod}
-          onPeriodChange={setBudgetPeriod}
-          action={budgetAction}
-          onActionChange={setBudgetAction}
-          onEditPricing={onEditPricing}
-        />
+            budget.spend_updated WS event. The ref anchors the header corner's
+            deep-link (scrollToSection === 'budget'). */}
+        <div ref={budgetSectionRef} data-settings-section="budget" className="scroll-mt-4">
+          <BudgetSection
+            project={project}
+            limit={budgetLimit}
+            onLimitChange={setBudgetLimit}
+            currency={budgetCurrency}
+            onCurrencyChange={setBudgetCurrency}
+            period={budgetPeriod}
+            onPeriodChange={setBudgetPeriod}
+            action={budgetAction}
+            onActionChange={setBudgetAction}
+            onEditPricing={onEditPricing}
+          />
+        </div>
 
         {/* Save */}
         <div className="flex items-center gap-3 pt-2">

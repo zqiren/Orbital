@@ -26,6 +26,12 @@ vi.mock('../hooks/useQueue', () => ({
     resumeQueue: vi.fn(),
   }),
 }));
+// BudgetCorner (in the header) calls useCost → useWebSocket. Mock it to a
+// no-spend response so the corner renders nothing and the header label tests
+// stay focused on the model label.
+vi.mock('../hooks/useCost', () => ({
+  useCost: () => ({ cost: null, loading: false, error: null, refresh: vi.fn() }),
+}));
 
 const mockProject: Project = {
   project_id: 'proj-42',

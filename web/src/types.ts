@@ -414,6 +414,13 @@ export interface QueueStateChangedEvent {
   type: 'queue.state_changed';
   project_id: string;
   state: QueueRunState;
+  /**
+   * Why the queue is paused, when state === 'paused'. A CODE, never a display
+   * string: 'user' for a manual/timed user pause, 'budget' for an enforcement
+   * trip. null/absent when not paused. Carried so the UI can render a budget-
+   * specific banner without re-reading config. Mirrors QueueState.pause_reason.
+   */
+  pause_reason?: 'user' | 'budget' | null;
 }
 
 export interface QueueReorderedEvent {
@@ -428,6 +435,17 @@ export interface BlockedSessionEntry {
 }
 
 /**
+ * One entry in the budget-paused-projects list: which project's queue is paused
+ * for budget enforcement. Codes only (no spend numbers — the corner/Budget
+ * section read those from GET /cost). Surfaced by GET /api/v2/blocked so the
+ * sidebar Blocked surface can reason-code budget pauses distinctly from
+ * approval-pending entries.
+ */
+export interface BudgetPausedProjectEntry {
+  project_id: string;
+}
+
+/**
  * Global WS event fired whenever any session enters or leaves `pending_approval`.
  * Not scoped to a project — broadcast to all subscribers.
  */
@@ -435,6 +453,11 @@ export interface BlockedCountChangedEvent {
   type: 'blocked-count-changed';
   blocked_count: number;
   blocked_sessions: BlockedSessionEntry[];
+  /**
+   * Projects whose queue is currently paused for budget. Optional/back-compat:
+   * absent on older daemons. Codes only — the sidebar reason-codes the marker.
+   */
+  budget_paused_projects?: BudgetPausedProjectEntry[];
 }
 
 /**
@@ -537,6 +560,13 @@ export interface QueueSnapshot {
   chat_session_id: string | null;
   /** UTC ISO deadline for a timed pause; null/absent = paused until resumed. */
   paused_until?: string | null;
+  /**
+   * Why the queue is paused, when state === 'paused'. A CODE, never a display
+   * string: 'user' for a manual/timed user pause, 'budget' for an enforcement
+   * trip. null/absent when not paused. Mirrors the backend QueueState field;
+   * the queue snapshot serializes it via model_dump.
+   */
+  pause_reason?: 'user' | 'budget' | null;
 }
 
 export interface FileEntry {

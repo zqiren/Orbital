@@ -44,6 +44,10 @@ vi.mock('./hooks/useQueue', () => ({
     resumeQueue: vi.fn(),
   }),
 }));
+// ProjectDetail's header BudgetCorner calls useCost → useWebSocket. Mock it.
+vi.mock('./hooks/useCost', () => ({
+  useCost: () => ({ cost: null, loading: false, error: null, refresh: vi.fn() }),
+}));
 
 import Sidebar from './components/Sidebar';
 import ProjectDetail from './components/ProjectDetail';

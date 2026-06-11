@@ -8,6 +8,7 @@ import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
+import BudgetCorner from './BudgetCorner';
 import { useQueue } from '../hooks/useQueue';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
@@ -67,6 +68,11 @@ export default function ProjectDetail({
     setRoute({ ...route, settings: true });
   }
 
+  // Budget corner → open settings scrolled to the Budget section.
+  function handleOpenBudgetSettings() {
+    setRoute({ ...route, settings: true, settingsAnchor: 'budget' });
+  }
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
@@ -76,12 +82,18 @@ export default function ProjectDetail({
           <StatusBadge status={agentStatus} />
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {/* Budget corner (P3-G): converted window spend / warn / exhausted
+              pill, next to the model name. Reads the same GET /cost as the
+              settings meter; event-driven (no polling). Click → Budget settings.
+              Replaces the dead P3-F $0.00 segment properly. */}
+          <BudgetCorner
+            project={project}
+            pauseReason={snapshot?.pause_reason}
+            onOpenBudgetSettings={handleOpenBudgetSettings}
+          />
           {(() => {
             // Model label: the project's pinned model, else the global default.
-            // NEVER agent_name (an identity, not a model). The header SPEND
-            // corner moved out with the P3-F budget_spent_usd removal — the real
-            // GET /cost-backed corner ships in P3-G. Until then the header shows
-            // the model label alone (no fabricated $0.00 from a dead field).
+            // NEVER agent_name (an identity, not a model).
             const modelName = project.model || globalDefaultModel || '';
             if (!modelName) return null;
             return (

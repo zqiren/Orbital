@@ -1077,3 +1077,106 @@ describe('mergeRecoveredAssistantMessage — REST recovery resolves identity lik
     expect(out[2].type).toBe('user_message');
   });
 });
+
+// ── P3-G: budget-trip timeline row ──────────────────────────────────────────
+// The agent loop appends a structured system row on a budget trip:
+//   {role:'system', source:'budget', event:'budget_blocked', payload:{...}}
+// The session endpoint passes the raw JSONL through, so `event`/`payload` ride
+// as extra fields not declared on ChatMessage — construct them via a cast.
+function budgetRow(payload: {
+  action: string;
+  window: string;
+  spend: number;
+  limit: number | null;
+  currency: string;
+}): ChatMessage {
+  return {
+    role: 'system',
+    content: null,
+    source: 'budget',
+    timestamp: TS,
+    // event/payload are passthrough extras; the parser reads them off a cast.
+    ...({ event: 'budget_blocked', payload } as unknown as Partial<ChatMessage>),
+  };
+}
+
+describe('transformChatHistory — budget_blocked timeline row', () => {
+  it('parses a pause trip into a budget_event item with payload codes/numbers', () => {
+    const out = transformChatHistory([
+      budgetRow({ action: 'pause', window: 'daily', spend: 1.2, limit: 1.0, currency: 'USD' }),
+    ]);
+    expect(out).toHaveLength(1);
+    const item = out[0];
+    expect(item.type).toBe('budget_event');
+    if (item.type === 'budget_event') {
+      expect(item.event).toBe('budget_blocked');
+      expect(item.action).toBe('pause');
+      expect(item.window).toBe('daily');
+      expect(item.spend).toBeCloseTo(1.2);
+      expect(item.limit).toBeCloseTo(1.0);
+      expect(item.currency).toBe('USD');
+    }
+  });
+
+  it('carries action=stop and a non-daily window', () => {
+    const out = transformChatHistory([
+      budgetRow({ action: 'stop', window: 'weekly', spend: 50, limit: 40, currency: 'CNY' }),
+    ]);
+    expect(out[0].type).toBe('budget_event');
+    if (out[0].type === 'budget_event') {
+      expect(out[0].action).toBe('stop');
+      expect(out[0].window).toBe('weekly');
+      expect(out[0].currency).toBe('CNY');
+    }
+  });
+
+  it('tolerates a null limit (no-limit trip)', () => {
+    const out = transformChatHistory([
+      budgetRow({ action: 'pause', window: 'monthly', spend: 7, limit: null, currency: 'USD' }),
+    ]);
+    expect(out[0].type).toBe('budget_event');
+    if (out[0].type === 'budget_event') {
+      expect(out[0].limit).toBeNull();
+    }
+  });
+
+  it('defaults an unknown window to daily and an unknown action to pause', () => {
+    const out = transformChatHistory([
+      budgetRow({ action: 'frobnicate', window: 'fortnightly', spend: 1, limit: 2, currency: 'USD' }),
+    ]);
+    expect(out[0].type).toBe('budget_event');
+    if (out[0].type === 'budget_event') {
+      expect(out[0].action).toBe('pause');
+      expect(out[0].window).toBe('daily');
+    }
+  });
+
+  it('ignores non-budget system rows (no budget_event emitted)', () => {
+    const notBudget: ChatMessage = {
+      role: 'system',
+      content: 'some other system note',
+      source: 'management',
+      timestamp: TS,
+    };
+    const out = transformChatHistory([notBudget]);
+    expect(out.some((i) => i.type === 'budget_event')).toBe(false);
+  });
+
+  it('a budget_threshold event does NOT produce a budget_event item', () => {
+    // budget_threshold is WS/relay-only and should never land in a session
+    // row — but if one ever does (daemon drift), the parser must not render
+    // it as a trip. Only event === 'budget_blocked' qualifies.
+    const thresholdRow: ChatMessage = {
+      role: 'system',
+      content: null,
+      source: 'budget',
+      timestamp: TS,
+      ...({
+        event: 'budget_threshold',
+        payload: { action: 'pause', window: 'daily', spend: 0.8, limit: 1.0, currency: 'USD' },
+      } as unknown as Partial<ChatMessage>),
+    };
+    const out = transformChatHistory([thresholdRow]);
+    expect(out.some((i) => i.type === 'budget_event')).toBe(false);
+  });
+});

@@ -1316,11 +1316,24 @@ async def list_blocked_globally():
 
         {
             "blocked_count": int,
-            "blocked_sessions": [{"project_id": str, "session_id": str}, ...]
+            "blocked_sessions": [{"project_id": str, "session_id": str}, ...],
+            "budget_paused_projects": [{"project_id": str}, ...]
         }
+
+    ``budget_paused_projects`` (Budget Piece 3 — P3-G) lists projects whose
+    queue is paused for budget enforcement (codes only, no spend numbers). The
+    sidebar Blocked surface reason-codes these distinctly from the
+    approval-pending ``blocked_sessions``. ``blocked_count`` continues to count
+    ONLY pending-approval sessions — budget pauses are a separate, additive
+    marker so existing approval semantics are untouched.
     """
     blocked = _agent_manager.list_blocked_sessions()
-    return {"blocked_count": len(blocked), "blocked_sessions": blocked}
+    budget_paused = _agent_manager.list_blocked_budget_projects()
+    return {
+        "blocked_count": len(blocked),
+        "blocked_sessions": blocked,
+        "budget_paused_projects": budget_paused,
+    }
 
 
 @router.post("/agents/{project_id}/cancel")

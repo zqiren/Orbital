@@ -124,3 +124,73 @@ describe('QueueHeader', () => {
     expect(screen.queryByTestId('queue-autoresume-hint')).toBeNull();
   });
 });
+
+// P3-G: budget-pause banner variant. A pause_reason==='budget' renders a
+// distinct banner + an error-toned state pill; the existing Resume button stays
+// functional (manual resume is allowed). A plain user pause renders neither.
+function budgetSnap(opts?: { queued?: number }): QueueSnapshot {
+  return { ...snap('paused', { queued: opts?.queued ?? 1 }), pause_reason: 'budget' };
+}
+
+describe('QueueHeader — budget-pause banner', () => {
+  it('renders the budget banner only when pause_reason === "budget"', () => {
+    render(
+      <QueueHeader snapshot={budgetSnap()} onStop={vi.fn()} onResume={vi.fn()} />,
+    );
+    expect(screen.getByTestId('queue-budget-banner')).toBeTruthy();
+    expect(screen.getByTestId('queue-budget-banner').textContent).toContain('Budget limit reached');
+  });
+
+  it('does NOT render the budget banner for a plain user pause', () => {
+    render(
+      <QueueHeader snapshot={snap('paused', { queued: 1 })} onStop={vi.fn()} onResume={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('queue-budget-banner')).toBeNull();
+  });
+
+  it('shows spend/limit detail when budgetCost is provided', () => {
+    render(
+      <QueueHeader
+        snapshot={budgetSnap()}
+        onStop={vi.fn()}
+        onResume={vi.fn()}
+        budgetCost={{ spent: '$1.20', limit: '$1.00', window: 'today' }}
+      />,
+    );
+    const detail = screen.getByTestId('queue-budget-banner-detail');
+    expect(detail.textContent).toContain('$1.20');
+    expect(detail.textContent).toContain('$1.00');
+    expect(detail.textContent).toContain('today');
+  });
+
+  it('falls back to the no-limit detail when budgetCost.limit is null', () => {
+    render(
+      <QueueHeader
+        snapshot={budgetSnap()}
+        onStop={vi.fn()}
+        onResume={vi.fn()}
+        budgetCost={{ spent: '$3.00', limit: null, window: 'this week' }}
+      />,
+    );
+    const detail = screen.getByTestId('queue-budget-banner-detail');
+    expect(detail.textContent).toContain('$3.00');
+    expect(detail.textContent).not.toContain(' of ');
+  });
+
+  it('keeps the Resume button functional under a budget pause', () => {
+    const onResume = vi.fn();
+    render(
+      <QueueHeader snapshot={budgetSnap()} onStop={vi.fn()} onResume={onResume} />,
+    );
+    fireEvent.click(screen.getByTestId('queue-resume-btn'));
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it('error-tones the state pill under a budget pause', () => {
+    render(
+      <QueueHeader snapshot={budgetSnap()} onStop={vi.fn()} onResume={vi.fn()} />,
+    );
+    const pill = screen.getByTestId('queue-state-pill');
+    expect(pill.className).toContain('text-error');
+  });
+});

@@ -33,11 +33,28 @@ function formatResumeTime(iso: string): string {
     : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * Pre-formatted budget figures for the budget-pause banner. Supplied by the
+ * parent (QueueTab) from the same useCost query the settings meter / header
+ * corner use, so all three agree. Optional: absent in unit tests and whenever
+ * the queue is not budget-paused.
+ */
+export interface QueueBudgetCost {
+  /** Pre-formatted converted window spend (e.g. "$1.20"). */
+  spent: string;
+  /** Pre-formatted limit, or null when no numeric limit resolved. */
+  limit: string | null;
+  /** Localized window word (e.g. "today"). */
+  window: string;
+}
+
 interface QueueHeaderProps {
   snapshot: QueueSnapshot | null;
   onStop: (durationSeconds?: number) => void | Promise<void>;
   onResume: () => void | Promise<void>;
   disabled?: boolean;
+  /** Budget figures for the budget-pause banner (P3-G). */
+  budgetCost?: QueueBudgetCost | null;
 }
 
 export default function QueueHeader({
@@ -45,6 +62,7 @@ export default function QueueHeader({
   onStop,
   onResume,
   disabled,
+  budgetCost,
 }: QueueHeaderProps) {
   const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -72,8 +90,24 @@ export default function QueueHeader({
 
   const isPaused = snapshot.state === 'paused';
   const isIdle = snapshot.state === 'idle';
+  // Budget-pause: a distinct banner + pill from the plain user pause. The
+  // pause_reason rides on the queue snapshot (model_dump of QueueState).
+  const isBudgetPaused = isPaused && snapshot.pause_reason === 'budget';
   const resumeHint =
     isPaused && snapshot.paused_until ? formatResumeTime(snapshot.paused_until) : '';
+
+  const budgetDetail = budgetCost
+    ? budgetCost.limit != null
+      ? t('queue.banner.budget.detail', {
+          spent: budgetCost.spent,
+          limit: budgetCost.limit,
+          window: budgetCost.window,
+        })
+      : t('queue.banner.budget.noLimit', {
+          spent: budgetCost.spent,
+          window: budgetCost.window,
+        })
+    : null;
 
   const pick = (duration?: number) => {
     setMenuOpen(false);
@@ -81,15 +115,34 @@ export default function QueueHeader({
   };
 
   return (
+    <div className="flex flex-col">
+    {isBudgetPaused && (
+      <div
+        className="flex items-center justify-between gap-3 px-6 py-2.5 bg-error/5 border-b border-error/20 max-md:px-4 max-md:flex-wrap"
+        data-testid="queue-budget-banner"
+        role="status"
+      >
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-error">{t('queue.banner.budget.title')}</p>
+          {budgetDetail && (
+            <p className="text-[11px] text-secondary mt-0.5" data-testid="queue-budget-banner-detail">
+              {budgetDetail}
+            </p>
+          )}
+        </div>
+      </div>
+    )}
     <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-border max-md:px-4 max-md:flex-wrap">
       <div className="flex items-center gap-4 text-xs text-secondary flex-wrap">
         <span
           className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
-            isPaused
-              ? 'bg-warning/15 text-warning'
-              : snapshot.state === 'running'
-                ? 'bg-accent/15 text-accent'
-                : 'bg-secondary/15 text-secondary'
+            isBudgetPaused
+              ? 'bg-error/15 text-error'
+              : isPaused
+                ? 'bg-warning/15 text-warning'
+                : snapshot.state === 'running'
+                  ? 'bg-accent/15 text-accent'
+                  : 'bg-secondary/15 text-secondary'
           }`}
           data-testid="queue-state-pill"
         >
@@ -182,6 +235,7 @@ export default function QueueHeader({
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

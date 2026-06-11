@@ -14,4 +14,16 @@ export type Route =
   | { name: 'create' }
   | { name: 'blocked' }
   | { name: 'settings' }
-  | { name: 'project'; projectId: string; tab: 'queue' | 'chat' | 'files'; sessionId?: string; settings?: boolean };
+  | {
+      name: 'project';
+      projectId: string;
+      tab: 'queue' | 'chat' | 'files';
+      sessionId?: string;
+      settings?: boolean;
+      /**
+       * Optional intent to scroll the settings overlay to a specific section on
+       * open (P3-G: the budget corner deep-links here). Only meaningful when
+       * `settings` is true; consumed (scrolled-to) once by SettingsView.
+       */
+      settingsAnchor?: 'budget';
+    };

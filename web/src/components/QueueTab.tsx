@@ -4,16 +4,35 @@
 
 import { useMemo } from 'react';
 import { useQueue } from '../hooks/useQueue';
+import { useCost } from '../hooks/useCost';
 import { useT } from '../i18n/useT';
-import type { QueueItem } from '../types';
+import { useLocale } from '../i18n/LocaleContext';
+import type { StringKey } from '../i18n/strings';
+import type { Project, QueueItem } from '../types';
+import { formatMoney } from '../budget/format';
+import { periodToWindow } from '../budget/derive';
 import AutomationsList from './AutomationsList';
 import QueueComposer from './QueueComposer';
 import QueueHeader from './QueueHeader';
+import type { QueueBudgetCost } from './QueueHeader';
 import QueueItemCard from './QueueItemCard';
 
 interface QueueTabProps {
   projectId: string;
+  /**
+   * Full project — used to resolve the budget window/limit/currency for the
+   * budget-pause banner. Optional so existing tests that mount with just a
+   * projectId keep working (banner simply doesn't render without it).
+   */
+  project?: Project;
 }
+
+const WINDOW_WORD: Record<'daily' | 'weekly' | 'monthly' | 'total', StringKey> = {
+  daily: 'settings.budget.window.day',
+  weekly: 'settings.budget.window.week',
+  monthly: 'settings.budget.window.month',
+  total: 'settings.budget.window.total',
+};
 
 function Section({
   title,
@@ -48,10 +67,40 @@ function Section({
   );
 }
 
-export default function QueueTab({ projectId }: QueueTabProps) {
+export default function QueueTab({ projectId, project }: QueueTabProps) {
   const t = useT();
+  const { locale } = useLocale();
   const { snapshot, loading, error, addItem, removeItem, stopQueue, resumeQueue } =
     useQueue(projectId);
+
+  // Budget-pause banner figures: only fetch /cost (and only render the banner)
+  // when the queue is paused for budget. The window/limit come from the project.
+  const isBudgetPaused =
+    snapshot?.state === 'paused' && snapshot?.pause_reason === 'budget';
+  const period = project?.budget_period || 'daily';
+  const window = periodToWindow(period);
+  // useCost subscribes to budget.spend_updated — event-driven, no polling. Pass
+  // null when not budget-paused / no project so we don't fetch unnecessarily.
+  const { cost: budgetCostResp } = useCost(
+    isBudgetPaused && project ? projectId : null,
+    window,
+  );
+  const budgetCost: QueueBudgetCost | null = useMemo(() => {
+    if (!isBudgetPaused || !budgetCostResp) return null;
+    const ccy = budgetCostResp.converted_total.currency;
+    const spent = budgetCostResp.converted_total.amount;
+    const limitNum =
+      project?.budget_limit_usd != null && project.budget_limit_usd > 0
+        ? project.budget_limit_usd
+        : null;
+    return {
+      spent: formatMoney(spent, ccy, locale),
+      limit: limitNum != null ? formatMoney(limitNum, ccy, locale) : null,
+      window: t(WINDOW_WORD[window]),
+    };
+    // t is unstable; bind to locale per the i18n convention.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBudgetPaused, budgetCostResp, project?.budget_limit_usd, window, locale]);
 
   const grouped = useMemo(() => {
     const items = snapshot?.items ?? [];
@@ -72,6 +121,7 @@ export default function QueueTab({ projectId }: QueueTabProps) {
         onStop={stopQueue}
         onResume={resumeQueue}
         disabled={loading}
+        budgetCost={budgetCost}
       />
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 max-md:px-4">
         {error && (

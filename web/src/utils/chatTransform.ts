@@ -115,6 +115,21 @@ export type DisplayItem =
       status: 'in_progress' | 'done' | 'failed' | 'skipped';
       trigger: 'turn_count' | 'agent_decided' | 'token_pressure';
       timestamp: string;
+    }
+  | {
+      // Budget enforcement trip (P3-G). Built from a session row written by the
+      // loop: {role:'system', source:'budget', event:'budget_blocked',
+      // payload:{action,window,spend,limit,currency}}. Codes/numbers only — the
+      // client localizes the message. (budget_threshold is WS-only; it never
+      // lands in a session row, so it isn't represented here.)
+      type: 'budget_event';
+      event: 'budget_blocked';
+      action: 'pause' | 'stop';
+      window: 'daily' | 'weekly' | 'monthly' | 'total';
+      spend: number;
+      limit: number | null;
+      currency: string;
+      timestamp: string;
     };
 
 const WINDOWS_PATH_RE = /[A-Za-z]:\\(?:Users|Windows|Program)[^\s"';&|>]*/gi;
@@ -319,6 +334,44 @@ function parseSubAgentSystemMessage(
   return null;
 }
 
+type BudgetEventItem = Extract<DisplayItem, { type: 'budget_event' }>;
+
+/**
+ * Parse a budget-trip session row into a timeline item, or null if the message
+ * isn't a budget event. The row shape (written by the agent loop) is
+ * `{role:'system', source:'budget', event:'budget_blocked', payload:{...}}`.
+ * `event`/`payload` aren't on the ChatMessage type (they survive as raw JSONL
+ * passthrough), so we read them off a narrow record cast. Codes/numbers only —
+ * never trusts any daemon-side display string.
+ */
+function parseBudgetSystemMessage(msg: ChatMessage): BudgetEventItem | null {
+  if (msg.source !== 'budget') return null;
+  const raw = msg as unknown as {
+    event?: unknown;
+    payload?: Record<string, unknown>;
+  };
+  if (raw.event !== 'budget_blocked') return null;
+  const p = raw.payload ?? {};
+  const action = p.action === 'stop' ? 'stop' : 'pause';
+  const window =
+    p.window === 'weekly' || p.window === 'monthly' || p.window === 'total'
+      ? p.window
+      : 'daily';
+  const spend = typeof p.spend === 'number' ? p.spend : 0;
+  const limit = typeof p.limit === 'number' ? p.limit : null;
+  const currency = typeof p.currency === 'string' ? p.currency : 'USD';
+  return {
+    type: 'budget_event',
+    event: 'budget_blocked',
+    action,
+    window,
+    spend,
+    limit,
+    currency,
+    timestamp: msg.timestamp ?? '',
+  };
+}
+
 export function transformChatHistory(
   messages: ChatMessage[],
   workspace?: string,
@@ -452,6 +505,17 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'system') {
+      // Budget trip row (P3-G): {source:'budget', event:'budget_blocked',
+      // payload:{action,window,spend,limit,currency}}. The session endpoint
+      // passes the raw JSONL through, so `event`/`payload` ride as extra fields
+      // not declared on ChatMessage — read them via a narrow cast.
+      const budgetItem = parseBudgetSystemMessage(msg);
+      if (budgetItem) {
+        finalizeCapsule();
+        items.push(budgetItem);
+        i++;
+        continue;
+      }
       if (msg._meta?.approval_request) {
         finalizeCapsule();
         items.push({

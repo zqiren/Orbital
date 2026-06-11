@@ -518,6 +518,7 @@ export default function App() {
                   <QueueTab
                     key={`queue-${selectedProject.project_id}`}
                     projectId={selectedProject.project_id}
+                    project={selectedProject}
                   />
                 )}
                 {route.tab === 'chat' && (

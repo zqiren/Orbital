@@ -57,7 +57,12 @@ export default function SettingsModalPage({
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        <SettingsView project={project} onSave={onSave} onDelete={onDelete} />
+        <SettingsView
+          project={project}
+          onSave={onSave}
+          onDelete={onDelete}
+          scrollToSection={route.settingsAnchor}
+        />
       </div>
     </div>
   );

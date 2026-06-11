@@ -2347,18 +2347,58 @@ class AgentManager:
                 blocked.append({"project_id": pid, "session_id": sid})
         return blocked
 
+    def list_blocked_budget_projects(self) -> list[dict]:
+        """Return all projects whose queue is currently paused for budget.
+
+        Each entry is ``{"project_id": str}`` (codes only — no spend numbers;
+        the frontend reads those from GET /cost). A project qualifies when its
+        persisted queue state is PAUSED with ``pause_reason == "budget"``.
+
+        Surfaced by ``GET /api/v2/blocked`` and the ``blocked-count-changed`` WS
+        event so the sidebar Blocked surface can reason-code budget pauses
+        distinctly from approval-pending entries (Budget Piece 3 — P3-G).
+
+        Reads the persisted queue.json (via the project's QueueStore), so it
+        works whether or not an agent/dispatcher is currently live. Best-effort
+        per project: a missing workspace / unreadable queue is skipped, never
+        raised — this feeds a display badge, not an enforcement path.
+        """
+        from agent_os.queue.models import QueueRunState
+
+        out: list[dict] = []
+        if self._project_store is None:
+            return out
+        for project in self._project_store.list_projects():
+            pid = project.get("project_id")
+            workspace = project.get("workspace") or ""
+            if not pid or not workspace:
+                continue
+            try:
+                store = self.get_queue_store(pid, workspace=workspace)
+                state = store.load()
+            except Exception:
+                # Best-effort display surface — never let one bad project break
+                # the whole badge.
+                continue
+            if state.state == QueueRunState.PAUSED and state.pause_reason == "budget":
+                out.append({"project_id": pid})
+        return out
+
     def _broadcast_blocked_count(self) -> None:
         """Emit a global ``blocked-count-changed`` WS event with the current
         aggregate blocked-session list.
 
         Called after every transition into or out of ``pending_approval`` so
-        all connected clients stay in sync without polling.
+        all connected clients stay in sync without polling. Also carries the
+        budget-paused project list (P3-G) so the Blocked surface stays live for
+        budget pauses without a separate fetch.
         """
         blocked = self.list_blocked_sessions()
         self._ws.broadcast_global({
             "type": "blocked-count-changed",
             "blocked_count": len(blocked),
             "blocked_sessions": blocked,
+            "budget_paused_projects": self.list_blocked_budget_projects(),
         })
 
     def get_session(self, project_id: str, *,

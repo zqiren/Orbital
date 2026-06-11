@@ -114,4 +114,67 @@ describe('BlockedBadge', () => {
     screen.getByRole('region').click();
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  // ── P3-G: budget-paused projects marker (additive, reason-coded) ──────────
+  it('shows a distinct budget marker when budgetPausedProjects is non-empty', () => {
+    mockUseBlockedCount.mockReturnValue({
+      blockedCount: 0,
+      blockedSessions: [],
+      budgetPausedProjects: [{ project_id: 'p1' }, { project_id: 'p2' }],
+      loading: false,
+    });
+    render(<BlockedBadge />);
+    const pill = screen.getByTestId('blocked-badge-budget-pill');
+    expect(pill).toBeInTheDocument();
+    expect(pill).toHaveTextContent('2 budget');
+    // Reason-coded with the error token, NOT the approval warning token.
+    expect(pill.className).toContain('text-error');
+  });
+
+  it('budget marker is independent of the approval count (both can show)', () => {
+    mockUseBlockedCount.mockReturnValue({
+      blockedCount: 3,
+      blockedSessions: [],
+      budgetPausedProjects: [{ project_id: 'p1' }],
+      loading: false,
+    });
+    render(<BlockedBadge />);
+    // Approval pill stays the pending-approval count; budget pill is separate.
+    expect(screen.getByTestId('blocked-badge-pill')).toHaveTextContent('3');
+    expect(screen.getByTestId('blocked-badge-budget-pill')).toHaveTextContent('1 budget');
+  });
+
+  it('does not fold budget pauses into the approval count / aria-label', () => {
+    mockUseBlockedCount.mockReturnValue({
+      blockedCount: 0,
+      blockedSessions: [],
+      budgetPausedProjects: [{ project_id: 'p1' }],
+      loading: false,
+    });
+    render(<BlockedBadge />);
+    // No approval pill (count is 0); the aria-label reflects 0 blocked sessions.
+    expect(screen.queryByTestId('blocked-badge-pill')).toBeNull();
+    expect(screen.getByRole('region')).toHaveAttribute(
+      'aria-label',
+      '0 sessions blocked across all projects',
+    );
+  });
+
+  it('hides the budget marker when budgetPausedProjects is empty', () => {
+    mockUseBlockedCount.mockReturnValue({
+      blockedCount: 1,
+      blockedSessions: [],
+      budgetPausedProjects: [],
+      loading: false,
+    });
+    render(<BlockedBadge />);
+    expect(screen.queryByTestId('blocked-badge-budget-pill')).toBeNull();
+  });
+
+  it('tolerates the field being absent (older hook shape)', () => {
+    mockUseBlockedCount.mockReturnValue({ blockedCount: 2, blockedSessions: [], loading: false });
+    render(<BlockedBadge />);
+    expect(screen.queryByTestId('blocked-badge-budget-pill')).toBeNull();
+    expect(screen.getByTestId('blocked-badge-pill')).toHaveTextContent('2');
+  });
 });

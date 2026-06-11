@@ -22,6 +22,7 @@ import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
+import { budgetTimelineText } from '../budget/timelineText';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -1457,6 +1458,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (item.type === 'sub_agent_activity') {
       return `sub_agent_activity:${item.timestamp}:${item.handle}:${item.action}`;
     }
+    if (item.type === 'budget_event') {
+      // No content field — key off timestamp + action BEFORE the content
+      // fallthrough below (which would crash on undefined.slice).
+      return `budget_event:${item.timestamp}:${item.action}`;
+    }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
     const contentPrefix = item.content.slice(0, 32);
@@ -2211,6 +2217,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   trigger={item.trigger}
                   timestamp={item.timestamp}
                 />
+              );
+            } else if (item.type === 'budget_event') {
+              // Budget-trip timeline row (P3-G). Codes/numbers from the payload
+              // only — localized client-side (en + zh) via the shared pure
+              // composer in budget/timelineText.ts (also unit-tested there).
+              const text = budgetTimelineText(item, locale, t);
+              rendered = (
+                <div
+                  key={`budget-${index}-${item.timestamp}`}
+                  data-testid="budget-timeline-row"
+                  className="rounded-lg border border-error/30 bg-error/5 px-4 py-2.5"
+                >
+                  <p className="text-xs font-medium text-error">{text}</p>
+                </div>
               );
             } else if (item.type === 'approval_card') {
               const resolved = approvals.get(item.tool_call_id)?.resolved ?? item.resolved;
