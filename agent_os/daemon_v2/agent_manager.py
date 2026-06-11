@@ -997,7 +997,7 @@ class AgentManager:
             enabled_sub_agents=enabled_sub_agents or [],
             disabled_sub_agents=list(disabled),
             budget_limit_usd=project.get("budget_limit_usd"),
-            budget_action=project.get("budget_action", "ask"),
+            budget_action=project.get("budget_action", "pause"),
         )
 
     async def ensure_agent_started(self, project_id: str) -> bool:

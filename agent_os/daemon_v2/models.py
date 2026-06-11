@@ -131,7 +131,7 @@ class AgentConfig:
     project_name: str = ""
     project_instructions: str = ""
     budget_limit_usd: float | None = None
-    budget_action: str = "ask"  # "ask" or "stop"
+    budget_action: str = "pause"  # normalized to "pause" | "stop" by guard.normalize_budget_action; not read by enforcement (the guard reads live config)
     budget_spent_usd: float = 0.0
     sdk: str = "openai"        # "openai" or "anthropic"
     provider: str = "custom"   # provider key from providers.json

@@ -460,7 +460,7 @@ class TriggerManager:
                 enabled_sub_agents=trigger_enabled_sub_agents,
                 disabled_sub_agents=list(disabled),
                 budget_limit_usd=project.get("budget_limit_usd"),
-                budget_action=project.get("budget_action", "ask"),
+                budget_action=project.get("budget_action", "pause"),
             )
             await self._agent_manager.start_agent(
                 project_id, config,

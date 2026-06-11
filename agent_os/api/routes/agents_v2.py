@@ -958,7 +958,7 @@ async def start_agent(req: StartAgentRequest):
         global_preferences_path="",
         llm_fallback_models=fallback_models,
         budget_limit_usd=project.get("budget_limit_usd"),
-        budget_action=project.get("budget_action", "ask"),
+        budget_action=project.get("budget_action", "pause"),
     )
     try:
         await _agent_manager.start_agent(
