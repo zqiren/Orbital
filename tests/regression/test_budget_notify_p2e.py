@@ -149,8 +149,15 @@ async def test_loop_emits_threshold_after_crossing(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_loop_no_limit_emits_nothing(tmp_path):
-    """No limit configured → the emitter never fires even though spend is recorded."""
+async def test_loop_no_limit_emits_no_threshold_or_trip(tmp_path):
+    """No limit configured → the threshold/trip EMITTER never fires even though
+    spend is recorded.
+
+    Budget Piece 3 (P3-C) added a debounced ``budget.spend_updated`` broadcast
+    that DOES fire even with no limit (the corner shows spend without a limit,
+    payload ``limit=None``). The invariant this test pins is narrowed
+    accordingly: the threshold/trip emitter is silent; spend_updated may flow.
+    """
     events = []
     cfg = {
         "budget_limit_usd": None,
@@ -161,7 +168,15 @@ async def test_loop_no_limit_emits_nothing(tmp_path):
     }
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
     await loop.run(initial_message="hi")
-    assert events == []
+    await loop._spend_broadcaster.aclose()
+    # No threshold/trip events (the emitter is gated on a configured limit).
+    assert EVENT_THRESHOLD not in [e["type"] for e in events]
+    assert EVENT_TRIP not in [e["type"] for e in events]
+    # spend_updated DOES fire, carrying limit=None.
+    from agent_os.budget.spend_broadcast import SPEND_UPDATED_EVENT
+    spend_evs = [e for e in events if e["type"] == SPEND_UPDATED_EVENT]
+    assert len(spend_evs) == 1
+    assert spend_evs[0]["limit"] is None
 
 
 @pytest.mark.asyncio

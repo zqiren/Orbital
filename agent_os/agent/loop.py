@@ -123,6 +123,16 @@ class AgentLoop:
         # ledger emission is skipped (loop runs unchanged). Also the project_dir
         # the pre-flight guard reads the ledger spend from.
         self._project_dir = project_dir
+        # Debounced ``budget.spend_updated`` WS broadcaster (Budget Piece 3 —
+        # Task P3-C). Fed the post-append window spend after each ledger append
+        # (reusing the notify check's already-computed numbers — zero extra
+        # spend() query when a limit is set). Routes through the SAME
+        # ``on_budget_event`` sink as the notify events. ≥1s leading+trailing
+        # debounce per project so a multi-turn burst collapses to at most two
+        # frames, the trailing carrying the LAST append's numbers. A None sink
+        # makes ``submit`` a silent no-op (lightweight test loops / no relay).
+        from agent_os.budget.spend_broadcast import SpendBroadcaster
+        self._spend_broadcaster = SpendBroadcaster(emit=on_budget_event)
         self._running = False
         self._llm_failed = False
         self._on_session_end = on_session_end
@@ -378,11 +388,20 @@ class AgentLoop:
         self._check_budget_notify()
 
     def _check_budget_notify(self) -> None:
-        """Run the budget threshold/trip emitter after a ledger append.
+        """Run the budget threshold/trip emitter after a ledger append, then
+        feed the debounced ``budget.spend_updated`` broadcast (Budget Piece 3).
 
         Reads the LIVE budget config (same resolver the pre-flight guard uses)
         and delegates to ``budget.notify.maybe_emit_budget_event``, which emits
         AT MOST ONCE per (project, window) for the 80% threshold and the trip.
+        It now also RETURNS the post-append management-spend snapshot it computed
+        (``window``/``spend``/``limit``/``currency`` in ``budget_currency``) so
+        the spend_updated broadcast reuses it — ZERO additional spend() query per
+        append when a limit is set. When no limit is configured the notify path
+        runs no query (returns None); the corner still shows spend, so we run ONE
+        management-only query here for the broadcast. A spend/window-math failure
+        skips the broadcast silently (already logged in the notify module).
+
         Never raises. No-op when ``on_budget_event``/``get_budget_config``/
         ``project_dir`` were not plumbed (e.g. lightweight test loops).
         """
@@ -394,7 +413,7 @@ class AgentLoop:
             cfg = self._get_budget_config()
             fx_rates = (cfg or {}).get("fx_rates") if isinstance(cfg, dict) else None
             from agent_os.budget.notify import maybe_emit_budget_event
-            maybe_emit_budget_event(
+            snapshot = maybe_emit_budget_event(
                 self._project_dir,
                 cfg,
                 emit=self._on_budget_event,
@@ -406,6 +425,73 @@ class AgentLoop:
                 getattr(self._session, "session_id", "?"),
                 exc_info=True,
             )
+            return
+        # Feed the debounced spend_updated broadcast. Wrapped in its own guard so
+        # a broadcast failure can never affect the notify check above nor the
+        # ledger append nor the loop.
+        try:
+            if snapshot is None:
+                # No limit configured (or a notify-side failure) → run one
+                # management-only spend query so the corner still shows spend.
+                snapshot = self._compute_spend_snapshot(cfg, fx_rates)
+            if snapshot is not None:
+                self._spend_broadcaster.submit(
+                    window=snapshot["window"],
+                    spend=snapshot["spend"],
+                    limit=snapshot["limit"],
+                    currency=snapshot["currency"],
+                )
+        except Exception:  # noqa: BLE001 — never break the loop on broadcast errors
+            logger.warning(
+                "budget spend_updated broadcast failed (session=%s); continuing.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
+
+    def _compute_spend_snapshot(self, cfg, fx_rates) -> "dict | None":
+        """Compute the post-append management-spend snapshot for the
+        ``budget.spend_updated`` broadcast in the NO-LIMIT case only.
+
+        The corner shows spend even without a limit, so when the notify check
+        ran no spend query (``maybe_emit_budget_event`` returned None because no
+        limit is set) we run exactly ONE management-only query here, converted
+        into ``budget_currency`` (consistent with the meter). Returns
+        ``{"window", "spend", "limit", "currency"}`` (``limit`` always None on
+        this path) or None when spend cannot be computed (guard-style failure →
+        skip the broadcast silently with a warning).
+        """
+        cfg = cfg or {}
+        window = cfg.get("budget_period") or "daily"
+        currency = cfg.get("budget_currency") or "USD"
+        anchor_ts = cfg.get("budget_anchor_ts")
+        try:
+            from agent_os.budget.ledger import spend as _spend
+            result = _spend(
+                self._project_dir,
+                window,
+                target_currency=currency,
+                fx_rates=fx_rates or {},
+                anchor_ts=anchor_ts,
+                # Management-only, consistent with the limit-governed meter
+                # (the limit only governs management spend; sub-agent display
+                # is a separate block).
+                sources=["management"],
+            )
+            spend_amount = float(result["converted_total"]["amount"])
+        except Exception:  # noqa: BLE001 — guard-style: skip the broadcast
+            logger.warning(
+                "budget spend_updated: spend query failed (session=%s); "
+                "skipping broadcast.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
+            return None
+        return {
+            "window": window,
+            "spend": spend_amount,
+            "limit": None,
+            "currency": currency,
+        }
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
         """Stream LLM response from the primary provider.
@@ -1484,6 +1570,10 @@ class AgentLoop:
         # Cancel any in-flight refresh task before cancelling the turn.
         if self._refresh_task is not None and not self._refresh_task.done():
             self._refresh_task.cancel()
+        # Cancel any pending debounced spend_updated trailing broadcast so it
+        # does not fire after teardown (best-effort UI freshness, not durable
+        # state — dropping a pending trailing on terminate is acceptable).
+        await self._spend_broadcaster.aclose()
         await self.cancel_turn()
         # Cooperative flag: loop's between-iterations check picks this up.
         self._session.stop()

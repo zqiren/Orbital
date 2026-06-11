@@ -135,7 +135,7 @@ def maybe_emit_budget_event(
     fx_rates: dict | None = None,
     now=None,
     marker_path: str | None = None,
-) -> None:
+) -> dict | None:
     """Detect threshold/trip crossings and emit AT MOST ONCE each per window.
 
     Args:
@@ -152,6 +152,16 @@ def maybe_emit_budget_event(
         marker_path: Override marker file path (tests). Defaults to
             ``ProjectPaths(project_dir).budget_notify_state``.
 
+    Returns:
+        The post-append management-spend SNAPSHOT this eval computed, as
+        ``{"window", "spend", "limit", "currency"}`` — so the caller can feed the
+        debounced ``budget.spend_updated`` broadcast WITHOUT a second spend query
+        (Budget Piece 3 — Task P3-C, the zero-additional-query goal). Returns
+        ``None`` when no spend query ran (``emit=None``, no limit configured, or a
+        spend/window-math failure) — in which case the caller runs its own single
+        query for the broadcast (the no-limit corner still shows spend). The
+        emit/marker behaviour is unchanged regardless of the return value.
+
     Never raises: a spend-query failure or marker I/O error degrades to "emit
     nothing this eval" (logged), never crashing the caller (the ledger-append
     site). Pure ``evaluate_budget`` is untouched — this re-runs the spend query
@@ -159,18 +169,18 @@ def maybe_emit_budget_event(
     """
     # Relay absent / no wiring → silent no-op. Do not even read the ledger.
     if emit is None:
-        return
+        return None
 
     cfg = budget_config or {}
     limit = cfg.get("budget_limit_usd")
     if limit is None:
-        return
+        return None
     try:
         limit_val = float(limit)
     except (TypeError, ValueError):
-        return
+        return None
     if limit_val <= 0:
-        return
+        return None
 
     window = cfg.get("budget_period") or "daily"
     currency = cfg.get("budget_currency") or "USD"
@@ -196,7 +206,16 @@ def maybe_emit_budget_event(
     except Exception:  # noqa: BLE001 — never crash the ledger-append site
         logger.warning("budget notify: spend query failed; emitting nothing",
                        exc_info=True)
-        return
+        return None
+
+    # The post-append spend snapshot for the debounced spend_updated broadcast.
+    # Returned to the caller so it reuses THIS query (no second spend()).
+    snapshot = {
+        "window": window,
+        "spend": spend_amount,
+        "limit": limit_val,
+        "currency": currency,
+    }
 
     # Compute the current window identity (re-arm key) and load the marker.
     try:
@@ -204,7 +223,9 @@ def maybe_emit_budget_event(
     except Exception:  # noqa: BLE001 — a window-math failure must not crash
         logger.warning("budget notify: window identity failed; emitting nothing",
                        exc_info=True)
-        return
+        # The spend was computed fine; the broadcast can still use it even
+        # though threshold/trip detection is skipped this eval.
+        return snapshot
 
     if marker_path is None:
         from agent_os.agent.project_paths import ProjectPaths
@@ -249,6 +270,8 @@ def maybe_emit_budget_event(
 
     if dirty:
         _write_marker(marker_path, marker)
+
+    return snapshot
 
 
 def maybe_emit_trip(

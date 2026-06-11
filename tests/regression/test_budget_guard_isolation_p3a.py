@@ -178,8 +178,16 @@ class TestSubagentSpendDoesNotEnforce:
         assert loop.get_completion_state()[0] != "budget_blocked"
         roles = [m.get("role") for m in loop._session.get_messages()]
         assert "assistant" in roles, roles
-        # No threshold/trip push fired from the subagent spend.
-        assert events == []
+        # No threshold/trip push fired from the subagent spend. (P3-C's
+        # budget.spend_updated broadcast MAY fire — it is display freshness,
+        # not a push — and its spend must be management-only, i.e. the 10x
+        # subagent total must not leak into it.)
+        kinds = [e.get("type") for e in events]
+        assert "budget.threshold" not in kinds
+        assert "budget.exhausted" not in kinds
+        for e in events:
+            if e.get("type") == "budget.spend_updated":
+                assert e.get("spend", 0.0) < 1.0, e
 
 
 # ---------------------------------------------------------------------------
