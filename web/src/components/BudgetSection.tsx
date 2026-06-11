@@ -30,8 +30,13 @@ interface BudgetSectionProps {
   onPeriodChange: (next: BudgetPeriod) => void;
   action: 'pause' | 'stop';
   onActionChange: (next: 'pause' | 'stop') => void;
-  /** Navigate to the pricing editor (placeholder — editor ships in P3-I). */
+  /** Navigate to the pricing editor. */
   onEditPricing: () => void;
+  /**
+   * Bumped after a pricing-table save so useCost re-fetches /cost and the meter
+   * + breakdown recompute historical spend against the new rates.
+   */
+  costRefreshKey?: number;
 }
 
 const PERIOD_OPTIONS: { value: BudgetPeriod; labelKey: StringKey; hintKey: StringKey }[] = [
@@ -72,13 +77,14 @@ export default function BudgetSection({
   action,
   onActionChange,
   onEditPricing,
+  costRefreshKey,
 }: BudgetSectionProps) {
   const t = useT();
   const { locale } = useLocale();
   const pid = project.project_id;
 
   const window = periodToWindow(period);
-  const { cost, refresh } = useCost(pid, window);
+  const { cost, refresh } = useCost(pid, window, costRefreshKey);
 
   const limitNum = limit.trim() !== '' ? parseFloat(limit) : null;
   const validLimit = limitNum != null && !Number.isNaN(limitNum) ? limitNum : null;
@@ -310,7 +316,7 @@ export default function BudgetSection({
           )}
         </div>
 
-        {/* Pricing editor link (placeholder — editor ships in P3-I) */}
+        {/* Pricing editor link */}
         <button
           type="button"
           onClick={onEditPricing}

@@ -115,4 +115,32 @@ describe('useCost', () => {
     expect(result.current.error).toBe('500');
     expect(result.current.cost).toBeNull();
   });
+
+  it('re-fetches when refreshKey changes (pricing-edit recompute trigger)', async () => {
+    apiFn.mockResolvedValueOnce(makeCost(1)).mockResolvedValueOnce(makeCost(5));
+    const { result, rerender } = renderHook(
+      ({ key }: { key: number }) => useCost('p1', 'daily', key),
+      { initialProps: { key: 0 } },
+    );
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
+    expect(apiFn).toHaveBeenCalledTimes(1);
+
+    // Bump the key as PricingEditor.onSaved would → forces a re-read of /cost
+    // under the new rates.
+    rerender({ key: 1 });
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(5));
+    expect(apiFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT re-fetch when refreshKey is unchanged across rerenders', async () => {
+    apiFn.mockResolvedValue(makeCost(1));
+    const { rerender } = renderHook(
+      ({ key }: { key: number }) => useCost('p1', 'daily', key),
+      { initialProps: { key: 7 } },
+    );
+    await waitFor(() => expect(apiFn).toHaveBeenCalledTimes(1));
+    rerender({ key: 7 });
+    await act(async () => { await Promise.resolve(); });
+    expect(apiFn).toHaveBeenCalledTimes(1);
+  });
 });

@@ -15,6 +15,13 @@ interface SettingsModalPageProps {
   setRoute: Dispatch<SetStateAction<Route>>;
   onSave: (data: ProjectUpdateRequest) => void;
   onDelete: () => void;
+  /** Open the pricing-table editor overlay (P3-I). */
+  onEditPricing?: () => void;
+  /**
+   * Bumped after a pricing-table save so the Budget meter/breakdown recompute
+   * against the new rates. Threaded down to BudgetSection's useCost.
+   */
+  costRefreshKey?: number;
 }
 
 export default function SettingsModalPage({
@@ -23,6 +30,8 @@ export default function SettingsModalPage({
   setRoute,
   onSave,
   onDelete,
+  onEditPricing,
+  costRefreshKey,
 }: SettingsModalPageProps) {
   const t = useT();
   function handleBack() {
@@ -61,6 +70,8 @@ export default function SettingsModalPage({
           project={project}
           onSave={onSave}
           onDelete={onDelete}
+          onEditPricing={onEditPricing}
+          costRefreshKey={costRefreshKey}
           scrollToSection={route.settingsAnchor}
         />
       </div>

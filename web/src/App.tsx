@@ -27,6 +27,7 @@ import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
 import SettingsModalPage from './components/SettingsModalPage';
+import PricingEditorPage from './components/PricingEditorPage';
 import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
@@ -62,6 +63,11 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'list' });
+
+  // Bumped after a pricing-table edit (PUT /pricing/overrides). Threaded into
+  // the settings Budget meter's useCost so historical cost visibly recomputes
+  // against the new rates without polling. See PricingEditor.onSaved.
+  const [costRefreshKey, setCostRefreshKey] = useState(0);
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -492,15 +498,29 @@ export default function App() {
           // fallback instead of unmounting the whole app (the app shell/sidebar
           // stays alive). resetKey clears a prior crash when the user navigates.
           <ErrorBoundary
-            resetKey={`${selectedProject.project_id}:${route.tab}:${route.sessionId ?? ''}:${route.settings ? 'settings' : ''}`}
+            resetKey={`${selectedProject.project_id}:${route.tab}:${route.sessionId ?? ''}:${route.pricing ? 'pricing' : route.settings ? 'settings' : ''}`}
           >
-            {route.settings ? (
+            {route.pricing ? (
+              // Pricing-table editor overlay (P3-I). Back returns to the
+              // settings surface; onSaved bumps the cost-refresh nonce so the
+              // Budget meter recomputes against the new rates on return.
+              <PricingEditorPage
+                onBack={() =>
+                  setRoute({ ...route, pricing: false, settings: true, settingsAnchor: 'budget' })
+                }
+                onSaved={() => setCostRefreshKey((k) => k + 1)}
+              />
+            ) : route.settings ? (
               <SettingsModalPage
                 project={selectedProject}
                 route={route}
                 setRoute={setRoute}
                 onSave={handleUpdateProject}
                 onDelete={handleDeleteProject}
+                onEditPricing={() =>
+                  setRoute({ ...route, settings: false, pricing: true })
+                }
+                costRefreshKey={costRefreshKey}
               />
             ) : (
               <ProjectDetail

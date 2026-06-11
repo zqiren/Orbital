@@ -32,12 +32,13 @@ interface SettingsViewProps {
   project: Project;
   onSave: (data: ProjectUpdateRequest) => void;
   onDelete: () => void;
-  /**
-   * Navigate to the pricing-table editor. Placeholder hook — the editor itself
-   * ships in P3-I; until then this defaults to a no-op so the link renders and
-   * the editor task can plug a real navigation in here.
-   */
+  /** Navigate to the pricing-table editor. */
   onEditPricing?: () => void;
+  /**
+   * Bumped after a pricing-table save so the Budget section's useCost
+   * re-fetches and the meter/breakdown recompute against the new rates.
+   */
+  costRefreshKey?: number;
   /**
    * Optional section to scroll into view on mount (P3-G: the header budget
    * corner deep-links here with 'budget'). Consumed once via a ref scroll.
@@ -72,6 +73,7 @@ export default function SettingsView({
   onSave,
   onDelete,
   onEditPricing = () => {},
+  costRefreshKey,
   scrollToSection,
 }: SettingsViewProps) {
   const t = useT();
@@ -611,6 +613,7 @@ export default function SettingsView({
             action={budgetAction}
             onActionChange={setBudgetAction}
             onEditPricing={onEditPricing}
+            costRefreshKey={costRefreshKey}
           />
         </div>
 

@@ -29,6 +29,14 @@ export interface UseCostResult {
 export function useCost(
   projectId: string | null,
   window: CostWindow,
+  /**
+   * Bump to force a re-fetch without a project/window change. Used after a
+   * pricing-table edit (PUT /pricing/overrides) so the meter/breakdown
+   * recompute historical cost against the NEW rates — the rate change fires no
+   * WS event (that's ledger-append only), so the editor signals a recompute by
+   * incrementing this. Event-driven, not polled.
+   */
+  refreshKey: number = 0,
 ): UseCostResult {
   const [cost, setCost] = useState<CostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,10 +62,13 @@ export function useCost(
     }
   }, [projectId, window]);
 
-  // Fetch on mount + whenever the project or window changes.
+  // Fetch on mount + whenever the project, window, or refreshKey changes. The
+  // refreshKey bump (post pricing-edit) re-runs this with the same `refresh`
+  // identity, re-reading /cost under the new rates.
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh, refreshKey]);
 
   // WS: a debounced budget.spend_updated for THIS project → re-fetch /cost.
   useEffect(() => {

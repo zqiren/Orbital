@@ -26,4 +26,10 @@ export type Route =
        * `settings` is true; consumed (scrolled-to) once by SettingsView.
        */
       settingsAnchor?: 'budget';
+      /**
+       * Open the pricing-table editor overlay (P3-I). Reached from the Budget
+       * section's "Edit pricing table" link; takes precedence over the settings
+       * surface in App's content switch. Back returns to settings.
+       */
+      pricing?: boolean;
     };
