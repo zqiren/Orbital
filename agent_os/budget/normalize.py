@@ -63,8 +63,12 @@ class ProviderSemantics(str, Enum):
 
         This is the documented entry point for the ledger consumer:
         ``ProviderSemantics.from_sdk(provider.sdk)``.
+
+        "openai-compatible" is accepted as an alias for "openai": it appeared
+        as a one-off sdk value in providers.json (mistral) and any config still
+        carrying it must ledger with subset semantics, not be silently skipped.
         """
-        if sdk == "openai":
+        if sdk in ("openai", "openai-compatible"):
             return cls.OPENAI_COMPAT
         if sdk == "anthropic":
             return cls.ANTHROPIC

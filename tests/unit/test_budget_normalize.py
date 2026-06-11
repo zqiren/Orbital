@@ -114,6 +114,34 @@ class TestProviderSemantics:
         with pytest.raises(ValueError):
             ProviderSemantics.from_sdk("gemini")
 
+    def test_from_sdk_openai_compatible_alias_maps_to_openai_compat(self):
+        """'openai-compatible' shipped as a one-off sdk value (mistral); a
+        config still carrying it must ledger with subset semantics, never be
+        silently skipped (which would report $0 cost forever)."""
+        assert (
+            ProviderSemantics.from_sdk("openai-compatible")
+            is ProviderSemantics.OPENAI_COMPAT
+        )
+
+    def test_every_registry_sdk_value_maps_to_semantics(self):
+        """Every sdk value in the shipped providers.json must resolve via
+        from_sdk — a provider whose sdk doesn't map would silently never
+        append ledger lines (warning + skip), breaking the 'every response
+        ledgers' outcome. A new sdk value must be added to from_sdk first."""
+        import json
+        import os
+
+        registry = os.path.join(
+            os.path.dirname(__file__), "..", "..", "agent_os", "config",
+            "providers.json",
+        )
+        with open(registry, encoding="utf-8") as f:
+            providers = json.load(f)["providers"]
+        sdks = {info["sdk"] for info in providers.values() if "sdk" in info}
+        assert sdks, "expected at least one sdk value in providers.json"
+        for sdk in sdks:
+            ProviderSemantics.from_sdk(sdk)  # must not raise
+
     def test_normalize_accepts_enum_member(self):
         """normalize_usage takes the enum member directly (ledger entry path)."""
         usage = TokenUsage(input_tokens=100, output_tokens=20, cache_read_tokens=40)

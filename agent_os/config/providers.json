@@ -2032,7 +2032,7 @@
       "base_url": "https://api.mistral.ai/v1",
       "currency": "USD",
       "supports_model_list": true,
-      "sdk": "openai-compatible",
+      "sdk": "openai",
       "suggested_models": [
         "mistral-large-latest",
         "mistral-medium-latest",
