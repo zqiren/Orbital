@@ -422,7 +422,7 @@ Control agents from your phone on the local network or via a cloud relay.
 </p>
 <p align="center"><em>Scan to open Orbital on your phone — same Wi-Fi network required</em></p>
 
-**Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests, budget alerts, and agent status changes.
+**Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests and agent status changes.
 
 </details>
 
@@ -437,7 +437,7 @@ Per-project budget limits prevent runaway spending:
 | `Budget Action` | `ask` (pause and prompt user) or `stop` (halt the agent) |
 | `Spent` | Running total with reset option |
 
-The agent loop tracks cumulative token usage and computes cost using per-model pricing from the provider registry. When the budget threshold is reached, the configured action fires and a push notification is sent.
+The agent loop tracks cumulative token usage and computes cost using per-model pricing from the provider registry. When the budget threshold is reached, the configured action fires (`ask` pauses the session; `stop` halts the agent). Budget events do not currently trigger push notifications.
 
 </details>
 
