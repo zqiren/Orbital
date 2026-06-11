@@ -2,14 +2,22 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression tests for budget spend persistence across sessions.
+"""Regression tests for budget config + the new ledger-based spend model.
 
-Root cause: budget_spent_usd was reset to 0.0 every session because it was
-only tracked in-memory in AgentLoop._budget_spent_usd. A project with a $5
-budget effectively had $5 per session, not $5 total.
+History: this file originally pinned the LEGACY cumulative dollar accumulator
+(``runtime.budget_spent_usd``, written after each LLM call via the loop's
+``on_cost_update`` callback). Budget Piece 2 DELETED that accumulator entirely
+— the token ledger is now the single source of recorded spend, and the
+pre-flight guard (``budget/guard.py``) is the single enforcement point. The
+loop no longer writes ``budget_spent_usd`` at all.
 
-Fix: persist cumulative spend in project JSON under "runtime.budget_spent_usd",
-load on session start, flush after each LLM call via on_cost_update callback.
+The old-contract tests have been rewritten to the NEW invariant:
+  * the loop emits a token-ledger event per response and writes NO dollar
+    accumulator (``TestLoopLedgerEmission``);
+  * the PUT route's legacy spend-reset write is gone — resetting spend no longer
+    mutates a persisted counter (``TestBudgetAPI``).
+The generic ProjectStore runtime-batching tests stay (the field is still a
+tolerated runtime key, just never written by the budget path now).
 """
 import json
 import os
@@ -123,101 +131,83 @@ class TestProjectBudgetPersistence:
 
 
 # ---------------------------------------------------------------------------
-# Agent loop: cost callback and cumulative init
+# Agent loop: ledger emission, NO dollar accumulator (Budget Piece 2)
 # ---------------------------------------------------------------------------
 
-class TestLoopCostTracking:
-    """AgentLoop calls on_cost_update after each LLM response."""
+class TestLoopLedgerEmission:
+    """The loop records spend via the token LEDGER only — never a dollar
+    accumulator. The legacy on_cost_update / budget_spent_usd constructor
+    params are GONE; passing them raises TypeError."""
 
-    @pytest.mark.asyncio
-    async def test_loop_cost_callback_invoked(self):
-        """on_cost_update receives (delta, total) after each response."""
+    def test_loop_rejects_legacy_budget_kwargs(self):
+        """The deleted legacy budget constructor params no longer exist."""
         from agent_os.agent.loop import AgentLoop
 
-        session = MagicMock()
-        session.messages = [{"role": "user", "content": "hello"}]
-        session.is_stopped = MagicMock(return_value=False)
-        session.pop_queued_messages = MagicMock(return_value=[])
-        session.append = MagicMock()
-        session.append_system = MagicMock()
-        session.notify_stream = MagicMock()
-        session.pause = MagicMock()
+        for kw in (
+            {"on_cost_update": lambda *a: None},
+            {"budget_spent_usd": 1.5},
+            {"cost_per_1k_input": 0.003},
+            {"budget_limit_usd": 5.0},
+            {"budget_action": "stop"},
+        ):
+            with pytest.raises(TypeError):
+                AgentLoop(
+                    MagicMock(), MagicMock(), MagicMock(), MagicMock(), **kw,
+                )
 
-        # Track callback invocations
-        cost_updates = []
-        def on_cost(delta, total):
-            cost_updates.append((delta, total))
+    @pytest.mark.asyncio
+    async def test_loop_emits_ledger_event_and_writes_no_dollar_accumulator(
+        self, tmp_path,
+    ):
+        """One LLM response → one ledger line; project_store gets NO
+        budget_spent_usd write (the dollar accumulator is gone)."""
+        from agent_os.agent.loop import AgentLoop
+        from agent_os.agent.session import Session
+        from agent_os.budget.ledger import ledger_path
+        from agent_os.agent.providers.types import TokenUsage
+
+        workspace = str(tmp_path / "ws")
+        os.makedirs(workspace, exist_ok=True)
+        session = Session.new("proj_x_0001", workspace, session_id="proj_x_0001",
+                              provider="moonshot", model="kimi", sdk="openai")
+
+        usage = TokenUsage(input_tokens=1000, output_tokens=500)
+        response = MagicMock()
+        response.usage = usage
+        response.has_tool_calls = False
+        response.text = "done"
+        response.raw_message = {}
 
         provider = MagicMock()
-        usage = MagicMock()
-        usage.input_tokens = 1000
-        usage.output_tokens = 500
-        response = MagicMock()
-        response.usage = usage
-        response.has_tool_calls = False
-        response.text = "done"
+        provider.sdk = "openai"
+        provider.provider = "moonshot"
+        provider.model = "kimi"
+
+        registry = MagicMock()
+        registry.reset_run_state = MagicMock()
+
+        context_manager = MagicMock()
 
         loop = AgentLoop(
-            session, provider, MagicMock(), MagicMock(),
-            budget_spent_usd=0.0,
-            on_cost_update=on_cost,
-            cost_per_1k_input=0.003,
-            cost_per_1k_output=0.015,
-        )
-
-        # Monkey-patch _stream_response to return our mock response
-        loop._stream_response = AsyncMock(return_value=response)
-
-        await loop.run("hello")
-
-        assert len(cost_updates) == 1
-        delta, total = cost_updates[0]
-        expected = (1000 / 1000) * 0.003 + (500 / 1000) * 0.015
-        assert abs(delta - expected) < 0.0001
-        assert abs(total - expected) < 0.0001
-
-    @pytest.mark.asyncio
-    async def test_loop_starts_with_persisted_spend(self):
-        """Loop accumulates from persisted budget_spent_usd, not from zero."""
-        from agent_os.agent.loop import AgentLoop
-
-        session = MagicMock()
-        session.messages = [{"role": "user", "content": "hello"}]
-        session.is_stopped = MagicMock(return_value=False)
-        session.pop_queued_messages = MagicMock(return_value=[])
-        session.append = MagicMock()
-        session.append_system = MagicMock()
-        session.notify_stream = MagicMock()
-        session.pause = MagicMock()
-
-        cost_updates = []
-        def on_cost(delta, total):
-            cost_updates.append((delta, total))
-
-        usage = MagicMock()
-        usage.input_tokens = 1000
-        usage.output_tokens = 0
-        response = MagicMock()
-        response.usage = usage
-        response.has_tool_calls = False
-        response.text = "done"
-
-        loop = AgentLoop(
-            session, MagicMock(), MagicMock(), MagicMock(),
-            budget_spent_usd=1.5,  # persisted from previous session
-            on_cost_update=on_cost,
-            cost_per_1k_input=0.003,
-            cost_per_1k_output=0.015,
+            session, provider, registry, context_manager,
+            project_dir=workspace,
         )
         loop._stream_response = AsyncMock(return_value=response)
 
         await loop.run("hello")
 
-        assert len(cost_updates) == 1
-        delta, total = cost_updates[0]
-        # total should be 1.5 (persisted) + delta (new)
-        expected_delta = (1000 / 1000) * 0.003
-        assert abs(total - (1.5 + expected_delta)) < 0.0001
+        # Exactly one ledger line was written for the management response.
+        path = ledger_path(workspace)
+        assert os.path.exists(path), "ledger file should exist after a response"
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        assert len(lines) == 1
+        rec = lines[0]
+        assert rec["source"] == "management"
+        assert rec["provider"] == "moonshot"
+        # uncached_input = input - cache_read (0) = 1000; output = 500
+        assert rec["uncached_input"] == 1000
+        assert rec["output"] == 500
 
 
 # ---------------------------------------------------------------------------
@@ -277,40 +267,36 @@ class TestBudgetAPI:
         assert data["budget_limit_usd"] == 5.0
         assert data["budget_spent_usd"] == 0.0
 
-    def test_reset_spend_via_api(self, client, workspace):
-        """PUT runtime_budget_spent_usd=0 resets spend."""
+    def test_legacy_spend_write_is_retired(self, client, workspace):
+        """Budget Piece 2: PUT runtime_budget_spent_usd no longer WRITES a
+        persisted dollar counter. The field is accepted (200) but inert — the
+        endpoint's spend-reset repurpose (anchor reset) is P2-D's job. Until
+        then, a PUT carrying it does not mutate budget_spent_usd, which stays 0."""
         pid = _create_project(client, workspace)
 
-        # Set some spend via API first
+        # PUT the legacy field — must NOT 500, must NOT persist a dollar value.
         resp = client.put(
             f"/api/v2/projects/{pid}",
             json={"runtime_budget_spent_usd": 2.75},
         )
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 2.75
+        # The legacy write is gone — spend stays at the default 0.0.
+        assert resp.json()["budget_spent_usd"] == 0.0
 
-        # Reset via API
-        resp = client.put(
-            f"/api/v2/projects/{pid}",
-            json={"runtime_budget_spent_usd": 0},
-        )
+        # Confirm via GET as well (no persisted runtime accumulator).
+        resp = client.get(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
         assert resp.json()["budget_spent_usd"] == 0.0
 
-    def test_budget_spent_in_project_detail(self, client, workspace):
-        """GET /projects/:id includes budget_spent_usd from runtime."""
+    def test_budget_spent_read_shape_preserved(self, client, workspace):
+        """GET /projects/:id still surfaces budget_spent_usd (tolerated READ of
+        the persisted field for back-compat); it defaults to 0.0 since nothing
+        writes it anymore."""
         pid = _create_project(client, workspace)
-
-        # Set spend via API (PUT runtime_budget_spent_usd)
-        resp = client.put(
-            f"/api/v2/projects/{pid}",
-            json={"runtime_budget_spent_usd": 1.23},
-        )
-        assert resp.status_code == 200
-
         resp = client.get(f"/api/v2/projects/{pid}")
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 1.23
+        assert "budget_spent_usd" in resp.json()
+        assert resp.json()["budget_spent_usd"] == 0.0
 
     def test_new_project_has_zero_spent(self, client, workspace):
         """New project starts with budget_spent_usd=0."""

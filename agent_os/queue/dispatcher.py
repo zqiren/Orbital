@@ -926,6 +926,63 @@ class QueueDispatcher:
                 )
                 return
 
+            # Budget trip (Budget Piece 2). The loop's pre-flight guard tripped
+            # BEFORE spending again and exited with the first-class
+            # ``budget_blocked`` reason. Route it EXPLICITLY — this is the branch
+            # that kills the A2/A3 paid-corrective-turn bug:
+            #   * NO corrective turn (no inject_system_message)
+            #   * NO contract-violation outcome
+            # ``exit_block_reason`` carries the normalized action ("pause" |
+            # "stop"); the loop set it in _trip_budget.
+            #
+            # In BOTH modes the queue goes PAUSED with reason="budget" so the
+            # remaining items don't dispatch and keep burning spend. The
+            # difference is the in-flight item's disposition:
+            #   * pause → item returns to the FRONT of the queue in ``queued``
+            #     state, so work resumes where it stopped after unblock. The
+            #     attempt is closed INTERRUPTED (JSONL stays valid) but
+            #     interrupted_count is NOT bumped — a budget block is not a
+            #     poison-pill interruption, so it must never trip the cap.
+            #   * stop → the item is marked terminal (BLOCKED), never requeued;
+            #     nothing auto-resumes a stop. The session ends via the loop's
+            #     normal graceful exit (the loop already broke out cleanly).
+            if exit_reason == "budget_blocked":
+                action = exit_block_reason or "pause"
+                logger.info(
+                    "dispatcher(%s): item %s budget_blocked (action=%s); "
+                    "no corrective turn, no contract violation; queue→PAUSED"
+                    " reason=budget",
+                    self._project_id, item.id, action,
+                )
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.INTERRUPTED,
+                    block_reason="budget_blocked",
+                )
+                if action == "stop":
+                    # Terminal: mark BLOCKED, do NOT requeue.
+                    self._store.set_item_state(item.id, ItemState.BLOCKED)
+                    self._broadcast_advance(item.id, "blocked")
+                else:
+                    # Pause: return the item to the FRONT of the queue, ready to
+                    # resume after unblock. No interrupted_count bump.
+                    self._store.set_item_state(item.id, ItemState.QUEUED)
+                    self._store.move_to_head(item.id)
+                self._log_attempt_close(
+                    item.id, "budget_blocked",
+                    first_turn_signaled=False,
+                    corrective_used=corrective_turn_used,
+                    reason=action,
+                )
+                # ALWAYS pass reason="budget" explicitly. The store's default is
+                # "user"; an omitted reason on an already-budget-paused queue
+                # would silently flip it to "user" and kill auto-resume.
+                self._store.set_queue_state(
+                    QueueRunState.PAUSED, reason="budget",
+                )
+                self._broadcast_state_changed(QueueRunState.PAUSED.value)
+                return
+
             if exit_reason == "complete":
                 self._store.close_latest_attempt(
                     item.id,

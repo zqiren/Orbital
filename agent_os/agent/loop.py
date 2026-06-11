@@ -24,7 +24,6 @@ from agent_os.agent.providers.types import (
     StreamAccumulator,
     StreamChunk,
     LLMResponse,
-    TokenUsage,
     ContextOverflowError,
     LLMError,
     ErrorCategory,
@@ -51,21 +50,9 @@ _diag_logger = logging.getLogger("agent.diag")
 # audit channel so per-call and per-session lines land together in daemon.log.
 _cache_logger = logging.getLogger("orbital.cache_audit")
 
-# Default cost rates ($/1K tokens) used when no per-model pricing is available.
-_DEFAULT_COST_PER_1K_INPUT = 0.003
-_DEFAULT_COST_PER_1K_OUTPUT = 0.015
-
 # Number of turns between automatic state checkpoints (turn-count trigger).
 # Also used as the global cooldown between ANY two refreshes (except token-pressure).
 COOLDOWN_TURNS = 50
-
-
-def _estimate_cost_usd(usage: TokenUsage,
-                       cost_per_1k_input: float = _DEFAULT_COST_PER_1K_INPUT,
-                       cost_per_1k_output: float = _DEFAULT_COST_PER_1K_OUTPUT) -> float:
-    """Estimate USD cost from token usage."""
-    return (usage.input_tokens / 1000) * cost_per_1k_input + \
-           (usage.output_tokens / 1000) * cost_per_1k_output
 
 
 def normalize_tool_call(tc_raw: dict) -> dict:
@@ -102,12 +89,7 @@ class AgentLoop:
         fallback_providers=None,
         max_iterations: int = 0,
         token_budget: int = 100_000_000,
-        budget_limit_usd: float | None = None,
-        budget_action: str = "ask",
-        budget_spent_usd: float = 0.0,
-        on_cost_update=None,
-        cost_per_1k_input: float = _DEFAULT_COST_PER_1K_INPUT,
-        cost_per_1k_output: float = _DEFAULT_COST_PER_1K_OUTPUT,
+        get_budget_config=None,
         on_session_end=None,
         on_session_end_refresh=None,
         project_dir: str | None = None,
@@ -120,17 +102,20 @@ class AgentLoop:
         self._utility_provider = utility_provider
         self._fallback_providers = fallback_providers or []
         self._max_iterations = max_iterations
+        # PURE token safety-net cap (NOT budget-derived). Budget Piece 2 cut the
+        # dollar→token derivation that used to feed this; the gate now only
+        # protects against a runaway non-terminating loop. The single
+        # dollar-budget enforcement point is the pre-flight guard (below).
         self._token_budget = token_budget
-        self._budget_limit_usd = budget_limit_usd
-        self._budget_action = budget_action
-        self._budget_spent_usd = budget_spent_usd
-        self._on_cost_update = on_cost_update
-        self._cost_per_1k_input = cost_per_1k_input
-        self._cost_per_1k_output = cost_per_1k_output
+        # LIVE budget config resolver (Budget Piece 2). A zero-arg callable
+        # returning the CURRENT project budget config dict (or None). Resolved
+        # fresh on EVERY guard evaluation — never snapshotted (the B5 fix). When
+        # None, the pre-flight guard is a no-op (e.g. lightweight test loops).
+        self._get_budget_config = get_budget_config
         # Per-project token ledger root: the workspace, resolved to
         # {workspace}/orbital/ledger/usage.jsonl via ProjectPaths. When None,
-        # ledger emission is skipped (loop runs unchanged). The legacy
-        # on_cost_update / budget_spent_usd path is independent of this.
+        # ledger emission is skipped (loop runs unchanged). Also the project_dir
+        # the pre-flight guard reads the ledger spend from.
         self._project_dir = project_dir
         self._running = False
         self._llm_failed = False
@@ -181,15 +166,14 @@ class AgentLoop:
         """Return how the last run ended: (exit_reason, summary, block_reason).
 
         ``exit_reason`` is one of ``complete`` | ``blocked`` | ``cancelled`` |
-        ``text`` (text-only — no completion tool called). The queue dispatcher
-        reads this after each run to route the item; this accessor formalizes
-        what was previously a raw read of the private ``_exit_*`` attributes.
+        ``budget_blocked`` | ``text`` (text-only — no completion tool called).
+        ``budget_blocked`` (Budget Piece 2) is a first-class exit distinct from
+        the others: the pre-flight budget guard tripped, so the loop stopped
+        BEFORE spending again. The queue dispatcher routes it explicitly (no
+        corrective turn, no contract violation). This accessor formalizes what
+        was previously a raw read of the private ``_exit_*`` attributes.
         """
         return (self._exit_reason, self._exit_summary, self._exit_block_reason)
-
-    @property
-    def budget_spent_usd(self) -> float:
-        return self._budget_spent_usd
 
     # ------------------------------------------------------------------
     # Diagnostics (permanent, always-on; see TASK-loop-diagnostic-instrumentation)
@@ -221,6 +205,66 @@ class AgentLoop:
         """Record the named loop-exit/continue path taken this iteration."""
         self._loop_exit_path = name
         self._diag("loop_exit", iteration=iteration, exit=name)
+
+    def _budget_tripped(self):
+        """Evaluate the pre-flight budget guard. Returns a tripped
+        ``BudgetDecision`` (truthy → trip) or None.
+
+        THE single dollar-budget enforcement point lives in
+        ``agent_os/budget/guard.py``; this method only WIRES it into the loop's
+        between-LLM-call chokepoint with LIVE config (resolved on every call via
+        ``self._get_budget_config`` — never a session-start snapshot). No-op when
+        no resolver or no ledger root was plumbed.
+
+        Convertibility: if some spend can't be converted to the limit's currency
+        (unknown FX pair), the convertible total is the spend (see the guard
+        module docstring). Spend-QUERY failures (ledger I/O) fail OPEN in the
+        guard with a logged warning; a malformed spend() return is a contract
+        bug and RAISES out of the guard (deliberately loud — never silently
+        masked as $0).
+        """
+        if self._get_budget_config is None or self._project_dir is None:
+            return None
+        try:
+            cfg = self._get_budget_config()
+        except Exception:  # noqa: BLE001 — a config read must not crash the loop
+            logger.warning("budget config resolver raised; skipping guard",
+                           exc_info=True)
+            return None
+        from agent_os.budget.guard import evaluate_budget
+        fx_rates = (cfg or {}).get("fx_rates") if isinstance(cfg, dict) else None
+        decision = evaluate_budget(
+            self._project_dir, cfg, fx_rates=fx_rates,
+        )
+        return decision if decision.tripped else None
+
+    def _trip_budget(self, decision, iteration: int) -> None:
+        """Record a budget trip: set the first-class ``budget_blocked`` exit
+        reason and append a structured timeline event (codes/numbers only).
+
+        Uses the session's typed-event affordance (a structured ``append`` row
+        with ``source="budget"`` + a ``payload`` dict) — the same shape the
+        queue signals use — NOT an English ``append_system`` sentence, per the
+        i18n rule (no display strings; the client renders the message). The
+        ``budget_action`` ("pause" | "stop") is normalized by the guard. It is
+        carried on ``_exit_block_reason`` so the dispatcher can route pause vs
+        stop without re-reading config (``get_completion_state`` surfaces it).
+        """
+        self._exit_reason = "budget_blocked"
+        self._exit_block_reason = decision.action
+        self._session.append({
+            "role": "system",
+            "source": "budget",
+            "event": "budget_blocked",
+            "payload": {
+                "action": decision.action,
+                "window": decision.window,
+                "spend": decision.spend,
+                "limit": decision.limit,
+                "currency": decision.currency,
+            },
+        })
+        self._note_exit("budget_blocked", iteration)
 
     def _emit_ledger_event(self, active_provider, usage) -> None:
         """Append one token-ledger event for a management LLM response.
@@ -435,12 +479,25 @@ class AgentLoop:
                     self._note_exit("max_iter", iteration)
                     break
 
-                # Check token budget
+                # Check token budget (PURE non-budget safety-net cap — the
+                # dollar→token derivation was cut in Budget Piece 2).
                 if cumulative_tokens >= self._token_budget:
                     self._session.append_system(
                         "Token budget exceeded. Save your current state and stop."
                     )
                     self._note_exit("token_budget", iteration)
+                    break
+
+                # --- Pre-flight budget guard (Budget Piece 2) ---------------
+                # THE single dollar-budget enforcement point. Evaluated BETWEEN
+                # LLM calls (here at the top of every tool-loop iteration), with
+                # LIVE config. On a trip the loop exits with the first-class
+                # ``budget_blocked`` reason; the dispatcher routes it explicitly.
+                # Sits before the LLM stream so a tripped budget spends nothing
+                # more. Never interrupts an in-flight tool execution.
+                _budget_decision = self._budget_tripped()
+                if _budget_decision is not None:
+                    self._trip_budget(_budget_decision, iteration)
                     break
 
                 iteration += 1
@@ -639,38 +696,13 @@ class AgentLoop:
                 # per management LLM response. Attribution uses `active_provider`
                 # — the post-rotation provider that ACTUALLY served THIS response
                 # (re-read at the top of every iteration from _all_providers[
-                # _current_idx]) — never the project's configured model. Wholly
-                # additive to and independent of the legacy budget path below;
-                # a failure here cannot alter loop behavior (guarded twice).
+                # _current_idx]) — never the project's configured model. The
+                # ledger is the SINGLE source of recorded spend; the pre-flight
+                # guard reads it. Budget Piece 2 deleted the legacy in-loop cost
+                # accumulator (_budget_spent_usd / on_cost_update / _estimate_cost_usd)
+                # and the post-hoc dollar pause/stop branch that used to live here.
                 if response.usage:
                     self._emit_ledger_event(active_provider, response.usage)
-
-                # Budget tracking (always active for spend persistence)
-                if response.usage:
-                    delta = _estimate_cost_usd(
-                        response.usage, self._cost_per_1k_input, self._cost_per_1k_output,
-                    )
-                    self._budget_spent_usd += delta
-                    if self._on_cost_update is not None:
-                        self._on_cost_update(delta, self._budget_spent_usd)
-                    # Per-project budget limit check
-                    if (self._budget_limit_usd is not None
-                            and self._budget_spent_usd >= self._budget_limit_usd):
-                        if self._budget_action == "stop":
-                            self._session.append_system(
-                                f"Budget limit exceeded (${self._budget_spent_usd:.2f} / "
-                                f"${self._budget_limit_usd:.2f}). Stopping."
-                            )
-                            self._note_exit("budget_stop", iteration)
-                            break
-                        else:  # "ask" — pause for user approval
-                            self._session.append_system(
-                                f"Budget limit exceeded (${self._budget_spent_usd:.2f} / "
-                                f"${self._budget_limit_usd:.2f}). Pausing for approval."
-                            )
-                            self._session.pause()
-                            self._note_exit("budget_pause", iteration)
-                            break
 
                 # Text-only response: append and exit
                 if not response.has_tool_calls:
@@ -1029,6 +1061,18 @@ class AgentLoop:
                 if self._context_manager.should_compact():
                     from agent_os.agent import compaction as compaction_mod
 
+                    # Pre-flight budget guard (Budget Piece 2): the
+                    # pre-compaction flush is a real management-LLM call that
+                    # spends. Evaluate the SAME single guard before it fires so a
+                    # tripped budget stops here rather than buying one more flush
+                    # response. On trip, exit with ``budget_blocked`` without
+                    # compacting (compaction is a no-spend local op, but the loop
+                    # is ending anyway — the next resume re-evaluates).
+                    _flush_budget = self._budget_tripped()
+                    if _flush_budget is not None:
+                        self._trip_budget(_flush_budget, iteration)
+                        break
+
                     # Token-pressure trigger: fire refresh BEFORE compaction.
                     # Exempt from cooldown — data preservation trumps redundancy.
                     if self._on_session_end_refresh is not None:
@@ -1302,18 +1346,9 @@ class AgentLoop:
             self._turn_cancelled = True
             return
 
-        # Claim the inflight task and capture the accumulator BEFORE any
-        # await. Defensive: under the current break-on-cancel design the
-        # loop exits its while body once the CancelledError handler runs,
-        # so _stream_accumulator is no longer reassigned during the
-        # wait_for below. The historical T04 C1 race (continue-based
-        # design → iteration N+1 reassigned the accumulator mid-await) is
-        # closed by the loop semantics; we keep the local ref as a
-        # no-cost safety net in case a future change reintroduces
-        # concurrent accumulator writes.
+        # Claim the inflight task BEFORE any await.
         inflight = self._inflight_stream
         self._inflight_stream = None
-        accumulator = self._stream_accumulator
 
         # Mark cancelled FIRST so any concurrent loop work observes it,
         # then mark "marker pending for this turn" to make further
@@ -1335,10 +1370,12 @@ class AgentLoop:
             pass
         except Exception:
             logger.exception("inflight stream raised during cancel_turn")
-
-        # Debit cost using the captured accumulator (see the defensive-
-        # capture rationale above).
-        self._debit_cancelled_turn_cost(accumulator)
+        # Budget Piece 2: the legacy partial-output cost debit
+        # (_debit_cancelled_turn_cost → _budget_spent_usd / on_cost_update) was
+        # deleted. The token ledger is the single source of recorded spend and
+        # records whole responses; partial cancelled-stream tokens are not
+        # ledgered (the provider's final usage chunk never arrived), which is
+        # acceptable — the next guard evaluation reads the ledger total.
 
     async def terminate(self) -> None:
         """End the loop. Cancels current turn and exits the while True.
@@ -1397,47 +1434,3 @@ class AgentLoop:
             "source": "management",
             "cancelled_by_user": True,
         })
-
-    def _debit_cancelled_turn_cost(self, accumulator=None) -> None:
-        """Debit the cost of partial output tokens generated before cancel.
-
-        Reads the streaming accumulator's collected usage (or estimates
-        from text_parts when usage is unavailable). Mirrors the normal
-        cost path used after a successful turn (the on_cost_update
-        callback at loop.py:103). Full debit per Moonshot's billing
-        policy: tokens generated are billed even if undelivered.
-
-        Takes the accumulator as an explicit parameter so callers can pass
-        in a reference captured BEFORE any awaits. Under the current
-        break-on-cancel loop design no in-loop code reassigns
-        _stream_accumulator after the CancelledError handler fires, so
-        the historical T04 C1 race is closed by semantics; the explicit
-        parameter is retained as a no-cost safety net. If no accumulator
-        is supplied (legacy call sites) we fall back to
-        self._stream_accumulator.
-        """
-        if accumulator is None:
-            accumulator = self._stream_accumulator
-        if accumulator is None:
-            return
-
-        # Prefer the usage emitted by the provider's final/usage chunk.
-        usage = accumulator.usage
-        if usage is None:
-            # No final-usage chunk arrived (we cancelled before it). Fall
-            # back to a rough output-token estimate from the partial text.
-            partial_text = "".join(accumulator.text_parts)
-            output_tokens = max(1, len(partial_text) // 4) if partial_text else 0
-            if output_tokens == 0:
-                return
-            usage = TokenUsage(input_tokens=0, output_tokens=output_tokens)
-
-        delta = _estimate_cost_usd(
-            usage, self._cost_per_1k_input, self._cost_per_1k_output,
-        )
-        self._budget_spent_usd += delta
-        if self._on_cost_update is not None:
-            try:
-                self._on_cost_update(delta, self._budget_spent_usd)
-            except Exception:
-                logger.exception("on_cost_update callback raised during cancel")

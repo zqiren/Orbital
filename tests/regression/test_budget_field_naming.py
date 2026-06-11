@@ -5,9 +5,11 @@
 """Regression: budget field naming and wiring.
 
 Covers:
-- budget_spent_usd vs runtime_budget_spent_usd alignment (PUT accepts both)
+- the legacy budget_spent_usd / runtime_budget_spent_usd PUT fields are now
+  INERT (Budget Piece 2 deleted the spend-write); they are accepted but do not
+  persist a dollar value
 - budget_limit_usd accepted on POST /api/v2/projects (creation)
-- GET returns both budget_spent_usd and budget_limit_usd
+- GET returns both budget_spent_usd (always 0.0 now) and budget_limit_usd
 """
 
 import pytest
@@ -41,35 +43,38 @@ def _create_project(client, workspace):
 
 
 class TestBudgetFieldNaming:
-    """Both field names work for setting budget spend."""
+    """Budget Piece 2: the legacy spend-write PUT fields are accepted but INERT
+    — they no longer persist a dollar accumulator (the ledger owns spend)."""
 
-    def test_runtime_budget_spent_usd_still_works(self, client, workspace):
-        """Original 'runtime_budget_spent_usd' field continues to work."""
+    def test_runtime_budget_spent_usd_is_inert(self, client, workspace):
+        """'runtime_budget_spent_usd' is accepted (200) but does not persist a
+        dollar value — spend stays 0.0 (the legacy write is gone)."""
         pid = _create_project(client, workspace)
         resp = client.put(f"/api/v2/projects/{pid}", json={
             "runtime_budget_spent_usd": 3.50,
         })
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 3.50
+        assert resp.json()["budget_spent_usd"] == 0.0
 
-    def test_budget_spent_usd_alias_works(self, client, workspace):
-        """New 'budget_spent_usd' alias also works for PUT."""
+    def test_budget_spent_usd_alias_is_inert(self, client, workspace):
+        """The 'budget_spent_usd' alias is likewise accepted but inert."""
         pid = _create_project(client, workspace)
         resp = client.put(f"/api/v2/projects/{pid}", json={
             "budget_spent_usd": 2.25,
         })
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 2.25
+        assert resp.json()["budget_spent_usd"] == 0.0
 
-    def test_runtime_takes_precedence(self, client, workspace):
-        """If both fields sent, runtime_budget_spent_usd takes precedence."""
+    def test_both_fields_together_still_inert(self, client, workspace):
+        """Sending both legacy fields is accepted without error and persists
+        nothing (no dollar accumulator)."""
         pid = _create_project(client, workspace)
         resp = client.put(f"/api/v2/projects/{pid}", json={
             "runtime_budget_spent_usd": 5.00,
             "budget_spent_usd": 1.00,
         })
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_usd"] == 5.00
+        assert resp.json()["budget_spent_usd"] == 0.0
 
 
 class TestBudgetLimitOnCreate:

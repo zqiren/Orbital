@@ -393,6 +393,13 @@ def _redact_project(project: dict) -> dict:
     prefs = result.get("notification_prefs", {})
     result["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
     result["is_empty_workspace"] = _workspace_is_empty(result.get("workspace", ""))
+    # Budget Piece 2 migration at the READ point: a legacy project that still
+    # persists budget_action="ask" (and was never re-saved) surfaces as the
+    # migrated "pause" in every GET response. Only normalize when the key is
+    # present so we never inject a default onto a project that never set one.
+    if "budget_action" in result:
+        from agent_os.budget.guard import normalize_budget_action
+        result["budget_action"] = normalize_budget_action(result["budget_action"])
     return result
 
 
@@ -491,7 +498,10 @@ async def create_project(req: CreateProjectRequest):
     if req.budget_limit_usd is not None:
         project_data["budget_limit_usd"] = req.budget_limit_usd
     if req.budget_action is not None:
-        project_data["budget_action"] = req.budget_action
+        # Budget Piece 2 migration: normalize on SAVE so persisted configs
+        # converge ("ask"→"pause", unknown→"pause", "stop" stays).
+        from agent_os.budget.guard import normalize_budget_action
+        project_data["budget_action"] = normalize_budget_action(req.budget_action)
     if req.budget_period is not None:
         project_data["budget_period"] = req.budget_period
     # The limit owns its currency. If a limit is set at creation and no explicit
@@ -562,14 +572,24 @@ async def update_project(project_id: str, body: ProjectUpdate):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    # Handle runtime budget spend reset separately (not a regular config field)
-    # Accept both field names for compatibility
-    runtime_budget_reset = updates.pop("runtime_budget_spent_usd", None)
-    budget_spent_alias = updates.pop("budget_spent_usd", None)
-    if runtime_budget_reset is None and budget_spent_alias is not None:
-        runtime_budget_reset = budget_spent_alias
-    if runtime_budget_reset is not None:
-        _project_store.update_runtime(project_id, {"budget_spent_usd": runtime_budget_reset})
+    # Budget Piece 2: the legacy ``budget_spent_usd`` runtime accumulator is
+    # GONE — the token ledger is now the single source of recorded spend and
+    # nothing writes ``runtime.budget_spent_usd`` anymore. We still POP the
+    # request fields so they don't fall through to ``update_project`` as config,
+    # but the legacy reset WRITE is deleted.
+    #
+    # SEAM for P2-D: the "reset spend" endpoint is repurposed to reset the
+    # ledger spend WINDOW (set ``budget_anchor_ts`` to now), not to zero a
+    # persisted dollar counter. That behavior change is P2-D's task; here we
+    # only retire the legacy write.
+    updates.pop("runtime_budget_spent_usd", None)
+    updates.pop("budget_spent_usd", None)
+
+    # Budget Piece 2 migration: normalize budget_action on SAVE so persisted
+    # configs converge ("ask"→"pause", unknown→"pause", "stop" stays).
+    if "budget_action" in updates:
+        from agent_os.budget.guard import normalize_budget_action
+        updates["budget_action"] = normalize_budget_action(updates["budget_action"])
 
     # --- Budget Piece 1, Task 4: derived-cost window config ---
     # "reset spend window" = set budget_anchor_ts to now (used only by the

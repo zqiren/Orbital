@@ -643,24 +643,33 @@ class AgentManager:
                 )
                 raise
 
-        # 11b. Budget persistence callback
-        from agent_os.agent.pricing import get_cost_rates, budget_usd_to_token_budget
-        cost_per_1k_input, cost_per_1k_output = get_cost_rates(
-            config.model, config.provider,
-        )
-        persisted_spend = (
-            self._project_store.get_project(project_id) or {}
-        ).get("runtime", {}).get("budget_spent_usd", 0.0)
-
-        # Derive token budget from dollar budget when set
-        effective_token_budget = budget_usd_to_token_budget(
-            config.budget_limit_usd, cost_per_1k_input, cost_per_1k_output,
-        )
-
-        def on_cost_update(delta_usd, total_spent_usd):
-            self._project_store.update_runtime(
-                project_id, {"budget_spent_usd": round(total_spent_usd, 6)},
-            )
+        # 11b. LIVE budget config resolver (Budget Piece 2).
+        #
+        # The loop's pre-flight guard reads the project's budget settings FRESH
+        # on every evaluation through this callable — never a session-start
+        # snapshot (the B5 fix: a limit raised mid-session takes effect on the
+        # next guard tick without a restart). It returns the CURRENT project
+        # config's budget fields plus the daemon-level fx_rates from settings.
+        # Budget Piece 2 deleted the legacy dollar-cost accumulator
+        # (budget_spent_usd / on_cost_update / cost_per_1k_* / the dollar→token
+        # derivation) — the token ledger is now the single source of recorded
+        # spend, and this guard is the single dollar-budget enforcement point.
+        def get_budget_config() -> dict:
+            project = self._project_store.get_project(project_id) or {}
+            fx_rates: dict = {}
+            if self._settings_store is not None:
+                try:
+                    fx_rates = dict(self._settings_store.get().fx_rates or {})
+                except Exception:  # noqa: BLE001 — a bad read must not crash the loop
+                    fx_rates = {}
+            return {
+                "budget_limit_usd": project.get("budget_limit_usd"),
+                "budget_action": project.get("budget_action"),
+                "budget_period": project.get("budget_period", "daily"),
+                "budget_currency": project.get("budget_currency"),
+                "budget_anchor_ts": project.get("budget_anchor_ts"),
+                "fx_rates": fx_rates,
+            }
 
         # 12. Loop
         loop = AgentLoop(
@@ -668,17 +677,16 @@ class AgentManager:
             utility_provider=utility_provider,
             fallback_providers=fallback_providers,
             max_iterations=config.max_iterations,
-            token_budget=effective_token_budget,
-            budget_limit_usd=config.budget_limit_usd,
-            budget_action=config.budget_action,
-            budget_spent_usd=persisted_spend,
-            on_cost_update=on_cost_update,
-            cost_per_1k_input=cost_per_1k_input,
-            cost_per_1k_output=cost_per_1k_output,
+            # PURE token safety-net cap (NOT budget-derived; the dollar→token
+            # path was deleted in Piece 2). config.token_budget defaults to the
+            # 100M safety net.
+            token_budget=config.token_budget,
+            get_budget_config=get_budget_config,
             on_session_end=session_end_callback,
             on_session_end_refresh=session_end_refresh_callback,
             # Per-project token ledger root: resolved by ProjectPaths to
-            # {workspace}/orbital/ledger/usage.jsonl.
+            # {workspace}/orbital/ledger/usage.jsonl. Also the dir the
+            # pre-flight guard reads ledger spend from.
             project_dir=config.workspace,
         )
 

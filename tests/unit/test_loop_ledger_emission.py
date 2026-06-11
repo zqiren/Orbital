@@ -7,8 +7,8 @@ LLM response (Budget Piece 1, Task 2).
 
 These exercise the *real* loop code path (AgentLoop.run) against a mock
 provider, writing a real ledger file under a tmp project_dir, then read the
-JSONL back. They also assert the legacy on_cost_update path stays intact in
-parallel (additive change).
+JSONL back. Budget Piece 2 deleted the legacy on_cost_update / budget_spent_usd
+accumulator — the ledger is now the SOLE spend record, which these pin.
 """
 
 import json
@@ -133,9 +133,10 @@ async def test_one_ledger_line_per_response(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_legacy_cost_path_stays_intact(tmp_path):
-    """The on_cost_update / budget_spent_usd path fires unchanged in parallel
-    with ledger emission (additive)."""
+async def test_ledger_is_the_sole_spend_record(tmp_path):
+    """Budget Piece 2: the legacy on_cost_update / budget_spent_usd accumulator
+    is GONE. The token ledger is the SOLE spend record — one line per response,
+    and the loop carries no dollar-accumulator attribute or constructor param."""
     session = Session.new("led_cost", str(tmp_path))
     provider = TextProvider("moonshot", "kimi-k2.5", "openai",
                             input_tokens=1000, output_tokens=500)
@@ -144,25 +145,27 @@ async def test_legacy_cost_path_stays_intact(tmp_path):
     context_mgr = ContextManager(session, builder, ctx)
     registry = SimpleToolRegistry()
 
-    cost_calls = []
-
-    def on_cost_update(delta, total):
-        cost_calls.append((delta, total))
+    # The deleted legacy params no longer exist.
+    with pytest.raises(TypeError):
+        AgentLoop(
+            session, provider, registry, context_mgr,
+            project_dir=str(tmp_path),
+            on_cost_update=lambda d, t: None,
+            max_iterations=5,
+        )
 
     loop = AgentLoop(
         session, provider, registry, context_mgr,
         project_dir=str(tmp_path),
-        budget_limit_usd=100.0,
-        on_cost_update=on_cost_update,
         max_iterations=5,
     )
     await loop.run(initial_message="hi")
 
-    # Legacy path fired and accumulated spend.
-    assert len(cost_calls) == 1
-    assert loop._budget_spent_usd > 0
-    # Ledger also wrote its line.
+    # The ledger is the sole spend record: exactly one line written.
     assert len(_read_ledger(str(tmp_path))) == 1
+    # No dollar-accumulator attribute on the loop.
+    assert not hasattr(loop, "_budget_spent_usd")
+    assert not hasattr(loop, "_on_cost_update")
 
 
 @pytest.mark.asyncio
@@ -187,8 +190,9 @@ async def test_no_project_dir_no_ledger_no_crash(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ledger_append_failure_does_not_break_loop(tmp_path, monkeypatch):
-    """If the ledger append itself raises, the loop must still complete and the
-    legacy cost path must still fire (resilience contract)."""
+    """If the ledger append itself raises, the loop must still complete
+    normally (resilience contract). The legacy cost path is gone — the ledger is
+    the only spend writer, and its failure is swallowed."""
     session = Session.new("led_resilient", str(tmp_path))
     provider = TextProvider("moonshot", "kimi-k2.5", "openai",
                             input_tokens=100, output_tokens=50)
@@ -205,18 +209,14 @@ async def test_ledger_append_failure_does_not_break_loop(tmp_path, monkeypatch):
     # Patch the symbol the loop actually calls.
     monkeypatch.setattr(loop_mod, "append_event", boom)
 
-    cost_calls = []
     loop = AgentLoop(
         session, provider, registry, context_mgr,
         project_dir=str(tmp_path),
-        budget_limit_usd=100.0,
-        on_cost_update=lambda d, t: cost_calls.append((d, t)),
         max_iterations=5,
     )
     # Must not raise even though append_event blows up.
     await loop.run(initial_message="hi")
 
-    assert len(cost_calls) == 1
     assert any(m.get("role") == "assistant" for m in session.get_messages())
 
 

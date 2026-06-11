@@ -24,7 +24,6 @@ from agent_os.agent.pricing import (
     ResolvedRates,
     resolve_rates,
     get_cost_rates,
-    budget_usd_to_token_budget,
 )
 
 
@@ -438,8 +437,11 @@ class TestMtimeInvalidation:
 # ---------------------------------------------------------------------------
 
 class TestLegacyFunctionsUnchanged:
-    """Verify get_cost_rates and budget_usd_to_token_budget produce byte-identical
-    outputs to what they produced before this change."""
+    """Verify get_cost_rates produces byte-identical outputs to before.
+
+    (``budget_usd_to_token_budget`` was deleted in Budget Piece 2 — the
+    dollar→token derivation was a second budget-blocking path; the byte-identity
+    tests for it were removed with the function.)"""
 
     def test_get_cost_rates_anthropic_sonnet(self):
         """Anthropic sonnet pricing unchanged."""
@@ -470,18 +472,6 @@ class TestLegacyFunctionsUnchanged:
         ci, co = get_cost_rates("some-model", "nonexistent_provider")
         assert ci == pytest.approx(3.0 / 1000)
         assert co == pytest.approx(15.0 / 1000)
-
-    def test_budget_usd_to_token_budget_unchanged(self):
-        """budget_usd_to_token_budget produces same output."""
-        result = budget_usd_to_token_budget(5.0, 0.003, 0.015)
-        # Exact formula: 5.0 / (0.85 * 0.003 + 0.15 * 0.015) * 1000
-        # = 5.0 / 0.00480 * 1000 = 1_041_666
-        assert result == 1_041_666
-
-    def test_budget_usd_none_returns_safety_net(self):
-        """None budget still returns 100M token safety net."""
-        result = budget_usd_to_token_budget(None, 0.003, 0.015)
-        assert result == 100_000_000
 
 
 # ---------------------------------------------------------------------------

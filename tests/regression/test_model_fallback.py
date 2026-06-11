@@ -107,6 +107,10 @@ class SuccessProvider:
 
     def __init__(self, model: str):
         self.model = model
+        # Identity attrs so the token ledger can attribute the response
+        # (Budget Piece 1/2: emission normalizes via ProviderSemantics.from_sdk).
+        self.sdk = "openai"
+        self.provider = "custom"
         self._call_count = 0
 
     async def stream(self, messages, tools=None):
@@ -358,14 +362,21 @@ class TestFallbackRotation:
 
     @pytest.mark.asyncio
     async def test_fallback_cost_tracking(self, tmp_path):
-        """Cost tracking accumulates regardless of which provider responds."""
+        """Spend is recorded in the token LEDGER regardless of which provider
+        responds. Budget Piece 2 replaced the in-loop dollar accumulator with
+        the ledger; this pins that a fallback response still produces a ledger
+        line (attributed to the provider that served it)."""
+        import json
+        import os
+        from agent_os.budget.ledger import ledger_path
+
         session = Session.new("fb_cost", str(tmp_path))
 
         primary = AlwaysErrorProvider(
             "primary-model",
             LLMError("service unavailable", status_code=503),
         )
-        # Fallback returns 1000 input + 500 output tokens
+        # Fallback returns a successful response with usage.
         fallback = SuccessProvider("fallback-model")
 
         builder = MockPromptBuilder()
@@ -376,13 +387,19 @@ class TestFallbackRotation:
         loop = AgentLoop(
             session, primary, registry, context_mgr,
             fallback_providers=[fallback],
-            budget_limit_usd=100.0,
+            project_dir=str(tmp_path),
             max_iterations=10,
         )
         await loop.run(initial_message="hello")
 
-        # Cost should be > 0 (tracked from fallback's response)
-        assert loop._budget_spent_usd > 0
+        # The ledger captured the fallback's response (spend is recorded there
+        # now, not in a loop-local dollar accumulator).
+        path = ledger_path(str(tmp_path))
+        assert os.path.exists(path)
+        with open(path, "r", encoding="utf-8") as f:
+            events = [json.loads(line) for line in f if line.strip()]
+        assert len(events) >= 1
+        assert events[-1]["model"] == "fallback-model"
 
 
 # ---------------------------------------------------------------------------

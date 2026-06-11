@@ -195,10 +195,13 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
     """cancel_turn() called while LLM is streaming:
     - cancels the inflight task
     - persists a cancellation marker in the JSONL
-    - debits the partial output_tokens via the cost callback
     - clears _inflight_stream
     - the loop EXITS (break-on-cancel design). _on_loop_done is the
       authoritative re-entry point for queued messages / hot resume.
+
+    (Budget Piece 2 retired the partial-output cost debit on cancel — the
+    dollar accumulator is gone; the ledger records whole responses only. So
+    this no longer asserts a cost callback.)
     """
     session = _make_session(tmp_path, session_id="s_partial")
     provider = _StreamingProvider(
@@ -211,17 +214,11 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
         hang_after_chunks=True,
     )
 
-    cost_calls: list[tuple[float, float]] = []
-
-    def on_cost(delta, total):
-        cost_calls.append((delta, total))
-
     loop_obj = AgentLoop(
         session=session,
         provider=provider,
         tool_registry=_FakeRegistry(),
         context_manager=_FakeContextManager(session),
-        on_cost_update=on_cost,
     )
 
     # Start the loop. It enters the streaming wait state.
@@ -245,15 +242,6 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
         assert len(markers) == 1, (
             f"Expected exactly 1 cancellation marker, got {len(markers)}: "
             f"{[m.get('content') for m in msgs]}"
-        )
-
-        # Cost was debited for the partial output tokens
-        assert len(cost_calls) >= 1, (
-            f"Expected cost callback to fire on cancel, got {cost_calls}"
-        )
-        delta, total = cost_calls[-1]
-        assert delta > 0, (
-            f"Expected positive cost debit on cancel, got delta={delta}"
         )
 
         # Break-on-cancel: run() must exit (does NOT re-enter the while
@@ -608,7 +596,9 @@ async def test_double_cancel_idempotent(tmp_path):
     """Calling cancel_turn() twice in rapid succession must:
     - not raise
     - append exactly one marker
-    - debit cost exactly once
+
+    (Budget Piece 2 retired the per-cancel cost debit, so the "debit exactly
+    once" assertion is gone — marker idempotency is the load-bearing claim.)
     """
     session = _make_session(tmp_path, session_id="s_double")
     provider = _StreamingProvider(
@@ -616,17 +606,12 @@ async def test_double_cancel_idempotent(tmp_path):
                              usage=TokenUsage(input_tokens=10, output_tokens=3))],
         hang_after_chunks=True,
     )
-    cost_calls: list[tuple[float, float]] = []
-
-    def on_cost(delta, total):
-        cost_calls.append((delta, total))
 
     loop_obj = AgentLoop(
         session=session,
         provider=provider,
         tool_registry=_FakeRegistry(),
         context_manager=_FakeContextManager(session),
-        on_cost_update=on_cost,
     )
 
     run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
@@ -640,10 +625,6 @@ async def test_double_cancel_idempotent(tmp_path):
         markers = [m for m in msgs if m.get("cancelled_by_user") is True]
         assert len(markers) == 1, (
             f"Double cancel must yield exactly 1 marker, got {len(markers)}"
-        )
-        # Cost callback fired exactly once for the cancellation
-        assert len(cost_calls) == 1, (
-            f"Double cancel must debit exactly once, got {len(cost_calls)}"
         )
     finally:
         await loop_obj.terminate()
