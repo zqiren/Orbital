@@ -38,7 +38,7 @@ mocked/null providers, not the sandbox account).
 ### 2. TypeScript Check (for frontend changes)
 
 ```bash
-cd web && npx tsc --noEmit
+cd web && npx tsc -b
 ```
 
 Must produce zero errors.
@@ -228,7 +228,7 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
 3. **Verify clean build from cold state** (catches `.tsbuildinfo`-cached failures like the v0.5.1 regression):
    ```bash
    rm -rf web/node_modules web/dist web/.tsbuildinfo
-   cd web && npm ci && npx tsc --noEmit && npm run build && cd ..
+   cd web && npm ci && npx tsc -b && npm run build && cd ..
    python -m pytest tests/unit/ -q
    ```
    All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
@@ -402,7 +402,7 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
 3. **Verify clean build from cold state** (catches `.tsbuildinfo`-cached failures like the v0.5.1 regression):
    ```bash
    rm -rf web/node_modules web/dist web/.tsbuildinfo
-   cd web && npm ci && npx tsc --noEmit && npm run build && cd ..
+   cd web && npm ci && npx tsc -b && npm run build && cd ..
    python -m pytest tests/unit/ -q
    ```
    All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
