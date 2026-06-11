@@ -111,13 +111,18 @@ def _write_event(workspace: str, record: dict) -> None:
 
 
 def _evt(ts="2026-06-10T12:00:00+00:00", provider="anthropic", model="claude-x",
-         source="management", uncached=0, output=0):
-    return {
+         source="management", uncached=0, output=0, reported_cost=None,
+         reported_cost_currency=None):
+    rec = {
         "ts": ts, "session_id": "s", "source": source,
         "provider": provider, "model": model,
         "uncached_input": uncached, "cache_read": 0,
         "cache_write": 0, "output": output,
     }
+    if reported_cost is not None:
+        rec["reported_cost"] = reported_cost
+        rec["reported_cost_currency"] = reported_cost_currency
+    return rec
 
 
 def _new_project(store, tmp_path, **extra):
@@ -155,6 +160,9 @@ class TestCostRoute:
         assert body["converted_total"]["estimated"] is True
         assert body["converted_total"]["amount"] == pytest.approx(16.666667, abs=1e-5)
         assert len(body["breakdown"]) == 2
+        # P3-B reshape: with no sub-agent rows planted, the new top-level
+        # subagents block is present and empty — management numbers unchanged.
+        assert body["subagents"] == []
 
     def test_window_defaults_to_project_budget_period(self, store, tmp_path,
                                                       make_client, override_file):
@@ -201,6 +209,79 @@ class TestCostRoute:
         client.get(f"/api/v2/projects/{pid}/cost")
         after = json.dumps(store.get_project(pid), sort_keys=True, default=str)
         assert before == after
+
+
+# ---------------------------------------------------------------------------
+# GET /cost — the P3-B subagents block reshape
+# ---------------------------------------------------------------------------
+
+class TestCostRouteSubagents:
+    """Sub-agent rows move OUT of the management breakdown/by_currency/
+    converted_total and INTO a separate top-level ``subagents`` list, carrying
+    the provider-reported cost verbatim (or null)."""
+
+    def test_subagent_rows_excluded_from_management_block(self, store, tmp_path,
+                                                          make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        # One management row ($15) + two sub-agent rows that must NOT pollute
+        # the management block.
+        _write_event(ws, _evt(output=1_000_000))  # management $15
+        _write_event(ws, _evt(source="subagent:claude-code", output=2_000_000,
+                              reported_cost=0.42, reported_cost_currency="USD"))
+        _write_event(ws, _evt(source="subagent:codex", output=3_000_000))
+        client = make_client(store)
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+
+        # Management block is management-only: $15, one breakdown row.
+        assert body["by_currency"] == {"USD": pytest.approx(15.0)}
+        assert body["converted_total"]["amount"] == pytest.approx(15.0)
+        assert len(body["breakdown"]) == 1
+        assert body["breakdown"][0]["source"] == "management"
+
+        # Sub-agents live in their own block, one entry per (provider,model,source).
+        subs = {s["source"]: s for s in body["subagents"]}
+        assert set(subs) == {"subagent:claude-code", "subagent:codex"}
+        assert subs["subagent:claude-code"]["tokens"]["output"] == 2_000_000
+        assert subs["subagent:codex"]["tokens"]["output"] == 3_000_000
+
+    def test_reported_cost_surfaced_verbatim_with_currency(self, store, tmp_path,
+                                                           make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        _write_event(ws, _evt(source="subagent:claude-code", output=2_000_000,
+                              reported_cost=0.42, reported_cost_currency="USD"))
+        client = make_client(store)
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+        entry = body["subagents"][0]
+        # Verbatim: 0.42 USD as reported, NOT the rate-derived $30 (2M × $15).
+        assert entry["reported_cost"] == {"amount": pytest.approx(0.42),
+                                          "currency": "USD"}
+        # The rate-derived cost block is deliberately absent on subagent entries.
+        assert "cost" not in entry
+
+    def test_absent_reported_cost_is_null(self, store, tmp_path, make_client,
+                                          override_file):
+        """A subscription-auth sub-agent (no reported_cost) → tokens with a
+        null cost, never a fabricated dollar figure."""
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        _write_event(ws, _evt(source="subagent:codex", output=3_000_000))
+        client = make_client(store)
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+        entry = body["subagents"][0]
+        assert entry["reported_cost"] is None
+        assert entry["tokens"]["output"] == 3_000_000
+
+    def test_subagents_empty_when_only_management(self, store, tmp_path,
+                                                  make_client, override_file):
+        pid, ws = _new_project(store, tmp_path, budget_period="total",
+                               budget_currency="USD")
+        _write_event(ws, _evt(output=1_000_000))
+        client = make_client(store)
+        body = client.get(f"/api/v2/projects/{pid}/cost?window=total").json()
+        assert body["subagents"] == []
+        assert body["by_currency"]["USD"] == pytest.approx(15.0)
 
 
 # ---------------------------------------------------------------------------

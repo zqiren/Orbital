@@ -90,8 +90,9 @@ def _append_raw(project_dir: str, record: dict) -> None:
 
 def _event_record(ts: str, provider="anthropic", model="claude-x",
                   source="management", uncached=0, cache_read=0,
-                  cache_write=0, output=0) -> dict:
-    return {
+                  cache_write=0, output=0, reported_cost=None,
+                  reported_cost_currency=None) -> dict:
+    rec = {
         "ts": ts,
         "session_id": "s",
         "source": source,
@@ -102,6 +103,10 @@ def _event_record(ts: str, provider="anthropic", model="claude-x",
         "cache_write": cache_write,
         "output": output,
     }
+    if reported_cost is not None:
+        rec["reported_cost"] = reported_cost
+        rec["reported_cost_currency"] = reported_cost_currency
+    return rec
 
 
 # ---------------------------------------------------------------------------
@@ -467,3 +472,49 @@ class TestSpendValidation:
 
     def test_windows_constant_shape(self):
         assert WINDOWS == ("daily", "weekly", "monthly", "total")
+
+
+# ---------------------------------------------------------------------------
+# spend: provider-reported cost surfaced per group (P3-B)
+# ---------------------------------------------------------------------------
+
+class TestReportedCostAggregation:
+    def test_reported_cost_summed_per_group_verbatim(self, tmp_path, override_file):
+        """Two subagent:claude-code rows in one (provider, model, source) group
+        sum their reported_cost VERBATIM (not recomputed from rates)."""
+        project = str(tmp_path)
+        _append_raw(project, _event_record(
+            "2026-06-02T01:00:00+00:00", source="subagent:claude-code",
+            output=1_000_000, reported_cost=0.05, reported_cost_currency="USD"))
+        _append_raw(project, _event_record(
+            "2026-06-02T02:00:00+00:00", source="subagent:claude-code",
+            output=1_000_000, reported_cost=0.07, reported_cost_currency="USD"))
+        r = spend(project, "total", override_path=override_file)
+        row = next(b for b in r["breakdown"] if b["source"] == "subagent:claude-code")
+        # 0.05 + 0.07 = 0.12 USD, surfaced verbatim per currency.
+        assert row["reported_cost"] == {"USD": pytest.approx(0.12)}
+        # The rate-derived cost is still present and independent (2M out × $15).
+        assert row["cost"]["total"] == pytest.approx(30.0)
+
+    def test_rows_without_reported_cost_omit_the_key(self, tmp_path, override_file):
+        """Management rows (and zero-cost subscription rows) carry no
+        reported_cost key on the breakdown entry."""
+        project = str(tmp_path)
+        _append_raw(project, _event_record(
+            "2026-06-02T01:00:00+00:00", source="management", output=1_000_000))
+        r = spend(project, "total", override_path=override_file)
+        assert "reported_cost" not in r["breakdown"][0]
+
+    def test_reported_cost_independent_of_sources_filter(self, tmp_path, override_file):
+        """The guard view (sources=['management']) still excludes subagent rows
+        entirely — reported_cost never leaks into the management-only view."""
+        project = str(tmp_path)
+        _append_raw(project, _event_record(
+            "2026-06-02T01:00:00+00:00", source="management", output=1_000_000))
+        _append_raw(project, _event_record(
+            "2026-06-02T02:00:00+00:00", source="subagent:claude-code",
+            output=1_000_000, reported_cost=0.05, reported_cost_currency="USD"))
+        r = spend(project, "total", override_path=override_file,
+                  sources=["management"])
+        assert [b["source"] for b in r["breakdown"]] == ["management"]
+        assert all("reported_cost" not in b for b in r["breakdown"])

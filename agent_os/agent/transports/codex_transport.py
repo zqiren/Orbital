@@ -128,6 +128,17 @@ class CodexTransport(AgentTransport):
         self._message_parts: dict[str, str] = {}
         self._final_texts: list[str] = []          # message texts (send() return)
         self._turn_done: asyncio.Event | None = None
+        # Display-only usage capture (P3-B). thread/tokenUsage/updated fires
+        # repeatedly within a turn carrying the cumulative `total` and the
+        # per-turn `last`; we want exactly ONE ledger event per (threadId,
+        # turnId) using the LAST `last` value seen. Dedup mechanism:
+        # replace-tracking — store the most recent `last` breakdown keyed by
+        # (threadId, turnId), then emit on the turn boundary (turn/completed)
+        # and drop the key. The map is bounded (one live turn at a time) and a
+        # stuck entry is harmless (display-only, never counts toward
+        # enforcement). Keyed by (threadId, turnId) so a resumed/late
+        # notification for a finished turn can't double-emit.
+        self._codex_last_usage: dict[tuple[str, str], dict] = {}
 
     # ------------------------------------------------------------------
     # turn bookkeeping
@@ -248,10 +259,106 @@ class CodexTransport(AgentTransport):
                 event_type="error", data={"error": params},
                 raw_text=f"Error: {text}"))
             return
-        # thread/started, thread/status/changed, thread/tokenUsage/updated,
-        # account/rateLimits/updated, mcpServer/* — supplementary only.
-        # NEVER drives idle (TEST RULE 1) and not worth a transcript row.
+        if method == "thread/tokenUsage/updated":
+            # Display-only usage capture (P3-B). Track the latest per-turn
+            # `last` breakdown; the actual ledger emission happens on the turn
+            # boundary (turn/completed). This notification NEVER drives idle.
+            self._track_token_usage(params)
+            return
+        # thread/started, thread/status/changed, account/rateLimits/updated,
+        # mcpServer/* — supplementary only. NEVER drives idle (TEST RULE 1)
+        # and not worth a transcript row.
         logger.debug("CodexTransport: ignoring notification %s", method)
+
+    def _track_token_usage(self, params: dict) -> None:
+        """Record the latest per-turn `last` token breakdown for this turn.
+
+        Replace-tracking dedup: the notification fires repeatedly per turn with
+        a cumulative `total` and the per-turn `last`. We keep only the most
+        recent `last` keyed by (threadId, turnId); the single ledger event is
+        emitted on the turn boundary (see ``_emit_token_usage``). Never raises —
+        a malformed notification is logged and skipped, leaving the turn intact.
+        """
+        try:
+            thread_id = params.get("threadId")
+            turn_id = params.get("turnId")
+            token_usage = params.get("tokenUsage") or {}
+            last = token_usage.get("last")
+            if not (thread_id and turn_id and isinstance(last, dict)):
+                return
+            # Last-write-wins: a later notification for the same turn replaces
+            # the prior `last` (the final notification carries the turn-final
+            # per-turn figures).
+            self._codex_last_usage[(thread_id, turn_id)] = last
+        except Exception:  # noqa: BLE001 — capture must never break a turn
+            logger.warning("CodexTransport: token-usage tracking failed; "
+                           "continuing without it.", exc_info=True)
+
+    def _emit_token_usage(self, turn_id: str | None) -> None:
+        """Append one ``subagent:codex`` ledger event for a completed turn.
+
+        Display-only (Budget Piece 3 Part B): captured tokens are shown in the
+        cost view but NEVER counted toward enforcement (the guard passes
+        ``sources=["management"]``; the P3-A pinned regression proves
+        isolation). NEVER raises.
+
+        Dedup: exactly one event per (threadId, turnId), using the LAST `last`
+        breakdown tracked for that turn. The key is popped on emit so a late
+        duplicate notification cannot double-ledger.
+
+        Codex `last` semantics ([OBSERVED] in
+        artifacts-2026-06-06-codex-lifecycle/.../traces): the per-turn
+        breakdown is ``{totalTokens, inputTokens, cachedInputTokens,
+        outputTokens, reasoningOutputTokens}`` where
+        ``totalTokens == inputTokens + outputTokens`` and
+        ``cachedInputTokens ⊆ inputTokens`` (SUBSET semantics — every trace line
+        has cachedInputTokens < inputTokens, and reasoningOutputTokens is a
+        subset of outputTokens, never added on top). That matches OpenAI-compat
+        subset normalization: uncached_input = inputTokens − cachedInputTokens,
+        cache_read = cachedInputTokens, cache_write = 0, output = outputTokens.
+        No reported_cost — Codex emits none.
+        """
+        try:
+            if self._thread_id is None or turn_id is None:
+                return
+            last = self._codex_last_usage.pop((self._thread_id, turn_id), None)
+            if not isinstance(last, dict):
+                return  # no usage observed for this turn
+            from agent_os.agent.providers.types import TokenUsage
+            from agent_os.budget.normalize import (
+                ProviderSemantics,
+                normalize_usage,
+            )
+            from agent_os.budget.ledger import (
+                SOURCE_SUBAGENT_CODEX,
+                LedgerEvent,
+                append_event,
+            )
+
+            token_usage = TokenUsage(
+                input_tokens=int(last.get("inputTokens", 0) or 0),
+                output_tokens=int(last.get("outputTokens", 0) or 0),
+                cache_read_tokens=int(last.get("cachedInputTokens", 0) or 0),
+                cache_write_tokens=0,  # Codex reports no cache-write tier
+            )
+            normalized = normalize_usage(token_usage, ProviderSemantics.OPENAI_COMPAT)
+            model = self._effective_model or self._model or "unknown"
+            append_event(
+                self._workspace,
+                LedgerEvent(
+                    session_id=self._thread_id or "",
+                    source=SOURCE_SUBAGENT_CODEX,
+                    provider="openai",
+                    model=model,
+                    usage=normalized,
+                    # Codex emits no cost — tokens only, never a fabricated $.
+                ),
+            )
+        except Exception:  # noqa: BLE001 — capture must never break a turn
+            logger.warning(
+                "CodexTransport: sub-agent usage capture failed (thread=%s "
+                "turn=%s); continuing without it.",
+                self._thread_id, turn_id, exc_info=True)
 
     async def _on_turn_completed(self, params: dict) -> None:
         turn = params.get("turn") or {}
@@ -276,6 +383,13 @@ class CodexTransport(AgentTransport):
             cause = "stopped" if self._stopping else "interrupted"
         else:  # "failed" (schema TurnStatus) or unrecognized
             cause = "error"
+        # Display-only usage capture (P3-B): emit the single ledger event for
+        # this turn from the LAST tracked `last` breakdown, BEFORE clearing
+        # _turn_id. Prefer the completed turn's own id (the notification carries
+        # it) so a turn that completed without _turn_id ever being set on self
+        # still attributes correctly; fall back to the in-flight _turn_id.
+        completed_turn_id = turn.get("id") or self._turn_id
+        self._emit_token_usage(completed_turn_id)
         self._turn_id = None
         self._turn_open = False
         await self._event_queue.put(TransportEvent(

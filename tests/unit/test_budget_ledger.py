@@ -135,3 +135,56 @@ class TestAppendEvent:
         )
         # No file was created (the parent is a regular file).
         assert not os.path.isdir(bogus)
+
+
+class TestReportedCostSerialization:
+    """P3-B: optional provider-reported cost fields round-trip through the
+    on-disk record only when present (subscription/management rows omit them)."""
+
+    def test_reported_cost_serialized_when_present(self, tmp_path):
+        usage = NormalizedUsage(uncached_input=10, cache_read=2, cache_write=1, output=5)
+        append_event(
+            str(tmp_path),
+            LedgerEvent(
+                session_id="sess-rc",
+                source="subagent:claude-code",
+                provider="anthropic",
+                model="claude-x",
+                usage=usage,
+                reported_cost=0.0123,
+                reported_cost_currency="USD",
+            ),
+        )
+        ev = _read_lines(ledger_path(str(tmp_path)))[0]
+        assert ev["reported_cost"] == 0.0123
+        assert ev["reported_cost_currency"] == "USD"
+        # Tokens still serialize alongside the reported cost.
+        assert ev["uncached_input"] == 10
+        assert ev["output"] == 5
+
+    def test_reported_cost_omitted_when_none(self, tmp_path):
+        """A management row (no reported_cost) must NOT emit the keys at all —
+        they are absent from the JSON, not present-but-null."""
+        usage = NormalizedUsage(uncached_input=10, cache_read=0, cache_write=0, output=5)
+        append_event(
+            str(tmp_path),
+            LedgerEvent(
+                session_id="sess-mgmt",
+                source="management",
+                provider="anthropic",
+                model="claude-x",
+                usage=usage,
+            ),
+        )
+        ev = _read_lines(ledger_path(str(tmp_path)))[0]
+        assert "reported_cost" not in ev
+        assert "reported_cost_currency" not in ev
+
+    def test_default_fields_are_none(self):
+        """The dataclass defaults keep management/loop call sites unchanged."""
+        ev = LedgerEvent(
+            session_id="s", source="management", provider="p", model="m",
+            usage=NormalizedUsage(0, 0, 0, 0),
+        )
+        assert ev.reported_cost is None
+        assert ev.reported_cost_currency is None

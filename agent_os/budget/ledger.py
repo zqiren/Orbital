@@ -43,9 +43,13 @@ if TYPE_CHECKING:  # pragma: no cover — type-only; avoids an import cycle.
 
 logger = logging.getLogger(__name__)
 
-# Event source enum. Only "management" is captured today; the subagent values
-# are RESERVED for a later piece and intentionally NOT emitted here.
+# Event source enum. "management" is the management agent's own LLM responses;
+# the "subagent:*" values are emitted by the sub-agent transports (P3-B) and
+# captured for the DISPLAY view only — never counted toward enforcement (the
+# guard/notify pass sources=["management"]; see the P3-A pinned regression).
 SOURCE_MANAGEMENT = "management"
+SOURCE_SUBAGENT_CLAUDE_CODE = "subagent:claude-code"
+SOURCE_SUBAGENT_CODEX = "subagent:codex"
 
 # Valid query windows (codes only — no display strings; per the binding i18n
 # rule, all human-readable labels render client-side).
@@ -78,6 +82,13 @@ class LedgerEvent:
 
     ``ts`` is filled in at append time (ISO8601 UTC) so callers don't have to.
     ``usage`` carries the four disjoint token counts from ``NormalizedUsage``.
+
+    ``reported_cost`` / ``reported_cost_currency`` are an OPTIONAL provider-
+    reported cost (P3-B): the SDK transport records claude-code's
+    ``total_cost_usd`` verbatim here when it is present AND > 0 (subscription
+    auth reports 0/absent → omitted). It is displayed VERBATIM by the cost
+    endpoint and NEVER recomputed from our rate table. Both fields are
+    serialized only when ``reported_cost`` is not None.
     """
 
     session_id: str
@@ -85,10 +96,12 @@ class LedgerEvent:
     provider: str
     model: str
     usage: NormalizedUsage
+    reported_cost: float | None = None
+    reported_cost_currency: str | None = None
 
     def to_record(self, ts: str) -> dict:
         """Flatten to the on-disk JSON record (disjoint token fields inline)."""
-        return {
+        record = {
             "ts": ts,
             "session_id": self.session_id,
             "source": self.source,
@@ -99,6 +112,12 @@ class LedgerEvent:
             "cache_write": self.usage.cache_write,
             "output": self.usage.output,
         }
+        # Only serialize the provider-reported cost when present — absent for
+        # every management row and for subscription-auth subagent rows.
+        if self.reported_cost is not None:
+            record["reported_cost"] = self.reported_cost
+            record["reported_cost_currency"] = self.reported_cost_currency
+        return record
 
 
 def append_event(project_dir: str, event: LedgerEvent) -> None:
@@ -371,6 +390,10 @@ def spend(
     # Aggregate token counts by (provider, model, source). Cost is derived AFTER
     # accumulation so we never round mid-sum.
     groups: dict[tuple[str, str, str], dict[str, int]] = {}
+    # Provider-reported cost (P3-B) accumulated per group, keyed by currency so
+    # a group never mixes currencies. Only sub-agent rows carry it (claude-code
+    # total_cost_usd); displayed verbatim, never recomputed from our rates.
+    reported: dict[tuple[str, str, str], dict[str, float]] = {}
     for rec in _iter_events(path):
         try:
             ts = _parse_ts(rec["ts"])
@@ -386,6 +409,13 @@ def spend(
             val = rec.get(fld, 0)
             if isinstance(val, int):
                 bucket[fld] += val
+        # Provider-reported cost is optional and additive across a group's rows.
+        rc = rec.get("reported_cost")
+        if isinstance(rc, (int, float)):
+            ccy = rec.get("reported_cost_currency")
+            if isinstance(ccy, str) and ccy:
+                rbucket = reported.setdefault(key, {})
+                rbucket[ccy] = rbucket.get(ccy, 0.0) + float(rc)
 
     breakdown: list[dict] = []
     by_currency: dict[str, float] = {}
@@ -399,7 +429,7 @@ def spend(
 
         by_currency[rates.currency] = by_currency.get(rates.currency, 0.0) + cost_total
 
-        breakdown.append({
+        row = {
             "provider": provider,
             "model": model,
             "source": source,
@@ -412,7 +442,18 @@ def spend(
                 "output": round(cost_output, _COST_ROUND_DP),
                 "total": round(cost_total, _COST_ROUND_DP),
             },
-        })
+        }
+        # Surface the provider-reported cost verbatim (per-currency) so the
+        # cost route can move sub-agent rows into a separate block carrying it.
+        # Single-currency in practice (claude-code is USD); a dict keeps the
+        # contract honest if a row ever spans currencies.
+        rbucket = reported.get((provider, model, source))
+        if rbucket:
+            row["reported_cost"] = {
+                ccy: round(amount, _COST_ROUND_DP)
+                for ccy, amount in sorted(rbucket.items())
+            }
+        breakdown.append(row)
 
     # Target currency for the converted total.
     target = target_currency or "USD"

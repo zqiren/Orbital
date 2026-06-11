@@ -723,11 +723,28 @@ async def get_project_cost(project_id: str, window: Optional[str] = Query(defaul
     ``daily``). Cost is computed at QUERY time (tokens × current resolved rate),
     so editing the rates table changes historical cost — intended.
 
+    Response shape (P3-B reshape): the MANAGEMENT block —
+    ``{window, by_currency, converted_total, breakdown}`` — carries management
+    spend ONLY, exactly the numbers it returned before sub-agent capture
+    existed. Sub-agent rows move OUT of that block into a separate top-level
+    ``subagents`` list. Each subagent entry is
+    ``{provider, model, source, tokens, reported_cost}`` where ``reported_cost``
+    is the provider-reported cost VERBATIM (with currency) when present, else
+    ``null`` — NEVER recomputed from our rate table. This keeps the display
+    honest: subscription-auth sub-agents show tokens with a null cost rather
+    than a fabricated dollar figure.
+
     The response carries codes / enums / ISO currency codes only (no display
     strings), per the binding i18n rule. A bad ``window`` returns 400 with a
     machine code in ``detail`` (not a sentence). Unknown project → 404.
     """
-    from agent_os.budget.ledger import spend, WINDOWS
+    from agent_os.budget.ledger import (
+        SOURCE_MANAGEMENT,
+        SOURCE_SUBAGENT_CLAUDE_CODE,
+        SOURCE_SUBAGENT_CODEX,
+        WINDOWS,
+        spend,
+    )
 
     project = _project_store.get_project(project_id)
     if not project:
@@ -760,12 +777,30 @@ async def get_project_cost(project_id: str, window: Optional[str] = Query(defaul
                            exc_info=True)
 
     try:
+        # Management block: filtered to management spend so by_currency /
+        # converted_total / breakdown are byte-identical to the pre-P3-B
+        # numbers (the P3-A pinned regression guarantees subagent rows never
+        # affect this view).
         result = spend(
             workspace,
             resolved_window,
             target_currency=target_currency,
             fx_rates=fx_rates,
             anchor_ts=anchor_ts,
+            sources=[SOURCE_MANAGEMENT],
+        )
+        # Sub-agent block: same window, but the subagent sources only. We reuse
+        # spend()'s grouping (per provider/model/source, with tokens + the
+        # verbatim per-currency reported_cost) and reshape into the flat
+        # display entries the client renders. No rate-derived dollar figure is
+        # exposed here — only the provider-reported cost, verbatim or null.
+        sub = spend(
+            workspace,
+            resolved_window,
+            target_currency=target_currency,
+            fx_rates=fx_rates,
+            anchor_ts=anchor_ts,
+            sources=[SOURCE_SUBAGENT_CLAUDE_CODE, SOURCE_SUBAGENT_CODEX],
         )
     except ValueError:
         # Defensive: spend() validates the window too; we already gated it.
@@ -773,7 +808,38 @@ async def get_project_cost(project_id: str, window: Optional[str] = Query(defaul
             status_code=400,
             detail={"code": "invalid_window", "allowed": list(WINDOWS)},
         )
+
+    result["subagents"] = [
+        _subagent_entry(row) for row in sub["breakdown"]
+    ]
     return result
+
+
+def _subagent_entry(row: dict) -> dict:
+    """Reshape one spend() breakdown row into a display-only subagent entry.
+
+    Carries provider / model / source / tokens, plus the provider-reported cost
+    VERBATIM when the row recorded one (claude-code's total_cost_usd), else
+    ``reported_cost: None``. The rate-derived ``cost`` block from spend() is
+    deliberately dropped — sub-agent cost is shown as reported by the provider
+    or not at all, never recomputed from our rates.
+    """
+    reported = row.get("reported_cost")
+    if reported:
+        # spend() aggregates reported_cost per currency. In practice claude-code
+        # reports a single currency (USD); pick the sole entry. If a row ever
+        # spans currencies, surface the first deterministically (sorted keys).
+        ccy = sorted(reported.keys())[0]
+        reported_cost = {"amount": reported[ccy], "currency": ccy}
+    else:
+        reported_cost = None
+    return {
+        "provider": row["provider"],
+        "model": row["model"],
+        "source": row["source"],
+        "tokens": row["tokens"],
+        "reported_cost": reported_cost,
+    }
 
 
 _cleanup_logger = logging.getLogger(__name__)

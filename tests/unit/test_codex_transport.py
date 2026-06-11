@@ -11,6 +11,7 @@ process is spawned — _route_server_message is fed directly.
 
 import asyncio
 import json
+import os
 
 import psutil
 import pytest
@@ -652,3 +653,191 @@ class TestStartupModelResolution:
             assert await t._resolve_startup_model() == "gpt-5.4-mini"
         assert any("model/list" in r.message for r in caplog.records), \
             "degradation must be surfaced, not silent"
+
+
+# ---------------------------------------------------------------------------
+# P3-B: display-only sub-agent usage capture (thread/tokenUsage/updated)
+# ---------------------------------------------------------------------------
+
+def _token_usage_notif(thread_id, turn_id, *, last, total=None):
+    """A verbatim-shaped thread/tokenUsage/updated notification.
+
+    Schema [OBSERVED] in artifacts-2026-06-06-codex-lifecycle/.../traces:
+    params = {threadId, turnId, tokenUsage: {last, total, modelContextWindow?}}.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "tokenUsage": {
+                "last": last,
+                "total": total if total is not None else last,
+                "modelContextWindow": 258400,
+            },
+        },
+    }
+
+
+def _ledger_lines(workspace):
+    from agent_os.budget.ledger import ledger_path
+    path = ledger_path(workspace)
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _capturing_transport(workspace):
+    """A transport wired to a real workspace so append_event lands on disk."""
+    t = _transport()
+    t._workspace = str(workspace)
+    return t
+
+
+class TestCodexUsageCapture:
+    @pytest.mark.asyncio
+    async def test_repeated_notifications_one_event_with_final_last(self, tmp_path):
+        """The notification fires repeatedly per turn with cumulative `total`
+        and per-turn `last`; we ledger exactly ONE event for the turn using the
+        LAST `last` value seen (replace-tracking, emit on turn boundary)."""
+        t = _capturing_transport(tmp_path)
+        t._begin_turn()
+        t._turn_id = "U1"
+        # First notification (turn so far): last == total.
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U1",
+            last={"totalTokens": 12189, "inputTokens": 11914,
+                  "cachedInputTokens": 9088, "outputTokens": 275,
+                  "reasoningOutputTokens": 137}))
+        # Second notification (later in same turn): cumulative total grows, the
+        # per-turn `last` is the FINAL per-turn breakdown — this is what we keep.
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U1",
+            last={"totalTokens": 12308, "inputTokens": 12223,
+                  "cachedInputTokens": 11648, "outputTokens": 85,
+                  "reasoningOutputTokens": 56},
+            total={"totalTokens": 24497, "inputTokens": 24137,
+                   "cachedInputTokens": 20736, "outputTokens": 360,
+                   "reasoningOutputTokens": 193}))
+        # No ledger line until the turn boundary.
+        assert _ledger_lines(tmp_path) == []
+        # Turn completes → exactly one event from the LAST `last`.
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U1", "status": "completed"}}})
+        lines = _ledger_lines(tmp_path)
+        assert len(lines) == 1
+        ev = lines[0]
+        assert ev["source"] == "subagent:codex"
+        assert ev["provider"] == "openai"
+        assert ev["session_id"] == "T1"
+        # Subset semantics: uncached = inputTokens - cachedInputTokens
+        # = 12223 - 11648 = 575; cache_read = 11648; cache_write = 0; out = 85.
+        assert ev["uncached_input"] == 575
+        assert ev["cache_read"] == 11648
+        assert ev["cache_write"] == 0
+        assert ev["output"] == 85
+        # Disjoint sum reconstructs the per-turn totalTokens (12308).
+        assert (ev["uncached_input"] + ev["cache_read"]
+                + ev["cache_write"] + ev["output"]) == 12308
+        # Codex emits no cost.
+        assert "reported_cost" not in ev
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_one_event_per_turn(self, tmp_path):
+        """Two turns in one thread → one ledger event per (threadId, turnId)."""
+        t = _capturing_transport(tmp_path)
+        # Turn 1.
+        t._begin_turn()
+        t._turn_id = "U1"
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U1",
+            last={"totalTokens": 12104, "inputTokens": 11989,
+                  "cachedInputTokens": 9088, "outputTokens": 115,
+                  "reasoningOutputTokens": 0}))
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U1", "status": "completed"}}})
+        # Turn 2.
+        t._begin_turn()
+        t._turn_id = "U2"
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U2",
+            last={"totalTokens": 12257, "inputTokens": 12251,
+                  "cachedInputTokens": 12160, "outputTokens": 6,
+                  "reasoningOutputTokens": 0}))
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U2", "status": "completed"}}})
+        lines = _ledger_lines(tmp_path)
+        assert len(lines) == 2
+        # Turn 1: uncached = 11989 - 9088 = 2901, out 115.
+        assert lines[0]["uncached_input"] == 2901
+        assert lines[0]["output"] == 115
+        # Turn 2: uncached = 12251 - 12160 = 91, out 6.
+        assert lines[1]["uncached_input"] == 91
+        assert lines[1]["output"] == 6
+
+    @pytest.mark.asyncio
+    async def test_turn_with_no_usage_emits_no_ledger_line(self, tmp_path):
+        """A turn that never received a tokenUsage notification ledgers nothing
+        (and still completes cleanly)."""
+        t = _capturing_transport(tmp_path)
+        t._begin_turn()
+        t._turn_id = "U1"
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U1", "status": "completed"}}})
+        assert _ledger_lines(tmp_path) == []
+        # turn_complete still flowed.
+        assert any(e.event_type == "turn_complete" for e in _drain(t))
+
+    @pytest.mark.asyncio
+    async def test_malformed_notification_skipped_turn_unaffected(self, tmp_path):
+        """A tokenUsage notification missing the `last` breakdown is skipped;
+        the turn is unaffected and ledgers nothing."""
+        t = _capturing_transport(tmp_path)
+        t._begin_turn()
+        t._turn_id = "U1"
+        # Missing tokenUsage.last entirely.
+        await t._route_server_message({"jsonrpc": "2.0",
+            "method": "thread/tokenUsage/updated",
+            "params": {"threadId": "T1", "turnId": "U1",
+                       "tokenUsage": {"total": {"totalTokens": 5}}}})
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U1", "status": "completed"}}})
+        assert _ledger_lines(tmp_path) == []
+
+    @pytest.mark.asyncio
+    async def test_tokenusage_notification_emits_no_transport_event(self, tmp_path):
+        """The notification must NEVER produce a transport event (it cannot
+        drive idle) — only the deferred ledger write happens on turn boundary."""
+        t = _capturing_transport(tmp_path)
+        t._begin_turn()
+        t._turn_id = "U1"
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U1",
+            last={"totalTokens": 12104, "inputTokens": 11989,
+                  "cachedInputTokens": 9088, "outputTokens": 115,
+                  "reasoningOutputTokens": 0}))
+        assert _drain(t) == []  # no event queued by the notification itself
+
+    @pytest.mark.asyncio
+    async def test_capture_never_raises_on_bad_workspace(self):
+        """An unwritable workspace must not propagate out of capture."""
+        t = _transport()
+        t._workspace = ""  # ledger_path("") unwritable; swallowed
+        t._begin_turn()
+        t._turn_id = "U1"
+        await t._route_server_message(_token_usage_notif(
+            "T1", "U1",
+            last={"totalTokens": 100, "inputTokens": 90,
+                  "cachedInputTokens": 10, "outputTokens": 10,
+                  "reasoningOutputTokens": 0}))
+        # Must NOT raise.
+        await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
+            "params": {"threadId": "T1",
+                       "turn": {"id": "U1", "status": "completed"}}})

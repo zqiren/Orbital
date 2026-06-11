@@ -10,6 +10,8 @@ All SDK classes are mocked — no API key needed.
 """
 
 import asyncio
+import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -334,6 +336,113 @@ class TestMessageToEvents:
         assert len(events) == 2
         assert events[0].event_type == "message"
         assert events[1].event_type == "tool_use"
+
+
+class TestSDKUsageCapture:
+    """P3-B: a result message's usage + total_cost_usd is captured to the
+    ledger as a display-only ``subagent:claude-code`` event. Never affects
+    enforcement; never raises on capture failure."""
+
+    @staticmethod
+    def _result(*, usage, total_cost_usd, session_id="sess-cap", is_error=False):
+        from claude_agent_sdk.types import ResultMessage
+        return ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=80,
+            is_error=is_error, num_turns=1, session_id=session_id,
+            total_cost_usd=total_cost_usd, usage=usage, result=None,
+            structured_output=None,
+        )
+
+    @staticmethod
+    def _ledger_lines(workspace):
+        from agent_os.budget.ledger import ledger_path
+        path = ledger_path(workspace)
+        if not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def test_usage_with_cost_records_reported_cost_verbatim(self, tmp_path):
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        # Anthropic additive usage shape: input_tokens excludes cache fields.
+        msg = self._result(
+            usage={
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 50,
+            },
+            total_cost_usd=0.0731,
+            session_id="sess-cap",
+        )
+        transport._message_to_events(msg)
+        lines = self._ledger_lines(str(tmp_path))
+        assert len(lines) == 1
+        ev = lines[0]
+        assert ev["source"] == "subagent:claude-code"
+        assert ev["provider"] == "anthropic"
+        assert ev["session_id"] == "sess-cap"
+        # Additive: uncached_input copied through, cache fields separate.
+        assert ev["uncached_input"] == 1000
+        assert ev["cache_read"] == 500
+        assert ev["cache_write"] == 50
+        assert ev["output"] == 200
+        # total_cost_usd > 0 → recorded verbatim with currency.
+        assert ev["reported_cost"] == 0.0731
+        assert ev["reported_cost_currency"] == "USD"
+
+    def test_subscription_zero_cost_records_tokens_only(self, tmp_path):
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        # Subscription auth → total_cost_usd is 0 → no reported_cost field.
+        msg = self._result(
+            usage={"input_tokens": 800, "output_tokens": 100},
+            total_cost_usd=0.0,
+        )
+        transport._message_to_events(msg)
+        ev = self._ledger_lines(str(tmp_path))[0]
+        assert ev["uncached_input"] == 800
+        assert ev["output"] == 100
+        assert "reported_cost" not in ev
+        assert "reported_cost_currency" not in ev
+
+    def test_absent_cost_records_tokens_only(self, tmp_path):
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        msg = self._result(
+            usage={"input_tokens": 800, "output_tokens": 100},
+            total_cost_usd=None,
+        )
+        transport._message_to_events(msg)
+        ev = self._ledger_lines(str(tmp_path))[0]
+        assert "reported_cost" not in ev
+
+    def test_malformed_usage_is_logged_skip_turn_unaffected(self, tmp_path):
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        # usage is not a dict → capture no-ops; the turn's event handling is
+        # unaffected (error result still yields its error event).
+        msg = self._result(usage="not-a-dict", total_cost_usd=0.5,
+                           is_error=True)
+        # Inject a result string so the error branch produces its event.
+        object.__setattr__(msg, "result", "boom")
+        events = transport._message_to_events(msg)
+        # No ledger line written (usage unusable), but no exception raised.
+        assert self._ledger_lines(str(tmp_path)) == []
+        # The error event still flows — capture failure didn't break the turn.
+        assert any(e.event_type == "error" for e in events)
+
+    def test_capture_never_raises_on_bad_workspace(self):
+        """An unwritable workspace must not propagate out of capture."""
+        transport = SDKTransport()
+        transport._workspace = ""  # ledger_path("") → unwritable; swallowed
+        msg = self._result(
+            usage={"input_tokens": 10, "output_tokens": 5},
+            total_cost_usd=0.01,
+        )
+        # Must NOT raise.
+        transport._message_to_events(msg)
 
 
 class TestSubAgentManagerApprovalRouting:

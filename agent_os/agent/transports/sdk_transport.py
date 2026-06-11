@@ -361,6 +361,10 @@ class SDKTransport(AgentTransport):
             async for msg in self._client.receive_response():
                 if isinstance(msg, ResultMessage):
                     self._session_id = getattr(msg, 'session_id', None)
+                    # Capture this stale turn's usage too (display-only,
+                    # never-raise) so a crash-then-flush doesn't silently drop
+                    # the prior turn's sub-agent tokens.
+                    self._capture_usage(msg)
                     logger.info("SDKTransport: flushed stale ResultMessage (session=%s)", self._session_id)
                     break
         except Exception as e:
@@ -556,6 +560,10 @@ class SDKTransport(AgentTransport):
 
         elif isinstance(msg, ResultMessage):
             self._session_id = getattr(msg, 'session_id', None)
+            # Display-only usage capture (P3-B). Never affects enforcement
+            # (guard counts management only) and never raises — a capture
+            # failure must not break or delay the turn.
+            self._capture_usage(msg)
             if msg.is_error and msg.result:
                 events.append(TransportEvent(
                     event_type="error",
@@ -564,3 +572,75 @@ class SDKTransport(AgentTransport):
                 ))
 
         return events
+
+    def _capture_usage(self, msg) -> None:
+        """Append one ``subagent:claude-code`` ledger event for a result message.
+
+        Display-only (Budget Piece 3 Part B): the captured tokens/cost are shown
+        in the cost view but NEVER counted toward budget enforcement (the guard
+        passes ``sources=["management"]``; the P3-A pinned regression proves
+        isolation). NEVER raises: wrapped in the same never-break pattern as
+        ``append_event`` so a capture error cannot fail or delay a turn.
+
+        The SDK ``ResultMessage.usage`` dict follows Anthropic's additive usage
+        semantics (``input_tokens`` excludes the cache fields), so we normalize
+        with ``ProviderSemantics.ANTHROPIC``. ``total_cost_usd`` — when present
+        AND > 0 — is recorded as the provider-reported cost, displayed VERBATIM
+        (never recomputed from our rates). Absent/zero (subscription auth) →
+        tokens only, no reported_cost.
+        """
+        try:
+            usage = getattr(msg, "usage", None)
+            if not isinstance(usage, dict):
+                return  # no usage on this result; nothing to capture
+            # Lazy import: budget.normalize -> providers.types pulls the agent
+            # package __init__; a module-level import here risks a cycle and is
+            # paid only once per turn-final result.
+            from agent_os.agent.providers.types import TokenUsage
+            from agent_os.budget.normalize import (
+                ProviderSemantics,
+                normalize_usage,
+            )
+            from agent_os.budget.ledger import (
+                SOURCE_SUBAGENT_CLAUDE_CODE,
+                LedgerEvent,
+                append_event,
+            )
+
+            token_usage = TokenUsage(
+                input_tokens=int(usage.get("input_tokens", 0) or 0),
+                output_tokens=int(usage.get("output_tokens", 0) or 0),
+                cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+                cache_write_tokens=int(
+                    usage.get("cache_creation_input_tokens", 0) or 0),
+            )
+            normalized = normalize_usage(token_usage, ProviderSemantics.ANTHROPIC)
+
+            # total_cost_usd is provider-reported; record it VERBATIM only when
+            # present AND > 0. Subscription auth reports 0/absent → tokens only.
+            reported_cost = None
+            reported_cost_currency = None
+            cost = getattr(msg, "total_cost_usd", None)
+            if isinstance(cost, (int, float)) and cost > 0:
+                reported_cost = float(cost)
+                reported_cost_currency = "USD"
+
+            # ResultMessage carries no model attribute; attribution comes from
+            # the last AssistantMessage's model, then a sentinel.
+            model = self._last_model or "unknown"
+            append_event(
+                self._workspace,
+                LedgerEvent(
+                    session_id=self._session_id or "",
+                    source=SOURCE_SUBAGENT_CLAUDE_CODE,
+                    provider="anthropic",
+                    model=model,
+                    usage=normalized,
+                    reported_cost=reported_cost,
+                    reported_cost_currency=reported_cost_currency,
+                ),
+            )
+        except Exception:  # noqa: BLE001 — capture must never break a turn
+            logger.warning(
+                "SDKTransport: sub-agent usage capture failed (session=%s); "
+                "continuing without it.", self._session_id, exc_info=True)
