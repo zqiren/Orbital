@@ -366,16 +366,46 @@ class QueueStore:
         new_state: QueueRunState,
         *,
         paused_until: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
-        """Set the queue run state. ``paused_until`` only applies when
-        entering PAUSED (timed pause); any other state clears it — the
-        deadline is meaningless outside PAUSED."""
+        """Set the queue run state.
+
+        ``paused_until`` only applies when entering PAUSED (timed pause); any
+        other state clears it — the deadline is meaningless outside PAUSED.
+
+        ``reason`` is the pause CODE ("user" or "budget"; never a display
+        string — i18n: codes only). It only applies when entering PAUSED:
+          * Entering PAUSED stores ``reason`` (defaults to "user" when the
+            caller omits it — every legacy pause is user-initiated).
+          * Any non-PAUSED state ALWAYS clears ``pause_reason`` to None.
+
+        **Precedence rule (load-bearing for Budget Piece 2's auto-resume,
+        which only touches ``pause_reason="budget"`` queues):** an explicit
+        user action always wins and sticks. Concretely, if the queue is
+        ALREADY PAUSED with ``pause_reason="user"``, a subsequent
+        ``set_queue_state(PAUSED, reason="budget")`` does NOT downgrade the
+        reason — user stays. The reverse IS allowed: a manual pause over a
+        budget pause sets the reason to "user". This precedence is enforced
+        HERE (the store) and nowhere else.
+        """
         state = self.load()
         with self._lock:
+            if new_state == QueueRunState.PAUSED:
+                effective_reason = "user" if reason is None else reason
+                # Precedence: a sticky user pause is not downgraded to budget.
+                # (Already-PAUSED + user + incoming budget → user wins.)
+                if (
+                    state.state == QueueRunState.PAUSED
+                    and state.pause_reason == "user"
+                    and effective_reason == "budget"
+                ):
+                    effective_reason = "user"
+                state.pause_reason = effective_reason
+                state.paused_until = paused_until
+            else:
+                state.pause_reason = None
+                state.paused_until = None
             state.state = new_state
-            state.paused_until = (
-                paused_until if new_state == QueueRunState.PAUSED else None
-            )
             self._save_locked()
 
     def auto_idle_if_empty(self) -> bool:
@@ -401,6 +431,7 @@ class QueueStore:
             if state.state == QueueRunState.IDLE:
                 return False
             state.paused_until = None
+            state.pause_reason = None
             state.state = QueueRunState.IDLE
             self._save_locked()
             return True

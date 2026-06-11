@@ -219,8 +219,10 @@ class QueueDispatcher:
                 datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
             ).isoformat()
         # Set queue state first so the main loop sees PAUSED on its next tick.
+        # A stop()/timed pause is always a user-initiated pause (reason "user");
+        # the store's precedence rule keeps it sticky over a later budget pause.
         self._store.set_queue_state(
-            QueueRunState.PAUSED, paused_until=paused_until,
+            QueueRunState.PAUSED, paused_until=paused_until, reason="user",
         )
 
         # Terminate any sub-agents under a budget so they don't keep churning
@@ -566,7 +568,13 @@ class QueueDispatcher:
                 "dispatcher(%s): malformed paused_until %r; clearing",
                 self._project_id, qstate.paused_until,
             )
-            self._store.set_queue_state(QueueRunState.PAUSED, paused_until=None)
+            # Drop the corrupt deadline but stay PAUSED — preserve the existing
+            # pause_reason (don't downgrade a budget pause to user here).
+            self._store.set_queue_state(
+                QueueRunState.PAUSED,
+                paused_until=None,
+                reason=qstate.pause_reason,
+            )
             return False
         return datetime.now(timezone.utc) >= deadline
 
@@ -1086,11 +1094,20 @@ class QueueDispatcher:
     def _broadcast_state_changed(self, state: str) -> None:
         if self._ws is None:
             return
+        # Carry pause_reason so the frontend can distinguish a budget block from
+        # a manual pause (Budget Piece 3 renders it). Read it from the store so
+        # every call site stays in sync with the just-written state — it is None
+        # for any non-PAUSED state by construction (set_queue_state clears it).
+        try:
+            pause_reason = self._store.load().pause_reason
+        except Exception:
+            pause_reason = None
         try:
             self._ws.broadcast(self._project_id, {
                 "type": "queue.state_changed",
                 "project_id": self._project_id,
                 "state": state,
+                "pause_reason": pause_reason,
             })
         except Exception:
             pass

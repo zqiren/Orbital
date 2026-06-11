@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -182,3 +183,85 @@ async def test_malformed_paused_until_is_cleared_not_looping(tmp_path):
     await dispatcher.shutdown()
     assert ok
     assert s.state == QueueRunState.PAUSED  # still paused, just deadline dropped
+
+
+# ---------------------------------------------------------------------------
+# pause_reason wiring (Task P2-B / C9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_pause_is_user_reason(tmp_path):
+    """A timed pause via stop(duration) records pause_reason="user"."""
+    store = QueueStore(tmp_path / "queue.json")
+    mgr = _MinimalAgentManager()
+    dispatcher = QueueDispatcher(
+        project_id="proj_timed", store=store, agent_manager=mgr,
+    )
+    await dispatcher.stop(duration_seconds=3600)
+    assert store.load().pause_reason == "user"
+
+
+@pytest.mark.asyncio
+async def test_untimed_pause_is_user_reason(tmp_path):
+    """A plain stop() (no duration) also records pause_reason="user"."""
+    store = QueueStore(tmp_path / "queue.json")
+    mgr = _MinimalAgentManager()
+    dispatcher = QueueDispatcher(
+        project_id="proj_timed", store=store, agent_manager=mgr,
+    )
+    await dispatcher.stop()
+    assert store.load().pause_reason == "user"
+
+
+@pytest.mark.asyncio
+async def test_state_changed_broadcast_carries_pause_reason(tmp_path):
+    """The queue.state_changed WS broadcast must include pause_reason.
+
+    On pause it is the active reason; on resume it is None (the store cleared
+    it on the transition out of PAUSED)."""
+    store = QueueStore(tmp_path / "queue.json")
+    ws = MagicMock()
+    mgr = _MinimalAgentManager()
+    dispatcher = QueueDispatcher(
+        project_id="proj_ws", store=store, agent_manager=mgr, ws_manager=ws,
+    )
+
+    await dispatcher.stop()
+    pause_payloads = [
+        c.args[1] for c in ws.broadcast.call_args_list
+        if c.args[1].get("type") == "queue.state_changed"
+    ]
+    assert pause_payloads, "no state_changed broadcast on pause"
+    assert pause_payloads[-1]["state"] == "paused"
+    assert pause_payloads[-1]["pause_reason"] == "user"
+
+    ws.broadcast.reset_mock()
+    await dispatcher.resume()
+    resume_payloads = [
+        c.args[1] for c in ws.broadcast.call_args_list
+        if c.args[1].get("type") == "queue.state_changed"
+    ]
+    assert resume_payloads, "no state_changed broadcast on resume"
+    assert resume_payloads[-1]["state"] == "running"
+    assert resume_payloads[-1]["pause_reason"] is None
+    await dispatcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_budget_broadcast_carries_budget_reason(tmp_path):
+    """A budget pause written to the store surfaces as pause_reason="budget"
+    in the broadcast — the contract Budget Piece 2's trip path relies on."""
+    store = QueueStore(tmp_path / "queue.json")
+    ws = MagicMock()
+    mgr = _MinimalAgentManager()
+    dispatcher = QueueDispatcher(
+        project_id="proj_ws", store=store, agent_manager=mgr, ws_manager=ws,
+    )
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    dispatcher._broadcast_state_changed(QueueRunState.PAUSED.value)
+    payloads = [
+        c.args[1] for c in ws.broadcast.call_args_list
+        if c.args[1].get("type") == "queue.state_changed"
+    ]
+    assert payloads[-1]["pause_reason"] == "budget"

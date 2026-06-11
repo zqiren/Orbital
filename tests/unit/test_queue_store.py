@@ -253,3 +253,108 @@ def test_auto_idle_clears_paused_until(tmp_path):
     changed = store.auto_idle_if_empty()
     assert changed is True
     assert store.load().paused_until is None
+
+
+# ---------------------------------------------------------------------------
+# pause_reason (Budget Piece 2, Task P2-B / C9)
+# ---------------------------------------------------------------------------
+
+
+def test_old_queue_json_without_pause_reason_loads(tmp_path):
+    """Back-compat: a persisted queue.json predating the pause_reason field
+    must deserialize fine, defaulting pause_reason to None."""
+    legacy = {
+        "version": 1,
+        "state": "paused",
+        "items": [],
+        "paused_until": None,
+    }
+    (tmp_path / "queue.json").write_text(json.dumps(legacy), encoding="utf-8")
+    state = QueueStore(tmp_path / "queue.json").load()
+    assert state.state == QueueRunState.PAUSED
+    assert state.pause_reason is None
+
+
+def test_pause_reason_defaults_to_user(tmp_path):
+    """Existing callers that omit reason get the user code — every legacy
+    pause is user-initiated."""
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED)
+    assert store.load().pause_reason == "user"
+
+
+def test_pause_reason_stored_explicitly(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    assert store.load().pause_reason == "budget"
+
+
+def test_pause_reason_round_trips(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    state = QueueStore(tmp_path / "queue.json").load()
+    assert state.pause_reason == "budget"
+
+
+def test_pause_reason_cleared_on_running(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    store.set_queue_state(QueueRunState.RUNNING)
+    assert store.load().pause_reason is None
+
+
+def test_pause_reason_cleared_on_idle(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    store.set_queue_state(QueueRunState.IDLE)
+    assert store.load().pause_reason is None
+
+
+def test_pause_reason_cleared_on_auto_idle(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    assert store.auto_idle_if_empty() is True
+    assert store.load().pause_reason is None
+
+
+def test_precedence_budget_does_not_downgrade_user(tmp_path):
+    """A user pause is sticky: a later budget pause must NOT overwrite it."""
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="user")
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    assert store.load().pause_reason == "user"
+
+
+def test_precedence_user_overrides_budget(tmp_path):
+    """An explicit user action always wins: a manual pause over a budget
+    pause sets the reason to user."""
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    store.set_queue_state(QueueRunState.PAUSED, reason="user")
+    assert store.load().pause_reason == "user"
+
+
+def test_precedence_user_resets_after_clearing(tmp_path):
+    """The sticky-user rule only applies while already PAUSED: once the queue
+    leaves PAUSED, a fresh budget pause is honored."""
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="user")
+    store.set_queue_state(QueueRunState.RUNNING)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    assert store.load().pause_reason == "budget"
+
+
+def test_budget_pause_can_be_re_set_to_budget(tmp_path):
+    """Budget-over-budget is fine (no user pause to protect)."""
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    assert store.load().pause_reason == "budget"
+
+
+def test_pause_reason_in_snapshot(tmp_path):
+    store = _store(tmp_path)
+    store.set_queue_state(QueueRunState.PAUSED, reason="budget")
+    snap = store.snapshot()
+    parsed = json.loads(json.dumps(snap))
+    assert parsed["pause_reason"] == "budget"

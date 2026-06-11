@@ -89,3 +89,11 @@ class QueueState(BaseModel):
     # "paused until explicitly resumed" (the default). Cleared on any
     # transition out of PAUSED.
     paused_until: Optional[str] = None
+    # When state == PAUSED, *why* the queue is paused — a CODE, never a display
+    # string (i18n: codes only). "user" for a manual/timed user pause; "budget"
+    # for an enforcement trip (Budget Piece 2). None when not paused. Cleared on
+    # any transition out of PAUSED. Tail-appended for back-compat: old queue.json
+    # files without this field load fine (defaults to None). Budget auto-resume
+    # only touches pause_reason="budget" queues, so the store enforces a
+    # precedence rule (see set_queue_state) keeping an explicit user pause sticky.
+    pause_reason: Optional[str] = None
