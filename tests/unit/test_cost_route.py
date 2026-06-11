@@ -261,18 +261,35 @@ class TestBudgetCurrencySetOnce:
 
 
 class TestAnchorReset:
-    def test_reset_flag_sets_anchor_to_now(self, store, tmp_path, make_client,
-                                           override_file):
-        pid, ws = _new_project(store, tmp_path)
+    def test_reset_flag_sets_anchor_to_now_total_mode(self, store, tmp_path,
+                                                      make_client, override_file):
+        """P2-D: the reset is total-mode-only. In total mode the flag sets the
+        anchor to now and the response carries ``budget_reset.applied=True``."""
+        pid, ws = _new_project(store, tmp_path, budget_period="total")
         client = make_client(store)
         resp = client.put(f"/api/v2/projects/{pid}",
                           json={"reset_budget_anchor": True})
         assert resp.status_code == 200
+        assert resp.json()["budget_reset"]["applied"] is True
+        assert resp.json()["budget_reset"]["code"] is None
         anchor = store.get_project(pid).get("budget_anchor_ts")
         assert anchor is not None
         # Parseable ISO8601.
         from datetime import datetime
         datetime.fromisoformat(anchor)
+
+    def test_reset_flag_noop_non_total_mode(self, store, tmp_path, make_client,
+                                            override_file):
+        """P2-D: in a non-total window the reset is a no-op that returns the
+        machine code ``not_total_mode`` and leaves the anchor untouched."""
+        pid, ws = _new_project(store, tmp_path, budget_period="daily")
+        client = make_client(store)
+        resp = client.put(f"/api/v2/projects/{pid}",
+                          json={"reset_budget_anchor": True})
+        assert resp.status_code == 200
+        assert resp.json()["budget_reset"]["applied"] is False
+        assert resp.json()["budget_reset"]["code"] == "not_total_mode"
+        assert store.get_project(pid).get("budget_anchor_ts") is None
 
     def test_direct_anchor_value_honored(self, store, tmp_path, make_client,
                                          override_file):

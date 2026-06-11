@@ -501,6 +501,13 @@ class QueueDispatcher:
                                 self._project_id,
                             )
                             await self.resume()
+                        elif self._budget_auto_resume_ready(qstate):
+                            logger.info(
+                                "dispatcher(%s): budget pause cleared (now under "
+                                "limit, action!=stop); auto-resuming",
+                                self._project_id,
+                            )
+                            await self.resume()
                         else:
                             await self._wait_idle()
                         continue
@@ -577,6 +584,74 @@ class QueueDispatcher:
             )
             return False
         return datetime.now(timezone.utc) >= deadline
+
+    def _budget_auto_resume_ready(self, qstate: QueueState) -> bool:
+        """Decide whether a budget-paused queue may LAZILY auto-resume (P2-D).
+
+        Lazy, query-driven — NO timers, NO background tasks. Called only from
+        the PAUSED branch of ``_run`` on the dispatcher's EXISTING evaluation
+        cadence (the ``_wait_idle`` IDLE_WAIT_TIMEOUT_SEC tick, plus any
+        ``notify_new_item`` nudge — e.g. a limit raised via the PUT route). The
+        window boundary (period roll-over) is discovered by the same guard query
+        the loop uses; we never schedule a midnight wake-up.
+
+        Returns True iff ALL hold:
+          * ``pause_reason == "budget"`` — a USER pause never auto-resumes, and
+            we only ever touch budget-paused queues (precedence is enforced in
+            the store; here we just read the reason).
+          * the project's CURRENT ``budget_action`` is NOT ``stop`` — the
+            binding coordinator ruling: "nothing ever auto-resumes a stop". Only
+            ``pause``-mode projects auto-resume.
+          * the SAME guard query the loop runs (``evaluate_budget``) reports the
+            project is now UNDER limit (``decision.tripped is False``) — limit
+            raised, period rolled over, anchor moved, or pricing corrected.
+
+        Fail-safe: any error resolving config or evaluating the guard → False
+        (stay paused). Auto-resume must never fire on a transient read error.
+        """
+        if qstate.pause_reason != "budget":
+            return False
+        # Resolve the LIVE budget config via the shared reader (same source the
+        # loop's pre-flight guard uses). Tolerate a manager test-double without
+        # the accessor: no config → cannot prove under-limit → stay paused.
+        cfg_fn = getattr(self._agent_manager, "build_budget_config", None)
+        if not callable(cfg_fn):
+            return False
+        try:
+            cfg = cfg_fn(self._project_id)
+        except Exception:  # noqa: BLE001 — a bad read must not auto-resume
+            logger.warning(
+                "dispatcher(%s): budget config read failed; staying paused",
+                self._project_id, exc_info=True,
+            )
+            return False
+
+        from agent_os.budget.guard import (
+            evaluate_budget,
+            normalize_budget_action,
+            ACTION_STOP,
+        )
+
+        # Coordinator ruling: a project now in stop-mode NEVER auto-resumes,
+        # even if it happens to be under limit. Re-checked on the CURRENT config.
+        action = normalize_budget_action((cfg or {}).get("budget_action"))
+        if action == ACTION_STOP:
+            return False
+
+        fx_rates = (cfg or {}).get("fx_rates") if isinstance(cfg, dict) else None
+        try:
+            decision = evaluate_budget(
+                self._workspace or self._project_id, cfg, fx_rates=fx_rates,
+            )
+        except Exception:  # noqa: BLE001 — guard failure must not auto-resume
+            logger.warning(
+                "dispatcher(%s): budget guard eval failed; staying paused",
+                self._project_id, exc_info=True,
+            )
+            return False
+        # Under limit now → clear to resume. Still tripped → stay paused (no
+        # flap: we return False and the loop idles, leaving reason="budget").
+        return not decision.tripped
 
     # ------------------------------------------------------------------
     # Per-item dispatch

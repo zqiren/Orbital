@@ -571,17 +571,31 @@ async def update_project(project_id: str, body: ProjectUpdate):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    # Budget Piece 2: the legacy ``budget_spent_usd`` runtime accumulator is
-    # GONE — the token ledger is now the single source of recorded spend and
-    # nothing writes ``runtime.budget_spent_usd`` anymore. We still POP the
-    # request fields so they don't fall through to ``update_project`` as config,
-    # but the legacy reset WRITE is deleted.
+    # Inspect the RAW body (pre-None-filter) so we can detect a reset request
+    # that arrives as the legacy ``budget_spent_usd: 0`` sentinel — 0 is not
+    # None, but the None-filter below would still keep it; we read presence here
+    # to decide reset intent before that field is popped as config.
+    raw_body = body.model_dump()
+    updates = {k: v for k, v in raw_body.items() if v is not None}
+    # Budget Piece 2 / P2-D: the legacy ``budget_spent_usd`` runtime accumulator
+    # is GONE — the token ledger is now the single source of recorded spend and
+    # nothing writes ``runtime.budget_spent_usd`` anymore. The legacy "reset
+    # spend" request fields are now REPURPOSED, not retired: the existing UI's
+    # reset button still PUTs ``{budget_spent_usd: 0}`` (see web/src/components/
+    # SettingsView.tsx:293), and that must keep working. We UNIFY the three reset
+    # surfaces — ``reset_budget_anchor: true`` (Piece 1), legacy
+    # ``budget_spent_usd``, legacy ``runtime_budget_spent_usd`` — into a single
+    # "reset the ledger spend WINDOW" operation: set ``budget_anchor_ts = now``,
+    # but ONLY in ``budget_period == "total"`` mode (the only window an anchor
+    # affects). In any non-total mode the reset is a NO-OP that surfaces the
+    # machine code ``not_total_mode`` (codes only, no sentences — i18n rule).
     #
-    # SEAM for P2-D: the "reset spend" endpoint is repurposed to reset the
-    # ledger spend WINDOW (set ``budget_anchor_ts`` to now), not to zero a
-    # persisted dollar counter. That behavior change is P2-D's task; here we
-    # only retire the legacy write.
+    # The fields are mapped-and-consumed here so they never fall through to
+    # ``update_project`` as bogus config keys.
+    legacy_reset_requested = (
+        raw_body.get("budget_spent_usd") is not None
+        or raw_body.get("runtime_budget_spent_usd") is not None
+    )
     updates.pop("runtime_budget_spent_usd", None)
     updates.pop("budget_spent_usd", None)
 
@@ -591,13 +605,34 @@ async def update_project(project_id: str, body: ProjectUpdate):
         from agent_os.budget.guard import normalize_budget_action
         updates["budget_action"] = normalize_budget_action(updates["budget_action"])
 
-    # --- Budget Piece 1, Task 4: derived-cost window config ---
-    # "reset spend window" = set budget_anchor_ts to now (used only by the
-    # "total" window). A direct ISO budget_anchor_ts value is also honored. The
-    # bool flag is a control input, not a persisted field — pop it either way.
-    reset_anchor = updates.pop("reset_budget_anchor", None)
-    if reset_anchor:
-        updates["budget_anchor_ts"] = datetime.now(timezone.utc).isoformat()
+    # --- Reset spend window (P2-D unification) ---
+    # "reset spend window" = set budget_anchor_ts to now, total-mode-only. A
+    # direct ISO budget_anchor_ts value is also honored (unconditionally — that
+    # is an explicit anchor set, not the reset operation). The bool flag is a
+    # control input, not a persisted field — pop it either way.
+    reset_anchor_flag = updates.pop("reset_budget_anchor", None)
+    reset_requested = bool(reset_anchor_flag) or legacy_reset_requested
+    # The effective window after this PUT (an incoming period change wins over
+    # the stored one, so a single PUT that sets total + resets behaves sanely).
+    eff_period = updates.get("budget_period", project.get("budget_period")) or "daily"
+    # ``budget_reset`` is the machine-readable outcome the frontend can read off
+    # the PUT response (codes only): applied flag, the code on a no-op, and the
+    # new anchor when applied. None when no reset was requested.
+    budget_reset: dict | None = None
+    if reset_requested:
+        if eff_period == "total":
+            new_anchor = datetime.now(timezone.utc).isoformat()
+            updates["budget_anchor_ts"] = new_anchor
+            budget_reset = {
+                "applied": True, "code": None, "budget_anchor_ts": new_anchor,
+            }
+        else:
+            # No-op in non-total mode — the anchor only bounds the ``total``
+            # window. Surface the code so the UI can explain why nothing changed.
+            budget_reset = {
+                "applied": False, "code": "not_total_mode",
+                "budget_anchor_ts": project.get("budget_anchor_ts"),
+            }
     # The limit owns its currency (set-once semantics):
     #   - An explicit budget_currency in the PUT body always wins (user owns it).
     #   - Otherwise, when this update SETS a budget limit and the project has no
@@ -643,10 +678,40 @@ async def update_project(project_id: str, body: ProjectUpdate):
             _agent_manager.update_autonomy(project_id, new_autonomy)
         except ValueError:
             pass  # invalid value already persisted — interceptor keeps old preset
+
+    # P2-D nudge: a budget config change (limit raise, period roll, anchor move)
+    # must reach a budget-paused dispatcher so its lazy auto-resume guard re-runs
+    # PROMPTLY rather than only on the next _wait_idle timeout. Reuse the exact
+    # nudge the add-item route uses (``notify_new_item`` sets the dispatcher's
+    # idle event) — no new watcher, no timer. The dispatcher itself decides
+    # whether to resume (reason=="budget" + under-limit + action!=stop); the
+    # route only wakes it. Fire whenever any budget-affecting key changed OR a
+    # reset was applied.
+    _BUDGET_KEYS = {
+        "budget_limit_usd", "budget_action", "budget_period",
+        "budget_currency", "budget_anchor_ts",
+    }
+    if _agent_manager is not None and (
+        _BUDGET_KEYS & set(updates) or (budget_reset and budget_reset["applied"])
+    ):
+        dispatcher = _agent_manager.get_dispatcher(project_id)
+        if dispatcher is not None:
+            try:
+                dispatcher.notify_new_item()
+            except Exception:
+                logger.warning(
+                    "budget config nudge to dispatcher failed for %s",
+                    project_id, exc_info=True,
+                )
+
     updated = _project_store.get_project(project_id)
     result = _redact_project(updated)
     _enrich_with_disk_content(result, workspace)
     result["budget_spent_usd"] = result.get("runtime", {}).get("budget_spent_usd", 0.0)
+    # P2-D: surface the reset outcome (codes only) so the frontend can read the
+    # ``not_total_mode`` no-op code. None when no reset was requested this PUT.
+    if budget_reset is not None:
+        result["budget_reset"] = budget_reset
     return result
 
 

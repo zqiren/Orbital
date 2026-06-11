@@ -655,21 +655,11 @@ class AgentManager:
         # derivation) — the token ledger is now the single source of recorded
         # spend, and this guard is the single dollar-budget enforcement point.
         def get_budget_config() -> dict:
-            project = self._project_store.get_project(project_id) or {}
-            fx_rates: dict = {}
-            if self._settings_store is not None:
-                try:
-                    fx_rates = dict(self._settings_store.get().fx_rates or {})
-                except Exception:  # noqa: BLE001 — a bad read must not crash the loop
-                    fx_rates = {}
-            return {
-                "budget_limit_usd": project.get("budget_limit_usd"),
-                "budget_action": project.get("budget_action"),
-                "budget_period": project.get("budget_period", "daily"),
-                "budget_currency": project.get("budget_currency"),
-                "budget_anchor_ts": project.get("budget_anchor_ts"),
-                "fx_rates": fx_rates,
-            }
+            # Delegate to the shared builder so the loop's pre-flight guard and
+            # the dispatcher's lazy budget auto-resume (P2-D) read the SAME live
+            # config (project budget fields + daemon fx_rates) — one source, no
+            # drift between the two guard call sites.
+            return self.build_budget_config(project_id)
 
         # 12. Loop
         loop = AgentLoop(
@@ -2425,6 +2415,35 @@ class AgentManager:
 
     def get_dispatcher(self, project_id: str) -> "QueueDispatcher | None":
         return self._dispatchers.get(project_id)
+
+    def build_budget_config(self, project_id: str) -> dict:
+        """Resolve the LIVE budget config for ``project_id`` (Budget Piece 2).
+
+        The single shared reader for both budget guard call sites:
+          * the agent loop's pre-flight guard (``get_budget_config`` closure), and
+          * the dispatcher's lazy budget auto-resume (P2-D),
+        so a limit raise / period roll / anchor move / pricing fix is seen
+        identically by both — no duplicated read, no drift.
+
+        Returns the current project's budget fields plus the daemon-level
+        ``fx_rates`` from settings. Reads fresh on every call (never a
+        session-start snapshot — the B5 fix).
+        """
+        project = self._project_store.get_project(project_id) or {}
+        fx_rates: dict = {}
+        if self._settings_store is not None:
+            try:
+                fx_rates = dict(self._settings_store.get().fx_rates or {})
+            except Exception:  # noqa: BLE001 — a bad read must not crash callers
+                fx_rates = {}
+        return {
+            "budget_limit_usd": project.get("budget_limit_usd"),
+            "budget_action": project.get("budget_action"),
+            "budget_period": project.get("budget_period", "daily"),
+            "budget_currency": project.get("budget_currency"),
+            "budget_anchor_ts": project.get("budget_anchor_ts"),
+            "fx_rates": fx_rates,
+        }
 
     def get_loop_task(self, project_id: str, *,
                       session_id: str | None = None) -> "asyncio.Task | None":
