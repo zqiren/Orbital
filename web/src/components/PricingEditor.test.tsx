@@ -185,6 +185,25 @@ describe('PricingEditor', () => {
     expect(body.anthropic).toEqual({ _currency: 'CNY', _default: { input_per_1m: 7.0 } });
   });
 
+  it('revert clears the unsaved draft so the input falls back to the resolved value', async () => {
+    apiFn.mockResolvedValueOnce(makeTable());
+    render(<PricingEditor />);
+    await waitFor(() => expect(screen.getByText('openai')).toBeInTheDocument());
+
+    // openai/gpt-4o output is a persisted override (resolved value 99). Type a
+    // new draft "30" into it — the input now shows the raw draft.
+    const cell = screen.getByLabelText('Output rate for openai gpt-4o') as HTMLInputElement;
+    fireEvent.change(cell, { target: { value: '30' } });
+    expect(cell.value).toBe('30');
+
+    // Click the per-field revert. The draft must be dropped so the input falls
+    // back to the resolved value (99) — NOT the stale "30".
+    fireEvent.click(screen.getByLabelText('Revert Output for openai to default'));
+    expect(cell.value).toBe('99');
+    // And the cell is now styled as a (reverted) default, not an override.
+    expect(cell.getAttribute('data-origin')).toBe('default');
+  });
+
   it('maps a codes-only 400 to a localized error message', async () => {
     apiFn
       .mockResolvedValueOnce(makeTable())

@@ -76,12 +76,14 @@ export default function ProjectDetail({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 pt-5 pb-4 max-md:px-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="font-mono text-[18px] font-semibold text-primary truncate">{project.name}</h1>
+      <div className="flex items-center justify-between gap-2 px-6 pt-5 pb-4 max-md:px-4">
+        {/* Left cluster keeps a readable minimum so a long budget pill on the
+            right can never crush the title to 0 width (P3-J header collision). */}
+        <div className="flex items-center gap-3 min-w-[40%] flex-1">
+          <h1 className="font-mono text-[18px] font-semibold text-primary truncate min-w-0">{project.name}</h1>
           <StatusBadge status={agentStatus} />
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 min-w-0 shrink">
           {/* Budget corner (P3-G): converted window spend / warn / exhausted
               pill, next to the model name. Reads the same GET /cost as the
               settings meter; event-driven (no polling). Click → Budget settings.

@@ -84,9 +84,13 @@ export default function BudgetCorner({
         data-testid="budget-corner"
         data-state="exhausted"
         aria-label={t('budget.corner.aria')}
-        className="font-mono text-[11px] font-medium leading-none px-2 py-1 rounded-full text-error bg-error/10 hover:bg-error/15 transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center"
+        className="shrink-0 max-md:max-w-[55%] font-mono text-[11px] font-medium leading-none px-2 py-1 rounded-full text-error bg-error/10 hover:bg-error/15 transition-colors duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center whitespace-nowrap"
       >
-        {t('budget.corner.exhausted')}
+        {/* Full label on >=md; a compact label below it so the long string can't
+            crush the project title to 0 width on a 375px viewport (P3-J header
+            collision). Both keys are i18n; only the visible one renders text. */}
+        <span className="hidden md:inline">{t('budget.corner.exhausted')}</span>
+        <span className="md:hidden">{t('budget.corner.exhausted.short')}</span>
       </button>
     );
   }

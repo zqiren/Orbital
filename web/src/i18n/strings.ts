@@ -108,6 +108,7 @@ export const STRINGS = {
   "blocked.budget.marker": { en: "{n} budget", zh: "{n} 个预算" },
   "budget.corner.aria": { en: "Budget status — open Budget settings", zh: "预算状态 — 打开预算设置" },
   "budget.corner.exhausted": { en: "Budget paused · raise limit to resume", zh: "预算已暂停 · 提高上限以恢复" },
+  "budget.corner.exhausted.short": { en: "Budget paused", zh: "预算已暂停" },
   "budget.corner.normal": { en: "≈ {spent} {window}", zh: "{window} ≈ {spent}" },
   "budget.corner.warn": { en: "≈ {spent} / {limit} {window}", zh: "{window} ≈ {spent} / {limit}" },
   "budget.timeline.blocked.noLimit": { en: "Budget limit reached — queue paused (spent ≈ {spent} {window})", zh: "已达预算上限 — 队列已暂停（{window}已花费 ≈ {spent}）" },
