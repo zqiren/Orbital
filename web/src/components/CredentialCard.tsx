@@ -40,7 +40,7 @@ export default function CredentialCard({
 
   if (resolved || credential.resolved) {
     return (
-      <div className="mb-3 px-4 py-2 rounded-lg bg-sidebar text-sm">
+      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-sm">
         <span className="text-success">{t('credCard.providedHeader')}</span>{' '}
         <span className="text-secondary">{t('credCard.providedFor', { domain: credential.domain })}</span>
       </div>
@@ -87,7 +87,7 @@ export default function CredentialCard({
   const allFilled = credential.fields.every((f) => (values[f] || '').trim().length > 0);
 
   return (
-    <div className="mb-3 rounded-lg border border-border overflow-hidden">
+    <div className="mb-3 shrink-0 rounded-lg border border-border overflow-hidden">
       <div className="bg-accent/10 px-4 py-1.5 border-b border-border">
         <span className="text-accent font-semibold text-sm">{t('credCard.header')}</span>
       </div>

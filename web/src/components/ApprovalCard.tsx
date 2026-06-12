@@ -100,7 +100,7 @@ export default function ApprovalCard({
   if (resolution) {
     const isApproved = resolution === 'approved';
     return (
-      <div className="mb-3 px-4 py-2 rounded-lg bg-sidebar text-sm">
+      <div className="mb-3 shrink-0 px-4 py-2 rounded-lg bg-sidebar text-sm">
         <span className={isApproved ? 'text-success' : 'text-error'}>
           {isApproved ? t('approval.approved') : t('approval.denied')}:
         </span>{' '}
@@ -166,7 +166,7 @@ export default function ApprovalCard({
   }
 
   return (
-    <div className="mb-3 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-[#FFFBF0] overflow-hidden">
+    <div className="mb-3 shrink-0 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-[#FFFBF0] overflow-hidden">
       <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
         <span className="text-[10.5px] uppercase tracking-[0.6px] text-warning font-semibold">{t('approval.header')}</span>
       </div>
