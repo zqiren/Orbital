@@ -500,7 +500,9 @@ class TestAgentConfigNewFields:
         assert config.agent_slug == "built-in"
         assert config.enabled_sub_agents == []
         assert config.agent_credentials == {}
-        assert config.network_extra_domains == []
+        # network_extra_domains removed (TASK-network-config-cleanup): it was
+        # dead config — never plumbed into NetworkRules.
+        assert not hasattr(config, "network_extra_domains")
 
     def test_custom_values(self):
         from agent_os.daemon_v2.models import AgentConfig
@@ -512,12 +514,10 @@ class TestAgentConfigNewFields:
             agent_slug="claude-code",
             enabled_sub_agents=["claude-code"],
             agent_credentials={"ANTHROPIC_API_KEY": "sk-ant-123"},
-            network_extra_domains=["custom.api.com"],
         )
         assert config.agent_slug == "claude-code"
         assert config.enabled_sub_agents == ["claude-code"]
         assert config.agent_credentials == {"ANTHROPIC_API_KEY": "sk-ant-123"}
-        assert config.network_extra_domains == ["custom.api.com"]
 
 
 # ---------------------------------------------------------------------------

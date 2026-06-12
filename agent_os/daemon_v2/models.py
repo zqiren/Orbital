@@ -127,7 +127,9 @@ class AgentConfig:
     # remains for backward compatibility but is treated as informational only.
     disabled_sub_agents: list[str] = field(default_factory=list)
     agent_credentials: dict = field(default_factory=dict)
-    network_extra_domains: list[str] = field(default_factory=list)
+    # network_extra_domains REMOVED (TASK-network-config-cleanup): persisted but
+    # never plumbed into NetworkRules — the allowlist is internal/hardcoded
+    # (DEFAULT_ALLOWLIST_DOMAINS + per-agent manifest network_domains).
     project_name: str = ""
     project_instructions: str = ""
     budget_limit_usd: float | None = None

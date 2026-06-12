@@ -56,7 +56,6 @@ class CreateProjectRequest(BaseModel):
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
-    network_extra_domains: list[str] | None = None
     agent_name: str | None = None
     is_scratch: bool = False
     notification_prefs: dict | None = None
@@ -80,7 +79,6 @@ class ProjectUpdate(BaseModel):
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
     agent_credentials: dict | None = None
-    network_extra_domains: list[str] | None = None
     agent_name: str | None = None
     project_goals_content: str | None = None
     user_directives_content: str | None = None
@@ -387,6 +385,9 @@ def _redact_project(project: dict) -> dict:
     """Return project dict with api_key masked."""
     from agent_os.daemon_v2.project_store import DEFAULT_NOTIFICATION_PREFS
     result = dict(project)
+    # Legacy dead config (TASK-network-config-cleanup): tolerated on old
+    # records, never exposed externally; dropped from disk on next save.
+    result.pop("network_extra_domains", None)
     key = result.get("api_key", "")
     if key and len(key) > 8:
         result["api_key"] = key[:4] + "..." + key[-4:]
@@ -491,8 +492,6 @@ async def create_project(req: CreateProjectRequest):
         project_data["disabled_sub_agents"] = req.disabled_sub_agents
     if req.agent_credentials is not None:
         project_data["agent_credentials"] = req.agent_credentials
-    if req.network_extra_domains is not None:
-        project_data["network_extra_domains"] = req.network_extra_domains
     if req.notification_prefs is not None:
         project_data["notification_prefs"] = req.notification_prefs
     if req.llm_fallback_models is not None:
@@ -1012,7 +1011,6 @@ async def start_agent(req: StartAgentRequest):
         enabled_sub_agents=project.get("enabled_sub_agents", []),
         disabled_sub_agents=project.get("disabled_sub_agents", []),
         agent_credentials=project.get("agent_credentials", {}),
-        network_extra_domains=project.get("network_extra_domains", []),
         is_scratch=project.get("is_scratch", False),
         agent_name=project.get("agent_name", project.get("name", "")),
         global_preferences_path="",

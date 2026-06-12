@@ -189,6 +189,9 @@ class ProjectStore:
             existing = project.get("notification_prefs", {})
             updates["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **existing, **updates["notification_prefs"]}
         project.update(updates)
+        # Drop the legacy dead config on save (TASK-network-config-cleanup):
+        # old records load fine, but the key does not survive a save round-trip.
+        project.pop("network_extra_domains", None)
         self._save()
 
     def find_scratch_project(self) -> dict | None:
