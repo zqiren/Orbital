@@ -349,6 +349,71 @@ class AgentManager:
         except OSError:
             logger.warning("Failed to write approval history for project %s", project_id)
 
+    def _build_llm_providers(self, config: AgentConfig):
+        """Construct (provider, fallback_providers, utility_provider, model_info)
+        from an AgentConfig. Single construction site shared by start_agent
+        (fresh session) and _start_loop (hot-resume live-resolve)."""
+        api_key = resolve_api_key({"api_key": config.api_key})
+        model_info = self._provider_registry.get_model_info(config.provider, config.model)
+        provider = LLMProvider(
+            config.model, api_key, config.base_url, sdk=config.sdk,
+            max_output=model_info.max_output,
+            capabilities=model_info.capabilities,
+            reasoning=model_info.reasoning,
+            provider=config.provider,
+        )
+
+        fallback_providers = []
+        for fb in config.llm_fallback_models:
+            fb_key = fb.api_key or api_key
+            fb_info = self._provider_registry.get_model_info(
+                getattr(fb, 'provider', 'custom'), fb.model,
+            )
+            fallback_providers.append(
+                LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
+                            max_output=fb_info.max_output,
+                            capabilities=fb_info.capabilities,
+                            reasoning=fb_info.reasoning,
+                            provider=getattr(fb, 'provider', 'custom'))
+            )
+
+        if config.utility_model:
+            utility_info = self._provider_registry.get_model_info(config.provider, config.utility_model)
+            utility_provider = LLMProvider(
+                config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
+                reasoning=utility_info.reasoning,
+                provider=config.provider,
+            )
+        else:
+            utility_provider = provider
+
+        return provider, fallback_providers, utility_provider, model_info
+
+    @staticmethod
+    def _provider_config_changed(handle, cfg: AgentConfig) -> bool:
+        """True when the session's current LLM clients no longer match the
+        project's CURRENT config (provider/model/base_url/sdk, utility model,
+        or fallback list) — i.e. a hot resume must rebuild them."""
+        p = handle.provider
+        if (getattr(p, "model", None) != cfg.model
+                or getattr(p, "provider", None) != cfg.provider
+                or getattr(p, "base_url", None) != cfg.base_url
+                or getattr(p, "sdk", None) != cfg.sdk):
+            return True
+        loop = handle.loop
+        fb_models = [
+            getattr(fb, "model", None)
+            for fb in (getattr(loop, "_fallback_providers", None) or [])
+        ]
+        if fb_models != [fb.model for fb in cfg.llm_fallback_models]:
+            return True
+        utility = getattr(loop, "_utility_provider", None)
+        if utility is not None:
+            expected_utility = cfg.utility_model or cfg.model
+            if getattr(utility, "model", None) != expected_utility:
+                return True
+        return False
+
     async def start_agent(self, project_id: str, config: AgentConfig,
                           initial_message: str | None = None,
                           trigger_source: str | None = None,
@@ -403,42 +468,11 @@ class AgentManager:
             if caps.isolation_method != "none":
                 self._platform_provider.grant_folder_access(config.workspace, "read_write")
 
-        # 1. Provider (centralized API key resolution)
-        api_key = resolve_api_key({"api_key": config.api_key})
-        model_info = self._provider_registry.get_model_info(config.provider, config.model)
-        provider = LLMProvider(
-            config.model, api_key, config.base_url, sdk=config.sdk,
-            max_output=model_info.max_output,
-            capabilities=model_info.capabilities,
-            reasoning=model_info.reasoning,
-            provider=config.provider,
+        # 1. Providers (centralized API key resolution) — shared with the
+        # hot-resume live-resolve in _start_loop.
+        provider, fallback_providers, utility_provider, model_info = (
+            self._build_llm_providers(config)
         )
-
-        # 1a. Fallback providers
-        fallback_providers = []
-        for fb in config.llm_fallback_models:
-            fb_key = fb.api_key or api_key
-            fb_info = self._provider_registry.get_model_info(
-                getattr(fb, 'provider', 'custom'), fb.model,
-            )
-            fallback_providers.append(
-                LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
-                            max_output=fb_info.max_output,
-                            capabilities=fb_info.capabilities,
-                            reasoning=fb_info.reasoning,
-                            provider=getattr(fb, 'provider', 'custom'))
-            )
-
-        # 1b. Utility provider
-        if config.utility_model:
-            utility_info = self._provider_registry.get_model_info(config.provider, config.utility_model)
-            utility_provider = LLMProvider(
-                config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
-                reasoning=utility_info.reasoning,
-                provider=config.provider,
-            )
-        else:
-            utility_provider = provider
 
         # 2. Tool registry
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
@@ -571,13 +605,26 @@ class AgentManager:
             session_id=session_id,
         )
 
-        # 11. Session-end callback
+        # 11. Session-end callback.
+        # Providers are resolved at CALL time from the live handle (not
+        # closure-captured from session start) so the memory flush / state
+        # refresh runs on the provider the project CURRENTLY configures —
+        # _start_loop may have live-resolved a switch since this session began.
+        def _live_providers():
+            h = self._handles.get(sk)
+            if h is not None:
+                live = h.provider
+                util = getattr(h.loop, "_utility_provider", None) or live
+                return live, util
+            return provider, utility_provider
+
         async def session_end_callback():
+            live_provider, live_utility = _live_providers()
             await run_session_end_routine(
                 session=session,
-                provider=provider,
+                provider=live_provider,
                 workspace_files=workspace_files,
-                utility_provider=utility_provider,
+                utility_provider=live_utility,
                 session_uuid=session.session_uuid,
                 project_id=project_id,
             )
@@ -596,11 +643,12 @@ class AgentManager:
                 "timestamp": ts,
             }, session_id=session_id)
             try:
+                live_provider, live_utility = _live_providers()
                 await run_session_end_routine(
                     session=session,
-                    provider=provider,
+                    provider=live_provider,
                     workspace_files=workspace_files,
-                    utility_provider=utility_provider,
+                    utility_provider=live_utility,
                     session_uuid=session.session_uuid,
                     bypass_idempotency=True,
                     project_id=project_id,
@@ -2833,26 +2881,63 @@ class AgentManager:
             return
         handle.last_activity = time.time()  # resume = activity; defer eviction
 
-        # Re-resolve API key so a key changed in settings takes effect
-        # without requiring a full agent restart.
-        project = self._project_store.get_project(project_id) or {}
-        cred_key = self._credential_store.get_api_key() if self._credential_store else None
-        global_settings = self._settings_store.get() if self._settings_store else None
-        fresh_key = (
-            project.get("api_key")
-            or cred_key
-            or (global_settings.llm.api_key if global_settings else None)
-            or ""
-        )
-        handle.provider.update_api_key(fresh_key)
-        # Also update utility and fallback providers on the loop
+        # Live-resolve the LLM provider/model/key from the CURRENT project
+        # config at turn start (TASK-session-provider-live-resolve): a provider
+        # switched in project settings takes effect on the next turn of every
+        # existing session — never a creation-time snapshot. A material change
+        # (provider/model/base_url/sdk/utility/fallbacks) rebuilds the clients;
+        # otherwise only the API key is refreshed in place (no client churn on
+        # the unchanged path). Resolution failure (e.g. project deleted
+        # mid-flight) keeps the existing providers and falls back to the
+        # legacy key-only refresh.
         loop = handle.loop
-        if hasattr(loop, '_utility_provider') and loop._utility_provider is not None:
-            if loop._utility_provider is not handle.provider:
-                loop._utility_provider.update_api_key(fresh_key)
-        if hasattr(loop, '_fallback_providers'):
-            for fb in loop._fallback_providers:
-                fb.update_api_key(fresh_key)
+        fresh_cfg = None
+        try:
+            fresh_cfg = self._build_agent_config_from_project(project_id)
+        except Exception:
+            logger.warning(
+                "_start_loop(%s): live provider resolution failed; "
+                "keeping existing providers", project_id, exc_info=True,
+            )
+        if fresh_cfg is not None and self._provider_config_changed(handle, fresh_cfg):
+            provider, fallback_providers, utility_provider, _info = (
+                self._build_llm_providers(fresh_cfg)
+            )
+            handle.provider = provider
+            loop._provider = provider
+            loop._utility_provider = utility_provider
+            loop._fallback_providers = fallback_providers
+            handle.config_snapshot.update({
+                "model": fresh_cfg.model,
+                "provider": fresh_cfg.provider,
+                "sdk": fresh_cfg.sdk,
+                "fallback_models": [fb.model for fb in fresh_cfg.llm_fallback_models],
+            })
+            logger.info(
+                "_start_loop(%s): live-resolved LLM provider -> %s/%s",
+                project_id, fresh_cfg.provider, fresh_cfg.model,
+            )
+        else:
+            if fresh_cfg is not None:
+                fresh_key = resolve_api_key({"api_key": fresh_cfg.api_key})
+            else:
+                # Legacy derivation (project unresolvable): credential store →
+                # global settings.
+                cred_key = self._credential_store.get_api_key() if self._credential_store else None
+                global_settings = self._settings_store.get() if self._settings_store else None
+                fresh_key = (
+                    cred_key
+                    or (global_settings.llm.api_key if global_settings else None)
+                    or ""
+                )
+            handle.provider.update_api_key(fresh_key)
+            # Also update utility and fallback providers on the loop
+            if hasattr(loop, '_utility_provider') and loop._utility_provider is not None:
+                if loop._utility_provider is not handle.provider:
+                    loop._utility_provider.update_api_key(fresh_key)
+            if hasattr(loop, '_fallback_providers'):
+                for fb in loop._fallback_providers:
+                    fb.update_api_key(fresh_key)
 
         task = asyncio.create_task(handle.loop.run())
         task.add_done_callback(
