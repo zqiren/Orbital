@@ -7,6 +7,7 @@ import type { FallbackModelEntry, ProviderRegistry } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import CredentialStore from './CredentialStore';
+import BrowserSignInCard from './BrowserSignInCard';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
 import { useLocale } from '../i18n/LocaleContext';
@@ -169,6 +170,11 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
             </p>
           </div>
           <CredentialStore />
+        </div>
+
+        {/* Browser Sign-In */}
+        <div className="mt-8 pt-6 border-t border-border">
+          <BrowserSignInCard />
         </div>
 
         {/* Sub-agents */}

@@ -528,6 +528,73 @@ class TestBrowserChannelFallback:
 
 
 # ---------------------------------------------------------------------------
+# close_for_handoff tests (settings browser sign-in)
+# ---------------------------------------------------------------------------
+
+class TestCloseForHandoff:
+    """close_for_handoff() releases the profile lock for a headed sign-in,
+    leaving the manager relaunchable via the lazy ensure_browser()."""
+
+    @pytest.mark.asyncio
+    async def test_close_for_handoff_clears_context_pages_and_state(self, tmp_path):
+        """Live context + pages -> close_for_handoff closes everything and resets state."""
+        pages = [_make_mock_page() for _ in range(2)]
+        ctx = _make_mock_context(pages=pages)
+        pw = _make_mock_playwright(ctx)
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            await mgr.get_page("proj_a")
+            await mgr.get_page("proj_b")
+
+        await mgr.close_for_handoff()
+
+        ctx.close.assert_awaited()
+        pw.stop.assert_awaited()
+        assert mgr._context is None
+        assert mgr._browser is None
+        assert mgr._playwright is None
+        assert mgr._project_pages == {}
+        assert mgr._page_state == {}
+
+    @pytest.mark.asyncio
+    async def test_ensure_browser_relaunches_after_close_for_handoff(self, tmp_path):
+        """After close_for_handoff, the next ensure_browser() lazily relaunches."""
+        ctx1 = _make_mock_context()
+        pw1 = _make_mock_playwright(ctx1)
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw1)
+            await mgr.ensure_browser()
+
+        await mgr.close_for_handoff()
+
+        ctx2 = _make_mock_context()
+        pw2 = _make_mock_playwright(ctx2)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw2)
+            result = await mgr.ensure_browser()
+
+        assert result is ctx2
+        pw2.chromium.launch_persistent_context.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_close_for_handoff_noop_when_no_context(self, tmp_path):
+        """Never-launched manager -> close_for_handoff is a no-op, no errors."""
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+
+        await mgr.close_for_handoff()
+
+        assert mgr._context is None
+        assert mgr._browser is None
+        assert mgr._playwright is None
+        assert mgr._project_pages == {}
+        assert mgr._page_state == {}
+
+
+# ---------------------------------------------------------------------------
 # Browser warmup tests
 # ---------------------------------------------------------------------------
 

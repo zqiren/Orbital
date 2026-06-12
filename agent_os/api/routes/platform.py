@@ -8,6 +8,7 @@ Exposes sandbox setup, status, and folder access control to the desktop app (Ele
 """
 
 import asyncio
+import inspect
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
@@ -182,11 +183,33 @@ async def browser_warmup(req: BrowserWarmupRequest = BrowserWarmupRequest()):
     Starts the warmup browser in a background task and returns immediately.
     The frontend polls GET /browser/warmup/status to detect when the user
     closes the browser.
+
+    Guarded on RUNNING SESSIONS, not on context existence: the daemon's
+    headless context holds the profile lock once lazily launched, so we
+    close it (close_for_handoff) before launching the headed warmup. While
+    any session is running that close would yank the browser out from under
+    it — refuse with 409 instead.
     """
     if _browser_manager is None:
         raise HTTPException(status_code=503, detail="Browser manager not available")
     if _browser_manager.warmup_active:
         return {"status": "already_active"}
+
+    if _agent_manager is not None:
+        project_ids = {pid for (pid, _sid) in _agent_manager._handles.keys()}
+        for pid in project_ids:
+            for sess in _agent_manager.list_sessions(pid):
+                if sess["status"] != "idle":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A session is currently running. Stop running sessions, then try again.",
+                    )
+
+    # Release the profile lock held by the idle daemon context (no-op if
+    # never launched). isawaitable: tolerates sync doubles in route tests.
+    close_result = _browser_manager.close_for_handoff()
+    if inspect.isawaitable(close_result):
+        await close_result
 
     async def _run_warmup():
         try:

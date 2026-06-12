@@ -670,6 +670,22 @@ class BrowserManager:
         self._playwright = None
         logger.info("Browser shutdown complete")
 
+    async def close_for_handoff(self):
+        """Release the browser profile lock for a headed sign-in handoff.
+
+        The persistent profile dir is locked (SingletonLock) by whichever
+        instance holds it, so the headed warmup browser cannot launch while
+        the daemon's headless context lives. This closes the context and
+        stops playwright (same teardown as ``shutdown()``), clearing
+        ``_project_pages``/``_page_state`` — the manager stays relaunchable
+        via the lazy ``ensure_browser()``. No-op when no context exists.
+        """
+        if self._context is None and self._playwright is None:
+            return
+        logger.info("Closing daemon browser context for sign-in handoff")
+        await self._cleanup_stale()
+        logger.info("Daemon browser context closed — profile lock released")
+
     # ------------------------------------------------------------------
     # Browser warmup (headed session for cookie warmup)
     # ------------------------------------------------------------------
