@@ -30,6 +30,11 @@ from agent_os.api.routes import agents_v2
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# the /cancel route forwards the body session_id to cancel_message.
+SID = "sess-stoprm-1"
+
+
 def _build_client():
     """AgentManager with one idle handle, wired behind a TestClient."""
     sub_agent_mgr = MagicMock()
@@ -58,7 +63,7 @@ def _build_client():
         task=None,
     )
     pid = "proj_stopgone"
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
 
     saved = {k: getattr(agents_v2, k)
              for k in ["_project_store", "_agent_manager", "_ws_manager", "_sub_agent_manager"]}
@@ -96,12 +101,12 @@ def test_cancel_still_works_and_keeps_session():
     """POST /api/v2/agents/{id}/cancel still 200s and leaves the handle loaded."""
     client, mgr, pid, saved = _build_client()
     try:
-        resp = client.post(f"/api/v2/agents/{pid}/cancel")
+        resp = client.post(f"/api/v2/agents/{pid}/cancel", json={"session_id": SID})
         assert resp.status_code == 200
         # idle handle → cancel is a no-op that reports the live status.
         assert resp.json()["status"] == "idle"
         # Session stays in memory, resumable immediately (NOT torn down).
-        assert (pid, "default") in mgr._handles
+        assert (pid, SID) in mgr._handles
     finally:
         client.close()
         _restore(saved)

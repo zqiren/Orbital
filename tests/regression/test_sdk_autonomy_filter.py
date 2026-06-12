@@ -330,9 +330,9 @@ class TestSubAgentManagerAutonomyWiring:
         mock_transport.update_autonomy = MagicMock()
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters[("proj_1", "default")] = {"claude-code": mock_adapter}
+        mgr._adapters[("proj_1", "sess-auto-0001")] = {"claude-code": mock_adapter}
 
-        mgr.update_sub_agent_autonomy("proj_1", Autonomy.HANDS_OFF)
+        mgr.update_sub_agent_autonomy("proj_1", Autonomy.HANDS_OFF, session_id="sess-auto-0001")
 
         mock_transport.update_autonomy.assert_called_once_with(Autonomy.HANDS_OFF)
 
@@ -348,10 +348,10 @@ class TestSubAgentManagerAutonomyWiring:
         mock_transport = MagicMock(spec=[])  # empty spec = no attributes
         mock_adapter = MagicMock()
         mock_adapter._transport = mock_transport
-        mgr._adapters[("proj_1", "default")] = {"other-agent": mock_adapter}
+        mgr._adapters[("proj_1", "sess-auto-0001")] = {"other-agent": mock_adapter}
 
         # Should not raise
-        mgr.update_sub_agent_autonomy("proj_1", Autonomy.CHECK_IN)
+        mgr.update_sub_agent_autonomy("proj_1", Autonomy.CHECK_IN, session_id="sess-auto-0001")
 
     def test_update_sub_agent_autonomy_no_adapters(self):
         """No-op when no adapters are running for the project."""
@@ -362,4 +362,4 @@ class TestSubAgentManagerAutonomyWiring:
         mgr = SubAgentManager(process_manager=pm)
 
         # Should not raise
-        mgr.update_sub_agent_autonomy("nonexistent_project", Autonomy.CHECK_IN)
+        mgr.update_sub_agent_autonomy("nonexistent_project", Autonomy.CHECK_IN, session_id="sess-auto-0001")

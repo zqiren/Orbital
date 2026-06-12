@@ -19,6 +19,11 @@ import pytest
 from agent_os.daemon_v2.agent_manager import AgentManager
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# bare project-level calls no longer resolve to a planted handle.
+SID = "sess-pause-0001"
+
+
 @pytest.fixture
 def manager():
     """Create an AgentManager with minimal mocks."""
@@ -62,9 +67,9 @@ class TestOnLoopDonePendingApproval:
 
     def test_broadcasts_pending_approval_when_paused(self, manager):
         handle, task_mock = _make_handle(paused_for_approval=True)
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        callback = manager._on_loop_done("proj_test")
+        callback = manager._on_loop_done("proj_test", session_id=SID)
         callback(task_mock)
 
         manager._ws.broadcast.assert_called()
@@ -76,9 +81,9 @@ class TestOnLoopDonePendingApproval:
 
     def test_does_not_broadcast_idle_when_paused(self, manager):
         handle, task_mock = _make_handle(paused_for_approval=True)
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        callback = manager._on_loop_done("proj_test")
+        callback = manager._on_loop_done("proj_test", session_id=SID)
         callback(task_mock)
 
         # None of the broadcast calls should contain 'idle'
@@ -90,9 +95,9 @@ class TestOnLoopDonePendingApproval:
     def test_broadcasts_idle_when_not_paused(self, manager):
         """Normal case: no approval pause -> broadcasts idle."""
         handle, task_mock = _make_handle(paused_for_approval=False)
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        callback = manager._on_loop_done("proj_test")
+        callback = manager._on_loop_done("proj_test", session_id=SID)
         callback(task_mock)
 
         manager._ws.broadcast.assert_called()
@@ -106,14 +111,14 @@ class TestGetRunStatusPendingApproval:
 
     def test_returns_pending_approval_when_paused(self, manager):
         handle, _ = _make_handle(paused_for_approval=True)
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        status = manager.get_run_status("proj_test")
+        status = manager.get_run_status("proj_test", session_id=SID)
         assert status == "pending_approval"
 
     def test_returns_idle_when_not_paused(self, manager):
         handle, _ = _make_handle(paused_for_approval=False)
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        status = manager.get_run_status("proj_test")
+        status = manager.get_run_status("proj_test", session_id=SID)
         assert status == "idle"

@@ -58,7 +58,7 @@ async def test_lifecycle_to_session_injection():
     injected = []
 
     am = MagicMock()
-    async def fake_inject(project_id, content):
+    async def fake_inject(project_id, content, session_id=None):  # session_id threaded since Piece 3 (2ce0182)
         session.append({"role": "system", "content": content, "source": "daemon"})
         injected.append(content)
         return "delivered"

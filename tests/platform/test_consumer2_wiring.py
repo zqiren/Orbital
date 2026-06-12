@@ -272,8 +272,15 @@ class TestShellToolParamMapping:
 class TestShellToolNullProviderIntegration:
     """Integration test: ShellTool with NullProvider."""
 
+    @pytest.mark.requires_windows
     def test_echo_with_null_provider(self):
-        """Execute 'echo hello' through ShellTool backed by NullProvider."""
+        """Execute 'echo hello' through ShellTool backed by NullProvider.
+
+        requires_windows: _make_shell_tool defaults os_type="windows", so the
+        ShellTool builds a ``powershell`` command line, and NullProvider is a
+        real-subprocess passthrough (it executes, it does not stub) — so this
+        needs powershell, i.e. a Windows machine (triage 2026-06-12).
+        """
         from agent_os.platform.null import NullProvider
 
         provider = NullProvider()

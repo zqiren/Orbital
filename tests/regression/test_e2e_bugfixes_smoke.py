@@ -197,7 +197,7 @@ class TestBug005a_SDKTransportStreaming:
         # the message reaching the consumer in real-time)
         consumer_received = asyncio.Event()
 
-        def on_message_hook(msg, project_id):
+        def on_message_hook(msg, project_id, session_id=None):  # session_id stamped since 113ff70/006bcec
             consumer_received.set()
 
         activity_translator.on_message = on_message_hook

@@ -14,10 +14,17 @@ when a manifest pairs ``command: claude`` with ``transport: acp``. The fixture
 stands in for future ACP-compliant agents (gemini-cli etc.).
 """
 import os
+import sys
+
 import pytest
 from agent_os.agent.adapters.base import AdapterConfig
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.transports.acp_transport import ACPTransport
+
+# Spawn the dummy ACP agent with THIS interpreter: a bare "python" only
+# resolves when a venv is activated, which made these 5 tests fail in any
+# non-activated shell (triage 2026-06-12 — harness fragility, not product).
+PYTHON = sys.executable
 
 
 class TestACPTransportE2E:
@@ -26,7 +33,7 @@ class TestACPTransportE2E:
         script = os.path.join(os.path.dirname(__file__), "fixtures", "dummy_acp_agent.py")
         transport = ACPTransport()
         adapter = CLIAdapter(handle="dummy-acp", display_name="Dummy ACP", transport=transport)
-        config = AdapterConfig(command="python", workspace=".", approval_patterns=[], args=[script])
+        config = AdapterConfig(command=PYTHON, workspace=".", approval_patterns=[], args=[script])
         await adapter.start(config)
         assert transport.session_id is not None
         assert transport.session_id == "dummy-sess-001"
@@ -41,7 +48,7 @@ class TestACPTransportE2E:
         script = os.path.join(os.path.dirname(__file__), "fixtures", "dummy_acp_agent.py")
         transport = ACPTransport()
         adapter = CLIAdapter(handle="dummy-acp", display_name="Dummy ACP", transport=transport)
-        config = AdapterConfig(command="python", workspace=".", approval_patterns=[], args=[script])
+        config = AdapterConfig(command=PYTHON, workspace=".", approval_patterns=[], args=[script])
         await adapter.start(config)
         sid = transport.session_id
         await adapter.send("msg1")
@@ -55,7 +62,7 @@ class TestACPTransportE2E:
         script = os.path.join(os.path.dirname(__file__), "fixtures", "dummy_acp_agent_with_permissions.py")
         transport = ACPTransport()
         adapter = CLIAdapter(handle="dummy-acp-perms", display_name="Dummy ACP Perms", transport=transport)
-        config = AdapterConfig(command="python", workspace=".", approval_patterns=[], args=[script])
+        config = AdapterConfig(command=PYTHON, workspace=".", approval_patterns=[], args=[script])
         await adapter.start(config)
         await adapter.send("do something")
         response = adapter._last_response
@@ -68,7 +75,7 @@ class TestACPTransportE2E:
         script = os.path.join(os.path.dirname(__file__), "fixtures", "dummy_acp_agent.py")
         transport = ACPTransport()
         adapter = CLIAdapter(handle="dummy-acp", display_name="Dummy ACP", transport=transport)
-        config = AdapterConfig(command="python", workspace=".", approval_patterns=[], args=[script])
+        config = AdapterConfig(command=PYTHON, workspace=".", approval_patterns=[], args=[script])
         await adapter.start(config)
         assert transport.is_alive()
         await adapter.stop()
@@ -79,7 +86,7 @@ class TestACPTransportE2E:
         """Test ACPTransport directly without CLIAdapter."""
         script = os.path.join(os.path.dirname(__file__), "fixtures", "dummy_acp_agent.py")
         transport = ACPTransport()
-        await transport.start("python", [script], ".")
+        await transport.start(PYTHON, [script], ".")
         assert transport.session_id == "dummy-sess-001"
         response = await transport.send("direct ACP test")
         assert "Echo: direct ACP test" in response

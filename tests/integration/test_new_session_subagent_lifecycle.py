@@ -30,6 +30,19 @@ from fastapi.testclient import TestClient
 from agent_os.api.routes import agents_v2
 from agent_os.agent.project_paths import ProjectPaths  # noqa: F401  (kept for test parity, currently unused after slug removal)
 
+# DELETION CANDIDATE (test triage 2026-06-12) — both tests assert that
+# POST /new-session stops sub-agents / rotates the running session, but
+# new_session was rewritten as PURE-CREATE in 8083e35: it mints an identity,
+# "writes no file and touches no running session" (route docstring,
+# agents_v2.py:1362), and explicitly does not stop sub-agents
+# (agent_manager.new_session docstring). The surviving pure-create contract is
+# covered by tests/regression/test_new_session_pure_create.py and
+# test_new_session_uuid_only.py. Listed for deletion pending review.
+pytestmark = pytest.mark.skip(
+    reason="DELETION CANDIDATE: asserts new_session stops sub-agents — retired by "
+           "8083e35 (pure-create); see test_new_session_pure_create.py",
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

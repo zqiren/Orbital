@@ -19,6 +19,10 @@ import websockets
 
 from .conftest import DAEMON_BASE, RELAY_BASE, RELAY_WS
 
+# Requires the relay server source tree (./relay), which is deployed on Railway
+# and not part of this checkout — see docs/TESTING-markers.md.
+pytestmark = pytest.mark.requires_relay
+
 
 def _pair_phone(daemon_http: httpx.Client, phone_http: httpx.Client) -> dict:
     """Helper: run pairing flow and return full pair result."""

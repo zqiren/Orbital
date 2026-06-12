@@ -42,6 +42,16 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Resource markers: tests carrying these are SKIPPED by default unless the
+# resource is present / explicitly opted into. See docs/TESTING-markers.md
+# for the exact command to run each group on a real machine.
+markers = [
+    "live_daemon: spawns a real claude/codex/uvicorn process (opt-in: ORBITAL_LIVE_DAEMON_TESTS=1)",
+    "live_sandbox: runs a REAL sandbox-exec against ~/Desktop — can EPERM-lock the dev tree (opt-in: ORBITAL_LIVE_SANDBOX_TESTS=1)",
+    "requires_windows: needs a real Windows machine (powershell / ctypes.windll / win32 APIs)",
+    "requires_keychain: needs a functional unlocked OS keychain (opt-in: ORBITAL_KEYCHAIN_TESTS=1)",
+    "requires_relay: needs the relay server source tree at ./relay (not part of this checkout)",
+]
 
 [tool.setuptools.packages.find]
 include = ["agent_os*"]

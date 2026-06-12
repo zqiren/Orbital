@@ -102,13 +102,25 @@ class _PauseResumeAgentManager:
         self._sub_agent_manager_obj = AsyncMock()
         self._sub_agent_manager_obj.stop_all = AsyncMock(return_value=None)
 
-    def get_session(self, project_id):
+    def get_session(self, project_id, *, session_id=None):
         return self._sessions[self._current_sid]
 
-    def get_loop(self, project_id):
+    def current_holder_session_id(self, project_id):
+        # The dispatcher live-reads the slot holder since 8083e35 (pure-create
+        # + materialize-on-first-message); without this accessor its run loop
+        # died with AttributeError ("unhandled error, backing off") and items
+        # never reached RUNNING.
+        return self._current_sid if self._task and not self._task.done() else None
+
+    def is_onboarding_complete(self, project_id):
+        # Dispatcher gates auto-start on onboarding since a1cffaa; these
+        # roundtrip tests model an onboarded project.
+        return True
+
+    def get_loop(self, project_id, *, session_id=None):
         return self._loop
 
-    def get_loop_task(self, project_id):
+    def get_loop_task(self, project_id, *, session_id=None):
         return self._task
 
     def get_sub_agent_manager(self):
@@ -119,7 +131,9 @@ class _PauseResumeAgentManager:
         self._next_summary = summary
         self._next_block_reason = block_reason
 
-    async def inject_message(self, project_id, content, *, nonce=None, session_id=None):
+    async def inject_message(self, project_id, content, *, nonce=None,
+                             session_id=None, queue_state=None):
+        # queue_state kwarg added with the dispatcher's first-turn contract inject
         # Append to the CURRENTLY ACTIVE session — no implicit swap. This is
         # the heart of the regression test: if pause swapped sessions, this
         # message would land in the chat session, not the parked attempt.
@@ -202,7 +216,9 @@ class _PauseResumeAgentManager:
         self._loop._exit_reason = "text"
         self._loop._exit_summary = None
         self._loop._exit_block_reason = None
-        return {"status": "new_session"}
+        # The dispatcher reads minted["session_id"] since the pure-create
+        # rewrite (8083e35) — mirror the real new_session() return shape.
+        return {"status": "new_session", "session_id": sid}
 
 
 async def _wait(predicate, timeout=5.0, interval=0.05):

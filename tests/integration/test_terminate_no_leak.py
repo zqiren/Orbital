@@ -44,6 +44,10 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-noleak-1"
+
+
 class _SlowStreamProvider:
     """Yields one chunk then hangs forever."""
 
@@ -147,7 +151,7 @@ def _make_manager_with_loop(workspace, project_id, provider=None):
         task=None,
         config_snapshot={"workspace": workspace, "model": "fake-slow"},
     )
-    mgr._handles[(project_id, "default")] = handle
+    mgr._handles[(project_id, SID)] = handle
     return mgr, ws, handle
 
 
@@ -167,6 +171,11 @@ def _read_session_messages(filepath):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="DELETION CANDIDATE: asserts new_session terminates the old loop — "
+           "retired by 8083e35 (pure-create: new_session touches no running "
+           "session); see test_new_session_pure_create.py",
+)
 @pytest.mark.asyncio
 async def test_new_session_terminates_in_under_3s_without_leak():
     """Direct mgr.new_session() on an in-flight loop returns in < 3s and
@@ -193,7 +202,7 @@ async def test_new_session_terminates_in_under_3s_without_leak():
         run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
         handle.task = run_task
         run_task.add_done_callback(
-            mgr._on_loop_done(project_id, session_id="default")
+            mgr._on_loop_done(project_id, session_id=SID)
         )
 
         try:
@@ -253,7 +262,7 @@ async def test_new_session_terminates_in_under_3s_without_leak():
             )
 
             # ---- A6: new session exists and is fresh ----
-            new_handle = mgr._handles.get((project_id, "default"))
+            new_handle = mgr._handles.get((project_id, SID))
             assert new_handle is not None, "New handle must exist after new_session"
             assert new_handle.session._filepath != old_session_path, (
                 "New session must have a different JSONL file"
@@ -327,7 +336,7 @@ async def test_dispatcher_survives_stop_agent_and_is_drained_by_shutdown():
         run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
         handle.task = run_task
         run_task.add_done_callback(
-            mgr._on_loop_done(project_id, session_id="default")
+            mgr._on_loop_done(project_id, session_id=SID)
         )
         deadline = time.monotonic() + 2.0
         while provider.chunks_yielded < 1 and time.monotonic() < deadline:
@@ -336,7 +345,7 @@ async def test_dispatcher_survives_stop_agent_and_is_drained_by_shutdown():
 
         try:
             tasks_before = set(asyncio.all_tasks())
-            await asyncio.wait_for(mgr.stop_agent(project_id), timeout=5.0)
+            await asyncio.wait_for(mgr.stop_agent(project_id, session_id=SID), timeout=5.0)
 
             # ---- A1: dispatcher SURVIVES agent stop ----
             # The dispatcher is the project's session-lifecycle manager; it

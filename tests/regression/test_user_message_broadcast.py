@@ -21,6 +21,11 @@ import pytest
 from agent_os.daemon_v2.activity_translator import ActivityTranslator
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# bare project-level calls no longer resolve to a planted handle.
+SID = "sess-bcast-0001"
+
+
 class TestUserMessageBroadcast:
     """ActivityTranslator broadcasts chat.user_message for user messages."""
 
@@ -138,11 +143,11 @@ class TestInjectNoncePropagation:
         mock_handle.task = mock_task
         mock_handle.session = mock_session
 
-        mgr._handles[("proj_test", "default")] = mock_handle
+        mgr._handles[("proj_test", SID)] = mock_handle
 
         # Patch _start_loop to avoid actually starting an agent loop
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            result = await mgr.inject_message("proj_test", "hello", nonce="nonce-xyz")
+            result = await mgr.inject_message("proj_test", "hello", nonce="nonce-xyz", session_id=SID)
 
         assert result == "delivered"
         assert len(appended_messages) == 1
@@ -178,10 +183,10 @@ class TestInjectNoncePropagation:
         mock_handle.task = mock_task
         mock_handle.session = mock_session
 
-        mgr._handles[("proj_test", "default")] = mock_handle
+        mgr._handles[("proj_test", SID)] = mock_handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
-            await mgr.inject_message("proj_test", "hi")
+            await mgr.inject_message("proj_test", "hi", session_id=SID)
 
         assert "nonce" not in appended[0]
 

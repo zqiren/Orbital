@@ -172,6 +172,12 @@ def manager():
     return mgr
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# inject_message(None) routes to the chat session and _on_loop_done(None) is a
+# handle-miss no-op, so both must target the planted handle's session.
+SID = "sess-denial-0001"
+
+
 class TestInjectMessageDuringApproval:
     """inject_message auto-denies the pending approval when paused and
     delivers the new user message. (Previously this test verified the
@@ -217,11 +223,11 @@ class TestInjectMessageDuringApproval:
         task_mock.exception.return_value = None
         handle.task = task_mock
 
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
-        result = await manager.inject_message("proj_test", "next task please")
+        result = await manager.inject_message("proj_test", "next task please", session_id=SID)
 
         # New return shape: dict with dismissal info
         assert isinstance(result, dict)
@@ -259,10 +265,10 @@ class TestInjectMessageDuringApproval:
         task_mock.exception.return_value = None
         handle.task = task_mock
 
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
 
-        result = await manager.inject_message("proj_test", "hello")
+        result = await manager.inject_message("proj_test", "hello", session_id=SID)
 
         assert result == "delivered"
         session.append.assert_called()
@@ -289,9 +295,9 @@ class TestOnLoopDoneApprovalBeforeQueueDrain:
         task.exception.return_value = None
         handle.task = task
 
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        callback = manager._on_loop_done("proj_test")
+        callback = manager._on_loop_done("proj_test", session_id=SID)
         callback(task)
 
         # pop_queued_messages should NOT have been called — the approval
@@ -318,9 +324,9 @@ class TestOnLoopDoneApprovalBeforeQueueDrain:
         task.exception.return_value = None
         handle.task = task
 
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
 
-        callback = manager._on_loop_done("proj_test")
+        callback = manager._on_loop_done("proj_test", session_id=SID)
         with patch("asyncio.ensure_future") as mock_ef:
             callback(task)
             if mock_ef.call_args:

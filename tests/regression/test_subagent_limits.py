@@ -56,9 +56,14 @@ def _make_sub_agent_manager():
     return SubAgentManager(process_manager=pm)
 
 
+# Explicit parent session id: the "default" sentinel was retired in 433912a
+# (seam 3 / D1); SubAgentManager hard-raises on session_id=None.
+SID = "sess-limits-0001"
+
+
 def _register_adapter(mgr, project_id, handle, adapter):
     """Directly inject an adapter into SubAgentManager for testing."""
-    sk = (project_id, "default")
+    sk = (project_id, SID)
     if sk not in mgr._adapters:
         mgr._adapters[sk] = {}
     mgr._adapters[sk][handle] = adapter
@@ -146,10 +151,10 @@ class TestBreadthLimit:
 
         # Attempt to start one more via the legacy path
         mgr._adapter_configs["agent-extra"] = MagicMock()
-        result = await mgr.start("proj-1", "agent-extra")
+        result = await mgr.start("proj-1", "agent-extra", session_id=SID)
         assert "limit" in result.lower() or "concurrent" in result.lower()
         # Should not have been added
-        assert "agent-extra" not in mgr._adapters.get(("proj-1", "default"), {})
+        assert "agent-extra" not in mgr._adapters.get(("proj-1", SID), {})
 
     @pytest.mark.asyncio
     async def test_breadth_freed_on_completion(self):
@@ -160,9 +165,9 @@ class TestBreadthLimit:
             _register_adapter(mgr, "proj-1", f"agent-{i}", _make_mock_adapter())
 
         # Stop one
-        await mgr.stop("proj-1", "agent-0")
+        await mgr.stop("proj-1", "agent-0", session_id=SID)
         # Now count should be MAX-1, new start should pass breadth check
-        count = len(mgr._adapters.get(("proj-1", "default"), {}))
+        count = len(mgr._adapters.get(("proj-1", SID), {}))
         assert count == MAX_CONCURRENT_SUBAGENTS - 1
 
     @pytest.mark.asyncio
@@ -176,7 +181,7 @@ class TestBreadthLimit:
         # Attempt to start one more — should pass breadth check
         # (may fail for other reasons like missing config, but not breadth)
         mgr._adapter_configs["agent-new"] = MagicMock()
-        result = await mgr.start("proj-1", "agent-new")
+        result = await mgr.start("proj-1", "agent-new", session_id=SID)
         assert "concurrent" not in result.lower()
 
     @pytest.mark.asyncio
@@ -189,5 +194,5 @@ class TestBreadthLimit:
 
         # project-2 should still allow starts (breadth check passes)
         mgr._adapter_configs["agent-a"] = MagicMock()
-        result = await mgr.start("proj-2", "agent-a")
+        result = await mgr.start("proj-2", "agent-a", session_id=SID)
         assert "concurrent" not in result.lower()

@@ -213,9 +213,10 @@ class TestQueuedMessageNonce:
         mock_handle.session = mock_session
         mock_handle.interceptor = None
 
-        mgr._handles[("proj_q", "default")] = mock_handle
+        # "default" sentinel retired in 433912a (seam 3 / D1) — key by explicit sid
+        mgr._handles[("proj_q", "sess-nonce-q1")] = mock_handle
 
-        result = await mgr.inject_message("proj_q", "queued msg", nonce="q-nonce")
+        result = await mgr.inject_message("proj_q", "queued msg", nonce="q-nonce", session_id="sess-nonce-q1")
 
         assert result == "queued"
         assert len(queue_calls) == 1
@@ -294,9 +295,9 @@ class TestOnLoopDoneNonce:
         task.exception.return_value = None
         handle.task = task
 
-        mgr._handles[("proj_d", "default")] = handle
+        mgr._handles[("proj_d", "sess-nonce-d1")] = handle
 
-        callback = mgr._on_loop_done("proj_d")
+        callback = mgr._on_loop_done("proj_d", session_id="sess-nonce-d1")
         mock_future = MagicMock()
         with patch("asyncio.ensure_future", return_value=mock_future) as mock_ef:
             callback(task)

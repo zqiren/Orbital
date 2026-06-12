@@ -25,6 +25,13 @@ from tests.platform.conftest import (
     HAS_SANDBOX_USER,
 )
 
+# live_sandbox: spawns a REAL sandboxed shell that probes the actual ~/Desktop
+# (see real_desktop at ~line 121). Running this against a dev checkout under
+# ~/Desktop has EPERM-locked .venv and the whole Desktop subtree mid-suite
+# until macOS folder access was re-granted (ACTIVE-seam3-test-sweep-resume.md).
+# Opt in only from a throwaway account: ORBITAL_LIVE_SANDBOX_TESTS=1.
+pytestmark = pytest.mark.live_sandbox
+
 
 def _wait_for_file(path: str, timeout: int = 15) -> str:
     """Poll for a file to appear and return its contents."""

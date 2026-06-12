@@ -39,6 +39,10 @@ def _manager() -> AgentManager:
         process_manager=MagicMock(),
     )
     mgr._ws.broadcast = MagicMock()
+    # start_agent(session_id=None) mints a real session uuid from the project
+    # name since 433912a (seam 3 / D1) — give the store a real dict so
+    # _mint_session_uuid's re.sub doesn't choke on a MagicMock name.
+    mgr._project_store.get_project.return_value = {"name": "proj"}
     # No platform isolation → skip the capability block before the provider.
     mgr._platform_provider = None
     # First call after the guard raises the sentinel.
@@ -104,7 +108,7 @@ async def test_slot_free_after_no_holder():
 
 @pytest.mark.asyncio
 async def test_session_id_none_does_not_bypass_slot_guard():
-    """session_id=None (resolves to 'default') is still subject to the slot guard."""
+    """session_id=None (now mints a fresh session uuid, 433912a) is still subject to the slot guard."""
     mgr = _manager()
     mgr._handles[("proj", "sess-A")] = _running_handle()
     with pytest.raises(ValueError, match="Slot held by session"):

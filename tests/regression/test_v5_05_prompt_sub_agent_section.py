@@ -57,8 +57,13 @@ class TestSubAgentAwarenessSection:
         builder = PromptBuilder()
         _, semi_stable, _ = builder.build(ctx)
 
+        # Wording updated by 16f9f42 (yield_turn dispatch + push-based
+        # sub-agent resume): "does NOT wait" became "ENDS YOUR TURN" /
+        # "AUTOMATICALLY RESUMED" — the non-blocking model is now described as
+        # turn-ending dispatch with push-based resume, not polling-free waiting.
         assert "returns IMMEDIATELY" in semi_stable
-        assert "does NOT wait" in semi_stable
+        assert "ENDS YOUR TURN" in semi_stable
+        assert "AUTOMATICALLY RESUMED" in semi_stable
 
     def test_section_shows_multiple_agents(self):
         """Multiple sub-agents listed with correct states."""

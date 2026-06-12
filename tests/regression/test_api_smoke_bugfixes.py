@@ -440,13 +440,15 @@ class TestBug005b_IdleRaceAPI:
         # Verify: adapter is not idle at construction
         assert adapter.is_idle() is False
 
-        # Register with sub_agent_manager — keyed by (project_id, session_id)
-        # under the default session for back-compat.
+        # Register with sub_agent_manager — keyed by (project_id, session_id).
+        # The "default" sentinel was retired in 433912a (seam 3 / D1); use an
+        # explicit session id and pass it to list_active (hard-raises on None).
+        sid = "sess-005b-0001"
         sam = deps["sub_agent_manager"]
-        sam._adapters.setdefault((project_id, "default"), {})["claude-code"] = adapter
+        sam._adapters.setdefault((project_id, sid), {})["claude-code"] = adapter
 
         # Check list_active — should show "running", not "idle"
-        active = sam.list_active(project_id)
+        active = sam.list_active(project_id, session_id=sid)
         assert len(active) == 1
         assert active[0]["status"] == "running", \
             f"Expected 'running', got '{active[0]['status']}' — BUG-005b regression"
@@ -456,7 +458,7 @@ class TestBug005b_IdleRaceAPI:
         assert len(busy) == 1, "Sub-agent should be in busy list, not idle"
 
         # Clean up
-        del sam._adapters[(project_id, "default")]
+        del sam._adapters[(project_id, sid)]
 
     @pytest.mark.asyncio
     async def test_adapter_idle_after_transport_send(self):

@@ -28,6 +28,10 @@ import pytest
 from agent_os.daemon_v2.agent_manager import AgentManager
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-cfa-0001"
+
+
 @pytest.fixture
 def manager():
     ws = MagicMock()
@@ -98,10 +102,10 @@ async def test_cancel_from_pending_approval_dismisses_and_returns_cancelled(mana
     handle, session, interceptor = _build_paused_handle(
         tool_call_id="tc_42", tool_name="write_file",
     )
-    manager._handles[("proj_test", "default")] = handle
+    manager._handles[("proj_test", SID)] = handle
     manager._record_approval_decision = MagicMock()
 
-    result = await manager.cancel_message("proj_test")
+    result = await manager.cancel_message("proj_test", session_id=SID)
 
     # Contract: API must distinguish "cancelled by user" from "wasn't running."
     assert result == {"status": "cancelled"}, (
@@ -155,9 +159,9 @@ async def test_cancel_with_no_pending_approval_still_returns_idle(manager):
     handle, session, _interceptor = _build_paused_handle()
     # Override: not actually paused for approval
     session._paused_for_approval = False
-    manager._handles[("proj_test", "default")] = handle
+    manager._handles[("proj_test", SID)] = handle
 
-    result = await manager.cancel_message("proj_test")
+    result = await manager.cancel_message("proj_test", session_id=SID)
 
     assert result == {"status": "idle"}, (
         f"non-paused done-task should still return idle, got {result}"

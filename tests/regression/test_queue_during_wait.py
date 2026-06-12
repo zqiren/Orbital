@@ -47,16 +47,16 @@ def _idle_handle() -> MagicMock:
 async def test_user_message_queued_during_waiting():
     """idle-poll alive → message appended, NO loop started, status 'queued'."""
     mgr = _manager()
-    sk = ("proj", "default")
+    sk = ("proj", "sess-qdw-1")  # explicit sid: "default" retired in 433912a (seam 3 / D1)
     handle = _idle_handle()
     mgr._handles[sk] = handle
 
     async def _never_done():
         await asyncio.sleep(9999)
     poll = asyncio.ensure_future(_never_done())
-    mgr._idle_poll_tasks["proj"] = poll  # waiting state
+    mgr._idle_poll_tasks[sk] = poll  # waiting state (SessionKey-keyed, agent_manager.py:108)
     try:
-        result = await mgr.inject_message("proj", "also check pricing", session_id="default")
+        result = await mgr.inject_message("proj", "also check pricing", session_id="sess-qdw-1")
 
         # Message appended to the session (the agent sees it on resume).
         assert handle.session.append.called
@@ -79,12 +79,12 @@ async def test_user_message_queued_during_waiting():
 async def test_user_message_starts_loop_when_not_waiting():
     """No idle-poll → existing hot-resume behaviour (loop started)."""
     mgr = _manager()
-    sk = ("proj", "default")
+    sk = ("proj", "sess-qdw-1")  # explicit sid: "default" retired in 433912a (seam 3 / D1)
     handle = _idle_handle()
     mgr._handles[sk] = handle
     # No _idle_poll_tasks entry → not waiting.
 
-    result = await mgr.inject_message("proj", "next task", session_id="default")
+    result = await mgr.inject_message("proj", "next task", session_id="sess-qdw-1")
 
     mgr._start_loop.assert_awaited_once()
     status = result.get("status") if isinstance(result, dict) else result

@@ -102,7 +102,14 @@ def test_session_new_writes_to_orbital_sessions(ws):
     sid = f"test_{uuid.uuid4().hex[:8]}"
     session = Session.new(sid, ws)
 
+    # Since 8083e35 (pure-create + materialize-on-first-message) Session.new()
+    # no longer touches disk — the JSONL materializes on the first append (see
+    # tests/regression/test_session_deferred_creation.py for that contract).
+    # This test's subject is the LOCATION the writer uses, so trigger the
+    # first write and assert the path.
     expected = Path(ws) / "orbital" / "sessions" / f"{sid}.jsonl"
+    assert not expected.exists(), "Session.new() must not create the file (deferred creation)"
+    session.append({"role": "user", "content": "first message"})
     assert expected.is_file(), f"Session file not at new location: {expected}"
 
     # Old location (slug-namespaced) must not exist

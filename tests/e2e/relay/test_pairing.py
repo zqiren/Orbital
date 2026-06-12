@@ -17,6 +17,10 @@ import pytest
 
 from .conftest import DAEMON_BASE, RELAY_BASE
 
+# Requires the relay server source tree (./relay), which is deployed on Railway
+# and not part of this checkout — see docs/TESTING-markers.md.
+pytestmark = pytest.mark.requires_relay
+
 # The relay uses this secret in test mode (set via env in conftest).
 JWT_SECRET = "test-secret-not-for-production"
 

@@ -55,6 +55,11 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# HTTP /cancel forwards the body session_id.
+SID = "sess-cmfp-0001"
+
+
 class _SlowStreamProvider:
     """Yields one chunk then hangs forever — simulates a long LLM call."""
 
@@ -163,7 +168,7 @@ def _make_agent_manager_with_running_loop(workspace, project_id, project_name,
         task=None,
         config_snapshot={"workspace": workspace, "model": "fake-slow"},
     )
-    mgr._handles[(project_id, "default")] = handle
+    mgr._handles[(project_id, SID)] = handle
     return mgr, ws, project_store, handle
 
 
@@ -213,7 +218,7 @@ def _inject_mock_handle(mgr, project_id):
         interceptor=MagicMock(),
         task=task,
     )
-    mgr._handles[(project_id, "default")] = handle
+    mgr._handles[(project_id, SID)] = handle
     return handle, task
 
 
@@ -331,7 +336,7 @@ async def test_cancel_via_http_during_stream():
             started = time.monotonic()
             # Direct method invocation — same path the HTTP route delegates to.
             result = await asyncio.wait_for(
-                mgr.cancel_message(project_id), timeout=5.0,
+                mgr.cancel_message(project_id, session_id=SID), timeout=5.0,
             )
             elapsed = time.monotonic() - started
 
@@ -360,8 +365,8 @@ async def test_cancel_via_http_during_stream():
             )
 
             # Handle still in _handles — agent alive, not torn down.
-            assert (project_id, "default") in mgr._handles
-            assert mgr._handles[(project_id, "default")] is handle
+            assert (project_id, SID) in mgr._handles
+            assert mgr._handles[(project_id, SID)] is handle
 
             # /cancel now propagates to sub-agents: stop_all is awaited (a
             # no-op here since no sub-agents were dispatched, but the call
@@ -397,7 +402,7 @@ async def test_cancel_via_http_idle_loop():
 
     client, saved = _build_test_client(mgr)
     try:
-        resp = client.post(f"/api/v2/agents/{pid}/cancel")
+        resp = client.post(f"/api/v2/agents/{pid}/cancel", json={"session_id": SID})
         assert resp.status_code == 200
         assert resp.json() == {"status": "idle"}
         handle.loop.cancel_turn.assert_not_awaited()
@@ -420,13 +425,13 @@ async def test_cancel_then_send_continues():
     handle, task = _inject_mock_handle(mgr, pid)
     client, saved = _build_test_client(mgr)
     try:
-        resp = client.post(f"/api/v2/agents/{pid}/cancel")
+        resp = client.post(f"/api/v2/agents/{pid}/cancel", json={"session_id": SID})
         assert resp.status_code == 200
         assert resp.json()["status"] == "cancelled"
 
         # Agent handle is still alive, same loop object.
-        assert (pid, "default") in mgr._handles
-        assert mgr._handles[(pid, "default")] is handle
+        assert (pid, SID) in mgr._handles
+        assert mgr._handles[(pid, SID)] is handle
 
         # Session not stopped.
         handle.session.stop.assert_not_called()
@@ -466,10 +471,10 @@ async def test_cancel_versus_stop_endpoint_isolation():
     client, saved = _build_test_client(mgr)
     try:
         # /cancel
-        resp_cancel = client.post(f"/api/v2/agents/{pid_cancel}/cancel")
+        resp_cancel = client.post(f"/api/v2/agents/{pid_cancel}/cancel", json={"session_id": SID})
         assert resp_cancel.status_code == 200
         assert resp_cancel.json()["status"] == "cancelled"
-        assert (pid_cancel, "default") in mgr._handles
+        assert (pid_cancel, SID) in mgr._handles
 
         # stop_agent() — mark target task done first so the shield-wait
         # doesn't hang. The /stop HTTP route no longer exists, so we invoke
@@ -481,12 +486,12 @@ async def test_cancel_versus_stop_endpoint_isolation():
         except (asyncio.CancelledError, Exception):
             pass
 
-        await mgr.stop_agent(pid_stop, session_id="default")
+        await mgr.stop_agent(pid_stop, session_id=SID)
 
         # stop_agent'd agent: handle popped.
-        assert (pid_stop, "default") not in mgr._handles
+        assert (pid_stop, SID) not in mgr._handles
         # /cancel'd agent: handle still alive.
-        assert (pid_cancel, "default") in mgr._handles
+        assert (pid_cancel, SID) in mgr._handles
     finally:
         client.close()
         _restore(saved)

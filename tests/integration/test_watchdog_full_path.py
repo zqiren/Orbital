@@ -26,6 +26,21 @@ import pytest
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 
+# DELETION CANDIDATE (test triage 2026-06-12) — do not un-skip without reading
+# the triage report. Both tests patch AgentManager._MAX_IDLE_POLLS to force the
+# 300s busy-watchdog kill, but that watchdog was deliberately DELETED in
+# 54b7ee2 ("Piece 3 Part B — remove reactive killing; evict only true-idle":
+# no fixed clock may kill a working or background-running sub-agent).
+# tests/regression/test_watchdog_stops_subagents.py is the rewritten
+# counterpart for the surviving behavior and even asserts the constant is gone
+# (`not hasattr(AgentManager, "_MAX_IDLE_POLLS")`). This file pins removed
+# behavior and no longer tests anything meaningful; listed for deletion
+# pending review.
+pytestmark = pytest.mark.skip(
+    reason="DELETION CANDIDATE: pins the 300s watchdog kill removed in 54b7ee2 "
+           "(Piece 3 Part B); superseded by test_watchdog_stops_subagents.py",
+)
+
 
 # ------------------------------------------------------------------ #
 # Helpers

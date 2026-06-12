@@ -88,6 +88,13 @@ def _build_paused_handle(*, tool_call_id="tc_99", tool_name="write_file",
     return handle, session, interceptor
 
 
+# Explicit session id: the "default" sentinel was retired in 433912a (seam 3 /
+# D1). inject_message(None) now routes to the persistent chat session via
+# _sid_inject and would never reach a planted handle, so the tests pass the
+# planted handle's session id explicitly.
+SID = "sess-deny-0001"
+
+
 class TestInjectAutoDeniesApproval:
     """inject_message must auto-deny pending approval and deliver the message."""
 
@@ -98,12 +105,12 @@ class TestInjectAutoDeniesApproval:
         handle, session, interceptor = _build_paused_handle(
             tool_call_id="tc_99", tool_name="write_file",
         )
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
         result = await manager.inject_message(
-            "proj_test", "just do something else",
+            "proj_test", "just do something else", session_id=SID,
         )
 
         # Return value is a dict with status="delivered" and dismissal info
@@ -145,7 +152,7 @@ class TestInjectAutoDeniesApproval:
         )
 
         # Loop restarted (multi-loop refactor passes session_id explicitly)
-        manager._start_loop.assert_called_once_with("proj_test", session_id="default")
+        manager._start_loop.assert_called_once_with("proj_test", session_id=SID)
 
         # queue_message was NOT called (old behavior)
         session.queue_message.assert_not_called()
@@ -158,11 +165,11 @@ class TestInjectAutoDeniesApproval:
             tool_call_id="tc_99", tool_name="write_file",
             tool_args={"path": "secret.txt"},
         )
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
-        await manager.inject_message("proj_test", "never mind")
+        await manager.inject_message("proj_test", "never mind", session_id=SID)
 
         manager._record_approval_decision.assert_called_once()
         call_args = manager._record_approval_decision.call_args
@@ -180,12 +187,12 @@ class TestInjectAutoDeniesApproval:
         """The nonce passed to inject_message must be attached to the
         appended user message so the WS echo can be deduplicated."""
         handle, session, interceptor = _build_paused_handle()
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
         await manager.inject_message(
-            "proj_test", "hi there", nonce="nonce-xyz",
+            "proj_test", "hi there", nonce="nonce-xyz", session_id=SID,
         )
 
         append_calls = session.append.call_args_list
@@ -203,11 +210,11 @@ class TestInjectAutoDeniesApproval:
         handle, session, interceptor = _build_paused_handle(
             tool_call_id="tc_99",
         )
-        manager._handles[("proj_test", "default")] = handle
+        manager._handles[("proj_test", SID)] = handle
         manager._start_loop = AsyncMock()
         manager._record_approval_decision = MagicMock()
 
-        await manager.inject_message("proj_test", "hi")
+        await manager.inject_message("proj_test", "hi", session_id=SID)
 
         broadcasts = manager._ws.broadcast.call_args_list
         resolved_broadcasts = [

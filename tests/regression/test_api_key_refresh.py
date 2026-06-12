@@ -28,6 +28,10 @@ from agent_os.config.provider_registry import ProviderRegistry
 # ── helpers ─────────────────────────────────────────────────────────────
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-keyref-0001"
+
+
 class FakeWsManager:
     """Minimal WS hub that accepts broadcasts silently."""
     def broadcast(self, project_id, payload):
@@ -72,12 +76,22 @@ class FakeCredentialStore:
 
 
 class FakeSettingsStore:
-    """Stub settings store with an LLM sub-object."""
+    """Stub settings store with an LLM sub-object.
+
+    Stubs every GlobalLLMSettings field _start_loop's live provider resolve
+    reads (36046b3: sessions live-resolve the LLM provider from project config
+    each turn). Leaving provider/sdk/fallback_models as bare MagicMock
+    attributes made _provider_config_changed() always report a material change
+    (MagicMock != "custom") and rebuild the client on every resume.
+    """
     def __init__(self, api_key=None, model="gpt-4o", base_url=None):
         self._settings = MagicMock()
         self._settings.llm.api_key = api_key
         self._settings.llm.model = model
         self._settings.llm.base_url = base_url
+        self._settings.llm.sdk = "openai"
+        self._settings.llm.provider = "custom"
+        self._settings.llm.fallback_models = []
 
     def get(self):
         return self._settings
@@ -148,9 +162,9 @@ async def test_hot_resume_uses_updated_key(tmp_path):
 
     # Start agent with old key
     config = _make_config(str(tmp_path), api_key="old-key")
-    await mgr.start_agent(project_id, config)
+    await mgr.start_agent(project_id, config, session_id=SID)
 
-    handle = mgr._handles[(project_id, "default")]
+    handle = mgr._handles[(project_id, SID)]
     assert handle.provider.api_key == "old-key"
 
     # Simulate loop finishing (cancel the real task)
@@ -164,7 +178,7 @@ async def test_hot_resume_uses_updated_key(tmp_path):
     # Mock loop.run to be a no-op coroutine so _start_loop doesn't actually run the LLM
     handle.loop.run = AsyncMock(return_value=None)
 
-    await mgr._start_loop(project_id)
+    await mgr._start_loop(project_id, session_id=SID)
 
     assert handle.provider.api_key == "new-key"
 
@@ -192,9 +206,9 @@ async def test_hot_resume_no_op_when_key_unchanged(tmp_path):
     )
 
     config = _make_config(str(tmp_path), api_key="same-key")
-    await mgr.start_agent(project_id, config)
+    await mgr.start_agent(project_id, config, session_id=SID)
 
-    handle = mgr._handles[(project_id, "default")]
+    handle = mgr._handles[(project_id, SID)]
     original_client = handle.provider._openai_client
 
     # Cancel the running task
@@ -206,7 +220,7 @@ async def test_hot_resume_no_op_when_key_unchanged(tmp_path):
             pass
 
     handle.loop.run = AsyncMock(return_value=None)
-    await mgr._start_loop(project_id)
+    await mgr._start_loop(project_id, session_id=SID)
 
     # Key unchanged -> client object identity preserved (no reconstruction)
     assert handle.provider._openai_client is original_client

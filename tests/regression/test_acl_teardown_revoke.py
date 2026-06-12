@@ -9,6 +9,19 @@ causing orphaned SID accumulation that eventually hit the 64KB DACL limit.
 See REPORT-sandbox-lifecycle-findings.md.
 """
 
+import sys
+
+import pytest
+
+# agent_os.platform.windows.sandbox touches ctypes.windll at import time, so
+# this module cannot even be collected off-Windows (triage 2026-06-12:
+# requires_windows; run on a real Windows machine with `pytest -m requires_windows`).
+if sys.platform != "win32":
+    pytest.skip("requires Windows (ctypes.windll import in agent_os.platform.windows.sandbox)",
+                allow_module_level=True)
+
+pytestmark = pytest.mark.requires_windows
+
 from unittest.mock import MagicMock, call
 
 from agent_os.platform.types import SetupResult

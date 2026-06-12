@@ -43,6 +43,10 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-termpath-1"
+
+
 class _SlowStreamProvider:
     """Provider whose stream() yields one chunk then hangs forever."""
 
@@ -148,7 +152,7 @@ def _make_agent_manager_with_running_loop(workspace, project_id, project_name,
         task=None,
         config_snapshot={"workspace": workspace, "model": "fake-slow"},
     )
-    mgr._handles[(project_id, "default")] = handle
+    mgr._handles[(project_id, SID)] = handle
     return mgr, ws, project_store, handle
 
 
@@ -236,7 +240,7 @@ async def test_stop_agent_terminates_via_loop(caplog):
             with caplog.at_level(logging.WARNING,
                                   logger="agent_os.daemon_v2.agent_manager"):
                 started = time.monotonic()
-                await asyncio.wait_for(mgr.stop_agent(project_id), timeout=5.0)
+                await asyncio.wait_for(mgr.stop_agent(project_id, session_id=SID), timeout=5.0)
                 elapsed = time.monotonic() - started
 
             assert elapsed < 5.0, (
@@ -286,6 +290,11 @@ async def test_stop_agent_terminates_via_loop(caplog):
                     pass
 
 
+@pytest.mark.skip(
+    reason="DELETION CANDIDATE: asserts new_session terminates the old loop — "
+           "retired by 8083e35 (pure-create: new_session touches no running "
+           "session); see test_new_session_pure_create.py",
+)
 @pytest.mark.asyncio
 async def test_new_session_terminates_old_loop():
     """POST /api/v2/agents/{pid}/new-session with an in-flight slow stream:
@@ -346,7 +355,7 @@ async def test_new_session_terminates_old_loop():
             )
 
             # New session JSONL must exist and be the new handle's session.
-            new_handle = mgr._handles.get((project_id, "default"))
+            new_handle = mgr._handles.get((project_id, SID))
             assert new_handle is not None
             new_session_path = new_handle.session._filepath
             assert os.path.isfile(new_session_path), (

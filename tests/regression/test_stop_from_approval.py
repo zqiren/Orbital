@@ -29,7 +29,7 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
 
 def _make_manager_with_paused_handle(project_id="proj_stop_approval",
-                                      session_id="default",
+                                      session_id="sess-stopappr-1",  # explicit sid: "default" retired in 433912a (seam 3 / D1)
                                       tool_call_id="tc_77",
                                       tool_name="write_file"):
     """Build an AgentManager + ProjectHandle in pending_approval state."""
@@ -106,16 +106,16 @@ async def test_stop_from_pending_approval_pops_handle_and_broadcasts():
     await task
 
     # Pre-conditions
-    assert (project_id, "default") in mgr._handles, "Sanity: handle planted"
+    assert (project_id, "sess-stopappr-1") in mgr._handles, "Sanity: handle planted"
     assert handle.task.done(), "Sanity: task is done (approval-paused)"
     assert session._paused_for_approval is True, (
         "Sanity: handle is in pending_approval"
     )
 
-    await mgr.stop_agent(project_id)
+    await mgr.stop_agent(project_id, session_id="sess-stopappr-1")
 
     # Handle popped — session no longer appears in list_sessions.
-    assert (project_id, "default") not in mgr._handles, (
+    assert (project_id, "sess-stopappr-1") not in mgr._handles, (
         "stop_agent must pop the handle from _handles"
     )
     assert mgr.list_sessions(project_id) == [], (

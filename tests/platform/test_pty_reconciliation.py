@@ -860,8 +860,14 @@ class TestPlatformProviderABC:
         assert "use_pty" in sig.parameters
         assert sig.parameters["use_pty"].default is False
 
+    @pytest.mark.requires_windows
     def test_windows_provider_run_process_accepts_use_pty(self):
-        """WindowsPlatformProvider.run_process() signature includes use_pty."""
+        """WindowsPlatformProvider.run_process() signature includes use_pty.
+
+        requires_windows: importing the Windows provider pulls in
+        agent_os.platform.windows.sandbox, which touches ctypes.windll at
+        import time (triage 2026-06-12).
+        """
         from agent_os.platform.windows.provider import WindowsPlatformProvider
 
         sig = inspect.signature(WindowsPlatformProvider.run_process)

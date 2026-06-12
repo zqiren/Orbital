@@ -53,7 +53,11 @@ def _make_manager():
     return mgr, ws
 
 
-def _make_idle_handle(mgr, project_id, session_id="default"):
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-term-0001"
+
+
+def _make_idle_handle(mgr, project_id, session_id=SID):
     """Plant a handle with a DONE task and no paused-for-approval."""
     session = MagicMock()
     session.is_stopped = MagicMock(return_value=False)
@@ -77,7 +81,7 @@ def _make_idle_handle(mgr, project_id, session_id="default"):
     return handle, task
 
 
-def _make_error_handle(mgr, project_id, session_id="default"):
+def _make_error_handle(mgr, project_id, session_id=SID):
     """Plant a handle whose task crashed with an exception."""
     session = MagicMock()
     session.is_stopped = MagicMock(return_value=False)
@@ -120,14 +124,14 @@ async def test_error_event_records_last_terminal_event():
         await task
     except RuntimeError:
         pass
-    cb = mgr._on_loop_done(pid, session_id="default")
+    cb = mgr._on_loop_done(pid, session_id=SID)
     cb(task)
 
     # last_terminal_event recorded for this session.
     sessions = mgr.list_sessions(pid)
     assert len(sessions) == 1
     entry = sessions[0]
-    assert entry["session_id"] == "default"
+    assert entry["session_id"] == SID
     assert "last_terminal_event" in entry, (
         "list_sessions must include last_terminal_event field"
     )
@@ -149,14 +153,14 @@ async def test_stopped_event_records_last_terminal_event():
 
     # last_terminal_event keyed by SessionKey persists beyond handle pop;
     # we expose it via a direct accessor for this assertion.
-    await mgr.stop_agent(pid)
+    await mgr.stop_agent(pid, session_id=SID)
 
     # Handle was popped — list_sessions is empty for the stopped session.
     assert mgr.list_sessions(pid) == [], (
         "Stopped session must not appear in list_sessions"
     )
     # But last_terminal_event for that key persists.
-    evt = mgr.get_last_terminal_event(pid, session_id="default")
+    evt = mgr.get_last_terminal_event(pid, session_id=SID)
     assert evt is not None, (
         "stop_agent must record last_terminal_event for the stopped session"
     )
@@ -174,7 +178,7 @@ async def test_new_session_event_records_last_terminal_event():
 
     # new_session is a complex method (LLM call for summary, etc.). Drive
     # the broadcast directly to test only the terminal-event recording.
-    mgr._broadcast_new_session_terminal_event(pid, session_id="default")
+    mgr._broadcast_new_session_terminal_event(pid, session_id=SID)
 
     sessions = mgr.list_sessions(pid)
     assert len(sessions) == 1
@@ -193,11 +197,11 @@ async def test_terminal_event_cleared_on_next_inject():
         await task
     except RuntimeError:
         pass
-    cb = mgr._on_loop_done(pid, session_id="default")
+    cb = mgr._on_loop_done(pid, session_id=SID)
     cb(task)
 
     # Confirm event was recorded.
-    assert mgr.get_last_terminal_event(pid, session_id="default") is not None
+    assert mgr.get_last_terminal_event(pid, session_id=SID) is not None
 
     # Drive inject; need to mock _start_loop because we don't have a real
     # provider/loop wired up for this manager.
@@ -206,10 +210,10 @@ async def test_terminal_event_cleared_on_next_inject():
     # but our handle exists, so we hit Case 2 (hot-resume).
     handle.interceptor.deactivate_bypass_all = MagicMock()
 
-    await mgr.inject_message(pid, "try again please")
+    await mgr.inject_message(pid, "try again please", session_id=SID)
 
     # last_terminal_event should now be cleared.
-    evt = mgr.get_last_terminal_event(pid, session_id="default")
+    evt = mgr.get_last_terminal_event(pid, session_id=SID)
     assert evt is None, (
         f"Inject must clear last_terminal_event after error; got {evt}"
     )

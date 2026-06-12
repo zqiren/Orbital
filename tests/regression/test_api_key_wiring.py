@@ -27,8 +27,15 @@ def client(tmp_path):
 class TestApiKeyEndpoints:
     """Verify all three api-key endpoints exist and accept correct schemas."""
 
+    @pytest.mark.requires_keychain
     def test_put_api_key_accepts_body(self, client):
-        """PUT /api/v2/settings/api-key accepts {api_key: string}."""
+        """PUT /api/v2/settings/api-key accepts {api_key: string}.
+
+        requires_keychain: the route 500s when the credential store's keyring
+        write fails, so a passing run needs a functional unlocked OS keychain
+        (triage 2026-06-12; the BaseException guard below only catches
+        in-process raises, not the 500 path).
+        """
         try:
             resp = client.put("/api/v2/settings/api-key", json={
                 "api_key": "sk-test-key-12345",
@@ -59,7 +66,14 @@ class TestApiKeyEndpoints:
         assert "configured" in data
         assert "source" in data
         assert isinstance(data["configured"], bool)
-        assert data["source"] in ("none", "keyring", "settings")
+        # Allowed sources per the product contract: CredentialStore.get_source
+        # (agent_os/daemon_v2/credential_store.py) returns
+        # 'environment' | 'keychain' | 'none', and the route's no-store
+        # fallback adds 'settings'. The old tuple ('none', 'keyring',
+        # 'settings') never matched the implementation ('keyring' is not a
+        # value the product emits) and broke whenever AGENT_OS_API_KEY was
+        # set in the environment (triage 2026-06-12).
+        assert data["source"] in ("none", "environment", "keychain", "settings")
 
     def test_generic_settings_still_works(self, client):
         """PUT /api/v2/settings still works for non-key fields."""

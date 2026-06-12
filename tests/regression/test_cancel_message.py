@@ -32,6 +32,10 @@ from agent_os.daemon_v2.agent_manager import AgentManager
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-cm-0001"
+
+
 def _make_manager():
     """Return a minimal AgentManager with mocked collaborators."""
     project_store = MagicMock()
@@ -81,7 +85,7 @@ def _make_active_handle(mgr, project_id: str):
         interceptor=MagicMock(),
         task=task,
     )
-    mgr._handles[(project_id, "default")] = handle
+    mgr._handles[(project_id, SID)] = handle
     return handle, task
 
 
@@ -97,7 +101,7 @@ async def test_cancel_message_calls_cancel_turn():
     pid = "proj-active"
     handle, task = _make_active_handle(mgr, pid)
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     assert result == {"status": "cancelled"}
     handle.loop.cancel_turn.assert_awaited_once()
@@ -106,7 +110,7 @@ async def test_cancel_message_calls_cancel_turn():
         "project_id": pid,
         "status": "idle",
         # session_id is stamped additively by _broadcast (multi-loop).
-        "session_id": "default",
+        "session_id": SID,
     })
 
     # Cleanup task
@@ -143,7 +147,7 @@ async def test_cancel_message_idle_loop():
         pass
     assert task.done()
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     assert result == {"status": "idle"}
     handle.loop.cancel_turn.assert_not_awaited()
@@ -162,16 +166,16 @@ async def test_cancel_message_does_not_stop_session():
     pid = "proj-session-alive"
     handle, task = _make_active_handle(mgr, pid)
 
-    await mgr.cancel_message(pid)
+    await mgr.cancel_message(pid, session_id=SID)
 
     # Session must not be stopped
     handle.session.stop.assert_not_called()
 
     # Handle must still be in _handles
-    assert (pid, "default") in mgr._handles
+    assert (pid, SID) in mgr._handles
 
     # Sub-agents ARE torn down now (cancel propagates to sub-agents).
-    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id="default")
+    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id=SID)
 
     # Cleanup
     task.cancel()
@@ -189,7 +193,7 @@ async def test_cancel_message_idempotent():
     handle, task = _make_active_handle(mgr, pid)
 
     # First call — in-flight, should cancel
-    result1 = await mgr.cancel_message(pid)
+    result1 = await mgr.cancel_message(pid, session_id=SID)
     assert result1 == {"status": "cancelled"}
     assert ws.broadcast.call_count == 1
 
@@ -201,7 +205,7 @@ async def test_cancel_message_idempotent():
         pass
 
     # Second call — loop is done
-    result2 = await mgr.cancel_message(pid)
+    result2 = await mgr.cancel_message(pid, session_id=SID)
     assert result2 == {"status": "idle"}
 
     # No additional broadcast on second call

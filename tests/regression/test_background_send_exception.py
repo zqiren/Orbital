@@ -26,6 +26,10 @@ from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
 
 
+# Explicit parent session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-bgsend-0001"
+
+
 def _make_manager_with_adapter(tmp_path, adapter, handle: str = "test-agent",
                                 project_id: str = "proj1",
                                 lifecycle_observer=None):
@@ -34,9 +38,9 @@ def _make_manager_with_adapter(tmp_path, adapter, handle: str = "test-agent",
     pm._ws = MagicMock()
     pm._ws.broadcast = MagicMock()
     sam = SubAgentManager(pm, lifecycle_observer=lifecycle_observer)
-    sam._adapters[(project_id, "default")] = {handle: adapter}
+    sam._adapters[(project_id, SID)] = {handle: adapter}
     transcript = SubAgentTranscript(str(tmp_path), handle, "t001")
-    sam._transcripts[(project_id, handle)] = transcript
+    sam._transcripts[(project_id, SID, handle)] = transcript
     return sam
 
 
@@ -66,7 +70,7 @@ class TestBackgroundSendStrongRef:
 
         sam = _make_manager_with_adapter(tmp_path, adapter)
 
-        await sam.send("proj1", "test-agent", "hello")
+        await sam.send("proj1", "test-agent", "hello", session_id=SID)
 
         # Wait until the coroutine actually started, guaranteeing the task
         # exists and holds a reference to the coroutine.
@@ -127,7 +131,7 @@ class TestBackgroundSendExceptionHandling:
         )
 
         with caplog.at_level(logging.ERROR, logger="agent_os.daemon_v2.sub_agent_manager"):
-            await sam.send("proj1", "broken-agent", "hello")
+            await sam.send("proj1", "broken-agent", "hello", session_id=SID)
             # Wait for the bg task to complete.
             if adapter._background_send_task is not None:
                 try:
@@ -201,7 +205,7 @@ class TestBackgroundSendExceptionHandling:
         )
 
         with caplog.at_level(logging.ERROR, logger="agent_os.daemon_v2.sub_agent_manager"):
-            await sam.send("proj1", "cancelled-agent", "hello")
+            await sam.send("proj1", "cancelled-agent", "hello", session_id=SID)
             await asyncio.wait_for(started.wait(), timeout=2.0)
 
             task = adapter._background_send_task

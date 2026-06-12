@@ -40,6 +40,10 @@ from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1).
+SID = "sess-cancel-0001"
+
+
 def _make_manager():
     """Minimal AgentManager with mocked collaborators. stop_all is async."""
     ws = MagicMock()
@@ -121,17 +125,17 @@ async def test_waiting_state_cancel_stops_subagents():
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-waiting"
     handle, session = _done_handle()
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
     poll = _alive_poll_task()
-    mgr._idle_poll_tasks[pid] = poll
+    mgr._idle_poll_tasks[(pid, SID)] = poll
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     # stop_all called for the right project + session
-    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id="default")
+    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id=SID)
 
     # Poll task removed from the registry and cancellation requested
-    assert pid not in mgr._idle_poll_tasks
+    assert (pid, SID) not in mgr._idle_poll_tasks
     with pytest.raises(asyncio.CancelledError):
         await poll
     assert poll.cancelled()
@@ -160,12 +164,12 @@ async def test_running_loop_cancels_turn_and_subagents():
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-running"
     handle, task = _running_handle()
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     handle.loop.cancel_turn.assert_awaited_once()
-    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id="default")
+    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id=SID)
     assert result == {"status": "cancelled"}
 
     task.cancel()
@@ -183,10 +187,10 @@ async def test_truly_idle_cancel_is_noop():
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-idle"
     handle, session = _done_handle()
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
     # No poll task registered, not paused.
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     assert result == {"status": "idle"}
     sub_agent_mgr.stop_all.assert_not_awaited()
@@ -216,9 +220,9 @@ async def test_approval_paused_dismisses_and_stops_subagents():
     handle.interceptor.remove_pending = MagicMock(
         side_effect=lambda t: handle.interceptor._pending_approvals.pop(t, None)
     )
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
 
-    result = await mgr.cancel_message(pid)
+    result = await mgr.cancel_message(pid, session_id=SID)
 
     # Approval dismissed
     session.append_tool_result.assert_called_once()
@@ -227,7 +231,7 @@ async def test_approval_paused_dismisses_and_stops_subagents():
     session.resume.assert_called_once()
 
     # AND sub-agents stopped
-    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id="default")
+    sub_agent_mgr.stop_all.assert_awaited_once_with(pid, session_id=SID)
 
     assert result == {"status": "cancelled"}
 
@@ -242,8 +246,8 @@ async def test_stop_all_timeout_still_returns_cancelled(caplog):
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-timeout"
     handle, session = _done_handle()
-    mgr._handles[(pid, "default")] = handle
-    mgr._idle_poll_tasks[pid] = _alive_poll_task()
+    mgr._handles[(pid, SID)] = handle
+    mgr._idle_poll_tasks[(pid, SID)] = _alive_poll_task()
 
     async def _hang(*_a, **_kw):
         await asyncio.sleep(999)
@@ -259,7 +263,7 @@ async def test_stop_all_timeout_still_returns_cancelled(caplog):
 
     with caplog.at_level(logging.WARNING, logger="agent_os.daemon_v2.agent_manager"):
         with patch("agent_os.daemon_v2.agent_manager.asyncio.wait_for", new=_fast_wait_for):
-            result = await mgr.cancel_message(pid)
+            result = await mgr.cancel_message(pid, session_id=SID)
 
     assert result == {"status": "cancelled"}
     assert any(
@@ -278,15 +282,15 @@ async def test_stop_agent_uses_shared_helper():
     mgr, ws, sub_agent_mgr = _make_manager()
     pid = "proj-stopagent"
     handle, session = _done_handle()
-    mgr._handles[(pid, "default")] = handle
+    mgr._handles[(pid, SID)] = handle
 
     mgr._stop_sub_agents = AsyncMock()
 
-    await mgr.stop_agent(pid)
+    await mgr.stop_agent(pid, session_id=SID)
 
-    mgr._stop_sub_agents.assert_awaited_once_with(pid, session_id="default")
+    mgr._stop_sub_agents.assert_awaited_once_with(pid, session_id=SID)
     # Behavior preserved: terminal event recorded + idle broadcast.
-    assert mgr.get_last_terminal_event(pid) is not None
+    assert mgr.get_last_terminal_event(pid, session_id=SID) is not None
     idle_broadcasts = [
         c for c in ws.broadcast.call_args_list
         if isinstance(c.args[1], dict) and c.args[1].get("status") == "idle"

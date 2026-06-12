@@ -25,6 +25,11 @@ from agent_os.agent.session import Session
 # ---------------------------------------------------------------------------
 
 
+# Explicit session id: "default" sentinel retired in 433912a (seam 3 / D1);
+# bare project-level calls no longer resolve to a planted handle.
+SID = "sess-defer-0001"
+
+
 class TestSessionDeferral:
     """Tests for Session.defer_message / pop_deferred_messages."""
 
@@ -233,10 +238,10 @@ class TestInjectSystemMessage:
         mock_task.exception.return_value = None
 
         handle = MagicMock(session=mock_session, task=mock_task, loop=MagicMock())
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
         with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
-            result = await mgr.inject_system_message("proj_1", "lifecycle event")
+            result = await mgr.inject_system_message("proj_1", "lifecycle event", session_id=SID)
 
         assert result == "delivered"
         mock_session.append.assert_called_once()
@@ -255,9 +260,9 @@ class TestInjectSystemMessage:
         mock_task.done.return_value = False  # Loop is running
 
         handle = MagicMock(session=mock_session, task=mock_task)
-        mgr._handles[("proj_1", "default")] = handle
+        mgr._handles[("proj_1", SID)] = handle
 
-        result = await mgr.inject_system_message("proj_1", "[Sub-agent] claude-code started")
+        result = await mgr.inject_system_message("proj_1", "[Sub-agent] claude-code started", session_id=SID)
 
         assert result == "deferred"
         mock_session.defer_message.assert_called_once_with(

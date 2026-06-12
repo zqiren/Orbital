@@ -19,6 +19,13 @@ import pytest_asyncio
 
 from agent_os.platform.types import NetworkRules
 
+# live_sandbox: applies REAL macOS Seatbelt (sandbox-exec) restrictions. Running
+# the live provider against a dev checkout under ~/Desktop has EPERM-locked the
+# dev tree mid-suite (ACTIVE-seam3-test-sweep-resume.md). Also contains the
+# documented expected env-fail test_portal_readonly. Opt in only from a
+# throwaway account: ORBITAL_LIVE_SANDBOX_TESTS=1.
+pytestmark = pytest.mark.live_sandbox
+
 # --- Skip markers ---
 
 IS_MACOS = sys.platform == "darwin"

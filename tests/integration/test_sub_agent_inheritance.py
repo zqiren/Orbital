@@ -27,6 +27,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Explicit parent session id: SubAgentManager hard-raises on session_id=None
+# since the "default" sentinel retirement (433912a — seam 3 / D1).
+SID = "proj_1_sess0001"
+
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.sub_agent_prompt import (
     MEMORY_MD_HEADER,
@@ -162,7 +166,7 @@ async def test_full_inheritance_dispatch_flow(seeded_workspace):
 
     # Patch SDKTransport so we capture the system_prompt without spawning claude.
     class FakeTransport:
-        def __init__(self, autonomy=None, system_prompt=None):
+        def __init__(self, autonomy=None, system_prompt=None, **kwargs):  # kwargs: resume_session_id/model (006bcec, 7724315)
             captured["system_prompt"] = system_prompt
             captured["autonomy"] = autonomy
             self._system_prompt = system_prompt
@@ -189,7 +193,7 @@ async def test_full_inheritance_dispatch_flow(seeded_workspace):
         "agent_os.agent.transports.sdk_transport.HAS_SDK",
         True,
     ):
-        result = await mgr._start_from_registry("proj_1", "claude-code")
+        result = await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     # Adapter started successfully
     assert "Started" in result, result
@@ -229,7 +233,7 @@ async def test_memory_md_persistence_across_dispatches(seeded_workspace):
     captured_prompts: list[str] = []
 
     class FakeTransport:
-        def __init__(self, autonomy=None, system_prompt=None):
+        def __init__(self, autonomy=None, system_prompt=None, **kwargs):  # kwargs: resume_session_id/model (006bcec, 7724315)
             captured_prompts.append(system_prompt)
             self._system_prompt = system_prompt
 
@@ -255,10 +259,10 @@ async def test_memory_md_persistence_across_dispatches(seeded_workspace):
         True,
     ):
         # Dispatch #1 — completes
-        await mgr._start_from_registry("proj_1", "claude-code")
+        await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
         # Stop and re-dispatch (simulate a second turn)
-        await mgr.stop("proj_1", "claude-code")
-        await mgr._start_from_registry("proj_1", "claude-code")
+        await mgr.stop("proj_1", "claude-code", session_id=SID)
+        await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     # MEMORY.md content was preserved
     with open(memory_path, "r", encoding="utf-8") as f:
@@ -284,7 +288,7 @@ async def test_other_sub_agents_memory_visible(seeded_workspace):
     captured: dict = {}
 
     class FakeTransport:
-        def __init__(self, autonomy=None, system_prompt=None):
+        def __init__(self, autonomy=None, system_prompt=None, **kwargs):  # kwargs: resume_session_id/model (006bcec, 7724315)
             captured["system_prompt"] = system_prompt
 
         async def start(self, command, args, workspace, env=None):
@@ -307,7 +311,7 @@ async def test_other_sub_agents_memory_visible(seeded_workspace):
         "agent_os.agent.transports.sdk_transport.HAS_SDK",
         True,
     ):
-        await mgr._start_from_registry("proj_1", "claude-code")
+        await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     sp = captured["system_prompt"]
     assert sp is not None
@@ -329,7 +333,7 @@ async def test_prompt_is_freshly_rendered_per_dispatch(seeded_workspace):
     captured_prompts: list[str] = []
 
     class FakeTransport:
-        def __init__(self, autonomy=None, system_prompt=None):
+        def __init__(self, autonomy=None, system_prompt=None, **kwargs):  # kwargs: resume_session_id/model (006bcec, 7724315)
             captured_prompts.append(system_prompt)
 
         async def start(self, command, args, workspace, env=None):
@@ -352,12 +356,12 @@ async def test_prompt_is_freshly_rendered_per_dispatch(seeded_workspace):
         "agent_os.agent.transports.sdk_transport.HAS_SDK",
         True,
     ):
-        await mgr._start_from_registry("proj_1", "claude-code")
-        await mgr.stop("proj_1", "claude-code")
+        await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
+        await mgr.stop("proj_1", "claude-code", session_id=SID)
 
         # Now create codex MEMORY.md
         codex_path = ensure_memory_md(workspace, "codex")
-        await mgr._start_from_registry("proj_1", "claude-code")
+        await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     assert len(captured_prompts) == 2
     # First dispatch must NOT mention codex memory (didn't exist yet)
@@ -467,7 +471,7 @@ async def test_pty_transport_does_not_create_memory_md(seeded_workspace):
         "agent_os.agent.transports.pty_transport.PTYTransport",
         FakePTYTransport,
     ):
-        result = await mgr._start_from_registry("proj_1", "claude-code")
+        result = await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     assert "Started" in result, result
     # Critical assertion: no orphan MEMORY.md stub was created.
@@ -552,7 +556,7 @@ async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
         "agent_os.agent.transports.acp_transport.ACPTransport",
         FakeACPTransport,
     ):
-        result = await mgr._start_from_registry("proj_1", "gemini-cli")
+        result = await mgr._start_from_registry("proj_1", "gemini-cli", session_id=SID)
 
     assert "Started" in result, result
     assert not os.path.exists(memory_path), (
@@ -572,7 +576,7 @@ async def test_sdk_transport_still_creates_memory_md(seeded_workspace):
     assert not os.path.exists(memory_path), "precondition: memory stub absent"
 
     class FakeSDKTransport:
-        def __init__(self, autonomy=None, system_prompt=None):
+        def __init__(self, autonomy=None, system_prompt=None, **kwargs):  # kwargs: resume_session_id/model (006bcec, 7724315)
             self._system_prompt = system_prompt
 
         async def start(self, command, args, workspace, env=None):
@@ -596,7 +600,7 @@ async def test_sdk_transport_still_creates_memory_md(seeded_workspace):
         "agent_os.agent.transports.sdk_transport.HAS_SDK",
         True,
     ):
-        result = await mgr._start_from_registry("proj_1", "claude-code")
+        result = await mgr._start_from_registry("proj_1", "claude-code", session_id=SID)
 
     assert "Started" in result, result
     assert os.path.isfile(memory_path), (

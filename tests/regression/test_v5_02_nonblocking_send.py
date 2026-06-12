@@ -2,13 +2,21 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression tests for TASK-V5-02: non-blocking agent_message(send)."""
+"""Regression tests for TASK-V5-02: non-blocking agent_message(send).
+
+Fixtures re-keyed off the retired ("proj1", "default") sentinel onto an
+explicit session uuid, and every send() now passes session_id (the "default"
+sentinel was deleted in 433912a — seam 3 / D1; SubAgentManager hard-raises on
+session_id=None).
+"""
 
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+SID = "proj1_sess0001"
 
 
 class TestNonBlockingSend:
@@ -33,14 +41,14 @@ class TestNonBlockingSend:
         slow_adapter.is_alive = MagicMock(return_value=True)
         slow_adapter.is_idle = MagicMock(return_value=False)
 
-        sam._adapters[("proj1", "default")] = {"slow-agent": slow_adapter}
+        sam._adapters[("proj1", SID)] = {"slow-agent": slow_adapter}
 
         # Create transcript
         transcript = SubAgentTranscript(str(tmp_path), "slow-agent", "t001")
-        sam._transcripts[("proj1", "slow-agent")] = transcript
+        sam._transcripts[("proj1", SID, "slow-agent")] = transcript
 
         start = time.monotonic()
-        result = await sam.send("proj1", "slow-agent", "do something slow")
+        result = await sam.send("proj1", "slow-agent", "do something slow", session_id=SID)
         elapsed = time.monotonic() - start
 
         assert elapsed < 1.0, f"send() took {elapsed:.1f}s — should be under 1s"
@@ -61,11 +69,11 @@ class TestNonBlockingSend:
         adapter._transport = None
         adapter.is_alive = MagicMock(return_value=True)
 
-        sam._adapters[("proj1", "default")] = {"claude-code": adapter}
+        sam._adapters[("proj1", SID)] = {"claude-code": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "claude-code", "t001")
-        sam._transcripts[("proj1", "claude-code")] = transcript
+        sam._transcripts[("proj1", SID, "claude-code")] = transcript
 
-        result = await sam.send("proj1", "claude-code", "hello")
+        result = await sam.send("proj1", "claude-code", "hello", session_id=SID)
 
         assert "orbital/sub_agents/" in result.replace("\\", "/")
         assert "claude-code" in result
@@ -78,7 +86,7 @@ class TestNonBlockingSend:
         pm = MagicMock()
         sam = SubAgentManager(pm)
 
-        result = await sam.send("proj1", "nonexistent", "hello")
+        result = await sam.send("proj1", "nonexistent", "hello", session_id=SID)
         assert "Error" in result
 
     @pytest.mark.asyncio
@@ -93,10 +101,10 @@ class TestNonBlockingSend:
         adapter.send = AsyncMock()
         adapter._transport = None
 
-        sam._adapters[("proj1", "default")] = {"agent-x": adapter}
+        sam._adapters[("proj1", SID)] = {"agent-x": adapter}
         # No transcript registered
 
-        result = await sam.send("proj1", "agent-x", "hello")
+        result = await sam.send("proj1", "agent-x", "hello", session_id=SID)
         assert "Transcript: unknown" in result
 
     @pytest.mark.asyncio
@@ -114,11 +122,11 @@ class TestNonBlockingSend:
         adapter = MagicMock()
         adapter._transport = transport
 
-        sam._adapters[("proj1", "default")] = {"sdk-agent": adapter}
+        sam._adapters[("proj1", SID)] = {"sdk-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "sdk-agent", "t001")
-        sam._transcripts[("proj1", "sdk-agent")] = transcript
+        sam._transcripts[("proj1", SID, "sdk-agent")] = transcript
 
-        await sam.send("proj1", "sdk-agent", "test message")
+        await sam.send("proj1", "sdk-agent", "test message", session_id=SID)
 
         transport.dispatch.assert_awaited_once_with("test message")
         # adapter.send should NOT have been called
@@ -139,11 +147,11 @@ class TestNonBlockingSend:
         adapter._transport = transport
         adapter.send = AsyncMock()
 
-        sam._adapters[("proj1", "default")] = {"pipe-agent": adapter}
+        sam._adapters[("proj1", SID)] = {"pipe-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "pipe-agent", "t001")
-        sam._transcripts[("proj1", "pipe-agent")] = transcript
+        sam._transcripts[("proj1", SID, "pipe-agent")] = transcript
 
-        result = await sam.send("proj1", "pipe-agent", "test")
+        result = await sam.send("proj1", "pipe-agent", "test", session_id=SID)
         assert "Message sent to pipe-agent" in result
 
         # Give the background task a chance to run
@@ -251,12 +259,12 @@ class TestNonBlockingSend:
         adapter.send = failing_send
         adapter._transport = None
 
-        sam._adapters[("proj1", "default")] = {"fail-agent": adapter}
+        sam._adapters[("proj1", SID)] = {"fail-agent": adapter}
         transcript = SubAgentTranscript(str(tmp_path), "fail-agent", "t001")
-        sam._transcripts[("proj1", "fail-agent")] = transcript
+        sam._transcripts[("proj1", SID, "fail-agent")] = transcript
 
         # Should not raise
-        result = await sam.send("proj1", "fail-agent", "hello")
+        result = await sam.send("proj1", "fail-agent", "hello", session_id=SID)
         assert "Message sent to fail-agent" in result
 
         # Let background task run and fail gracefully
