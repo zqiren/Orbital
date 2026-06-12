@@ -587,7 +587,35 @@ class BrowserTool(Tool):
         ref_map = self._bm.get_ref_map(self._project_id, id(page))
         if not ref_map:
             return ToolResult(content="No snapshot taken yet. Run snapshot first.")
-        fields = args.get("fields", [])
+        # Loud shape validation (F1): a missing/empty/malformed `fields` arg
+        # must be an explicit error, never a "Filled 0 fields" success-looking
+        # no-op. Error text references entry KEYS only — values may contain
+        # substituted secrets and must never be echoed.
+        shape_help = (
+            "Error: fill requires fields=[{ref, value}, ...] — a non-empty "
+            "list of objects, each with 'ref' (element ref from snapshot) "
+            "and 'value' (the text to fill in). "
+        )
+        fields = args.get("fields")
+        if not isinstance(fields, list) or not fields:
+            got = (
+                "Got no 'fields' argument." if fields is None
+                else "Got an empty list." if isinstance(fields, list)
+                else f"Got {type(fields).__name__} instead of a list."
+            )
+            return ToolResult(content=shape_help + got)
+        malformed = [
+            (i, sorted(f.keys()) if isinstance(f, dict) else type(f).__name__)
+            for i, f in enumerate(fields)
+            if not isinstance(f, dict) or "ref" not in f or "value" not in f
+        ]
+        if malformed:
+            details = "; ".join(
+                f"entry {i} has keys {shape}" if isinstance(shape, list)
+                else f"entry {i} is a {shape}, not an object"
+                for i, shape in malformed
+            )
+            return ToolResult(content=shape_help + f"Malformed entries: {details}.")
         results = []
         for field in fields:
             try:

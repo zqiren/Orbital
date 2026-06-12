@@ -1048,3 +1048,85 @@ async def test_fetch_cleans_up_on_error():
 
     assert "error" in result.content.lower()
     fetch_page.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# TASK-credential-contract-fixes 1b: fill must fail LOUDLY on malformed args.
+# "Filled 0 fields" as a success-looking no-op (F1) taught agents their fill
+# worked when it did nothing.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fill_missing_fields_errors_with_expected_shape():
+    """fill with no `fields` arg → explicit error naming the expected shape."""
+    page = _make_mock_page()
+    bm = _make_browser_manager(page)
+    bm.get_ref_map.return_value = _make_ref_map()
+    tool = _make_tool(bm=bm)
+
+    result = await tool.execute_async(action="fill")
+
+    assert "error" in result.content.lower()
+    assert "fields" in result.content
+    assert "ref" in result.content
+    assert "value" in result.content
+    assert "Filled 0 fields" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_fill_empty_fields_errors_with_expected_shape():
+    """fill with fields=[] → explicit error, never 'Filled 0 fields' success."""
+    page = _make_mock_page()
+    bm = _make_browser_manager(page)
+    bm.get_ref_map.return_value = _make_ref_map()
+    tool = _make_tool(bm=bm)
+
+    result = await tool.execute_async(action="fill", fields=[])
+
+    assert "error" in result.content.lower()
+    assert "fields" in result.content
+    assert "ref" in result.content
+    assert "value" in result.content
+    assert "Filled 0 fields" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_fill_ref_text_shape_errors_without_filling():
+    """fill with the {ref, text} shape (text instead of value) → explicit
+    error naming the expected {ref, value} shape; nothing gets filled."""
+    page = _make_mock_page()
+    bm = _make_browser_manager(page)
+    bm.get_ref_map.return_value = _make_ref_map()
+    tool = _make_tool(bm=bm)
+
+    mock_locator = _make_mock_locator()
+    with patch("agent_os.agent.tools.browser.resolve_ref", new_callable=AsyncMock, return_value=mock_locator):
+        result = await tool.execute_async(
+            action="fill", fields=[{"ref": "e5", "text": "hello"}],
+        )
+
+    assert "error" in result.content.lower()
+    assert "ref" in result.content
+    assert "value" in result.content
+    # Must be an explicit shape error, not a per-field crash dressed in the
+    # success-looking "Filled N fields:" frame.
+    assert "Filled 1 fields" not in result.content
+    mock_locator.fill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fill_non_dict_entry_errors_without_filling():
+    """fill with a non-dict entry → explicit error naming the expected shape."""
+    page = _make_mock_page()
+    bm = _make_browser_manager(page)
+    bm.get_ref_map.return_value = _make_ref_map()
+    tool = _make_tool(bm=bm)
+
+    mock_locator = _make_mock_locator()
+    with patch("agent_os.agent.tools.browser.resolve_ref", new_callable=AsyncMock, return_value=mock_locator):
+        result = await tool.execute_async(action="fill", fields=["e5=hello"])
+
+    assert "error" in result.content.lower()
+    assert "ref" in result.content
+    assert "value" in result.content
+    mock_locator.fill.assert_not_awaited()

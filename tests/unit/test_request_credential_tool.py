@@ -74,3 +74,75 @@ def test_error_returns_error_content(tool, mock_cred_store):
     mock_cred_store.get_metadata.side_effect = RuntimeError("kaboom")
     result = tool.execute(name="x", domain="x.com", fields=["p"], reason="r")
     assert "Error" in result.content
+
+
+# ---------------------------------------------------------------------------
+# TASK-credential-contract-fixes 1a: the PENDING branch must hand the agent
+# usable token names up front (so resume needs no redundant second call),
+# and must never embed stored values.
+# ---------------------------------------------------------------------------
+
+_SENTINEL = "SENTINEL-value-zV9q3xKfPLEASE-NEVER-APPEAR"
+
+
+class _FakeStoreWithValues:
+    """First-time request (no metadata) against a store that WOULD hand out a
+    sentinel value if asked — proving the pending result is built from field
+    names only, never from stored values."""
+
+    def get_metadata(self, name):
+        return None
+
+    def get_value(self, name, field):
+        return _SENTINEL
+
+
+def test_pending_result_contains_placeholder_tokens_for_every_field():
+    tool = RequestCredentialTool(credential_store=_FakeStoreWithValues())
+    result = tool.execute(
+        name="dify", domain="cloud.dify.ai",
+        fields=["email", "password", "code"],
+        reason="login",
+    )
+    data = json.loads(result.content)
+    assert data["status"] == "pending"
+    assert data["tokens"] == {
+        "email": "<secret:dify.email>",
+        "password": "<secret:dify.password>",
+        "code": "<secret:dify.code>",
+    }
+
+
+def test_pending_message_states_tokens_usable_after_submit():
+    tool = RequestCredentialTool(credential_store=_FakeStoreWithValues())
+    result = tool.execute(
+        name="dify", domain="cloud.dify.ai", fields=["email"], reason="login",
+    )
+    data = json.loads(result.content)
+    msg = data["message"].lower()
+    assert "token" in msg
+    assert "submit" in msg
+    assert "after" in msg
+
+
+def test_pending_result_contains_no_stored_values():
+    tool = RequestCredentialTool(credential_store=_FakeStoreWithValues())
+    result = tool.execute(
+        name="dify", domain="cloud.dify.ai",
+        fields=["email", "password"],
+        reason="login",
+    )
+    assert _SENTINEL not in result.content
+    assert result.meta is not None
+    assert _SENTINEL not in json.dumps(result.meta)
+
+
+def test_fields_guidance_is_field_adaptive_not_username_biased():
+    """The schema must teach 'request exactly the fields the form shows' with
+    multi-shape examples, not a lone ['username', 'password'] example that
+    biases agents into requesting fields the page doesn't have."""
+    tool = RequestCredentialTool(credential_store=_FakeStoreWithValues())
+    desc = tool.parameters["properties"]["fields"]["description"]
+    assert "exactly the fields" in desc
+    assert "'email'" in desc
+    assert "'code'" in desc

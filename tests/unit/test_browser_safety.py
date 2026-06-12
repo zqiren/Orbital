@@ -165,8 +165,10 @@ def test_substitute_secrets():
 
 
 def test_substitute_missing_secret():
+    # Error text updated by TASK-credential-contract-fixes: states the required
+    # <secret:name.field> shape and that tokens come from request_credential.
     resolver = lambda key: None
-    with pytest.raises(ValueError, match="not found in credential store"):
+    with pytest.raises(ValueError, match="Unknown secret token"):
         substitute_secrets("<secret:missing>", resolver)
 
 

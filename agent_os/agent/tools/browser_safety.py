@@ -144,8 +144,10 @@ def substitute_secrets(text: str, resolver: "Callable[[str], str]") -> str:
         value = resolver(key)
         if value is None:
             raise ValueError(
-                f"Secret '{key}' not found in credential store. "
-                "Register it in project settings first."
+                f"Unknown secret token '<secret:{key}>'. Secret tokens must "
+                "have the form <secret:name.field> and come from a "
+                "request_credential call — use exactly the tokens it returns; "
+                "do not construct token names."
             )
         return value
 

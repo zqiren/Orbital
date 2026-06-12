@@ -47,9 +47,14 @@ def test_substitute_secrets_calls_resolver():
 
 
 def test_substitute_secrets_resolver_returns_none_raises():
-    """Regression: missing credential should raise ValueError."""
+    """Regression: missing credential should raise ValueError.
+
+    (Text updated by TASK-credential-contract-fixes: the error now states the
+    required <secret:name.field> shape and that tokens come from
+    request_credential, instead of the misleading "register it in project
+    settings" instruction.)"""
     resolver = lambda key: None
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ValueError, match="Unknown secret token"):
         substitute_secrets("<secret:gmail.email>", resolver)
 
 

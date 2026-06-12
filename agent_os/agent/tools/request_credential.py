@@ -17,7 +17,8 @@ class RequestCredentialTool(Tool):
         self.description = (
             "Request website login credentials from the user. "
             "If credentials already exist, returns secret tokens. "
-            "Otherwise, triggers a secure input modal (values never enter chat)."
+            "Otherwise, triggers a secure input modal (values never enter chat). "
+            "Request exactly the fields the login form shows."
         )
         self.parameters = {
             "type": "object",
@@ -33,7 +34,10 @@ class RequestCredentialTool(Tool):
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Fields to request (e.g., ['username', 'password'])",
+                    "description": (
+                        "Request exactly the fields the login form shows, "
+                        "e.g. ['email'], ['username', 'password'], or ['code']"
+                    ),
                 },
                 "reason": {
                     "type": "string",
@@ -62,7 +66,11 @@ class RequestCredentialTool(Tool):
                     "message": f"Credential '{name}' is stored. Use the <secret:> tokens.",
                 }))
 
-            # Credential doesn't exist — return pending with meta signal
+            # Credential doesn't exist — return pending with meta signal.
+            # The pending result must already carry the usable token names:
+            # resume does NOT re-execute this tool, so this is the agent's
+            # only authoritative source of token names.
+            tokens = {f: f"<secret:{name}.{f}>" for f in fields}
             return ToolResult(
                 content=json.dumps({
                     "status": "pending",
@@ -70,7 +78,13 @@ class RequestCredentialTool(Tool):
                     "domain": domain,
                     "fields": fields,
                     "reason": reason,
-                    "message": "Waiting for user to provide credentials via secure modal.",
+                    "tokens": tokens,
+                    "message": (
+                        "Waiting for the user to provide credentials via the "
+                        "secure modal. These tokens become usable AFTER the "
+                        "user submits the modal — use exactly these tokens; "
+                        "do not construct or guess token names."
+                    ),
                 }),
                 meta={
                     "credential_request": True,
