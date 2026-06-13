@@ -284,6 +284,79 @@ def _ensure_chat_content(messages: list) -> list:
     return repaired
 
 
+def _ensure_tool_result_contiguity(messages: list) -> list:
+    """Guarantee every tool-result block is contiguous for strict providers.
+
+    A ``role:"tool"`` result must immediately follow the assistant message that
+    holds the matching ``tool_calls`` (or another tool result of the same
+    batch). A persisted turn can violate this when a non-tool message is written
+    between siblings — e.g. a turn-yielding dispatch injects a ``system`` echo
+    after its own result, before the cancelled siblings are appended:
+    ``tool(_1) → system(echo) → tool(_2) → tool(_3)``. MiniMax rejects that with
+    400 "tool call result does not follow tool call (2013)".
+
+    This reorders ONLY: for each assistant ``tool_calls`` message, the matched
+    tool results are pulled up to be contiguous (keeping their relative order),
+    and any non-tool message interleaved *within* the block is relocated to just
+    after the block (keeping its relative order). Nothing is fabricated,
+    dropped, or merged; messages after the block's last tool result are left in
+    place; the input list and its dicts are never mutated.
+
+    Reorder-only by contract: this relies on ``ContextManager._validate_tool_results``
+    having already run (it does, on every send path, before message prep) to inject
+    missing results and drop true orphans/duplicate tool_call_ids. This helper cannot
+    repair a tool result with no live owner — it only moves existing rows. Keep this
+    pass *after* that validation; moving it ahead could re-expose the 400.
+    """
+    n = len(messages)
+    consumed = [False] * n
+    out: list = []
+    i = 0
+    while i < n:
+        if consumed[i]:
+            i += 1
+            continue
+        msg = messages[i]
+        out.append(msg)
+        consumed[i] = True
+
+        tool_calls = msg.get("role") == "assistant" and msg.get("tool_calls")
+        if tool_calls:
+            ids = {
+                tc.get("id")
+                for tc in tool_calls
+                if isinstance(tc, dict) and tc.get("id")
+            }
+            if ids:
+                tool_results: list = []   # matched results, in encounter order
+                displaced: list = []      # non-tool rows before the last match
+                pending: list = []        # non-tool rows since the last match
+                seen: set = set()
+                j = i + 1
+                while j < n and seen != ids:
+                    m = messages[j]
+                    # A new tool_calls turn bounds this block — stop scanning.
+                    if m.get("role") == "assistant" and m.get("tool_calls"):
+                        break
+                    tcid = m.get("tool_call_id")
+                    if m.get("role") == "tool" and tcid in ids and tcid not in seen:
+                        tool_results.append(j)
+                        seen.add(tcid)
+                        displaced.extend(pending)
+                        pending = []
+                    else:
+                        pending.append(j)
+                    j += 1
+                # Emit matched results contiguously, then the interleaved rows.
+                # `pending` (rows after the last matched result) stays in place —
+                # the outer loop appends it in original order.
+                for idx in tool_results + displaced:
+                    out.append(messages[idx])
+                    consumed[idx] = True
+        i += 1
+    return out
+
+
 def _apply_reasoning_policy(message: dict, reasoning) -> dict:
     """Enforce per-model echo_back contract on outbound assistant messages.
 
@@ -380,7 +453,10 @@ class LLMProvider:
         # Final pass: strict OpenAI-compatible providers (MiniMax) reject any
         # message with empty content and reject system-only requests. Repair
         # both here, at the wire boundary, so the persisted session is untouched.
-        return _ensure_chat_content(result)
+        repaired = _ensure_chat_content(result)
+        # Then guarantee every tool-result block is contiguous (strict providers
+        # 400 on a tool result that does not immediately follow its tool_calls).
+        return _ensure_tool_result_contiguity(repaired)
 
     async def stream(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Stream completion, yielding StreamChunk objects.
