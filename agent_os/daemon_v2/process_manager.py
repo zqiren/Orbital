@@ -44,10 +44,34 @@ class ProcessManager:
         # turn_complete chunk, or note_turn_closed() from the blocking-send
         # path (Pipe/ACP, which never emit turn_complete).
         self._turn_open: dict[str, bool] = {}
+        # same key -> the SubAgentTranscript for the live consumer, so the
+        # blocking-send turn-closer (note_turn_closed) can append the per-turn
+        # boundary the consume() turn_complete branch appends for streaming
+        # transports. Without it, blocking transports (Pipe/ACP/PTY) leave a
+        # boundaryless transcript and the multi-turn split aliases.
+        self._transcripts: dict[str, object] = {}
 
     @staticmethod
     def _key(project_id: str, session_id: "str | None", handle: str) -> str:
         return f"{project_id}:{session_id or ''}:{handle}"
+
+    @staticmethod
+    def _append_turn_boundary(transcript, handle: str) -> None:
+        """Append the per-turn delimiter the read path splits on.
+
+        Empty content → never renders (chatTransform gates empty agent rows;
+        the unfiltered chat merge drops turn_complete rows outright). Exactly one
+        per terminal turn keeps the i-th message_routed marker paired with the
+        i-th transcript slice — a missing boundary drifts the pairing and aliases
+        the next turn's text into this dispatch's bubble.
+        """
+        if transcript is not None:
+            transcript.append({
+                "source": handle,
+                "content": "",
+                "timestamp": _now(),
+                "chunk_type": "turn_complete",
+            })
 
     def _matching_keys(self, project_id: str, handle: str) -> list[str]:
         """All consumer keys for (project, handle) across sessions — used by
@@ -160,6 +184,16 @@ class ProcessManager:
                                     transcript.filepath,
                                     session_id=session_id,
                                 )
+                        # Append a turn boundary so read_sub_agent_summary can
+                        # split the transcript per-turn (multi-turn display).
+                        # Appended for EVERY terminal cause — including "stopped"
+                        # (an SDK per-turn cancel fired when a new dispatch
+                        # arrives mid-stream): the stopped turn still has a
+                        # preceding message_routed marker, so omitting its
+                        # boundary would drift the i-th marker ↔ i-th slice
+                        # pairing and alias the next turn's text into this
+                        # dispatch's bubble (TASK-subagent-last-message-display).
+                        self._append_turn_boundary(transcript, handle)
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
                         self._turn_open[key] = False
@@ -261,6 +295,7 @@ class ProcessManager:
 
         task = asyncio.create_task(consume())
         self._tasks[key] = task
+        self._transcripts[key] = transcript
 
     def note_turn_closed(self, project_id: str, handle: str,
                          session_id: "str | None" = None) -> None:
@@ -271,9 +306,17 @@ class ProcessManager:
         so a later clean teardown's stream-end is not misread as an abnormal
         mid-turn death. ``session_id=None`` closes the turn flag in every
         session-scoped slot for (project, handle) — legacy back-compat.
+
+        This is the blocking-transport analog of the consume() turn_complete
+        branch, so it also appends the per-turn boundary (when the caller names
+        a session): without it a blocking transcript has ZERO boundaries and the
+        multi-turn split collapses to one slice, aliasing the last turn's text
+        onto the first dispatch.
         """
         if session_id is not None:
-            self._turn_open[self._key(project_id, session_id, handle)] = False
+            key = self._key(project_id, session_id, handle)
+            self._turn_open[key] = False
+            self._append_turn_boundary(self._transcripts.get(key), handle)
             return
         for k in list(self._turn_open):
             if k.startswith(f"{project_id}:") and k.endswith(f":{handle}"):
@@ -289,6 +332,7 @@ class ProcessManager:
             keys = self._matching_keys(project_id, handle)
         for key in keys:
             self._turn_open.pop(key, None)
+            self._transcripts.pop(key, None)
             task = self._tasks.pop(key, None)
             if task is not None and not task.done():
                 task.cancel()

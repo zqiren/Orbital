@@ -29,58 +29,24 @@ def _parse_ts(value) -> "datetime | None":
         return None
 
 
-def read_sub_agent_summary(transcript_path: str) -> "dict | None":
-    """Read a sub-agent JSONL transcript and produce a capsule-shaped summary.
-
-    Returns a dict shaped::
+def _summarize_turn(entries: list) -> dict:
+    """Summarize ONE turn's (boundary-free) chunks into the capsule-shaped dict::
 
         {
-            "tool_rows": [
-                {"name": "Write", "timestamp": "...", "duration_seconds": 1.2},
-                {"name": "Bash",  "timestamp": "...", "duration_seconds": 1.8},
-                {"name": "Read",  "timestamp": "...", "duration_seconds": 0.4},
-            ],
-            "total_duration_seconds": 7.3,             # first→last chunk timestamp
-            "response": "The file already exists ...",  # last response/message chunk
+            "tool_rows": [{"name": "Write", "timestamp": "...", "duration_seconds": 1.2}, ...],
+            "total_duration_seconds": 7.3,             # first→last chunk in the turn
+            "response": "The file already exists ...",  # last response/message in the turn
             "chunk_count": 4,
-            # Back-compat: a de-duped name list, kept for any older caller.
-            "tools_used": ["Write", "Bash", "Read"],
-            "duration_seconds": 7.3,
+            "tools_used": ["Write", "Bash", "Read"],   # de-duped, first-seen order
+            "duration_seconds": 7.3,                    # alias of total_duration_seconds
         }
 
-    Tool rows are one-per-``tool_activity`` line, in chronological order. Each
-    row's ``duration_seconds`` is the gap to the next chunk (the last tool's
-    duration is the gap to the following response/turn_complete, or 0 if it is
-    the final chunk). Only the tool *name* is available — the SDK transport
-    streams ``[Using tool: X]`` with no args/results.
-
-    Returns ``None`` when the file does not exist, is empty, or contains no
-    parseable JSON lines. Malformed individual lines are skipped, not fatal.
+    ``response`` is the LAST response/message chunk in THIS turn, or ``""`` if
+    the turn produced none (errored / interrupted / tool-only). Callers MUST NOT
+    alias a neighboring turn's text into an empty one. Tool-row durations look
+    ahead only within the turn (the last tool's gap to the following chunk, or
+    0). Only the tool *name* is available (the SDK streams ``[Using tool: X]``).
     """
-    if not transcript_path or not os.path.exists(transcript_path):
-        return None
-
-    # Collect every parseable entry first so per-tool durations can look ahead
-    # to the next chunk's timestamp.
-    entries: list = []
-    try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(entry, dict):
-                    entries.append(entry)
-    except OSError:
-        return None
-
-    if not entries:
-        return None
-
     chunk_count = len(entries)
     response = ""
     tool_rows: list = []
@@ -137,6 +103,66 @@ def read_sub_agent_summary(transcript_path: str) -> "dict | None":
         "tools_used": tools_used,
         "duration_seconds": total_duration_seconds,
     }
+
+
+def read_sub_agent_summary(transcript_path: str) -> "list | None":
+    """Read a sub-agent JSONL transcript → a LIST of per-turn summary dicts.
+
+    The transcript is split into turns on ``chunk_type="turn_complete"``
+    boundary rows (ProcessManager appends one at each terminal turn). Each
+    completed turn is the run of chunks BEFORE a boundary; the boundary closes
+    it. Returns one ``_summarize_turn`` dict per completed turn, in order.
+
+    Rules:
+    - Trailing chunks AFTER the last boundary are an in-flight turn → NOT
+      returned (they get a bubble on a later reload, once complete).
+    - A transcript with ZERO boundaries is a legacy/flat file → ONE turn (the
+      whole file). Retroactivity guard for pre-boundary transcripts.
+    - Boundary rows are split out before summarizing, so they never count toward
+      a turn's ``chunk_count`` or duration.
+
+    Returns ``None`` when the file does not exist, is empty, or contains no
+    parseable JSON lines. Malformed individual lines are skipped, not fatal.
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+
+    entries: list = []
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except OSError:
+        return None
+
+    if not entries:
+        return None
+
+    # Split on turn_complete boundary rows. Each boundary closes the turn that
+    # precedes it; trailing post-boundary chunks (in-flight) are dropped.
+    turns: list = []
+    current: list = []
+    boundary_seen = False
+    for e in entries:
+        if e.get("chunk_type") == "turn_complete":
+            boundary_seen = True
+            turns.append(current)
+            current = []
+        else:
+            current.append(e)
+    if not boundary_seen:
+        # Legacy flat transcript (no boundary) → the whole file is one turn.
+        turns = [current]
+
+    return [_summarize_turn(t) for t in turns]
 
 
 class SubAgentTranscript:

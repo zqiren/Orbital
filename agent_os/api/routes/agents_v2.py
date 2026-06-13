@@ -1920,51 +1920,84 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
     return result, total
 
 
-# Matches the "[Sub-agent] {handle} started ... Transcript: {path}" system
-# line the lifecycle observer writes into the management session JSONL. Group
-# 1 is the sub-agent handle; group 2 is the transcript path.
-_SUB_AGENT_STARTED_RE = re.compile(
-    r"^\[Sub-agent\]\s+(\S+)\s+started\b.*?Transcript:\s*(.+?)\s*$"
+# Matches the per-dispatch "message_routed" marker the lifecycle observer writes
+# into the management session JSONL — either
+#   [Sub-agent] Message sent to {handle}: "{preview}". Transcript: {path}
+# or the user-@mention variant
+#   [Sub-agent] User sent @{handle}: "{preview}". Transcript: {path}
+# Group 1 = handle, group 2 = transcript path. DOTALL + tail-anchored on the
+# final "Transcript:" because the message preview may contain newlines. The
+# `started` marker is deliberately NOT matched: it is suppressed on the real
+# dispatch path (announce=False), so anchoring on it never fired in production.
+_SUB_AGENT_DISPATCH_RE = re.compile(
+    r'^\[Sub-agent\]\s+(?:Message sent to |User sent @)([\w.-]+):'
+    r'.*\bTranscript:\s*(.+?)\s*$',
+    re.DOTALL,
 )
 
 
 def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
-    """Inline a compact sub-agent run summary after each dispatch marker.
+    """Inline each sub-agent dispatch's per-turn final message as a display bubble.
 
-    For every ``[Sub-agent] {handle} started … Transcript: {path}`` system
-    message in *messages*, read the referenced sub-agent transcript and insert
-    a synthetic ``source="sub_agent"`` message immediately after it. The
-    frontend transforms that into a distinct ``sub_agent_run`` block (tools
-    used, duration, response) so the management chat carries the durable record
-    of the sub-agent's work — not just the one-line completion summary.
+    Anchored on the per-dispatch ``message_routed`` marker (the line that fires
+    once per dispatch on the real routing path and carries the transcript path).
+    For the i-th dispatch to a given transcript, read the i-th per-turn slice
+    from ``read_sub_agent_summary``; when that slice carries a final response,
+    insert a synthetic ``source="sub_agent"`` message right after the marker.
+    The frontend renders it as an agent header + tool capsule + response bubble,
+    so the management chat carries the durable per-turn record of the
+    sub-agent's work — not just the one-line completion marker.
 
-    Read-only and best-effort: a missing/empty transcript leaves the markers
-    untouched. Operates on whatever page was already paginated, so it never
-    changes the total-count math.
+    Honest degradation (never alias another turn's text into the wrong slot):
+    - A slice with NO response (errored / interrupted / tool-only) → no bubble;
+      the existing one-line terminal marker stands.
+    - More dispatches than completed slices (last dispatch still in flight) →
+      bubbles for the completed slices only; the trailing one appears on a later
+      reload once it completes.
+
+    Read-only and best-effort: a missing/unreadable transcript is a no-op.
+    Operates on the already-paginated page, so it never changes the total-count
+    math — and it NEVER persists. The full text lives ONLY on this display
+    channel; the management LLM context keeps the capped marker (dual-stream
+    isolation, DIAGNOSIS Q1).
     """
     out: list[dict] = []
+    slices_by_path: dict[str, "list | None"] = {}
+    dispatch_idx: dict[str, int] = {}
     for msg in messages:
         out.append(msg)
         if msg.get("role") != "system":
             continue
         content = msg.get("content") or ""
-        m = _SUB_AGENT_STARTED_RE.match(content)
+        m = _SUB_AGENT_DISPATCH_RE.match(content)
         if not m:
             continue
         handle, transcript_path = m.group(1), m.group(2)
-        try:
-            summary = read_sub_agent_summary(transcript_path)
-        except Exception:
-            summary = None
-        if not summary:
+        # The i-th dispatch to THIS transcript pairs with its i-th completed
+        # turn-slice (markers and turns derive from the same ordered stream).
+        i = dispatch_idx.get(transcript_path, 0)
+        dispatch_idx[transcript_path] = i + 1
+        if transcript_path not in slices_by_path:
+            try:
+                slices_by_path[transcript_path] = read_sub_agent_summary(transcript_path)
+            except Exception:
+                slices_by_path[transcript_path] = None
+        slices = slices_by_path[transcript_path]
+        if not slices or i >= len(slices):
+            # No transcript, or this dispatch is still in flight (no slice yet).
+            continue
+        turn = slices[i]
+        if not (turn.get("response") or "").strip():
+            # Errored / interrupted / tool-only turn: let the existing terminal
+            # marker one-liner speak. Never alias a neighboring turn's text.
             continue
         out.append({
             "role": "assistant",
-            "content": summary.get("response") or "",
+            "content": turn.get("response") or "",
             "source": "sub_agent",
             "sub_agent_handle": handle,
-            "sub_agent_tool_rows": summary.get("tool_rows", []),
-            "sub_agent_duration": summary.get("total_duration_seconds", 0.0),
+            "sub_agent_tool_rows": turn.get("tool_rows", []),
+            "sub_agent_duration": turn.get("total_duration_seconds", 0.0),
             "timestamp": msg.get("timestamp", ""),
             "session_id": msg.get("session_id"),
         })
@@ -2082,12 +2115,17 @@ async def chat_history(
     # Read sub-agent transcript entries (disk scan + in-memory)
     sub_entries = []
     if _sub_agent_manager is not None:
-        sub_entries = await asyncio.to_thread(
+        raw_entries = await asyncio.to_thread(
             _sub_agent_manager.get_all_transcript_entries, project_id
         )
-        # Normalize transcript entries to chat message format
-        for entry in sub_entries:
+        # Normalize transcript entries to chat message format, dropping the
+        # turn_complete boundary rows (empty per-turn delimiters consumed only
+        # by the session-filtered split — never user-facing, must not render).
+        for entry in raw_entries:
+            if entry.get("chunk_type") == "turn_complete":
+                continue
             entry.setdefault("role", "agent")
+            sub_entries.append(entry)
 
     if not sub_entries:
         # Fast path: no transcripts, use original pagination
