@@ -55,6 +55,60 @@ def _derive_name(content) -> str | None:
     return head + "…"
 
 
+def _splice_pending_cancellations(messages: list, pending_ids: set, content: str, now: str):
+    """Place CANCELLED tool-result rows contiguously after each owning assistant.
+
+    For every assistant ``tool_calls`` message owning one or more ``pending_ids``,
+    insert a CANCELLED tool-result row for those ids immediately after the
+    assistant's existing contiguous tool results — i.e. *before* any interleaved
+    non-tool row (a lifecycle ``system`` echo, a ``meta`` resume marker, …).
+
+    Operates on the FULL message list (meta rows included) so nothing is dropped.
+    Pure reorder/insert: existing rows keep their order, cancellations are added
+    in tool_calls *declaration* order (deterministic), and only ids that have an
+    owning assistant here are inserted. Returns ``(new_messages, inserted)`` where
+    ``inserted`` is the list of newly created cancellation dicts.
+    """
+    orphaned = set(pending_ids)
+    if not orphaned:
+        return messages, []
+    inserted: list[dict] = []
+    out: list[dict] = []
+    n = len(messages)
+    i = 0
+    while i < n:
+        msg = messages[i]
+        out.append(msg)
+        tcs = msg.get("tool_calls") if msg.get("role") == "assistant" else None
+        if tcs:
+            tc_ids = {tc.get("id", "") for tc in tcs if tc.get("id")}
+            here = orphaned & tc_ids
+            if here:
+                # Carry over already-present sibling tool results, contiguous.
+                j = i + 1
+                while (j < n and messages[j].get("role") == "tool"
+                       and messages[j].get("tool_call_id") in tc_ids):
+                    out.append(messages[j])
+                    j += 1
+                for tc in tcs:
+                    tid = tc.get("id", "")
+                    if tid in here:
+                        row = {
+                            "role": "tool",
+                            "content": content,
+                            "tool_call_id": tid,
+                            "source": "management",
+                            "timestamp": now,
+                        }
+                        out.append(row)
+                        inserted.append(row)
+                orphaned -= here
+                i = j
+                continue
+        i += 1
+    return out, inserted
+
+
 class Session:
     """Append-only conversation log backed by a JSONL file.
 
@@ -654,85 +708,104 @@ class Session:
         """Return True if a tool result already exists for this tool_call_id."""
         return tool_call_id not in self.pending_tool_calls
 
-    def resolve_pending_tool_calls(self) -> None:
-        """Inject CANCELLED for all orphaned tool_call IDs."""
-        pending = list(self.pending_tool_calls)
-        for tc_id in pending:
-            self.append_tool_result(tc_id, "CANCELLED: This tool call was not executed.")
+    def _persist_cancellations_adjacent(self, content: str) -> list[dict]:
+        """Insert CANCELLED results for all pending tool calls adjacent to their
+        originating assistant's tool block, persisted to disk with meta rows
+        preserved. Returns the inserted message dicts ([] if nothing was placed).
 
-    def _heal_orphaned_tool_calls(self) -> None:
-        """Insert CANCELLED results adjacent to originating assistant messages.
-
-        Called during load() when pending_tool_calls is non-empty (crash/kill
-        scenario). Inserts results immediately after the assistant message and
-        any existing sibling tool results, then rewrites the JSONL atomically.
+        Reads the FULL on-disk content (not ``self._messages``) so meta rows
+        (session_start, sub_agent_thread) are never dropped — a meta-stripped
+        rewrite was the latent bug here. The caller MUST hold ``self._file_lock``
+        (and ``self._lock`` for a mid-session write); ``load()`` already holds the
+        file lock when it heals.
         """
-        orphaned = set(self.pending_tool_calls)
-        if not orphaned:
-            return
-
-        healed_count = 0
-        new_messages: list[dict] = []
-
-        i = 0
-        while i < len(self._messages):
-            msg = self._messages[i]
-            new_messages.append(msg)
-
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                # Collect tool_call IDs from this assistant message
-                tc_ids_in_msg = {
-                    tc.get("id", "") for tc in msg["tool_calls"] if tc.get("id")
-                }
-                orphans_here = orphaned & tc_ids_in_msg
-
-                if orphans_here:
-                    # Advance past any existing sibling tool results
-                    j = i + 1
-                    while j < len(self._messages):
-                        next_msg = self._messages[j]
-                        if next_msg.get("role") == "tool" and next_msg.get("tool_call_id") in tc_ids_in_msg:
-                            new_messages.append(next_msg)
-                            j += 1
-                        else:
-                            break
-
-                    # Insert CANCELLED for orphaned IDs
-                    for tc_id in orphans_here:
-                        cancel_msg = {
-                            "role": "tool",
-                            "content": "CANCELLED: This tool call was not executed (session interrupted).",
-                            "tool_call_id": tc_id,
-                            "source": "management",
-                            "timestamp": _now(),
-                        }
-                        new_messages.append(cancel_msg)
-                        healed_count += 1
-
-                    orphaned -= orphans_here
-                    i = j
+        pending = set(self.pending_tool_calls)
+        if not pending or not os.path.exists(self._filepath):
+            return []
+        full: list[dict] = []
+        with open(self._filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
                     continue
-
-            i += 1
-
-        if healed_count == 0:
-            return
-
-        # Atomic JSONL rewrite (same pattern as compaction)
+                try:
+                    full.append(json.loads(line))
+                except json.JSONDecodeError:
+                    logger.warning("Skipped corrupted JSONL line during cancel-splice")
+        # Cancel exactly the ids genuinely unresolved ON DISK (declared by some
+        # assistant, no result yet) that we also intend to cancel. Reading truth
+        # from `full` rather than trusting self.pending_tool_calls makes this
+        # idempotent: it can never double-insert a result for an already-resolved
+        # id, nor act on an id with no owning assistant (memory/disk desync).
+        declared: set = set()
+        resolved: set = set()
+        for m in full:
+            role = m.get("role")
+            if role == "assistant" and m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    if tc.get("id"):
+                        declared.add(tc["id"])
+            elif role == "tool" and m.get("tool_call_id"):
+                resolved.add(m["tool_call_id"])
+        effective = pending & (declared - resolved)
+        if not effective:
+            return []
+        new_full, inserted = _splice_pending_cancellations(full, effective, content, _now())
+        if not inserted:
+            return []
+        # Atomic JSONL rewrite (same pattern as compaction / heal).
         tmp_path = self._filepath + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            for msg in new_messages:
+            for msg in new_full:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, self._filepath)
-        self._messages = new_messages
-        self.pending_tool_calls.clear()
+        self._messages = [m for m in new_full if m.get("role") != "meta"]
+        self.pending_tool_calls -= {m["tool_call_id"] for m in inserted}
+        return inserted
 
-        logger.warning(
-            "Session %s: healed %d orphaned tool calls from interrupted session",
-            self.session_uuid, healed_count,
+    def resolve_pending_tool_calls(self) -> None:
+        """Inject CANCELLED for all orphaned tool_call IDs, placed contiguously
+        after their assistant's tool block (so strict providers don't 400 on a
+        tool result that doesn't follow its tool_calls) and persisted to disk
+        with meta rows preserved.
+        """
+        if not self.pending_tool_calls:
+            return
+        with self._lock:
+            with self._file_lock:
+                inserted = self._persist_cancellations_adjacent(
+                    "CANCELLED: This tool call was not executed."
+                )
+        # WS-activity parity: notify observers of the inserted rows outside the
+        # locks (on_append may broadcast). Persisted order is already correct.
+        for msg in inserted:
+            if self.on_append is not None:
+                try:
+                    self.on_append(msg)
+                except Exception:
+                    logger.exception("on_append callback failed")
+
+    def _heal_orphaned_tool_calls(self) -> None:
+        """Insert CANCELLED results adjacent to originating assistant messages.
+
+        Called during load() (under the file lock) when pending_tool_calls is
+        non-empty (crash/kill scenario). Delegates placement to the shared
+        ``_persist_cancellations_adjacent``, which preserves meta rows
+        (session_start, sub_agent_thread) — a meta-stripped rewrite was the prior
+        bug — and keeps the distinct crash-recovery wording.
+        """
+        if not self.pending_tool_calls:
+            return
+        inserted = self._persist_cancellations_adjacent(
+            "CANCELLED: This tool call was not executed (session interrupted)."
         )
+        if inserted:
+            logger.warning(
+                "Session %s: healed %d orphaned tool calls from interrupted session",
+                self.session_uuid, len(inserted),
+            )
 
     # ------------------------------------------------------------------
     # Streaming observer
