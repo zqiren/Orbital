@@ -92,8 +92,8 @@ app = BUNDLE(
     icon=os.path.join(project_root, 'assets', 'icon.icns'),
     bundle_identifier='com.orbital.desktop',
     info_plist={
-        'CFBundleShortVersionString': '0.5.2',
-        'CFBundleVersion': '0.5.2',
+        'CFBundleShortVersionString': '0.6.0',
+        'CFBundleVersion': '0.6.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '13.0',
         'CFBundleDisplayName': 'Orbital',
