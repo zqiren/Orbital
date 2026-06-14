@@ -2,18 +2,16 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center">
-  <img src="docs/subagent-dispatch.gif" alt="Delegating work to Claude Code from inside an Orbital project" width="800">
-</p>
-<p align="center"><em>You assign work to the project. The agent plans, delegates to Claude Code, and reports back.</em></p>
+<!-- TODO: replace with a hero GIF of the full loop; the still below stands in for now -->
+<p align="center"><img src="docs/screenshots/3A-chat-file-creation.png" alt="Your agent scans the codebase, drafts a phased implementation plan, and delegates Phase 1 to a Claude Code sub-agent" width="100%"></p>
+<p align="center"><em>You give your agent the work. It plans, delegates to Claude Code, and reports back.</em></p>
 
-<p align="center">
-  <img src="docs/approval.gif" alt="Claude Code requests approval to create a folder — approved from phone" width="800">
-</p>
+<!-- TODO: replace with a hero GIF of the approval flow; the still below stands in for now -->
+<p align="center"><img src="docs/screenshots/5B2-mobile-approval-card.png" alt="A consequential action pauses and an approval card appears on the phone with full context" width="300"></p>
 <p align="center"><em>Consequential action — approval request to your phone — work continues.</em></p>
 
-<h2 align="center">Give your agent a project, not a prompt.</h2>
-<p align="center">The project workspace you and your agent share — with memory that persists,<br>sandbox boundaries you set, and approvals you control.</p>
+<h2 align="center">The agent that never starts from zero.</h2>
+<p align="center">Every piece of work your agent finishes becomes context for the next instruction.<br>The project gets more capable the longer it runs — not reset to zero.</p>
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.5.1/Orbital-Setup-1.0.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
@@ -34,21 +32,23 @@
 
 ## Why this exists
 
-Working with AI agents today is micromanaging an intern.
+Every agent today forgets. You paste the same context into every session. You re-explain the project every morning. The decisions you settled last week vanish when the session ends, so you settle them again.
 
-You paste context into every session. You watch every action because you don't trust it won't break something. You copy outputs between tools because the agents can't see each other's work. You re-explain the project every morning because nothing persisted. You run one thing at a time because running more means losing track.
+Your agent dies. Your session ends. Your work doesn't.
 
-A real project isn't a chat session. It's a workspace with a goal, a budget, boundaries, and a history. You hand it to someone you trust, check in when it matters, and get out of the way. That's what Orbital does for agents.
+Orbital is an agent built around that fact. Everything it finishes — the artifacts it produced, the decisions, the lessons — is written into the project and read back at the start of the next session. Instead of starting from zero, your agent starts from everything it has already made. The work compounds.
 
 ---
 
 ## What makes Orbital different
 
-**A project, not a prompt.** Each project is a folder on your machine with its own workspace, instructions, memory, budget, sandbox, and approval rules. Context persists across sessions. Decisions accumulate. A project you opened yesterday knows what happened yesterday.
+**Artifacts that compound.** Most of the work in a project is your agent producing artifacts — code, documents, research, reports. Every artifact it finishes becomes reference material for the next session and the next artifact, alongside the state, decisions, and lessons it keeps current. A project you opened yesterday knows what happened yesterday — and builds on it.
 
-**Delegate, don't micromanage.** Pick an autonomy preset — hands-off, check-in, or supervised. The agent runs within the boundaries you set. Consequential actions surface to you for approval, with full context. Everything else, the agent handles. You supervise from your desk or your phone.
+**Grounded in your real work.** The project is a folder on your disk, local-first. Your files aren't just storage — they're what your agent reads before it produces anything, so its artifacts target your actual codebase, your actual documents, your actual data, instead of plausible-sounding output grounded in nothing.
 
-**One workspace, many agents.** Your Orbital project can dispatch work to Claude Code, Codex, Gemini CLI, or any CLI agent — all working on the same files, with access to the same decisions, instructions, and history. Stop copy-pasting between a chat tab and a terminal tab. The agents see each other's work because they're in the same project.
+**Safe to leave running.** Queue up tasks and walk away: your agent works through them one at a time, declaring an outcome on every item — completed with a summary, or blocked with a reason for you to resolve. It works inside sandbox boundaries you set, under a per-project budget, with approval rules you control; consequential actions reach your phone.
+
+**Swap the hands, keep the memory.** Your agent delegates execution to sub-agents — Claude Code, Codex, Gemini CLI, or any CLI agent. They're interchangeable: each one works from the same accumulated context — the same files, decisions, instructions, and history — and what they finish flows back into the project. Change the sub-agent; lose nothing.
 
 ---
 
@@ -56,6 +56,7 @@ A real project isn't a chat session. It's a workspace with a goal, a budget, bou
 
 - **Project-based agent management** — each project is a folder with its own workspace, instructions, budget, and autonomy level
 - **Sub-agent delegation** — the management agent monitors your workspace, evaluates progress against goals, and dispatches work to Claude Code, Codex, Gemini CLI, or any CLI agent
+- **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
 - **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
 - **Approval workflows** — agents pause before risky actions; approve from desktop or phone
 - **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
@@ -75,27 +76,22 @@ A real project isn't a chat session. It's a workspace with a goal, a budget, bou
 
    **Step 1 — LLM Provider:** Connect your API key. Supports Anthropic, OpenAI, Moonshot, DeepSeek, and a dozen other providers.
 
-   <p align="center">
-     <img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1 — configure your LLM provider and API key" width="700">
-   </p>
+   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1: select an LLM provider and enter your API key" width="100%"></p>
+
 
    **Step 2 — Sandbox:** Orbital creates an isolated user account so agents can't access your personal files or network without permission.
 
-   <p align="center">
-     <img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2 — sandbox isolation confirmation" width="700">
-   </p>
+   <p align="center"><img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2: sandbox isolation confirmation" width="100%"></p>
+
 
    **Step 3 — Browser Warm-up:** Sign into sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs.
 
-   <p align="center">
-     <img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3 — browser warm-up for agent web access" width="700">
-   </p>
+   <p align="center"><img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3: browser warm-up, signing into sites the agent will use" width="100%"></p>
+
 
 2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
 
-<p align="center">
-  <img src="docs/screenshots/new-project-setting.png" alt="New project creation with workspace and autonomy settings" width="700">
-</p>
+<p align="center"><img src="docs/screenshots/new-project-setting.png" alt="New project creation dialog with workspace directory and autonomy level settings" width="100%"></p>
 
 3. **Chat** — type a task in the chat bar and the management agent handles it
 4. **Approve or automate** — review tool calls in the approval card, or set autonomy to hands-off
@@ -104,26 +100,20 @@ A real project isn't a chat session. It's a workspace with a goal, a budget, bou
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard with multiple projects running in parallel" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/2A-dashboard-all-running.png" alt="Dashboard with multiple projects running in parallel, each with its own triggers and session history" width="100%"></p>
 <p align="center"><em>Multiple projects running in parallel — each with its own workspace, triggers, and session history</em></p>
 
-<p align="center">
-  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve agent actions from your phone" width="350">
-</p>
+<p align="center"><img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approving an agent action from the phone with full context" width="300"></p>
 <p align="center"><em>Approve agent actions from your phone — with full context and optional guidance</em></p>
 
-<p align="center">
-  <img src="docs/screenshots/3B-subagent-delegation.png" alt="Sub-agent executing delegated work and reporting back" width="800">
-</p>
-<p align="center"><em>Management agent delegates Phase 1 to @claudecode, monitors progress, and reviews the result — all inside the same project workspace</em></p>
+<p align="center"><img src="docs/screenshots/3B-subagent-delegation.png" alt="Your agent delegates Phase 1 to a Claude Code sub-agent, monitors progress, and reviews the result inside the project" width="100%"></p>
+<p align="center"><em>Your agent delegates Phase 1 to @claudecode, monitors progress, and reviews the result — all inside the same project</em></p>
 
 ---
 
 ## How It Works
 
-Orbital treats each unit of agent work as a **project** — not a chat session. A project binds a workspace directory, evolving instructions, an autonomy preset, a budget, approval rules, and persistent state into one supervised unit. The agent works inside the project. You supervise from anywhere.
+Orbital is one agent bound to a **project** — not a chat session. The project binds a workspace directory, evolving instructions, an autonomy preset, a budget, approval rules, and persistent state into one supervised unit. Your agent plans and delegates inside it, sub-agents execute, and everything they finish is written back as context for the next instruction. You supervise from anywhere.
 
 ```mermaid
 flowchart TB
@@ -182,7 +172,7 @@ flowchart TB
 | Triggers (cron + file watch) | ✅ | ❌ | ✅ (`openclaw cron`) | ✅ (`/schedule`) |
 | Open source | GPL-3.0 | ❌ | MIT | ❌ |
 
-**The short version:** Claude Projects proved the mental model. OpenClaw proved local agents work. Cowork proved people want agents to run autonomously. Orbital is all three in one place, on your machine, where agents can actually update the project and collaborate inside the same workspace.
+**The short version:** Claude Projects proved the mental model. OpenClaw proved local agents work. Cowork proved people want agents to run autonomously. Orbital is one agent that does all three on your machine — it keeps its own project state current across sessions, and delegates execution to whichever sub-agents you choose. It never starts from zero.
 
 ---
 
@@ -205,9 +195,7 @@ flowchart TB
 
 Each project maps to a workspace directory and maintains its own sessions, triggers, and configuration.
 
-<p align="center">
-  <img src="docs/screenshots/files.png" alt="File explorer — browse and upload files in the project workspace" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/files.png" alt="File explorer — browsing, previewing, and uploading files in a project's workspace" width="100%"></p>
 <p align="center"><em>Browse, preview, and upload files in each project's workspace</em></p>
 
 ```
@@ -247,9 +235,28 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 
 The sidebar includes a **Quick Task** section for fire-and-forget interactions. Scratch projects skip the full project creation flow — useful for one-off tasks that don't need a dedicated workspace.
 
-<p align="center">
-  <img src="docs/screenshots/quick-task.png" alt="Quick Task — browsing Hacker News and returning structured results" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/quick-task.png" alt="Quick Task — a fire-and-forget task (browsing Hacker News) returning structured results" width="100%"></p>
+
+</details>
+
+<details>
+<summary><strong>Task Queue</strong></summary>
+
+Each project has a queue. Add tasks — pin urgent ones to the front — and your agent works through them one at a time, in order, without you watching.
+
+The agent must declare an outcome on every item; it can't silently drift to the next one:
+
+| Outcome | What happens |
+|---------|--------------|
+| **Completed** | The agent reports a short summary; the item moves to **Completed** and the queue advances. |
+| **Blocked** | The agent states the reason (missing credentials, ambiguous requirements, …); the item moves to **Needs Attention** and the queue moves on. You unblock it when ready. |
+
+**Pause to steer.** Pause the queue mid-item to chat freely — your clarifications land in the same session, so the agent sees them when you resume.
+
+**Compounding by design.** Each completed item's artifacts are already in the project when the next item starts, so later tasks build on earlier ones instead of starting over. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
+
+<p align="center"><img src="docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png" alt="Queue tab — Now Running, Queued, and Automations sections; the queue can be paused to chat and steer" width="100%"></p>
+<p align="center"><em>Queue tasks and walk away — your agent drains them one at a time, declaring an outcome on each</em></p>
 
 </details>
 
@@ -264,9 +271,7 @@ Three autonomy presets control how much supervision agents receive:
 | **Check-in** | Approval | Approval | Write only | Balanced. Default for external agents. |
 | **Supervised** | Approval | Approval | All except read | Maximum oversight. |
 
-<p align="center">
-  <img src="docs/screenshots/budget.png" alt="Project settings — autonomy presets and budget controls" width="700">
-</p>
+<p align="center"><img src="docs/screenshots/budget.png" alt="Project settings — autonomy presets and per-project budget controls" width="100%"></p>
 <p align="center"><em>Pick an autonomy level and set budget limits per project</em></p>
 
 **Approval flow:**
@@ -275,9 +280,7 @@ Three autonomy presets control how much supervision agents receive:
 3. User can **Approve**, **Deny**, or **Auto-approve for 10 minutes**
 4. Per-action bypass: same tool+args auto-approved for 60 seconds
 
-<p align="center">
-  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approve agent actions from your phone" width="350">
-</p>
+<p align="center"><img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card — approving an agent action from the phone with full context" width="300"></p>
 <p align="center"><em>Approve agent actions from your phone — with full context and optional guidance</em></p>
 
 </details>
@@ -287,14 +290,10 @@ Three autonomy presets control how much supervision agents receive:
 
 Orbital is not tied to a single AI tool. The management agent plans and delegates, while specialized sub-agents execute. Any CLI-based agent can be registered via a manifest file.
 
-<p align="center">
-  <img src="docs/screenshots/3A-chat-file-creation.png" alt="Management agent creating a plan and delegating to sub-agents" width="800">
-</p>
-<p align="center"><em>The management agent creates an implementation plan...</em></p>
+<p align="center"><img src="docs/screenshots/3A-chat-file-creation.png" alt="Your agent drafting a phased implementation plan in chat before delegating" width="100%"></p>
+<p align="center"><em>Your agent creates an implementation plan...</em></p>
 
-<p align="center">
-  <img src="docs/screenshots/3B-subagent-delegation.png" alt="Sub-agent executing delegated work and reporting back" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/3B-subagent-delegation.png" alt="A Claude Code sub-agent executing the delegated phase while your agent monitors and reviews the result" width="100%"></p>
 <p align="center"><em>...delegates Phase 1 to @claudecode, monitors progress, and reviews the result</em></p>
 
 **Transport types:**
@@ -337,10 +336,8 @@ Built on **Patchright** (a Playwright fork with anti-bot-detection):
 - **Accessibility-first**: `snapshot` returns an accessibility tree with `[ref=eN]` element references for reliable interaction
 - **26 browser actions**: navigate, click, type, fill, press, hover, select, drag, upload, snapshot, screenshot, extract, search (page), evaluate, tab management, go back/forward, reload, wait, PDF export, web search, URL fetch, batch
 
-<p align="center">
-  <img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="Agent browsing arxiv.org and scanning research papers" width="350">
-</p>
-<p align="center"><em>An agent browsing arxiv.org — scanning for AI reasoning papers on a daily schedule</em></p>
+<p align="center"><img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="Mobile view of the agent browsing arxiv.org, scanning research papers on a daily schedule" width="300"></p>
+<p align="center"><em>Your agent browsing arxiv.org — scanning for AI reasoning papers on a daily schedule</em></p>
 
 </details>
 
@@ -361,22 +358,18 @@ The management agent translates this into a `create_trigger` tool call with the 
 | **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
 | **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
 
-<p align="center">
-  <img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger — monitoring auth/ directory for .py changes" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger configuration — monitoring auth/ for .py changes, running tests on every save" width="100%"></p>
 <p align="center"><em>File watch trigger: monitors auth/ for .py changes, runs tests on every save. 22 runs so far.</em></p>
 
-<p align="center">
-  <img src="docs/screenshots/scheduled-trigger.png" alt="Scheduled trigger — daily research scan at 6 AM" width="800">
-</p>
+<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Scheduled trigger configuration — daily research scan at 6 AM" width="100%"></p>
 <p align="center"><em>Scheduled trigger: scans arxiv, Hacker News, and tech blogs every day at 6 AM. 12 runs.</em></p>
 
 **Real-world example — Health Tracker with file watch:**
 
 <p align="center">
-  <img src="docs/screenshots/4B-mobile-meal-chat1.jpg" alt="Setting up a meal photo file watcher from phone" width="350">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/4B-mobile-meal-chat2.jpg" alt="Agent automatically analyzing a meal photo" width="350">
+  <img src="docs/screenshots/4B-mobile-meal-chat1.jpg" alt="Mobile chat: setting up a meal photo file watcher from the phone" width="280">
+  &nbsp;
+  <img src="docs/screenshots/4B-mobile-meal-chat2.jpg" alt="Mobile chat: the agent automatically analyzing a dropped meal photo" width="280">
 </p>
 <p align="center"><em>Left: "Watch uploads/ for meal photos and track calories." Right: Drop a photo, get instant nutritional analysis.</em></p>
 
@@ -409,17 +402,15 @@ The management agent translates this into a `create_trigger` tool call with the 
 Control agents from your phone on the local network or via a cloud relay.
 
 <p align="center">
-  <img src="docs/screenshots/4A-mobile-dashboard.png" alt="Mobile dashboard — all projects at a glance" width="350">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/5C-mobile-approved.png" alt="Agent completing work after mobile approval" width="350">
+  <img src="docs/screenshots/4A-mobile-dashboard.png" alt="Mobile dashboard — all projects at a glance" width="280">
+  &nbsp;
+  <img src="docs/screenshots/5C-mobile-approved.png" alt="The agent completing its work after a mobile approval" width="280">
 </p>
-<p align="center"><em>Left: Project dashboard on phone. Right: Agent completes its research after you approve from anywhere.</em></p>
+<p align="center"><em>Left: Project dashboard on phone. Right: Your agent completes its research after you approve from anywhere.</em></p>
 
 **Local network**: Scan the QR code in Settings to open Orbital on your phone via LAN.
 
-<p align="center">
-  <img src="docs/screenshots/qr-code-lan-pairng.png" alt="QR code for mobile access on local network" width="700">
-</p>
+<p align="center"><img src="docs/screenshots/qr-code-lan-pairng.png" alt="QR code in Settings for mobile access on the local network" width="100%"></p>
 <p align="center"><em>Scan to open Orbital on your phone — same Wi-Fi network required</em></p>
 
 **Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests and agent status changes.
@@ -444,10 +435,8 @@ The agent loop tracks cumulative token usage and computes cost using per-model p
 <details>
 <summary><strong>Credential Management</strong></summary>
 
-<p align="center">
-  <img src="docs/screenshots/credential-store.png" alt="Credential store — website passwords stored in system keychain" width="700">
-</p>
-<p align="center"><em>Website credentials stored in your system keychain. Agents always ask permission before using them.</em></p>
+<p align="center"><img src="docs/screenshots/credential-store.png" alt="Credential store — website passwords stored in the system keychain" width="100%"></p>
+<p align="center"><em>Website credentials stored in your system keychain. Your agent always asks permission before using them.</em></p>
 
 - **API keys**: Stored in OS keychain (`keyring`), masked in API responses, per-project BYOK override
 - **Website credentials**: Metadata in `credential-meta.json`, values in OS keychain. The `request_credential` tool lets agents request credentials mid-session via a secure modal — credentials never appear in chat history.
@@ -494,10 +483,8 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 **Skills system**: Agents create reusable skills from multi-step workflows and consult matching skills before starting similar tasks. Skills are stored as SKILL.md files in the workspace and managed through the Settings UI.
 
-<p align="center">
-  <img src="docs/screenshots/skills.png" alt="Skills — operational patterns the agent follows" width="700">
-</p>
-<p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how the agent works</em></p>
+<p align="center"><img src="docs/screenshots/skills.png" alt="Skills settings — reusable operational patterns the agent follows" width="100%"></p>
+<p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how your agent works</em></p>
 
 </details>
 
@@ -616,7 +603,7 @@ python -m pytest tests/unit/ tests/platform/ -q \
   --ignore=tests/platform/test_consumer3_wiring.py
 
 # TypeScript check (zero errors expected)
-cd web && npx tsc --noEmit
+cd web && npx tsc -b
 
 # Daemon integration test
 bash scripts/restart-daemon.sh
@@ -666,7 +653,7 @@ I loved Claude Projects. I hated that I couldn't let an agent update the project
 
 I loved OpenClaw. I hated the lack of control — no budget, no sandbox, no way to supervise from my phone when I stepped away.
 
-Orbital is the thing I wanted. A project you can hand to an agent. Memory that persists. Sandbox, budget, approvals you control. The phone to check in when you're not at your desk. Claude Code, Codex, Gemini CLI working as sub-agents in the same workspace.
+Orbital is the thing I wanted. One agent that remembers everything we've done. Sandbox, budget, approvals I control. The phone to check in when I'm not at my desk. Claude Code, Codex, Gemini CLI as the hands it delegates to — swap the hands, keep the memory. An agent that never starts from zero.
 
 Built nights and weekends while working full-time. Still very early. Feedback and issues welcome.
 
@@ -677,7 +664,7 @@ Built nights and weekends while working full-time. Still very early. Feedback an
 Orbital is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ```
-Orbital — The project workspace you and your agent share.
+Orbital — The agent that never starts from zero.
 Copyright (C) 2026 Orbital Contributors
 
 This program is free software: you can redistribute it and/or modify
