@@ -58,6 +58,8 @@ TASK/
 REPORT-*.md
 RESEARCH-*.md
 DIAGNOSIS-*.md
+INVESTIGATION-*.md
+*FINDINGS*.md
 ACTIVE-*.md
 ACTIVE-*/
 docs/superpowers/specs/
@@ -72,3 +74,10 @@ docs/superpowers/specs/
 bug-log.md
 qclaw-*.md
 orbital-marketing-bug-analysis.html
+
+# Internal scratch docs — investigations, test-run logs/artifacts, planning notes (keep local, don't track)
+docs/investigations/
+docs/testing/
+docs/superpowers/plans/
+RUN-MANUAL-SMOKE.md
+RUN-LOG-*.md
