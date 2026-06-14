@@ -180,7 +180,7 @@ Orbital 暂未做代码签名,Windows 会提示安全警告:
 2. 打开 DMG,把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
-需要 macOS 13 (Ventura) 及以上。Apple Silicon 和 Intel 都支持。
+需要 macOS 13 (Ventura) 及以上,**仅支持 Apple Silicon(M1 及更新机型)**。本版本为 arm64 构建,**不支持 Intel Mac**。
 
 <details>
 <summary>macOS Gatekeeper 警告</summary>

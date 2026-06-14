@@ -526,7 +526,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
-Requires macOS 13 (Ventura) or later. Apple Silicon and Intel supported.
+Requires macOS 13 (Ventura) or later, **Apple Silicon (M1 or newer)**. Intel Macs are **not** supported by this build (the bundle is arm64-only).
 
 <details>
 <summary>macOS Gatekeeper Warning</summary>

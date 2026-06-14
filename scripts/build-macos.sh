@@ -64,6 +64,30 @@ echo "[4b/5] Re-signing bundle ad-hoc after asset copy..."
 codesign --force --deep --sign - dist/Orbital.app
 codesign --verify --deep --strict dist/Orbital.app
 
+# 4c. Pre-flight asserts — fail the build instead of shipping a broken bundle.
+#     (Each of these has caused a shipped regression before; see CLAUDE.md.)
+echo "[4c/5] Verifying bundle integrity..."
+_APP="dist/Orbital.app"
+_BIN="$_APP/Contents/MacOS/Orbital"
+_HOST_ARCH="$(uname -m)"   # arm64 on Apple Silicon, x86_64 on Intel
+if ! lipo -archs "$_BIN" 2>/dev/null | tr ' ' '\n' | grep -qx "$_HOST_ARCH"; then
+    echo "ERROR: app binary is missing host arch '$_HOST_ARCH' (got: $(lipo -archs "$_BIN" 2>/dev/null || echo unknown)); it won't launch on this platform." >&2
+    exit 1
+fi
+for _arch in macos-arm64 macos-x86_64; do
+    if [[ ! -x "$_APP/Contents/Resources/agent_os/vendor/rg/$_arch/rg" ]]; then
+        echo "ERROR: bundled ripgrep missing/not executable: vendor/rg/$_arch/rg — the grep tool would break on user machines." >&2
+        exit 1
+    fi
+done
+if [[ ! -f "$_APP/Contents/Resources/web/index.html" ]]; then
+    echo "ERROR: web SPA missing from bundle (Contents/Resources/web/index.html) — app would launch to a blank window." >&2
+    exit 1
+fi
+# Re-assert the codesign seal: a broken seal triggers Sequoia's drag-install "some items had to be skipped".
+codesign --verify --deep --strict "$_APP" || { echo "ERROR: codesign seal invalid after asset copy." >&2; exit 1; }
+echo "  OK: arch=$_HOST_ARCH, ripgrep (arm64+x86_64), web SPA, codesign seal intact."
+
 # 5. Create DMG
 echo "[5/5] Creating DMG..."
 DMG_NAME="Orbital-0.6.0-macOS.dmg"
