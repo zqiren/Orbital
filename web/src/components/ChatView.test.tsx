@@ -1170,3 +1170,105 @@ describe('appendLiveReasoning — agent header anchor', () => {
     }
   });
 });
+
+describe('ChatView: full-history reconcile after a turn settles (TASK-history-reconcile-after-turn)', () => {
+  // Captured bug: a session that starts EMPTY is carried entirely by the WS
+  // overlay + limit=1 fallback; the full-history limit=100 reconcile never
+  // fires, so middle assistant turns silently disappear from the view while
+  // remaining in the backend (DIAGNOSIS-history-loss-subcause.md). After the
+  // VIEWED session's turn settles, the view must reconcile against full history.
+  const FULL_HISTORY = [
+    { role: 'user', content: 'Q1-what-is-it', timestamp: '2026-06-15T15:41:38.000000+00:00', session_id: 's1' },
+    { role: 'assistant', content: 'A1-MIDDLE-ANSWER-UNIQUE', timestamp: '2026-06-15T15:42:49.000000+00:00', session_id: 's1', source: 'assistant' },
+    { role: 'user', content: 'Q2-side-effects', timestamp: '2026-06-15T15:43:04.000000+00:00', session_id: 's1' },
+    { role: 'assistant', content: 'A2-LATEST-ANSWER', timestamp: '2026-06-15T15:43:26.000000+00:00', session_id: 's1', source: 'assistant' },
+  ];
+  const initialChatCalls = () =>
+    apiWithTotalCalls.filter((p) => p.includes('/chat?limit=') && !p.includes('offset=')).length;
+
+  it('reconciles the viewed session against full history after its turn settles', async () => {
+    // Reproduce the captured condition: session starts EMPTY and the holder is
+    // unresolved (null) at the running transition, so the wasRunningRef/viewing
+    // latch never fires via the agentStatus path.
+    runStatusHolder = null;
+    chatInitialResponse = { data: [], total: 0 };
+
+    // 1. Mount idle, empty session -> items=[] (initial limit=100 load).
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // 2. Agent starts running; viewing is false (holder null), so the running
+    //    branch does NOT latch wasRunningRef.
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    // 3. A stream delta arrives for the VIEWED session (definitive proof it is
+    //    streaming). The overlay does NOT contain the middle answer.
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        session_id: 's1',
+        text: 'A2-LATEST streaming token',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+    await flushEffects();
+
+    // 4. Backend now holds the FULL persisted history (all 4 messages).
+    chatInitialResponse = { data: FULL_HISTORY, total: FULL_HISTORY.length };
+    const before = initialChatCalls();
+
+    // 5. The turn settles: running -> idle.
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    // (a) A full-history reconcile fired for the viewed session after the turn.
+    expect(initialChatCalls()).toBeGreaterThan(before);
+    expect(
+      apiWithTotalCalls.some(
+        (p) => p.includes('/chat?limit=') && p.includes('session_id=s1') && !p.includes('offset='),
+      ),
+    ).toBe(true);
+
+    // (b) The view now contains ALL turns, including the middle answer the
+    //     overlay lacked -- not just the latest.
+    expect(container.textContent ?? '').toContain('A1-MIDDLE-ANSWER-UNIQUE');
+  });
+
+  it('does NOT reconcile when switching to a different idle session mid-turn (no fetch storm)', async () => {
+    // s1 is the running holder and is being viewed; the user switches to view
+    // idle s2 BEFORE s1 finishes. When s1 then goes idle, no full-history
+    // reconcile must fire (the "was streaming" latch must reset on switch).
+    runStatusHolder = 's1';
+    chatInitialResponse = { data: [], total: 0 };
+
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        session_id: 's1',
+        text: 's1 streaming',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+    await flushEffects();
+
+    // Switch to view s2 (idle) while s1 is still the running holder.
+    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await flushEffects();
+    const before = initialChatCalls();
+
+    // s1's loop ends -> project agentStatus goes idle while viewing s2.
+    await renderChat({ agentStatus: 'idle', sessionId: 's2' });
+    await flushEffects();
+
+    // No spurious reconcile fired on the idle transition after the switch.
+    expect(initialChatCalls()).toBe(before);
+  });
+});

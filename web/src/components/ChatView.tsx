@@ -784,6 +784,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   useEffect(() => {
     let cancelled = false;
 
+    // Reset the "was running while viewed" latch on every session (re)load so a
+    // stale latch from a previous session can't trigger a full-history
+    // reconcile against the newly-viewed session on the next idle transition.
+    wasRunningRef.current = false;
+
     if (sessionId === undefined) {
       // No active session resolved yet — clear and show the (non-loading)
       // empty state. Reset pagination so a later session load starts fresh.
@@ -1090,6 +1095,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (e.project_id !== projectId) return;
       // Strict session routing: render only deltas for the viewed session.
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      // A live delta for the VIEWED session is definitive proof it is the
+      // session actively executing. Latch the "was running while viewed" flag
+      // so the running->idle catch-up reconciles full persisted history — even
+      // when the holder/viewing latch never fired (holder unresolved at the
+      // running transition, the captured bug). Reset on session switch (load
+      // effect) so this never reconciles a session navigated away from.
+      wasRunningRef.current = true;
 
       if (e.is_final) {
         setStream((prev) => {
