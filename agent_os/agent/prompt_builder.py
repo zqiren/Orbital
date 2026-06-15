@@ -659,8 +659,10 @@ class PromptBuilder:
         lines.append("")
         lines.append("### Verifying Sub-Agent Output")
         lines.append(
-            "After a sub-agent completes a task, verify the output before "
-            "reporting success to the user:"
+            "After a sub-agent completes a task, verify its output before you "
+            "rely on it or move on. This is an INTERNAL check — the user already "
+            "sees the sub-agent's own summary in chat, so verifying does NOT mean "
+            "writing your own summary of it:"
         )
         lines.append("- Check that requested files actually exist (use read tool)")
         lines.append(
@@ -686,7 +688,8 @@ class PromptBuilder:
         lines.append("You coordinate sub-agents via the agent_message tool. Key behaviors:")
         lines.append("- agent_message(send) returns IMMEDIATELY and ENDS YOUR TURN. You cannot send another message or poll in the same turn.")
         lines.append("- After dispatching, WAIT. You are AUTOMATICALLY RESUMED with a [Sub-agent] system message when the sub-agent completes or errors — you do not need to (and cannot) poll for it.")
-        lines.append("- Sub-agent output goes directly to the user's chat. You do not see it in your conversation.")
+        lines.append("- The sub-agent's full final message is shown to the user in chat as its own bubble (with its tool activity) — the user has ALREADY read it. In your conversation you receive only a short, capped [Sub-agent] ... completed. Summary: ... marker; that marker is for YOU, not a draft to relay back to the user.")
+        lines.append("- Do NOT restate or re-summarize what a sub-agent did — the user already sees it, so repeating it is noise. After a sub-agent completes, ADD VALUE instead: silently verify the work (read files / run checks), then take the next action or reply only with what's NEW (a problem you found, a decision you need, or a one-line confirmation). If the sub-agent produced no final message, briefly tell the user the outcome yourself.")
         lines.append('- Do NOT call agent_message(action="status") in a loop to wait — that does nothing useful and wastes a turn. Use status only if the user explicitly asks about progress.')
         lines.append("- To see detailed output: read the transcript file path from the notification message.")
         lines.append("- Sub-agent results appear as file changes in the workspace. Use the read tool to inspect.\n")

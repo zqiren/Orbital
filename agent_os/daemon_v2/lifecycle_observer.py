@@ -61,7 +61,27 @@ class LifecycleObserver:
                            *, session_id: str | None = None) -> None:
         """Sub-agent finished its current task."""
         summary_text = summary[:500] if summary else "(no output)"
-        content = f"[Sub-agent] {handle} completed. Summary: {summary_text}. Transcript: {transcript_path}"
+        if summary and summary.strip():
+            # The sub-agent's full final message is already shown to the user as
+            # its own chat bubble (subagent-last-message-display). Re-summarizing
+            # it here would duplicate what the user already sees, so steer the
+            # management agent toward verifying / advancing instead of echoing.
+            guidance = (
+                " The user can already see this summary in chat as the sub-agent's "
+                "own message — do NOT repeat or re-summarize it. Verify the work if "
+                "needed, then continue or reply only with what's new."
+            )
+        else:
+            # No final message → no bubble was shown to the user, so the agent
+            # should report the outcome itself rather than stay silent.
+            guidance = (
+                " The sub-agent produced no final message, so nothing was shown to "
+                "the user — briefly tell the user the outcome yourself."
+            )
+        content = (
+            f"[Sub-agent] {handle} completed. Summary: {summary_text}. "
+            f"Transcript: {transcript_path}.{guidance}"
+        )
         await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
