@@ -70,6 +70,26 @@ describe('QueueComposer', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  // Enter that commits an IME (e.g. Pinyin) candidate must not submit the
+  // message — it belongs to the input method, not to us.
+  it('Enter does NOT submit while an IME is composing (isComposing)', () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    render(<QueueComposer onSubmit={onSubmit} />);
+    const input = screen.getByTestId('queue-composer-input');
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false, isComposing: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('Enter does NOT submit while an IME is composing (legacy keyCode 229)', () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    render(<QueueComposer onSubmit={onSubmit} />);
+    const input = screen.getByTestId('queue-composer-input');
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false, keyCode: 229 });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('renders hint text when provided', () => {
     render(<QueueComposer onSubmit={() => {}} hint="Chat freely — queue is stopped" />);
     expect(screen.getByText(/Chat freely/)).toBeTruthy();

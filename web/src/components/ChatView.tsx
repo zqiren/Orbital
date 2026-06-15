@@ -1943,6 +1943,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // While an IME (e.g. Pinyin) is composing, Enter/Arrow/Tab belong to the
+    // candidate window — don't submit or hijack them for our dropdowns.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (showCommandDropdown) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();

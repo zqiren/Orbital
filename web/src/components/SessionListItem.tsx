@@ -209,6 +209,9 @@ export function SessionListItem({
             onBlur={commitRename}
             onKeyDown={(e) => {
               e.stopPropagation();
+              // Enter that commits an IME (e.g. Pinyin) candidate must not
+              // commit the rename — it belongs to the input method.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter') {
                 e.preventDefault();
                 commitRename();

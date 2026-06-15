@@ -40,6 +40,9 @@ export default function QueueComposer({
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While an IME (e.g. Pinyin) is composing, Enter commits the candidate —
+    // it belongs to the input method, not to us. Don't submit mid-composition.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSubmit();
