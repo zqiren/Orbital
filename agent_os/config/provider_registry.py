@@ -35,6 +35,8 @@ class ReasoningInfo:
 
     `field`: stream-delta key carrying reasoning text. None + supported=True
     means reasoning is inline as <think>...</think> within `content`.
+    `inline_tag`: for inline-think models (field is None), the tag name wrapping
+        reasoning in `content`. Defaults to "think"; MiniMax-M3 uses "mm:think".
     `echo_back`: must past assistant turns include the field?
         required  – API 400s if missing  (DeepSeek v4 family, Anthropic during tool use, Gemini 3 during tool use)
         optional  – tolerated either way
@@ -45,6 +47,7 @@ class ReasoningInfo:
     """
     supported: bool = False
     field: str | None = None
+    inline_tag: str = "think"
     echo_back: str = "none"
     enable: str = "model_only"
     needs_verification: bool = False
@@ -68,6 +71,7 @@ def _parse_reasoning_entry(entry: dict | None) -> ReasoningInfo:
     return ReasoningInfo(
         supported=bool(entry.get("supported", False)),
         field=entry.get("field"),
+        inline_tag=entry.get("inline_tag", "think"),
         echo_back=entry.get("echo_back", "none"),
         enable=entry.get("enable", "model_only"),
         needs_verification=bool(entry.get("needs_verification", False)),

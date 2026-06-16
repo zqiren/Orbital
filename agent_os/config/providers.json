@@ -2912,9 +2912,10 @@
           "reasoning": {
             "supported": true,
             "field": null,
+            "inline_tag": "mm:think",
             "echo_back": "optional",
             "enable": "model_only",
-            "notes": "Inline-think: M3 emits reasoning in <think>…</think> within content by default; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. https://platform.minimax.io/docs/api-reference/text-openai-api",
+            "notes": "Inline-think: M3 emits reasoning in <mm:think>…</mm:think> within content (NOT the bare <think> tag); Orbital's InlineThinkSplitter (field=null contract, inline_tag=mm:think) peels it into reasoning_content. https://platform.minimax.io/docs/api-reference/text-openai-api",
             "needs_verification": true
           }
         },

@@ -427,6 +427,13 @@ class LLMProvider:
             and getattr(r, "field", "sentinel") is None
         )
 
+    def _inline_think_tag(self) -> str:
+        """The reasoning tag name for this model's inline-think content. Sourced
+        from ReasoningInfo.inline_tag (provider config); defaults to ``think``
+        for models that don't declare a namespaced tag (e.g. MiniMax-M3 uses
+        ``mm:think``)."""
+        return getattr(self.reasoning, "inline_tag", "think") or "think"
+
     def update_api_key(self, new_key: str) -> None:
         """Hot-swap the API key, reconstructing the underlying client."""
         if new_key == self.api_key:
@@ -519,7 +526,10 @@ class LLMProvider:
         # Inline-think models (e.g. MiniMax M-series) stream reasoning inside
         # <think>…</think> within `content`. Peel it into reasoning_content as
         # deltas arrive (tags may span chunk boundaries). None for other models.
-        splitter = InlineThinkSplitter() if self._inline_think_mode() else None
+        splitter = (
+            InlineThinkSplitter(tag=self._inline_think_tag())
+            if self._inline_think_mode() else None
+        )
 
         async for chunk in response_iter:
             if not chunk.choices:
@@ -657,7 +667,7 @@ class LLMProvider:
         # Inline-think models: peel <think>…</think> out of content into
         # reasoning_content so the persisted message keeps a clean answer.
         if self._inline_think_mode() and isinstance(text, str) and text:
-            splitter = InlineThinkSplitter()
+            splitter = InlineThinkSplitter(tag=self._inline_think_tag())
             visible, think = splitter.feed(text)
             v2, t2 = splitter.flush()
             text = visible + v2

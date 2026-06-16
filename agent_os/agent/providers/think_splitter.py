@@ -21,10 +21,13 @@ from __future__ import annotations
 
 
 class InlineThinkSplitter:
-    OPEN = "<think>"
-    CLOSE = "</think>"
-
-    def __init__(self) -> None:
+    def __init__(self, tag: str = "think") -> None:
+        # The reasoning tag is configurable because providers namespace it
+        # differently (e.g. MiniMax-M3 emits ``<mm:think>…</mm:think>``). The
+        # name is sourced from ``ReasoningInfo.inline_tag`` in provider config;
+        # it defaults to ``think`` for providers that don't declare one.
+        self.OPEN = f"<{tag}>"
+        self.CLOSE = f"</{tag}>"
         self._in_think = False
         # Holds a tail that might be the start of a tag spanning into the next
         # delta (e.g. "<thi"), so we never emit a partial tag as visible text.
