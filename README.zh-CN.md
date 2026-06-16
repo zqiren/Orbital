@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.0/Orbital-Setup-0.6.0.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.0/Orbital-0.6.0-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-0.6.1-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://youtu.be/D9l0r4gP_RQ"><strong>演示视频</strong></a>
 </p>
 <p align="center">5 分钟装好。不需要 Python 或 Node 环境。</p>
@@ -176,7 +176,7 @@ Orbital 暂未做代码签名,Windows 会提示安全警告:
 
 ### macOS
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.0) 下载 [`Orbital-0.6.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.0/Orbital-0.6.0-macOS.dmg)
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.1) 下载 [`Orbital-0.6.1-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-0.6.1-macOS.dmg)
 2. 打开 DMG,把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
