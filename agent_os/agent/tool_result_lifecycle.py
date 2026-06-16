@@ -32,7 +32,9 @@ def truncate_consumed_tool_results(
 
     Args:
         session: The Session instance.
-        assistant_response_text: The LLM's response text (used as summary).
+        assistant_response_text: The LLM's response text. Retained for signature
+            stability; intentionally NOT embedded in the stub — a narration-as-
+            summary stub misled the model into treating it as the file content.
         iteration: Current iteration number (used in disk path).
     """
     messages = session.get_messages()
@@ -61,12 +63,18 @@ def truncate_consumed_tool_results(
         # Save full content to disk
         disk_path = _export_to_disk(session, msg, tool_name, key_param, iteration)
 
-        # Build compact stub
-        summary = (assistant_response_text or "")[:350]
+        # Build compact stub. The body must be HONEST: it is metadata + a notice,
+        # never the model's narration dressed up as a summary of the content. A
+        # narration-as-summary stub caused the model to reconstruct exact
+        # `old_text` for edits from a non-authoritative paraphrase, so exact-match
+        # edits failed. We keep the useful metadata header and state plainly that
+        # this stub is not the content and must be re-read before it is relied on.
         stub = (
             f"[Tool: {tool_name} | Target: {key_param} | "
             f"Original: {token_count} tokens | Full result: {disk_path}]\n\n"
-            f"Agent summary: {summary}"
+            f"[Truncated and moved to disk — this stub is NOT the content. If you "
+            f"need the actual content (e.g. exact text for an edit), re-read it "
+            f"before relying on it; it may also have changed since you last read it.]"
         )
 
         stubs[tool_call_id] = stub

@@ -5,7 +5,8 @@
 """Integration: multi-tool truncation end-to-end with real LLM.
 
 Triggers multiple file reads in a single agent run to verify all tool
-results share the same agent summary and all disk backups are created.
+results are replaced with honest (non-narration) stubs and all disk backups
+are created.
 
 Env vars:
     AGENT_OS_TEST_API_KEY: LLM API key (Moonshot)
@@ -202,10 +203,11 @@ async def test_all_disk_backups_created(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-async def test_stubs_share_agent_summary(
+async def test_stubs_are_honest_not_narration(
     agent_loop, session, workspace, three_files,
 ):
-    """All stubbed tool results from the same turn share the same summary."""
+    """Every stubbed tool result carries the honest 'NOT the content' notice and
+    never the model's narration as a faux summary."""
     await agent_loop.run(
         initial_message=(
             "Read alpha.txt, beta.txt, and gamma.txt. "
@@ -217,22 +219,13 @@ async def test_stubs_share_agent_summary(
     stubbed = [m for m in messages if m.get("role") == "tool" and m.get("_stubbed")]
 
     if len(stubbed) < 2:
-        pytest.skip("Need at least 2 stubbed results to test shared summary")
+        pytest.skip("Need at least 2 stubbed results to test stub honesty")
 
-    # Extract summaries from stubs
-    summaries = []
     for msg in stubbed:
         content = msg["content"]
-        if "Agent summary:" in content:
-            summary = content.split("Agent summary:")[1].strip()
-            summaries.append(summary)
-
-    # All summaries from the same turn should be identical
-    if summaries:
-        assert len(set(summaries)) == 1, (
-            f"Expected all stubs to share same summary, got {len(set(summaries))} distinct: "
-            f"{summaries}"
-        )
+        assert content.startswith("[Tool:")
+        assert "NOT the content" in content
+        assert "Agent summary:" not in content
 
 
 @pytest.mark.asyncio

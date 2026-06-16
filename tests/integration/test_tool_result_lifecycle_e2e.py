@@ -157,7 +157,10 @@ async def test_tool_result_truncated_after_read(
 
     for msg in stubbed:
         assert msg["content"].startswith("[Tool:")
-        assert "Agent summary:" in msg["content"]
+        # Honest stub: a notice that the content was evicted, never the model's
+        # narration masquerading as a summary of the content.
+        assert "NOT the content" in msg["content"]
+        assert "Agent summary:" not in msg["content"]
         # Stub must be much smaller than the original file (~9600 chars)
         assert len(msg["content"]) < 1000, (
             f"Stub should be compact, got {len(msg['content'])} chars"

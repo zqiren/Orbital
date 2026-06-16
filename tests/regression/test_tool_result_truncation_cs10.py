@@ -78,8 +78,11 @@ class TestToolResultTruncationCS10:
             assert msg.get("_stubbed") is True
             content = msg["content"]
             assert content.startswith("[Tool:")
-            assert "Agent summary:" in content
-            assert assistant_text[:100] in content
+            # Honest stub: metadata header + a notice, never the model's
+            # narration dressed up as a summary of the evicted content.
+            assert "Agent summary:" not in content
+            assert assistant_text[:100] not in content
+            assert "NOT the content" in content
             # Stub must be much smaller than original
             assert len(content) < 1000
 
@@ -105,20 +108,24 @@ class TestToolResultTruncationCS10:
         assert "Full result:" in stub
         assert ".json" in stub
 
-    def test_stubs_contain_agent_summary(self, session):
-        """Stubs contain the agent's response text as summary."""
+    def test_stubs_do_not_embed_narration(self, session):
+        """Stubs must NOT embed the agent's narration as a faux content summary."""
         _add_tool_call_and_result(
             session, "tc_sum", "browser",
             {"action": "snapshot", "url": "https://example.com"},
             "Y" * 5_000,
         )
 
-        summary = "The page shows a login form with email and password fields."
-        truncate_consumed_tool_results(session, summary, iteration=1)
+        narration = "The page shows a login form with email and password fields."
+        truncate_consumed_tool_results(session, narration, iteration=1)
 
         messages = session.get_messages()
         tool_msg = [m for m in messages if m.get("role") == "tool"][0]
-        assert summary in tool_msg["content"]
+        content = tool_msg["content"]
+        assert narration not in content
+        assert "Agent summary:" not in content
+        assert "NOT the content" in content
+        assert "re-read" in content.lower()
 
     def test_full_content_not_in_session_after_truncation(self, session):
         """Original large content must NOT remain in session messages."""
@@ -173,8 +180,8 @@ class TestToolResultTruncationCS10:
         tool_msg = [m for m in messages if m.get("role") == "tool"][0]
         assert tool_msg["content"] == first_stub
 
-    def test_multi_tool_calls_share_same_summary(self, session):
-        """Multiple tool calls in one turn all get the same agent summary."""
+    def test_multi_tool_calls_all_get_honest_stub(self, session):
+        """Multiple tool calls in one turn all get an honest (non-narration) stub."""
         # Single assistant message with 3 tool calls
         session.append({
             "role": "assistant",
@@ -197,7 +204,8 @@ class TestToolResultTruncationCS10:
 
         for msg in tool_msgs:
             assert msg.get("_stubbed") is True
-            assert summary in msg["content"]
+            assert summary not in msg["content"]
+            assert "NOT the content" in msg["content"]
 
     def test_token_savings_cs10_scenario(self, session):
         """CS-10 scenario: 49K tokens reduced to ~2.1K tokens in stubs."""
