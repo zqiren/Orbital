@@ -1174,8 +1174,21 @@ class AgentLoop:
                                 break
                         _prev_action_hash = action_hash
 
-                    # Circuit breaker: track consecutive identical errors
-                    if isinstance(tool_content, str) and tool_content.startswith("Error"):
+                    # Circuit breaker: trip only on genuine tool/infra failures,
+                    # never on recoverable input errors the model can correct
+                    # (e.g. edit old_text-not-found — the agent should re-read and
+                    # retry, not lose the tool). Recoverability is read from the
+                    # structured ToolResult marker, not by string-sniffing; a
+                    # raised exception (_exec_result is None) is never recoverable.
+                    # Identity is compared on the FULL error string so two
+                    # genuinely different failures are not collapsed.
+                    is_error = isinstance(tool_content, str) and tool_content.startswith("Error")
+                    is_recoverable = bool(
+                        _exec_result is not None
+                        and _exec_result.meta
+                        and _exec_result.meta.get("recoverable")
+                    )
+                    if is_error and not is_recoverable:
                         prev = error_tracker.get(tc["name"])
                         if prev and prev["error"] == tool_content:
                             prev["count"] += 1
@@ -1189,7 +1202,8 @@ class AgentLoop:
                                 f"Work with the tools that are available or ask the user for help."
                             )
                     else:
-                        # Successful execution clears error tracking for this tool
+                        # Successful execution OR a recoverable input error clears
+                        # error tracking for this tool.
                         error_tracker.pop(tc["name"], None)
 
                 # Drain deferred messages (lifecycle notifications)
