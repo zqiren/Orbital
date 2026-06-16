@@ -32,8 +32,8 @@ interface ProjectDetailProps {
 }
 
 const TABS: { key: 'queue' | 'chat' | 'files'; labelKey: StringKey }[] = [
-  { key: 'queue', labelKey: 'projectDetail.tab.queue' },
   { key: 'chat', labelKey: 'projectDetail.tab.chat' },
+  { key: 'queue', labelKey: 'projectDetail.tab.queue' },
   { key: 'files', labelKey: 'projectDetail.tab.files' },
 ];
 
