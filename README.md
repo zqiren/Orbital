@@ -9,7 +9,7 @@
 <p align="center">Every piece of work your agent finishes becomes context for the next instruction.<br>The project gets more capable the longer it runs — not reset to zero.</p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.0/Orbital-Setup-0.6.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-Setup-0.6.1.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-0.6.1-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>Watch the demo</strong></a>
 </p>
@@ -506,7 +506,7 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 ### Windows
 
-1. Download [`Orbital-Setup-0.6.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.6.0/Orbital-Setup-0.6.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.0) (latest Windows build)
+1. Download [`Orbital-Setup-0.6.1.exe`](https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-Setup-0.6.1.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.1) (latest Windows build)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
