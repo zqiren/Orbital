@@ -127,6 +127,33 @@ class _EditRegistry:
         return self.execute(name, args)
 
 
+class _SequenceRegistry:
+    """Returns successive ToolResults from a list (the last one repeats)."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self._i = 0
+        self.executions = []
+
+    def reset_run_state(self):
+        pass
+
+    def schemas(self):
+        return []
+
+    def is_async(self, name):
+        return False
+
+    def execute(self, name, args):
+        self.executions.append((name, args))
+        r = self._results[min(self._i, len(self._results) - 1)]
+        self._i += 1
+        return r
+
+    async def execute_async(self, name, args):
+        return self.execute(name, args)
+
+
 def _make_loop(session, provider, registry):
     return AgentLoop(
         session=session,
@@ -201,6 +228,26 @@ async def test_real_edit_not_found_does_not_disable_edit(tmp_path):
     assert len(registry.executions) >= 2
     # ...but the tool was never disabled.
     assert not _was_disabled(session, "edit")
+
+
+@pytest.mark.asyncio
+async def test_distinct_nonrecoverable_errors_sharing_50char_prefix_not_collapsed(tmp_path):
+    """Two non-recoverable errors identical in their first 50 chars but different
+    overall must NOT be treated as identical: the breaker compares the FULL error
+    string, so it never reaches count>=2 and the tool stays enabled. Guards
+    against a regression to preview-based comparison."""
+    session = Session.new("breaker_fullstring", str(tmp_path))
+    prefix = "Error: " + "Z" * 50  # 57 chars; first 50 identical across both
+    registry = _SequenceRegistry([
+        ToolResult(content=prefix + "_alpha"),
+        ToolResult(content=prefix + "_beta"),
+    ])
+    provider = _ToolThenDoneProvider("shell", {"command": "ls"})
+    loop = _make_loop(session, provider, registry)
+    await loop.run("run a command")
+
+    assert len(registry.executions) >= 2
+    assert not _was_disabled(session, "shell")
 
 
 def test_edit_not_found_is_marked_recoverable(tmp_path):

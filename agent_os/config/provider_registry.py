@@ -71,7 +71,7 @@ def _parse_reasoning_entry(entry: dict | None) -> ReasoningInfo:
     return ReasoningInfo(
         supported=bool(entry.get("supported", False)),
         field=entry.get("field"),
-        inline_tag=entry.get("inline_tag", "think"),
+        inline_tag=(entry.get("inline_tag") or "think"),
         echo_back=entry.get("echo_back", "none"),
         enable=entry.get("enable", "model_only"),
         needs_verification=bool(entry.get("needs_verification", False)),
