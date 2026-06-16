@@ -47,9 +47,19 @@ class EditTool(Tool):
             count = content.count(old_text)
 
             if count == 0:
-                preview = old_text[:50]
-                suffix = "..." if len(old_text) > 50 else ""
-                return ToolResult(content=f"Error: '{preview}{suffix}' not found in {path}")
+                # Honest, actionable error. Name the file, explain the likely
+                # cause, and instruct a re-read — the model usually fails here
+                # because it built old_text from a stale/truncated view rather
+                # than the current bytes. Echo the FULL old_text (not a 50-char
+                # preview) so two genuinely different failed edits produce two
+                # genuinely different error strings. Matching stays exact.
+                return ToolResult(content=(
+                    f"Error: old_text not found in {path}. The text you tried to "
+                    f"replace is not present in the current file — it may have been "
+                    f"edited since you last read it, or truncated from context. "
+                    f"Re-read {path} now, then retry the edit using the exact "
+                    f"current text.\n\nThe old_text that was not found:\n{old_text}"
+                ))
 
             if count > 1:
                 return ToolResult(content="Error: multiple matches found (expected exactly 1)")
