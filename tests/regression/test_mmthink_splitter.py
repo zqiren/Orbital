@@ -107,11 +107,30 @@ def test_parse_reasoning_entry_defaults_inline_tag():
     assert info.inline_tag == "think"
 
 
-def test_minimax_m3_declares_mmthink():
-    """The shipped providers.json must wire M3 to mm:think end-to-end."""
+def test_minimax_m3_uses_default_think_tag():
+    """M3's standard reasoning tag is <think>. (The v0.6.1 mm:think override was
+    a misdiagnosis — M3 normally emits <think>…</think>; mm:think appeared once
+    as a malformed lone close tag. Reverted in v0.6.2.)"""
     from agent_os.config.provider_registry import ProviderRegistry
 
     info = ProviderRegistry().get_model_info("minimax", "MiniMax-M3")
     assert info.reasoning.supported is True
     assert info.reasoning.field is None  # inline-think contract
-    assert info.reasoning.inline_tag == "mm:think"
+    assert info.reasoning.inline_tag == "think"
+
+
+def test_minimax_m3_peels_plain_think_block():
+    """REGRESSION (v0.6.1 → v0.6.2): M3 emits standard <think>…</think>. Its
+    CONFIGURED splitter must peel that, not leak it. v0.6.1 set inline_tag=
+    mm:think, so the splitter missed <think> and the monologue leaked verbatim
+    into chat (observed in session orbital-marketing_273196db: 6 leaked <think>
+    blocks, 0 reasoning_content)."""
+    from agent_os.config.provider_registry import ProviderRegistry
+
+    info = ProviderRegistry().get_model_info("minimax", "MiniMax-M3")
+    vis, reason = _feed_all(
+        ["<think>internal M3 reasoning</think>visible answer"],
+        tag=info.reasoning.inline_tag,
+    )
+    assert vis == "visible answer"
+    assert reason == "internal M3 reasoning"
