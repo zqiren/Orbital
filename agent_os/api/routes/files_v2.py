@@ -234,7 +234,7 @@ async def _notify_upload(project_id: str, rel_path: str, filename: str, size: in
             content=(
                 f"User uploaded `{filename}` to `{rel_path}`. Read the file and "
                 "determine if it's relevant to your current work. If it changes "
-                "your understanding of the project, update CONTEXT.md."
+                "your understanding of the project, update INDEX.md."
             ),
             file_refs=[rel_path],
             source="upload",

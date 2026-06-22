@@ -23,8 +23,12 @@ _TMP = ".tmp"
 _PROJECT_STATE = "PROJECT_STATE.md"
 _DECISIONS = "DECISIONS.md"
 _LESSONS = "LESSONS.md"
-_SESSION_LOG = "SESSION_LOG.md"
-_CONTEXT = "CONTEXT.md"
+# INDEX.md (navigation: derived file tree + one sentence per file) is the
+# rename of the former CONTEXT.md. SESSION_LOG.md is retired (its cross-session
+# history role is redundant with the always-injected Layer-1 files).
+_INDEX = "INDEX.md"
+_DECISIONS_ARCHIVE = "DECISIONS_ARCHIVE.md"
+_LESSONS_ARCHIVE = "LESSONS_ARCHIVE.md"
 _PROJECT_GOALS = "project_goals.md"
 _USER_DIRECTIVES = "user_directives.md"
 _APPROVAL_HISTORY = "approval_history.jsonl"
@@ -71,12 +75,22 @@ class ProjectPaths:
         return os.path.join(self.orbital_dir, _LESSONS)
 
     @property
-    def session_log(self) -> str:
-        return os.path.join(self.orbital_dir, _SESSION_LOG)
+    def index(self) -> str:
+        """Navigation map: derived file tree + one sentence per file.
+
+        Rename of the former ``context`` (CONTEXT.md → INDEX.md).
+        """
+        return os.path.join(self.orbital_dir, _INDEX)
 
     @property
-    def context(self) -> str:
-        return os.path.join(self.orbital_dir, _CONTEXT)
+    def decisions_archive(self) -> str:
+        """Demoted durable decisions (read-on-demand; never injected)."""
+        return os.path.join(self.orbital_dir, _DECISIONS_ARCHIVE)
+
+    @property
+    def lessons_archive(self) -> str:
+        """Demoted durable lessons (read-on-demand; never injected)."""
+        return os.path.join(self.orbital_dir, _LESSONS_ARCHIVE)
 
     # ------------------------------------------------------------------
     # Instructions sub-directory

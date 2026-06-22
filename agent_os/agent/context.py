@@ -30,7 +30,7 @@ _LAYER1_FILES: tuple[tuple[str, str], ...] = (
     ("state", "PROJECT_STATE.md"),
     ("decisions", "DECISIONS.md"),
     ("lessons", "LESSONS.md"),
-    ("context", "CONTEXT.md"),
+    ("index", "INDEX.md"),
 )
 
 
@@ -216,18 +216,31 @@ class ContextManager:
 
         layer_messages: list[dict] = []
 
-        # Layer 1: PROJECT_STATE.md, DECISIONS.md, LESSONS.md
-        # WorkspaceFileManager itself routes through ProjectPaths post-TASK-02,
-        # so a single read path covers all callers and any new layer-1 keys
-        # added to _LAYER1_FILES are picked up automatically.
+        # Layer 1: PROJECT_STATE / DECISIONS / LESSONS / INDEX, injected
+        # newest-within-budget (memory_entries.inject_view): durable files inject
+        # the newest entries that fit PLUS the oldest few foundational ones;
+        # volatile files head-trim. Budgets derive from the active model's
+        # context window (already resolved into model_context_limit from
+        # providers.json) — never hardcoded. Overflow is safe ONLY because the
+        # session-end hard cap demotes durable overflow to an archive that INDEX
+        # points to (do not drop a durable entry from injection un-pointed).
+        from agent_os.agent import memory_entries as _mem
+        _budgets = _mem.budgets_for_window(self._model_context_limit)
+        soft_flags: list[str] = []
         if self._workspace_files is not None:
             for key, filename in _LAYER1_FILES:
                 content = self._workspace_files.read(key)
-                if content:
+                if not content:
+                    continue
+                view = _mem.inject_view(content, key, _budgets[key]["hard"])
+                if view:
                     layer_messages.append({
                         "role": "system",
-                        "content": f"[{filename}]\n{content}",
+                        "content": f"[{filename}]\n{view}",
                     })
+                flag = _mem.soft_flag(content, key)
+                if flag:
+                    soft_flags.append(flag)
 
         # Layer 3: instructions/*.md
         instructions_dir = pp.instructions_dir
@@ -298,6 +311,15 @@ class ContextManager:
 
         # Validate tool results: ensure every tool_call has a matching result
         result = self._validate_tool_results(result)
+
+        # Soft-cap memory-hygiene nudges go in the dynamic (uncached) slot —
+        # NEVER the cached prefix — so a flag that churns while a file is over
+        # threshold does not bust the prefix cache every turn.
+        if soft_flags:
+            truly_dynamic = (
+                (truly_dynamic + "\n\n" if truly_dynamic else "")
+                + "[MEMORY HYGIENE] " + " ".join(soft_flags)
+            )
 
         # Truly dynamic runtime context (timestamps, context budget) — appended
         # last so it doesn't break prefix caching for everything before it.

@@ -208,11 +208,12 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
     |   +-- screenshots/                # Browser screenshots
     |   +-- pdfs/                       # Saved PDFs
     |   +-- shell-output/               # Shell command output
-    +-- PROJECT_STATE.md                # Current task state
-    +-- DECISIONS.md                    # Decision log
-    +-- LESSONS.md                      # Learned patterns
-    +-- SESSION_LOG.md                  # Last 3 session summaries
-    +-- CONTEXT.md                      # External reference material
+    +-- PROJECT_STATE.md                # Current-state scratchpad (overwrite)
+    +-- DECISIONS.md                    # Durable decisions + reasoning
+    +-- LESSONS.md                      # Durable heuristics / playbooks
+    +-- INDEX.md                        # Navigation map: file tree + one line per file
+    +-- DECISIONS_ARCHIVE.md            # Demoted decisions (read-on-demand)
+    +-- LESSONS_ARCHIVE.md              # Demoted lessons (read-on-demand)
 
 ~/orbital/                              # Home global (daemon infrastructure)
 +-- daemon.pid                          # Singleton enforcement
@@ -228,15 +229,17 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 <details>
 <summary><strong>Context Management & Compaction</strong></summary>
 
-This is the engine behind *never starts from zero*. **Five workspace files** are maintained by the LLM at session boundaries:
+This is the engine behind *never starts from zero*. The agent-maintained Layer-1 files are injected every turn (bounded per file) and consolidated at session boundaries:
 
-| File | Purpose |
-|------|---------|
-| `PROJECT_STATE.md` | Current task, in-progress work |
-| `DECISIONS.md` | Decision log with rationale |
-| `LESSONS.md` | Learned patterns and pitfalls |
-| `SESSION_LOG.md` | Last 3 session summaries |
-| `CONTEXT.md` | External references, API docs |
+| File | Purpose | Bound |
+|------|---------|-------|
+| `PROJECT_STATE.md` | Current-state scratchpad — what's true now (overwrite, not a changelog) | token cap → trim oldest |
+| `DECISIONS.md` | Durable decisions + reasoning (merge-and-supersede, never contradict) | token cap → demote oldest-cold to archive |
+| `LESSONS.md` | Durable heuristics / technical playbooks (kept intact, never word-trimmed) | token cap → demote oldest-cold to archive |
+| `INDEX.md` | Navigation map only: file tree + one sentence per file | one-sentence format + token cap |
+| `DECISIONS_ARCHIVE.md`, `LESSONS_ARCHIVE.md` | Demoted durable entries, read-on-demand (pointed to by INDEX) | unbounded |
+
+Each entry carries system-managed metadata (`id` / `created` / `touched` / `tag`) so dedup runs on recency. Per-turn injection bounds each file to a budget derived from the active model's context window. Session-end runs a deterministic size backstop (demote/trim, never an LLM call) plus a best-effort LLM dedup/merge that fixes contradictions. (`SESSION_LOG.md` was retired; the Layer-1 files are injected every turn, so a separate session history is redundant.)
 
 **Cold resume**: On session start, these files are assembled into the system prompt to reorient the agent — no context lost between sessions.
 

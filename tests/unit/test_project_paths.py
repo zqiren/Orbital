@@ -62,11 +62,18 @@ class TestFlatMemoryFiles:
     def test_lessons(self):
         assert os.path.normpath(self.pp.lessons) == p("orbital", "LESSONS.md")
 
-    def test_session_log(self):
-        assert os.path.normpath(self.pp.session_log) == p("orbital", "SESSION_LOG.md")
+    def test_index(self):
+        # CONTEXT.md → INDEX.md rename (Layer-1 memory redesign): the former
+        # `.context` accessor is now `.index`, pointing at the navigation map.
+        assert os.path.normpath(self.pp.index) == p("orbital", "INDEX.md")
 
-    def test_context(self):
-        assert os.path.normpath(self.pp.context) == p("orbital", "CONTEXT.md")
+    def test_decisions_archive(self):
+        # Demoted durable decisions (read-on-demand; never injected).
+        assert os.path.normpath(self.pp.decisions_archive) == p("orbital", "DECISIONS_ARCHIVE.md")
+
+    def test_lessons_archive(self):
+        # Demoted durable lessons (read-on-demand; never injected).
+        assert os.path.normpath(self.pp.lessons_archive) == p("orbital", "LESSONS_ARCHIVE.md")
 
 
 # ---------------------------------------------------------------------------

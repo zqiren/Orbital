@@ -64,10 +64,8 @@ def seeded_workspace(workspace):
         f.write("# Decisions\n\n- Use SDK transport for sub-agents.\n")
     with open(paths.lessons, "w", encoding="utf-8") as f:
         f.write("# Lessons\n\n- Always check token limits.\n")
-    with open(paths.session_log, "w", encoding="utf-8") as f:
-        f.write("# Session Log\n\n2026-05-08: refactored ChatView.\n")
-    with open(paths.context, "w", encoding="utf-8") as f:
-        f.write("# Context\n\nReference: spec PROMPT-TEMPLATE.\n")
+    with open(paths.index, "w", encoding="utf-8") as f:
+        f.write("# Index\n\nReference: spec PROMPT-TEMPLATE.\n")
     with open(paths.user_directives, "w", encoding="utf-8") as f:
         f.write("- always run pytest first\n")
     return workspace
@@ -210,8 +208,8 @@ async def test_full_inheritance_dispatch_flow(seeded_workspace):
     assert paths.project_state in sp
     assert paths.decisions in sp
     assert paths.lessons in sp
-    assert paths.session_log in sp
-    assert paths.context in sp
+    assert paths.index in sp
+    assert "SESSION_LOG.md" not in sp  # retired in the Layer-1 memory redesign
     assert paths.instructions_dir in sp
     assert memory_path in sp
 

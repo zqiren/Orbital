@@ -74,13 +74,18 @@ class EditTool(Tool):
             # Exactly one match — replace it
             new_content = content.replace(old_text, new_text, 1)
 
+            # Layer-1 memory files: stamp metadata + enforce format on the
+            # resulting content (shared persist path — caps cannot be bypassed
+            # via edit). No-op for non-memory files.
+            from agent_os.agent import memory_entries
+            new_content, warns = memory_entries.process_on_write(self._workspace, resolved, new_content)
+
             with open(resolved, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            return ToolResult(content=json.dumps({
-                "path": path,
-                "status": "success",
-                "replacements": 1,
-            }))
+            out = json.dumps({"path": path, "status": "success", "replacements": 1})
+            if warns:
+                out += "\n\nNote: " + " ".join(warns)
+            return ToolResult(content=out)
         except Exception as e:
             return ToolResult(content=f"Error: {str(e)}")

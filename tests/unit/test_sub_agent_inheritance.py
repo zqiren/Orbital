@@ -67,8 +67,9 @@ class TestRenderSubAgentPromptPaths:
         assert paths.project_state in prompt
         assert paths.decisions in prompt
         assert paths.lessons in prompt
-        assert paths.session_log in prompt
-        assert paths.context in prompt
+        # SESSION_LOG.md was retired in the Layer-1 memory redesign; the
+        # navigation file CONTEXT.md was renamed to INDEX.md (paths.index).
+        assert paths.index in prompt
         assert paths.instructions_dir in prompt
         assert paths.skills_dir in prompt
 

@@ -114,8 +114,7 @@ def render_sub_agent_prompt(
     lines.append(f"- {paths.project_state}   — current task state")
     lines.append(f"- {paths.decisions}       — project decisions to respect")
     lines.append(f"- {paths.lessons}       — past learnings")
-    lines.append(f"- {paths.session_log}     — last 3 session summaries")
-    lines.append(f"- {paths.context}         — external reference material")
+    lines.append(f"- {paths.index}         — navigation map (file tree + one line per file)")
     lines.append(f"- {paths.instructions_dir}{os.sep}      — user directives and project goals")
     lines.append(f"- {paths.skills_dir}{os.sep}            — reusable skills available in this project")
     lines.append("")
@@ -159,7 +158,7 @@ def render_sub_agent_prompt(
     lines.append("")
     lines.append("Do NOT modify these orbital-managed files:")
     lines.append(
-        "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, SESSION_LOG.md, CONTEXT.md,"
+        "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md,"
     )
     lines.append(
         "instructions/, sub_agents/ (other than your own MEMORY.md)."
