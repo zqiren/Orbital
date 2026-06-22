@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import namedtuple
 from dataclasses import asdict
 from urllib.parse import quote_plus as _url_encode
 
@@ -157,6 +158,71 @@ _FETCH_EXTRACT_JS = """
     return main ? main.innerText : '';
 }
 """
+
+# JS to extract Bing (cn.bing.com) organic results. Same {title,url,snippet}
+# shape as the Google extractor so the result-formatting code stays
+# engine-agnostic.
+_BING_EXTRACT_JS = """
+() => {
+    const results = [];
+    const items = document.querySelectorAll('li.b_algo');
+    for (const item of items) {
+        const titleEl = item.querySelector('h2 a, h2');
+        const linkEl = item.querySelector('h2 a[href], a[href]');
+        const snippetEl = item.querySelector('.b_caption p, .b_algoSlug, .b_lineclamp2, p');
+        if (titleEl && linkEl) {
+            results.push({
+                title: titleEl.textContent || '',
+                url: linkEl.href || '',
+                snippet: snippetEl ? snippetEl.textContent || '' : '',
+            });
+        }
+    }
+    return results.slice(0, 10);
+}
+"""
+
+# A search engine: display name, a "{q}"-templated query URL, the JS that
+# extracts its organic results into the common {title,url,snippet} shape, and
+# an optional CSS selector to wait for before extracting (for engines that
+# hydrate results via JS after networkidle). None = extract immediately.
+SearchEngine = namedtuple("SearchEngine", "name url_template extract_js results_selector")
+
+
+def _is_china_locale(locale) -> bool:
+    """True when the locale indicates mainland China, where ``www.google.com``
+    is unreachable without a VPN.
+
+    Traditional-Chinese regions (``zh-TW`` / ``zh-HK``) deliberately do NOT
+    match — Google is reachable there, so they keep the default. Accepts both
+    BCP-47 (``zh-CN``) and POSIX (``zh_CN``) separators, case-insensitively.
+    """
+    if not locale:
+        return False
+    norm = str(locale).replace("_", "-").lower()
+    return norm == "zh" or norm.startswith("zh-cn") or norm.startswith("zh-hans")
+
+
+def _pick_search_engine(locale) -> SearchEngine:
+    """Auto-pick the search engine from the browser-detected locale.
+
+    Mainland-China locales get Bing China (``cn.bing.com``) — reachable without
+    a VPN and scrapeable; every other (and unknown) locale keeps Google, so
+    existing behavior is unchanged.
+    """
+    if _is_china_locale(locale):
+        # www.bing.com (not cn.bing.com): renders results when tested from
+        # outside China and, inside China, redirects to cn.bing.com/search —
+        # so it works without a VPN in both. setmkt forces the China market.
+        return SearchEngine(
+            "bing-cn",
+            "https://www.bing.com/search?q={q}&setmkt=zh-CN",
+            _BING_EXTRACT_JS,
+            "li.b_algo",
+        )
+    return SearchEngine(
+        "google", "https://www.google.com/search?q={q}", _SEARCH_EXTRACT_JS, None
+    )
 
 
 class BrowserTool(Tool):
@@ -893,9 +959,20 @@ class BrowserTool(Tool):
 
         original_page = await self._bm.get_page(self._project_id)
 
+        # Auto-pick the search engine from the browser's detected locale:
+        # mainland China can't reach google.com without a VPN, so route there
+        # to Bing China. navigator.language reflects the locale the context was
+        # launched with; fall back to Google on any read failure.
+        locale = None
+        try:
+            locale = await original_page.evaluate("() => navigator.language")
+        except Exception:
+            pass
+        engine = _pick_search_engine(locale)
+
         search_page = None
         try:
-            search_url = f"https://www.google.com/search?q={_url_encode(query)}"
+            search_url = engine.url_template.format(q=_url_encode(query))
             search_page = await original_page.context.new_page()
 
             await search_page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
@@ -904,7 +981,19 @@ class BrowserTool(Tool):
             except Exception:
                 pass  # take what we have
 
-            results = await search_page.evaluate(_SEARCH_EXTRACT_JS)
+            # Some engines (Bing) hydrate results via JS just after networkidle;
+            # wait for the first result so extraction doesn't fire on an empty
+            # container. On timeout (bot-wall / no results) we fall through to
+            # extraction + the AX-tree fallback below, unchanged.
+            if engine.results_selector:
+                try:
+                    await search_page.wait_for_selector(
+                        engine.results_selector, timeout=6000
+                    )
+                except Exception:
+                    pass
+
+            results = await search_page.evaluate(engine.extract_js)
 
             if not results:
                 # Structured extraction failed (selectors may be stale).
@@ -948,7 +1037,7 @@ class BrowserTool(Tool):
 
             return ToolResult(
                 content=f"Search results for: {query}\n\n" + "\n\n".join(formatted),
-                meta={"query": query, "result_count": len(results)},
+                meta={"query": query, "result_count": len(results), "engine": engine.name},
             )
 
         except Exception as e:
