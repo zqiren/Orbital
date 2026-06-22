@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -51,6 +52,11 @@ class QueueDispatcher:
 
     IDLE_WAIT_TIMEOUT_SEC = 5.0
     LOOP_WAIT_POLL_SEC = 2.0
+    # How often the held slot re-checks for the session's next turn and for
+    # stop / pause / shutdown while a continuation is pending (the session
+    # ended a turn without a verdict but has more turns to go). Small enough to
+    # stay responsive; the total wait is bounded by the backstop deadline.
+    HOLD_POLL_SEC = 0.5
     SUB_AGENT_STOP_TIMEOUT_SEC = 10.0
     # After auto-starting an agent, poll run-status this often until it settles
     # to 'idle' (so the queue item hot-resumes a dedicated run instead of being
@@ -1095,6 +1101,78 @@ class QueueDispatcher:
                 self._idle_event.set()
                 return
 
+            # Session-level verdict (not turn-level): a verdict-less turn-end
+            # is terminal ONLY when the session has no pending continuation. A
+            # turn that ended to await a dispatched sub-agent ("yield_turn") is
+            # NOT a verdict — the session has more turns to go; its next turn is
+            # auto-triggered by the sub-agent completion push-back
+            # (on_completed -> inject_system_message -> _start_loop). Hold the
+            # dispatch slot (session stays active, queue does not advance) and
+            # re-await the next turn, while staying responsive to
+            # stop / pause / shutdown. Everything else still in the "text"
+            # bucket (genuine stalls, terminal-error paths) falls through to the
+            # corrective-turn -> contract-violation path below, unchanged.
+            exit_path = getattr(loop_obj, "_loop_exit_path", None)
+            if self._continuation_pending(exit_path, session_id):
+                hold = await self._hold_slot_for_continuation(
+                    item, session_id, gen_at_start,
+                )
+                if hold == "resume":
+                    # The session's next turn started; re-await + classify it.
+                    continue
+                if hold in ("paused", "shutdown"):
+                    # Preserve the attempt exactly (mirror the pause guard
+                    # above): no close, no advance, no rotation. resume() /
+                    # teardown owns the parked session.
+                    logger.info(
+                        "dispatcher(%s): item %s slot-hold released (%s); "
+                        "attempt preserved, no advance",
+                        self._project_id, item.id, hold,
+                    )
+                    return
+                if hold == "cancelled":
+                    # Out-of-band cancel during the hold — close INTERRUPTED so
+                    # the attempt can be reclaimed; no advance, no rotation
+                    # (mirror the cancelled branch above).
+                    self._store.close_latest_attempt(
+                        item.id,
+                        outcome=AttemptOutcome.INTERRUPTED,
+                        block_reason="cancelled",
+                    )
+                    self._log_attempt_close(
+                        item.id, "interrupted",
+                        first_turn_signaled=False,
+                        corrective_used=corrective_turn_used,
+                        reason="cancelled",
+                    )
+                    return
+                # hold == "timeout": the continuation never arrived within the
+                # backstop deadline (e.g. a hung sub-agent whose push-back never
+                # fired). Self-recover via the runtime-cap disposition — close
+                # the attempt and BLOCK so the queue advances rather than
+                # pinning the head forever.
+                logger.warning(
+                    "dispatcher(%s): item %s slot-hold exceeded %ss awaiting "
+                    "continuation; closing BLOCKED so the queue self-recovers",
+                    self._project_id, item.id, self._max_runtime_seconds,
+                )
+                self._store.close_latest_attempt(
+                    item.id,
+                    outcome=AttemptOutcome.INTERRUPTED,
+                    block_reason="exceeded hold deadline awaiting continuation",
+                )
+                self._log_attempt_close(
+                    item.id, "interrupted",
+                    first_turn_signaled=False,
+                    corrective_used=corrective_turn_used,
+                )
+                self._store.set_item_state(item.id, ItemState.BLOCKED)
+                self._broadcast_advance(item.id, "interrupted")
+                if self._store.auto_idle_if_empty():
+                    self._broadcast_state_changed(QueueRunState.IDLE.value)
+                self._idle_event.set()
+                return
+
             # text-only on a queue item.
             # CHANGE 2: give the agent ONE corrective turn before recording
             # a contract violation. Inject a stern system reminder telling
@@ -1205,6 +1283,119 @@ class QueueDispatcher:
                 raise
             except Exception:
                 return
+
+    # ------------------------------------------------------------------
+    # Session-level verdict: continuation-pending slot-hold
+    # ------------------------------------------------------------------
+
+    def _continuation_pending(self, exit_path, session_id: str) -> bool:
+        """Whether a verdict-less turn-end has a pending continuation — i.e.
+        the session has more turns to go before a real complete/blocked
+        verdict, so it must stay active in its slot rather than terminate.
+
+        ``_exit_reason`` reads ``"text"`` for all of these, so the diagnostic
+        ``_loop_exit_path`` identifies the pattern and the pattern's own
+        pending signal confirms it. Currently recognizes a sub-agent dispatch
+        (``yield_turn``) whose sub-agent is still live for this session — the
+        same "busy" signal ``_on_loop_done`` computes (agent_manager
+        ``list_active`` status ``"running"``). Its next turn arrives via the
+        existing completion push-back. (``credential_request`` is a planned
+        fast-follow on this same slot-hold primitive: its resume trigger needs
+        its own verification before it can be carved out here.)
+        """
+        if exit_path == "yield_turn":
+            return self._sub_agent_running(session_id)
+        return False
+
+    def _sub_agent_running(self, session_id: str) -> bool:
+        """True iff a sub-agent for this session reports status ``"running"``."""
+        sub_mgr = self._agent_manager.get_sub_agent_manager()
+        if sub_mgr is None:
+            return False
+        try:
+            active = sub_mgr.list_active(self._project_id, session_id=session_id)
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): sub-agent liveness probe failed; treating as "
+                "no pending continuation", self._project_id,
+            )
+            return False
+        return any((a or {}).get("status") == "running" for a in (active or []))
+
+    async def _hold_slot_for_continuation(
+        self, item: ItemRecord, session_id: str, gen_at_start: int,
+    ) -> str:
+        """Hold the dispatch slot while the session awaits its next turn.
+
+        The session reached a verdict-less turn-end with a pending continuation,
+        so its loop task is already ``done()`` — ``_wait_for_loop_done`` would
+        return immediately and cannot be the wait. Poll for the session's NEXT
+        turn (a fresh loop task installed by the push-back: on_completed ->
+        inject_system_message -> _start_loop) while remaining responsive to
+        stop / pause / shutdown. This runs INSIDE the ``_run`` task's call stack
+        (it is awaited directly, never detached), so shutdown's
+        ``self._task.cancel()`` reaches it.
+
+        Returns one of:
+          * ``"resume"``    — the next turn started; re-await + classify it.
+          * ``"paused"``    — user pause/stop (``_stop_generation`` bump) or
+                              stored ``QueueRunState.PAUSED``; preserve attempt.
+          * ``"shutdown"``  — dispatcher teardown (``_shutting_down``).
+          * ``"cancelled"`` — the loop/session was cancelled out-of-band.
+          * ``"timeout"``   — the backstop deadline elapsed (continuation never
+                              arrived).
+        """
+        parked_task = self._agent_manager.get_loop_task(
+            self._project_id, session_id=session_id,
+        )
+        # Backstop (owner decision: included, reusing the runtime cap). If the
+        # continuation never arrives — e.g. a hung sub-agent whose push-back
+        # never fires — the hold expires so the queue self-recovers instead of
+        # pinning the head forever. Set ``max_runtime_seconds`` falsy to rely on
+        # manual stop instead.
+        deadline = None
+        if self._max_runtime_seconds:
+            deadline = time.monotonic() + self._max_runtime_seconds
+
+        while True:
+            # --- interruptibility (mandatory) ---
+            if self._shutting_down:
+                return "shutdown"
+            if self._stop_generation != gen_at_start:
+                return "paused"
+            try:
+                if self._store.load().state == QueueRunState.PAUSED:
+                    return "paused"
+            except Exception:
+                logger.exception(
+                    "dispatcher(%s): queue-state read during slot-hold failed; "
+                    "continuing to hold", self._project_id,
+                )
+            loop_obj = self._agent_manager.get_loop(
+                self._project_id, session_id=session_id,
+            )
+            if loop_obj is not None:
+                if getattr(loop_obj, "_exit_reason", None) == "cancelled":
+                    return "cancelled"
+                sess = getattr(loop_obj, "_session", None)
+                is_stopped = getattr(sess, "is_stopped", None)
+                if callable(is_stopped) and is_stopped():
+                    return "cancelled"
+
+            # --- next-turn detection ---
+            # A fresh loop task (different identity from the one we parked on)
+            # means the push-back installed the session's next turn.
+            cur = self._agent_manager.get_loop_task(
+                self._project_id, session_id=session_id,
+            )
+            if cur is not None and cur is not parked_task:
+                return "resume"
+
+            # --- backstop ---
+            if deadline is not None and time.monotonic() >= deadline:
+                return "timeout"
+
+            await asyncio.sleep(self.HOLD_POLL_SEC)
 
     # ------------------------------------------------------------------
     # WebSocket helpers
