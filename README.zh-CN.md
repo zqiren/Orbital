@@ -2,22 +2,15 @@
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center">
-  <img src="docs/subagent-dispatch.gif" alt="在 Orbital project 内把任务派给 Claude Code" width="800">
-</p>
-<p align="center"><em>你把任务交给 project——agent 自己规划、派发给 Claude Code、把结果汇报给你。</em></p>
+<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital 在真实 project 中工作——工作空间里不断积累 agent 产出的成果、决策与记忆文件" width="100%"></p>
+<p align="center"><em>你把工作交给 agent。它读取 project 里已经积累的一切,完成任务,再把学到的写回去。</em></p>
 
-<p align="center">
-  <img src="docs/approval.gif" alt="Claude Code 请求创建文件夹的权限——在手机上批准" width="800">
-</p>
-<p align="center"><em>关键动作——审批流推到你手机上——同意后继续工作。</em></p>
-
-<h2 align="center">给 agent 一个 project,而不是一个 prompt。</h2>
-<p align="center">你和 agent 共享的项目工作空间——记忆长期保留,<br>边界由你设定,审批由你掌控。</p>
+<h2 align="center">永不从零开始的 agent。</h2>
+<p align="center">agent 每完成一件工作,都会成为下一条指令的上下文。<br>project 跑得越久,能力越强——而不是被清零重来。</p>
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-Setup-0.6.1.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.2/Orbital-0.6.2-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.3/Orbital-0.6.3-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://youtu.be/D9l0r4gP_RQ"><strong>演示视频</strong></a>
 </p>
 <p align="center">5 分钟装好。不需要 Python 或 Node 环境。</p>
@@ -66,9 +59,21 @@
 
    **Step 2 — Sandbox:** Orbital 创建一个隔离的系统账号,agent 在没有授权时无法访问你的个人文件或网络。
 
+   <p align="center">
+     <img src="docs/screenshots/sandbox-setup.png" alt="设置向导第二步——sandbox 隔离确认" width="700">
+   </p>
+
    **Step 3 — Browser Warm-up:** 提前登录 agent 需要访问的站点(Google、GitHub 等),存下 cookie,防止它在浏览时被验证码挡住。
 
+   <p align="center">
+     <img src="docs/screenshots/browser-warm-up.png" alt="设置向导第三步——浏览器预热,提前登录 agent 需要访问的站点" width="700">
+   </p>
+
 2. **创建 project** —— 起个名字,选择本地的一个文件夹,设定 autonomy 等级
+
+   <p align="center">
+     <img src="docs/screenshots/new-project-setting.png" alt="新建 project 对话框——选择工作空间目录和 autonomy 等级" width="700">
+   </p>
 3. **开始对话** —— 在聊天框输入任务,agent 自己处理
 4. **审批或自动化** —— 在审批卡片里查看工具调用,同意后 agent 才会继续,或把 autonomy 设成 hands-off
 
@@ -81,10 +86,36 @@
 </p>
 <p align="center"><em>多个 project 并行运行——每个都有自己的工作空间、trigger 和会话历史</em></p>
 
+<p align="center"><img src="docs/screenshots/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md、SESSION_LOG.md" width="800"></p>
+<p align="center"><em>project 自己维护状态、决策与经验,每个会话开始时都会读回——所以每次都从"上次结束的地方"继续,而不是从零开始</em></p>
+
+<p align="center"><img src="docs/screenshots/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
+<p align="center"><em>在每个 project 的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
+
+<p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="把任务派给 Claude Code sub-agent,它读取 project 上下文、完成工作并把成果写回工作空间" width="800"></p>
+<p align="center"><em>把任务派给 Claude Code、Codex 或 Gemini——它们读取同一份积累的上下文,完成后把成果写回工作空间</em></p>
+
+<p align="center"><img src="docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png" alt="任务队列——正在运行、排队中、自动化三个区块;队列可暂停以便介入引导" width="800"></p>
+<p align="center"><em>把任务排进队列然后走开——agent 逐个处理,每个完成项都会成为下一个的上下文;随时可暂停介入引导,再继续</em></p>
+
+<p align="center"><img src="docs/screenshots/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
+<p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式,下次遇到类似任务先查阅</em></p>
+
+<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="定时 trigger 配置——每天定时扫描 arxiv、Hacker News、技术博客" width="800"></p>
+<p align="center"><em>定时与文件监听 trigger——让管理 agent 定期检查并自动派发 sub-agent,无需你动手</em></p>
+
+<p align="center"><img src="docs/screenshots/settings-budget.png" alt="Budget 设置——花费上限、重置周期、按模型的实时成本明细、可编辑的价格表" width="800"></p>
+<p align="center"><em>为每个 project 设定 budget 上限和重置周期,实时查看按模型的花费与成本明细</em></p>
+
+<p align="center"><img src="docs/screenshots/credential-store.png" alt="凭据管理——网站密码存放在系统钥匙串中" width="800"></p>
+<p align="center"><em>网站凭据存放在系统钥匙串里,绝不暴露给聊天</em></p>
+
 <p align="center">
-  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="移动端审批卡片——在手机上批准 agent 动作" width="350">
+  <img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="手机端——agent 在浏览 arxiv,按日程扫描论文" width="280">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="移动端审批卡片——在手机上批准 agent 动作" width="280">
 </p>
-<p align="center"><em>在手机上批准 agent 的动作——带完整上下文,可附加指引</em></p>
+<p align="center"><em>手机上监督:实时查看 agent 活动,带完整上下文批准关键动作(可附加指引)</em></p>
 
 ---
 
@@ -176,7 +207,7 @@ Orbital 暂未做代码签名,Windows 会提示安全警告:
 
 ### macOS
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.2) 下载 [`Orbital-0.6.2-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.2/Orbital-0.6.2-macOS.dmg)
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.3) 下载 [`Orbital-0.6.3-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.3/Orbital-0.6.3-macOS.dmg)
 2. 打开 DMG,把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
