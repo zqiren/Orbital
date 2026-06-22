@@ -4,12 +4,19 @@
 
 """Regression: retry wrapper for session-end summarization LLM call (B1/RC-A).
 
-These tests verify that run_session_end_routine retries the LLM call up to
-3 times on asyncio.TimeoutError, with per-attempt timeouts of 30s, 60s, 90s,
-and no inter-attempt sleep. Non-timeout exceptions do not trigger retry.
+These tests verify that ``run_session_end_routine`` retries the LLM dedup/merge
+call up to 3 times on ``asyncio.TimeoutError``, with per-attempt timeouts of
+30s, 60s, 90s, and no inter-attempt sleep. Non-timeout exceptions do not trigger
+a retry.
 
-TDD note: each test should fail before the fix (bare await without retry)
-and pass after.
+Layer-1 memory redesign note: the session-end pass is now positioned as the
+*cleanup*, not the state record. The LLM dedup/merge is best-effort — when it
+times out (all attempts) or raises a non-timeout error, the routine NO LONGER
+propagates the exception. Instead it logs and runs the DETERMINISTIC hard-cap
+backstop (demote-to-archive for durable files), which never deletes durable
+content. The retry/no-retry *decision* is the invariant under test here; the
+old "exception propagates to the caller" contract is gone, replaced by "the
+deterministic backstop still runs."
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agent_os.agent import memory_entries as _mem
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
@@ -44,13 +52,27 @@ def _mock_session(messages=None, session_id="sess_retry_test"):
 
 
 def _valid_llm_response(tag="x"):
+    # New Layer-1 contract: keys are project_state / decisions / lessons / index.
+    # (session_log_entry and "context" are gone.)
     return json.dumps({
         "project_state": f"# State\nstate-{tag}",
-        "decisions": f"## Decision {tag}\n**Chose:** A",
-        "session_log_entry": f"## Session {tag} -- today\n- Did thing",
-        "lessons": f"## Lesson {tag}\n**Problem:** p\n**Fix:** f",
-        "context": f"## People\n- Person {tag}",
+        "decisions": f"## 2026-06-18: Decision {tag}\n**Chose:** A\n\n",
+        "lessons": f"1. **Lesson {tag}.** Problem p, fix f.\n",
+        "index": f"# INDEX\n- PROJECT_STATE.md — current scratchpad ({tag}).\n",
     })
+
+
+def _decisions(n: int, *, touched=None, body="x" * 120) -> str:
+    """n stamped DECISIONS entries, oldest-first, with explicit touched dates."""
+    out = []
+    for i in range(1, n + 1):
+        t = touched(i) if touched else f"2026-01-{i:02d}"
+        out.append(
+            f"## 2026-01-{i:02d}: Decision {i} "
+            f"<!--mem id:d{i} created:2026-01-{i:02d} touched:{t}-->\n"
+            f"**Chose:** option {i}\n**Reason:** {body}\n**Rejected:** alt {i}\n\n"
+        )
+    return "".join(out)
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +109,7 @@ async def test_succeeds_first_attempt(tmp_path, caplog):
     retry_logs = [r for r in caplog.records if "timed out, retrying" in r.message]
     assert len(retry_logs) == 0, f"Unexpected retry logs: {[r.message for r in retry_logs]}"
 
-    # Content is preserved
+    # Content is preserved (project_state overwrites STATE verbatim — not stamped)
     assert ws.read("state") == "# State\nstate-first"
 
 
@@ -170,13 +192,26 @@ async def test_succeeds_after_two_timeouts(tmp_path, caplog):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: All attempts timeout — propagates TimeoutError
+# Test 4: All attempts timeout — does NOT raise; deterministic backstop runs
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_all_attempts_timeout_propagates(tmp_path, caplog):
-    """LLM times out three times; TimeoutError propagates, ERROR log emitted, no 4th attempt."""
+async def test_all_attempts_timeout_runs_backstop(tmp_path, caplog, monkeypatch):
+    """LLM times out three times.
+
+    New behavior: ``run_session_end_routine`` does NOT propagate the TimeoutError.
+    It logs an ERROR after the 3rd attempt (no 4th attempt) and then runs the
+    DETERMINISTIC hard-cap backstop, which demotes over-budget durable content to
+    the archive without deleting anything.
+    """
+    # Tiny budget so the deterministic hard cap is forced to demote — makes the
+    # backstop observable.
+    monkeypatch.setitem(_mem.FILE_BUDGETS, "decisions", {"soft": 120, "hard": 180})
     ws = WorkspaceFileManager(str(tmp_path))
+    ws.ensure_dir()
+    # Pre-seed an over-budget, stamped DECISIONS file. This also guarantees a
+    # cleanup delta (no marker yet) so the LLM pass actually runs.
+    ws.write("decisions", _decisions(12, body="x" * 20))
     session = _mock_session(session_id="s_all_timeout")
 
     provider = AsyncMock()
@@ -187,41 +222,78 @@ async def test_all_attempts_timeout_propagates(tmp_path, caplog):
     ]
 
     with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):
-        with pytest.raises((asyncio.TimeoutError, TimeoutError)):
-            await run_session_end_routine(session, provider, ws, session_uuid="s_all_timeout")
+        # Must NOT raise — the routine swallows the timeout and runs the backstop.
+        await run_session_end_routine(
+            session, provider, ws, session_uuid="s_all_timeout"
+        )
 
     # Exactly 3 attempts, no 4th
     assert provider.complete.call_count == 3, (
         f"Expected exactly 3 LLM calls (no 4th), got {provider.complete.call_count}"
     )
 
-    # ERROR log must be emitted for final failure
+    # ERROR log must be emitted for the final (all-attempts) timeout
     error_logs = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(error_logs) >= 1, (
         f"Expected at least 1 ERROR log on final failure, got: {[r.message for r in caplog.records]}"
     )
 
-    # No files written (exception propagated before writes)
-    assert ws.read("state") is None or ws.read("state") == ""
+    # Deterministic backstop ran despite the timeout: live file capped, durable
+    # content demoted to the archive (never deleted).
+    kept = ws.read("decisions") or ""
+    assert _mem.est_tokens(kept) <= _mem.FILE_BUDGETS["decisions"]["hard"], (
+        "Hard cap did not trim the live DECISIONS file"
+    )
+    archive = ws.read("decisions_archive") or ""
+    assert "Decision" in archive, (
+        "Deterministic backstop did not demote any entry to the archive"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Non-timeout exception does NOT retry
+# Test 5: Non-timeout exception does NOT retry (and does NOT propagate)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_non_timeout_exception_no_retry(tmp_path):
-    """ValueError on first attempt: no retry, exception propagates immediately."""
+async def test_non_timeout_exception_no_retry(tmp_path, caplog, monkeypatch):
+    """ValueError on first attempt: no retry of the LLM call.
+
+    The retry ladder is reserved for timeouts. A non-timeout error breaks out of
+    the loop on the first attempt (so exactly 1 call, no retry). Under the new
+    Layer-1 contract the error is NOT propagated — it is logged and the
+    deterministic backstop still runs.
+    """
+    monkeypatch.setitem(_mem.FILE_BUDGETS, "decisions", {"soft": 120, "hard": 180})
     ws = WorkspaceFileManager(str(tmp_path))
+    ws.ensure_dir()
+    ws.write("decisions", _decisions(12, body="x" * 20))
     session = _mock_session(session_id="s_value_error")
 
     provider = AsyncMock()
     provider.complete.side_effect = ValueError("bad input")
 
-    with pytest.raises(ValueError, match="bad input"):
-        await run_session_end_routine(session, provider, ws, session_uuid="s_value_error")
+    with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):
+        # Must NOT raise — non-timeout errors are swallowed, backstop runs.
+        await run_session_end_routine(
+            session, provider, ws, session_uuid="s_value_error"
+        )
 
-    # Only one attempt — no retry for non-timeout errors
+    # Only one attempt — non-timeout errors do NOT enter the retry ladder.
     assert provider.complete.call_count == 1, (
         f"Expected exactly 1 LLM call (no retry on ValueError), got {provider.complete.call_count}"
+    )
+
+    # The error was logged, not raised.
+    failure_logs = [r for r in caplog.records if "bad input" in r.message]
+    assert failure_logs, (
+        f"Expected the ValueError to be logged, got: {[r.message for r in caplog.records]}"
+    )
+
+    # Deterministic backstop still ran.
+    kept = ws.read("decisions") or ""
+    assert _mem.est_tokens(kept) <= _mem.FILE_BUDGETS["decisions"]["hard"], (
+        "Hard cap did not trim the live DECISIONS file"
+    )
+    assert "Decision" in (ws.read("decisions_archive") or ""), (
+        "Deterministic backstop did not demote any entry to the archive"
     )

@@ -290,8 +290,7 @@ async def test_30_turn_session_fires_refresh_at_turn_15_and_30():
             wfm.write("state", f"# State\nLast update: {call_n['n']}")
             wfm.write("decisions", "# Decisions\n")
             wfm.write("lessons", "# Lessons\n")
-            wfm.write("context", "# Context\n")
-            wfm.append("session_log", "\n## Session\n- Updated\n")
+            wfm.write("index", "# Index\n")
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):

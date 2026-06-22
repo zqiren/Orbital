@@ -33,17 +33,15 @@ def workspace(tmp_path):
     os.makedirs(pp.instructions_dir, exist_ok=True)
     os.makedirs(pp.sessions_dir, exist_ok=True)
 
-    # Write the five memory files
+    # Write the four Layer-1 memory files (SESSION_LOG retired; CONTEXT → INDEX)
     with open(pp.project_state, "w", encoding="utf-8") as f:
         f.write("## Current Status\nWorking on feature-X implementation.")
     with open(pp.decisions, "w", encoding="utf-8") as f:
         f.write("## 2026-04-01: Use async IO\nChosen for performance.")
     with open(pp.lessons, "w", encoding="utf-8") as f:
         f.write("1. Always validate input before processing.\n2. Write tests first.")
-    with open(pp.context, "w", encoding="utf-8") as f:
+    with open(pp.index, "w", encoding="utf-8") as f:
         f.write("- **Client:** ACME Corp.\n- **Deadline:** 2026-05-01.")
-    with open(pp.session_log, "w", encoding="utf-8") as f:
-        f.write("## Session 2026-04-01\nCompleted: auth module.")
 
     # Write project goals
     with open(pp.project_goals, "w", encoding="utf-8") as f:
@@ -68,11 +66,15 @@ class TestColdResumeNewLayout:
         assert "feature-X" in wfm.read("state")
         assert wfm.read("decisions") is not None
         assert wfm.read("lessons") is not None
-        assert wfm.read("context") is not None
-        assert wfm.read("session_log") is not None
+        # CONTEXT.md was renamed to INDEX.md ("context" key → "index").
+        assert wfm.read("index") is not None
 
     def test_cold_resume_context_contains_memory_content(self, workspace):
-        """build_cold_resume_context() returns content from all five memory files."""
+        """build_cold_resume_context() returns content from all Layer-1 files.
+
+        Roster is state/decisions/lessons/index — no SESSION_LOG special-case
+        (SESSION_LOG was retired) and CONTEXT is now INDEX.
+        """
         wfm = WorkspaceFileManager(workspace)
         ctx = wfm.build_cold_resume_context()
 
@@ -80,8 +82,10 @@ class TestColdResumeNewLayout:
         assert "feature-X" in ctx, "PROJECT_STATE content must appear in resume context"
         assert "async IO" in ctx, "DECISIONS content must appear in resume context"
         assert "validate input" in ctx, "LESSONS content must appear in resume context"
-        assert "ACME Corp" in ctx, "CONTEXT content must appear in resume context"
-        assert "auth module" in ctx, "SESSION_LOG content must appear in resume context"
+        assert "ACME Corp" in ctx, "INDEX content must appear in resume context"
+        # SESSION_LOG was retired — its history role is redundant with the
+        # always-injected Layer-1 files. Cold resume must not surface it.
+        assert "Session Log" not in ctx, "Cold resume must not contain a Session Log section"
 
     def test_cold_resume_does_not_show_onboarding(self, workspace):
         """Cold resume must NOT inject ONBOARDING MODE (files exist so it should resume)."""

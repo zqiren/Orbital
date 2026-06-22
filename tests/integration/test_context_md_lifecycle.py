@@ -65,21 +65,21 @@ async def test_session_end_restructures_old_context_md(tmp_path):
     mgr = WorkspaceFileManager(str(tmp_path))
     mgr.ensure_dir()
     # Old flat format CONTEXT.md (external-entities-only era)
-    mgr.write("context", "- **Tencent:** vendor\n- **Moonshot:** LLM API\n")
+    mgr.write("index", "- **Tencent:** vendor\n- **Moonshot:** LLM API\n")
 
     session = Session.new("ctxlife", str(tmp_path))
     session.append({"role": "user", "content": "did stuff", "source": "user"})
 
     provider = _JsonProvider({
         "project_state": "Working on CONTEXT.md feature.",
-        "context": NEW_CONTEXT,
+        "index": NEW_CONTEXT,
     })
 
     await run_session_end_routine(
         session, provider, mgr, session_uuid=session.session_uuid,
     )
 
-    updated = mgr.read("context")
+    updated = mgr.read("index")
     assert updated is not None
     assert "## Overview" in updated and "## Key Files" in updated
     # old flat-only content replaced (no longer just dash entries)
@@ -90,12 +90,12 @@ async def test_session_end_restructures_old_context_md(tmp_path):
 async def test_updated_context_md_appears_in_next_prepare(tmp_path):
     mgr = WorkspaceFileManager(str(tmp_path))
     mgr.ensure_dir()
-    mgr.write("context", "- old entry\n")
+    mgr.write("index", "- old entry\n")
 
     session = Session.new("ctxlife2", str(tmp_path))
     session.append({"role": "user", "content": "x", "source": "user"})
 
-    provider = _JsonProvider({"project_state": "s", "context": NEW_CONTEXT})
+    provider = _JsonProvider({"project_state": "s", "index": NEW_CONTEXT})
     await run_session_end_routine(
         session, provider, mgr, session_uuid=session.session_uuid,
     )

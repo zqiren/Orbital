@@ -36,6 +36,12 @@ class WriteTool(Tool):
             if resolved is None:
                 return ToolResult(content=f"Error: could not write to {path}: path outside workspace")
 
+            # Layer-1 memory files: stamp system-managed metadata + enforce
+            # format (non-destructive). This is the shared persist path so a
+            # direct tool write can no longer bypass the memory invariants.
+            from agent_os.agent import memory_entries
+            content, warns = memory_entries.process_on_write(self._workspace, resolved, content)
+
             # Auto-create parent directories
             parent = os.path.dirname(resolved)
             os.makedirs(parent, exist_ok=True)
@@ -43,10 +49,10 @@ class WriteTool(Tool):
             with open(resolved, "w", encoding="utf-8") as f:
                 n = f.write(content)
 
-            return ToolResult(content=json.dumps({
-                "path": resolved,
-                "status": "success",
-                "bytes": n,
-            }))
+            payload = {"path": resolved, "status": "success", "bytes": n}
+            out = json.dumps(payload)
+            if warns:
+                out += "\n\nNote: " + " ".join(warns)
+            return ToolResult(content=out)
         except Exception as e:
             return ToolResult(content=f"Error: could not write to {arguments.get('path', '?')}: {str(e)}")

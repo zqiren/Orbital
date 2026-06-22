@@ -5,31 +5,32 @@
 """Unit tests for OCC protection of metadata files in run_session_end_routine.
 
 Track C2 / dispatch §3.2 — verifies the Optimistic Concurrency Control
-pattern that protects PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md,
-LESSONS.md, and CONTEXT.md from being clobbered when the user (or any
-other writer) edits one of them while the session-end LLM call is in
-flight.
+pattern that protects the Layer-1 memory files (PROJECT_STATE.md,
+DECISIONS.md, LESSONS.md, INDEX.md) from being clobbered when the user
+(or any other writer) edits one of them while the session-end LLM call
+is in flight.
 
 Pattern under test:
-  1. capture st_mtime_ns of each file BEFORE the LLM call (or before
-     the read inside the SESSION_LOG asyncio.Lock)
-  2. compute new content (LLM call for the four overwrite files,
-     read+append for SESSION_LOG)
+  1. capture st_mtime_ns of each Layer-1 file BEFORE the LLM call
+  2. compute new content (single LLM call returning project_state /
+     decisions / lessons / index)
   3. re-stat just before the atomic write
-  4. if mtimes match: write via WorkspaceFileManager.write (tmp+rename)
+  4. if mtimes match: write via WorkspaceFileManager.write (tmp+rename),
+     stamping DECISIONS/LESSONS metadata on the way
   5. if mtimes differ: abort with a structured WARNING containing
      project_id, file_path, baseline_mtime, observed_mtime,
      cache_thrash_telemetry=True
 
 Tests cover: per-file abort on user mid-edit, per-file write on clean
-baseline, the special SESSION_LOG lock+OCC interaction, multi-file
-isolation (one abort does not block the others), and structured log
-fields. An integration-flavored test exercises two concurrent
-session-end routines hitting SESSION_LOG.md to verify the lock keeps
-them from corrupting the file.
+baseline, multi-file isolation (one abort does not block the others),
+and structured log fields.
+
+SESSION_LOG.md was removed in the Layer-1 memory redesign (no append
+file, no per-project append lock), so the tests that exercised its
+special lock + re-stat append path are gone — that feature no longer
+exists. INDEX.md replaces the old CONTEXT.md.
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -66,33 +67,38 @@ def _mock_provider(response_text):
 
 
 def _valid_llm_response(tag="x"):
+    """A well-formed session-end JSON payload for the new contract.
+
+    Keys are project_state / decisions / lessons / index (no
+    session_log_entry, no "context").
+    """
     return json.dumps({
         "project_state": f"# State\nstate-{tag}",
         "decisions": f"## 2026-05-20: Decision {tag}\n**Chose:** A\n**Reason:** R",
-        "session_log_entry": f"## Session {tag} -- today\n- Did thing",
         "lessons": f"1. Lesson {tag}\n",
-        "context": f"- Person {tag}",
+        "index": f"- Person {tag}",
     })
 
 
 @pytest.fixture(autouse=True)
 def _reset_module_state():
-    """Reset module-level idempotency set and SESSION_LOG lock map
-    between tests so cases don't leak state into each other."""
+    """Reset the module-level idempotency set between tests so cases don't
+    leak state into each other.
+
+    (The SESSION_LOG per-project append-lock map is gone with the Layer-1
+    redesign — there is no longer a ``_session_log_locks`` to clear.)
+    """
     wsf_module._completed_session_ends.clear()
-    wsf_module._session_log_locks.clear()
     yield
     wsf_module._completed_session_ends.clear()
-    wsf_module._session_log_locks.clear()
 
 
 def _bump_mtime_by(path: str, delta_seconds: float = 5.0) -> int:
-    """Mutate a file in-place so its st_mtime_ns advances.
+    """Mutate a file's mtime so its st_mtime_ns advances.
 
-    Writes one byte then resets the file but using os.utime to a fixed
-    later timestamp — simulates a user editing the file between when
-    the session-end routine captured the baseline and the post-LLM
-    write. Returns the new st_mtime_ns.
+    Uses os.utime to a fixed later timestamp — simulates a user editing
+    the file between when the session-end routine captured the baseline
+    and the post-LLM write. Returns the new st_mtime_ns.
     """
     st = os.stat(path)
     new_atime = st.st_atime + delta_seconds
@@ -102,20 +108,19 @@ def _bump_mtime_by(path: str, delta_seconds: float = 5.0) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. test_clean_baseline_writes_all_five_files
+# 1. test_clean_baseline_writes_all_layer1_files
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_clean_baseline_writes_all_five_files(tmp_path):
-    """When no file changes during the LLM call, all 5 files are written."""
+async def test_clean_baseline_writes_all_layer1_files(tmp_path):
+    """When no file changes during the LLM call, all 4 Layer-1 files write."""
     ws = WorkspaceFileManager(str(tmp_path))
 
-    # Pre-seed all 5 files so we have a definite baseline mtime.
+    # Pre-seed all 4 Layer-1 files so we have a definite baseline mtime.
     ws.write("state", "before-state")
     ws.write("decisions", "## old\n**Chose:** old")
-    ws.write("session_log", "## Session old -- old\n- old")
     ws.write("lessons", "1. old lesson")
-    ws.write("context", "- old person")
+    ws.write("index", "- old person")
 
     session = _mock_session(session_id="sess_clean")
     provider = _mock_provider(_valid_llm_response("clean"))
@@ -125,15 +130,13 @@ async def test_clean_baseline_writes_all_five_files(tmp_path):
         session_uuid="sess_clean", project_id="proj_clean",
     )
 
+    # STATE / INDEX are overwrite scratchpads, written verbatim.
     assert ws.read("state") == "# State\nstate-clean"
-    # decisions and lessons go through sanity-checks; just verify the
-    # marker entry is present (single entry preserved verbatim).
+    assert ws.read("index") == "- Person clean"
+    # DECISIONS / LESSONS go through the stamping persist path; just verify
+    # the marker entry survives (stamp adds a trailing metadata comment).
     assert "Decision clean" in ws.read("decisions")
     assert "Lesson clean" in ws.read("lessons")
-    # SESSION_LOG is append-style — old entry must remain alongside new
-    assert "Session old" in ws.read("session_log")
-    assert "Session clean" in ws.read("session_log")
-    assert "Person clean" in ws.read("context")
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +194,12 @@ async def test_user_edit_during_llm_aborts_state_write(tmp_path, caplog):
 
 @pytest.mark.asyncio
 async def test_one_file_aborts_others_still_write(tmp_path, caplog):
-    """If only LESSONS.md is touched mid-LLM, the other four files still write."""
+    """If only LESSONS.md is touched mid-LLM, the other Layer-1 files still write."""
     ws = WorkspaceFileManager(str(tmp_path))
     ws.write("state", "old-state")
     ws.write("decisions", "## 2026-01-01: Old\n**Chose:** old")
-    ws.write("session_log", "## Session old -- 2026-01-01\n- old")
     ws.write("lessons", "1. user-lesson")
-    ws.write("context", "- old person")
+    ws.write("index", "- old person")
 
     lessons_path = ws._file_path("lessons")
     user_lessons = "1. user-lesson\n2. user-additional-lesson-during-llm"
@@ -224,13 +226,10 @@ async def test_one_file_aborts_others_still_write(tmp_path, caplog):
     # Lessons abort → user content survives
     assert ws.read("lessons") == user_lessons
 
-    # Other four files write normally
+    # Other Layer-1 files write normally
     assert ws.read("state") == "# State\nstate-multi"
     assert "Decision multi" in ws.read("decisions")
-    assert "Person multi" in ws.read("context")
-    assert "Session multi" in ws.read("session_log")
-    # Old session_log entry must also survive (append, not overwrite)
-    assert "Session old" in ws.read("session_log")
+    assert ws.read("index") == "- Person multi"
 
     # Exactly one OCC abort warning, for lessons
     aborts = [r for r in caplog.records if "OCC abort" in r.message]
@@ -246,7 +245,9 @@ async def test_one_file_aborts_others_still_write(tmp_path, caplog):
 async def test_nonexistent_file_baseline_allows_initial_write(tmp_path):
     """Files that don't exist at baseline write normally (baseline=None)."""
     ws = WorkspaceFileManager(str(tmp_path))
-    # No pre-seeding. All 5 files are absent.
+    # No pre-seeding. All Layer-1 files are absent. With no marker present
+    # either, the no-delta gate still allows the routine to run (the LLM
+    # output creates the files for the first time).
 
     session = _mock_session(session_id="sess_first")
     provider = _mock_provider(_valid_llm_response("first"))
@@ -256,12 +257,11 @@ async def test_nonexistent_file_baseline_allows_initial_write(tmp_path):
         session_uuid="sess_first", project_id="proj_first",
     )
 
-    # All five files now exist
+    # All four Layer-1 files now exist
     assert ws.exists("state")
     assert ws.exists("decisions")
-    assert ws.exists("session_log")
     assert ws.exists("lessons")
-    assert ws.exists("context")
+    assert ws.exists("index")
 
 
 # ---------------------------------------------------------------------------
@@ -305,150 +305,7 @@ async def test_user_creates_file_during_llm_aborts_state_write(tmp_path, caplog)
 
 
 # ---------------------------------------------------------------------------
-# 6. test_session_log_user_edit_aborts_append
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_session_log_user_edit_aborts_append(tmp_path, caplog):
-    """SESSION_LOG.md user edit between baseline-stat and write aborts cleanly."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.write("session_log", "## Session old -- 2026-01-01\n- old\n")
-
-    session_log_path = ws._file_path("session_log")
-
-    # Patch _stat_mtime_ns so the SECOND call (the pre-write re-stat
-    # inside the lock) returns a value different from the first call
-    # (the in-lock baseline). This simulates a user edit landing
-    # between the baseline capture and the atomic-write moment.
-    original_stat = wsf_module._stat_mtime_ns
-    call_count = {"n": 0}
-
-    def fake_stat(path: str):
-        real = original_stat(path)
-        if path == session_log_path:
-            call_count["n"] += 1
-            # Second call (the re-stat just before write) returns a
-            # different mtime to simulate a user edit landing in between.
-            if call_count["n"] == 2:
-                return (real or 0) + 1_000_000  # +1 ms
-        return real
-
-    user_session_log = "## Session old -- 2026-01-01\n- old\n## USER WROTE\nnotes\n"
-
-    session = _mock_session(session_id="sess_sl_user_edit")
-    provider = _mock_provider(_valid_llm_response("sl_user"))
-
-    # Mutate the file content too (so the abort actually preserves user data)
-    async def _llm_side_effect(*args, **kwargs):
-        with open(session_log_path, "w", encoding="utf-8") as f:
-            f.write(user_session_log)
-        resp = MagicMock()
-        resp.text = _valid_llm_response("sl_user")
-        return resp
-
-    provider.complete.side_effect = _llm_side_effect
-
-    with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
-        monkeypatch_target = wsf_module
-        original = monkeypatch_target._stat_mtime_ns
-        monkeypatch_target._stat_mtime_ns = fake_stat
-        try:
-            await run_session_end_routine(
-                session, provider, ws,
-                session_uuid="sess_sl_user_edit", project_id="proj_sl_user",
-            )
-        finally:
-            monkeypatch_target._stat_mtime_ns = original
-
-    # User edit must survive.
-    assert ws.read("session_log") == user_session_log
-
-    # Structured warning for session_log
-    aborts = [r for r in caplog.records if "OCC abort" in r.message and "session_log" in r.message]
-    assert aborts, "expected OCC abort for session_log"
-
-
-# ---------------------------------------------------------------------------
-# 7. test_session_log_lock_serializes_concurrent_routines
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_session_log_lock_serializes_concurrent_routines(tmp_path):
-    """Two concurrent session-end routines targeting the same SESSION_LOG
-    must not corrupt the file. Both entries should land cleanly."""
-    ws = WorkspaceFileManager(str(tmp_path))
-    ws.write("session_log", "## Session base -- 2026-01-01\n- base\n")
-
-    # Provider with a small await inside so the two routines actually
-    # overlap. Without the lock, the second routine's append would
-    # read+write-on-stale data and at minimum trigger the OCC abort
-    # warning (wasted LLM call); we want zero aborts here.
-    async def _delayed_llm(tag):
-        async def _impl(*args, **kwargs):
-            await asyncio.sleep(0.05)
-            resp = MagicMock()
-            resp.text = _valid_llm_response(tag)
-            return resp
-        return _impl
-
-    p1 = AsyncMock()
-    p1.complete.side_effect = await _delayed_llm("conc_a")
-    p2 = AsyncMock()
-    p2.complete.side_effect = await _delayed_llm("conc_b")
-
-    session1 = _mock_session(session_id="sess_a")
-    session2 = _mock_session(session_id="sess_b")
-
-    # bypass_idempotency on both so the routines actually run (different
-    # session_ids would also work but bypass is more explicit about
-    # what's being tested here).
-    await asyncio.gather(
-        run_session_end_routine(
-            session1, p1, ws,
-            session_uuid="sess_a", project_id="proj_conc",
-            bypass_idempotency=True,
-        ),
-        run_session_end_routine(
-            session2, p2, ws,
-            session_uuid="sess_b", project_id="proj_conc",
-            bypass_idempotency=True,
-        ),
-    )
-
-    final = ws.read("session_log") or ""
-    # All three entries (base + conc_a + conc_b) present, no corruption
-    assert "Session base" in final
-    assert "Session conc_a" in final
-    assert "Session conc_b" in final
-
-    # File parses as well-formed markdown (no half-written content,
-    # no doubled headers, no torn lines)
-    # Each "## Session" header marks one entry; there should be exactly 3.
-    import re
-    headers = re.findall(r'(?m)^## Session ', final)
-    assert len(headers) == 3, f"expected 3 session entries, got {len(headers)}:\n{final}"
-
-
-# ---------------------------------------------------------------------------
-# 8. test_session_log_lock_keyed_by_project_id
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_session_log_lock_keyed_by_project_id(tmp_path):
-    """Two routines for DIFFERENT projects do not block each other."""
-    # Two separate workspaces == two separate SESSION_LOG files == two
-    # independent lock entries. The lock helper is exercised directly
-    # here rather than through the full routine to keep the test focused.
-    lock_a = wsf_module._get_session_log_lock("proj_a")
-    lock_b = wsf_module._get_session_log_lock("proj_b")
-
-    assert lock_a is not lock_b
-    # Same key returns the same instance
-    assert wsf_module._get_session_log_lock("proj_a") is lock_a
-
-
-# ---------------------------------------------------------------------------
-# 9. test_log_includes_all_required_structured_fields
+# 6. test_log_includes_all_required_structured_fields
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio

@@ -119,7 +119,12 @@ def test_append_creates_then_appends(ws):
 # ---------------------------------------------------------------------------
 
 def test_read_all_mixed(ws):
-    """Some files exist, some don't -- correct dict with None for missing."""
+    """Some files exist, some don't -- correct dict with None for missing.
+
+    The roster is now the Layer-1 redesign set: state, decisions, lessons,
+    index plus the two archives. "session_log"/"context" are gone; read_all
+    spans all six keys (archives included).
+    """
     ws.write("state", "state content")
     ws.write("lessons", "lessons content")
 
@@ -128,9 +133,16 @@ def test_read_all_mixed(ws):
     assert result["state"] == "state content"
     assert result["lessons"] == "lessons content"
     assert result["decisions"] is None
-    assert result["session_log"] is None
-    assert result["context"] is None
-    assert len(result) == 5
+    # index replaces the retired "context" key.
+    assert result["index"] is None
+    # read_all now spans the archives too.
+    assert result["decisions_archive"] is None
+    assert result["lessons_archive"] is None
+    assert set(result) == {
+        "state", "decisions", "lessons",
+        "index", "decisions_archive", "lessons_archive",
+    }
+    assert len(result) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -138,30 +150,34 @@ def test_read_all_mixed(ws):
 # ---------------------------------------------------------------------------
 
 def test_build_cold_resume_context_all_files(ws):
-    """All 5 files exist -- assembled string with section headers in correct order."""
+    """All Layer-1 files exist -- assembled string with section headers in order.
+
+    The Layer-1 redesign retired SESSION_LOG and renamed CONTEXT -> INDEX. The
+    cold-resume order is now state, decisions, lessons, index (no session log).
+    """
     ws.write("state", "In progress.")
     ws.write("decisions", "Chose X over Y.")
     ws.write("lessons", "Don't do Z.")
-    ws.write("context", "Person: Alice.")
-    ws.write("session_log", "## Session s1 -- 2026-02-15\n- Did stuff")
+    ws.write("index", "src/foo.py — the foo module.")
 
     ctx = ws.build_cold_resume_context()
 
-    # Check section order
+    # Check section order (index replaces the old context/session-log tail).
     state_pos = ctx.index("## Project State")
     decisions_pos = ctx.index("## Decisions")
     lessons_pos = ctx.index("## Lessons Learned")
-    context_pos = ctx.index("## External Context")
-    log_pos = ctx.index("## Session Log (Recent)")
+    index_pos = ctx.index("## Project Index")
 
-    assert state_pos < decisions_pos < lessons_pos < context_pos < log_pos
+    assert state_pos < decisions_pos < lessons_pos < index_pos
 
     # Check content is included
     assert "In progress." in ctx
     assert "Chose X over Y." in ctx
     assert "Don't do Z." in ctx
-    assert "Person: Alice." in ctx
-    assert "Did stuff" in ctx
+    assert "src/foo.py — the foo module." in ctx
+
+    # SESSION_LOG was removed — no such section should ever appear.
+    assert "Session Log" not in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -182,25 +198,15 @@ def test_build_cold_resume_context_minimal(ws):
 
 
 # ---------------------------------------------------------------------------
-# 8. test_session_log_truncation
+# 8. test_session_log_truncation — DELETED.
+#
+# SESSION_LOG.md and its last-3-sessions resume truncation are a genuinely
+# removed feature in the Layer-1 memory redesign (no "session_log" key, no
+# _truncate_session_log, build_cold_resume_context no longer special-cases it).
+# Nothing about this test's intent survives the removal, so it is dropped
+# rather than re-expressed. The roster/resume-no-session-log invariants are
+# covered by tests/regression/test_layer1_memory_redesign.py.
 # ---------------------------------------------------------------------------
-
-def test_session_log_truncation(ws):
-    """SESSION_LOG with many sessions -- only last 3 included in resume context."""
-    sessions = []
-    for i in range(10):
-        sessions.append(f"## Session sess_{i} -- 2026-02-{10+i}\n- Did thing {i}")
-    ws.write("session_log", "\n\n".join(sessions))
-
-    ctx = ws.build_cold_resume_context()
-
-    # Only last 3 sessions should be present
-    assert "sess_7" in ctx
-    assert "sess_8" in ctx
-    assert "sess_9" in ctx
-    # Earlier sessions should not be present
-    assert "sess_0" not in ctx
-    assert "sess_6" not in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -266,15 +272,20 @@ def test_build_session_summary():
 
 @pytest.mark.asyncio
 async def test_session_end_routine_writes_files(tmp_path):
-    """Mock LLM returns valid JSON -- correct files written."""
+    """Mock LLM returns valid JSON -- correct Layer-1 files written.
+
+    New session-end contract: JSON keys are project_state, decisions, lessons,
+    index (no session_log_entry, no "context"). STATE/INDEX are overwritten;
+    DECISIONS/LESSONS are stamped with metadata before write, so assertions on
+    those files check substrings, not exact bytes.
+    """
     ws = WorkspaceFileManager(str(tmp_path))
 
     llm_response = json.dumps({
         "project_state": "# Project State\nEverything is great.",
-        "decisions": "## 2026-02-15: Chose A\n**Chose:** A\n**Reason:** Better.",
-        "session_log_entry": "## Session sess_x -- 2026-02-15\n- Completed: stuff",
-        "lessons": "## Lesson 1\n**Problem:** Bad thing.\n**Fix:** Good thing.",
-        "context": "## People\n- Alice: dev lead",
+        "decisions": "## 2026-02-15: Chose A\n**Chose:** A\n**Reason:** Better.\n",
+        "lessons": "1. **Bad thing.** Do the good thing instead.\n",
+        "index": "## People\n- Alice: dev lead\n",
     })
 
     session = _mock_session([
@@ -283,18 +294,21 @@ async def test_session_end_routine_writes_files(tmp_path):
     ], session_id="sess_writes_files")
     provider = _mock_provider(llm_response)
 
+    # Fresh workspace has no cleanup marker -> delta gate passes -> LLM runs.
     await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
-    # state is written (overwritten)
+    # state is written verbatim (overwrite scratchpad)
     assert ws.read("state") == "# Project State\nEverything is great."
-    # decisions appended
-    assert "Chose A" in ws.read("decisions")
-    # session_log appended
-    assert "sess_x" in ws.read("session_log")
-    # lessons appended
-    assert "Lesson 1" in ws.read("lessons")
-    # context appended
-    assert "Alice" in ws.read("context")
+    # decisions written (stamped) — title/body survive the metadata stamp
+    decisions = ws.read("decisions")
+    assert "Chose A" in decisions
+    assert "<!--mem id:" in decisions  # stamped by the persist path
+    # lessons written (stamped, renumbered contiguously)
+    assert "Do the good thing instead." in ws.read("lessons")
+    # index written verbatim (navigation map, overwrite) — replaces old "context"
+    assert "Alice" in ws.read("index")
+    # SESSION_LOG is gone — its key no longer exists on the roster.
+    assert "session_log" not in FILE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +317,15 @@ async def test_session_end_routine_writes_files(tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_end_routine_bad_json(tmp_path, caplog):
-    """LLM returns garbage -- no files modified, warning logged."""
+    """LLM returns garbage -- no LLM-derived writes, parse warning logged.
+
+    On unparseable JSON the routine logs a parse-failure warning and falls
+    through to the deterministic backstop. With a tiny pre-written state the
+    backstop trims nothing, so no Layer-1 file is touched. (SESSION_LOG no
+    longer exists, so there's nothing for it to skip writing.)
+    """
     ws = WorkspaceFileManager(str(tmp_path))
-    # Pre-write a state file to ensure it's not modified
+    # Pre-write a state file (well under budget) to ensure it's not modified.
     ws.write("state", "original state")
 
     session = _mock_session([{"role": "user", "content": "Hello"}], session_id="sess_bad_json")
@@ -314,13 +334,13 @@ async def test_session_end_routine_bad_json(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
-    # state should be unchanged
+    # state should be unchanged (no LLM-derived overwrite happened)
     assert ws.read("state") == "original state"
-    # No other files created
+    # No durable files created from the garbage response.
     assert ws.read("decisions") is None
-    assert ws.read("session_log") is None
-    # Warning should be logged
-    assert "failed to parse LLM response" in caplog.text
+    assert ws.read("lessons") is None
+    # Parse-failure warning should be logged.
+    assert "JSON parse failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -329,15 +349,19 @@ async def test_session_end_routine_bad_json(tmp_path, caplog):
 
 @pytest.mark.asyncio
 async def test_session_end_routine_empty_optionals(tmp_path):
-    """LLM returns empty decisions/lessons/context -- only state + session_log written."""
+    """LLM returns empty decisions/lessons/index -- only state written.
+
+    A "" (or whitespace-only) field means "preserve the existing file
+    unchanged" in the new contract, so empty optionals must not create files.
+    SESSION_LOG no longer exists, so state is the only file that gets written.
+    """
     ws = WorkspaceFileManager(str(tmp_path))
 
     llm_response = json.dumps({
         "project_state": "# State\nDoing well.",
         "decisions": "",
-        "session_log_entry": "## Session sess_y -- 2026-02-15\n- Done things",
         "lessons": "  ",
-        "context": "",
+        "index": "",
     })
 
     session = _mock_session([{"role": "user", "content": "Go"}], session_id="sess_empty_opt")
@@ -347,12 +371,10 @@ async def test_session_end_routine_empty_optionals(tmp_path):
 
     # state written
     assert ws.read("state") == "# State\nDoing well."
-    # session_log written
-    assert "sess_y" in ws.read("session_log")
     # Empty optionals should NOT create files
     assert ws.read("decisions") is None
     assert ws.read("lessons") is None
-    assert ws.read("context") is None
+    assert ws.read("index") is None
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +421,8 @@ async def test_session_end_uses_utility_provider(tmp_path):
     llm_response = json.dumps({
         "project_state": "state",
         "decisions": "",
-        "session_log_entry": "## Session s -- date\n- done",
         "lessons": "",
-        "context": "",
+        "index": "",
     })
 
     session = _mock_session([{"role": "user", "content": "Hi"}], session_id="sess_util_prov")

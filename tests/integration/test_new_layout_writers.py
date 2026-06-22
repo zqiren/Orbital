@@ -12,8 +12,8 @@ PASS criteria (post-migration):
   {ws}/orbital/PROJECT_STATE.md                  — written by WorkspaceFileManager
   {ws}/orbital/DECISIONS.md                      — written by WorkspaceFileManager
   {ws}/orbital/LESSONS.md                        — written by WorkspaceFileManager
-  {ws}/orbital/SESSION_LOG.md                    — written by WorkspaceFileManager
-  {ws}/orbital/CONTEXT.md                        — written by WorkspaceFileManager
+  {ws}/orbital/INDEX.md                          — written by WorkspaceFileManager
+  (SESSION_LOG.md / CONTEXT.md retired in the Layer-1 memory redesign)
   {ws}/orbital/instructions/project_goals.md     — written by agents_v2/_write_workspace_file
   {ws}/orbital/sessions/{sid}.jsonl              — written by Session.new
   {ws}/orbital/sub_agents/test-agent/{tid}.jsonl — written by SubAgentTranscript
@@ -67,15 +67,16 @@ def test_workspace_file_manager_writes_to_orbital(ws):
     wfm.write("state", "# State\nTest state content.")
     wfm.write("decisions", "# Decisions\nTest decisions.")
     wfm.write("lessons", "# Lessons\nTest lessons.")
-    wfm.write("context", "# Context\nTest context.")
-    wfm.append("session_log", "## Session 1\n- done stuff\n")
+    wfm.write("index", "# Index\nTest index.")
 
     orbital = Path(ws) / "orbital"
     assert (orbital / "PROJECT_STATE.md").is_file(), "PROJECT_STATE.md missing"
     assert (orbital / "DECISIONS.md").is_file(), "DECISIONS.md missing"
     assert (orbital / "LESSONS.md").is_file(), "LESSONS.md missing"
-    assert (orbital / "SESSION_LOG.md").is_file(), "SESSION_LOG.md missing"
-    assert (orbital / "CONTEXT.md").is_file(), "CONTEXT.md missing"
+    assert (orbital / "INDEX.md").is_file(), "INDEX.md missing"
+    # SESSION_LOG.md and CONTEXT.md were retired in the Layer-1 memory redesign.
+    assert not (orbital / "SESSION_LOG.md").exists(), "SESSION_LOG.md must be retired"
+    assert not (orbital / "CONTEXT.md").exists(), "CONTEXT.md must be renamed to INDEX.md"
 
     # Old locations must not exist
     assert not (orbital / ".migrated").exists(), ".migrated marker must not exist"
@@ -362,8 +363,7 @@ def test_no_forbidden_paths_in_full_layout(ws):
     wfm.write("state", "state")
     wfm.write("decisions", "decisions")
     wfm.write("lessons", "lessons")
-    wfm.write("context", "context")
-    wfm.append("session_log", "## Session 1\n- done\n")
+    wfm.write("index", "index")
 
     sid = "test_full_sess"
     session = Session.new(sid, ws)

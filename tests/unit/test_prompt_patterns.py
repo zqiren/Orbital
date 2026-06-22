@@ -138,17 +138,25 @@ class TestSessionEndConsolidation:
             "files_modified": [],
             "recent_messages": [],
         })
-        assert "REPLACES" in prompt or "REPLACE" in prompt
+        assert "REPLACE" in prompt or "SUPERSEDE" in prompt
         # NOTE: a literal "Cap at 20" assertion was retired here. The wording
         # has shifted with prompt rewrites; the cap is now enforced server-side
-        # at write time (see tests/regression/test_session_log_bounded.py).
-        # The lessons field should NOT contain the old append-only wording
-        # Extract just the lessons instruction (field 4) from the prompt
-        lessons_section = prompt.split('"lessons"')[1].split('"context"')[0]
+        # at write time (deterministic hard cap → demote-to-archive).
+        # The lessons field should NOT contain the old append-only wording.
+        # Extract just the lessons instruction from the prompt. In the Layer-1
+        # redesign the field that follows lessons is "index" (CONTEXT → INDEX),
+        # so isolate the lessons section between the "lessons" and "index" keys.
+        lessons_section = prompt.split('"lessons"')[1].split('"index"')[0]
         assert "Only include genuinely new" not in lessons_section
 
     def test_session_end_prompt_carries_forward(self):
-        """Session-end prompt instructs carrying forward existing lessons."""
+        """Session-end prompt instructs preserving/carrying forward existing content.
+
+        In the Layer-1 redesign the explicit "carry forward" phrasing was
+        replaced by the cleaner "return '' / preserve the existing file
+        unchanged" contract plus "keep currently-true" guidance. The intent is
+        unchanged: existing memory must not be silently dropped by the pass.
+        """
         wfm = WorkspaceFileManager("/tmp/test")
         prompt = wfm.build_session_end_prompt({
             "message_count": 1,
@@ -156,7 +164,9 @@ class TestSessionEndConsolidation:
             "files_modified": [],
             "recent_messages": [],
         })
-        assert "Carry forward" in prompt or "carry forward" in prompt.lower()
+        lower = prompt.lower()
+        assert "preserve the existing file" in lower
+        assert "keep currently-true" in lower
 
 
 # ===========================================================================
@@ -290,11 +300,20 @@ class TestContextBudgetReflection:
 class TestLessonsInstructionUpdate:
 
     def test_append_mid_session_instruction(self):
-        """Normal project prompt says agent may append to LESSONS.md mid-session."""
+        """Normal project prompt says agent updates LESSONS.md proactively mid-session.
+
+        The Layer-1 redesign replaced the explicit "You may append mid-session"
+        line with the unified instruction to update the memory files (including
+        LESSONS.md) proactively with the write/edit tools as work happens, plus
+        the trigger to add a lesson on error-recovery. Same intent: the agent
+        writes lessons during the session, not only at session end.
+        """
         builder = PromptBuilder()
         ctx = make_context(is_scratch=False)
         _, semi_stable, _ = builder.build(ctx)
-        assert "You may append mid-session" in semi_stable
+        assert "Update them proactively with the write/edit tools as you work" in semi_stable
+        assert "LESSONS.md" in semi_stable
+        assert "Add a lesson when you" in semi_stable
 
     def test_old_do_not_write_removed(self):
         """Old contradictory 'do NOT need to read or write' instruction is gone."""

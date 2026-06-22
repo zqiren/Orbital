@@ -4,12 +4,17 @@
 
 """Workspace file management and session-end routine.
 
-Manages the 5 workspace files in {workspace}/orbital/:
-  PROJECT_STATE.md, DECISIONS.md, SESSION_LOG.md, LESSONS.md, CONTEXT.md
+Manages the agent-maintained Layer-1 files in {workspace}/orbital/:
+  PROJECT_STATE.md (volatile scratchpad), DECISIONS.md, LESSONS.md (durable),
+  INDEX.md (navigation map), plus DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md
+  (demoted durable entries, read-on-demand).
 
 Provides:
   - WorkspaceFileManager: read/write/append workspace files, build cold resume context
-  - run_session_end_routine: generate and write workspace files at session end via LLM
+  - run_session_end_routine: deterministic size backstop + best-effort LLM dedup/merge
+
+The active model (MiniMax-M3) has a 1,000,000-token window; bounds here exist for
+attention and a clean, non-contradictory project identity, NOT context pressure.
 """
 
 from __future__ import annotations
@@ -21,6 +26,9 @@ import os
 import re
 import sys
 import time
+from datetime import date
+
+from agent_os.agent import memory_entries as _mem
 
 logger = logging.getLogger(__name__)
 
@@ -33,35 +41,12 @@ _IS_WINDOWS = sys.platform == "win32"
 # asyncio.Lock unless tests show flakiness under concurrent dispatch.
 _completed_session_ends: set[str] = set()
 
-# Per-(project_id, "session_log") asyncio.Lock cache. SESSION_LOG.md is the
-# only read-modify-write file in run_session_end_routine: we read current
-# contents, append the new entry, and may rewrite with a cap. If two
-# session-end routines (e.g. the loop fire-and-forget path and the
-# new_session() pre-archival path, or two concurrent periodic refreshes)
-# race here AND the OCC stat-compare aborts one of them, we have already
-# burned an LLM call for nothing. Serializing the SESSION_LOG critical
-# section avoids that waste — the OCC pattern then only catches genuine
-# user mid-edits, not internal contention.
-#
-# Lock entries are created lazily and never removed. The dict grows at
-# most one entry per project_id over a daemon lifetime, which is bounded
-# by user-installed projects — negligible memory.
-_session_log_locks: dict[tuple[str, str], asyncio.Lock] = {}
-
-
-def _get_session_log_lock(project_id: str) -> asyncio.Lock:
-    """Return the (project_id, "session_log") asyncio.Lock, creating it lazily.
-
-    Safe to call from any event loop on the daemon process — asyncio.Lock
-    binds to the running loop on first acquisition, and SESSION_LOG writes
-    happen on the agent loop's event loop in all production callers.
-    """
-    key = (project_id, "session_log")
-    lock = _session_log_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _session_log_locks[key] = lock
-    return lock
+# Persisted "last cleanup" marker for the session-end no-delta gate. Maps
+# project_id -> {file_key: mtime_ns} captured at the last successful cleanup, so a
+# session-end whose memory files are unchanged since then is a no-op (no LLM call).
+# Persisted to orbital/.memory_cleanup.json (the in-memory idempotency set resets
+# on daemon restart; this gate must survive restarts).
+_CLEANUP_MARKER_FILE = ".memory_cleanup.json"
 
 
 def _stat_mtime_ns(path: str) -> int | None:
@@ -141,32 +126,23 @@ def _atomic_replace(src: str, dst: str) -> None:
 FILE_NAMES: dict[str, str] = {
     "state": "PROJECT_STATE.md",
     "decisions": "DECISIONS.md",
-    "session_log": "SESSION_LOG.md",
     "lessons": "LESSONS.md",
-    "context": "CONTEXT.md",
+    "index": "INDEX.md",
+    # Archives: demoted durable entries, read-on-demand, never injected.
+    "decisions_archive": "DECISIONS_ARCHIVE.md",
+    "lessons_archive": "LESSONS_ARCHIVE.md",
 }
 
-# Order for cold resume context assembly
-_RESUME_ORDER = ["state", "decisions", "lessons", "context", "session_log"]
+# Layer-1 files injected every turn (excludes archives). Order for cold resume.
+_RESUME_ORDER = ["state", "decisions", "lessons", "index"]
 
 # Section headers for cold resume context
 _SECTION_HEADERS: dict[str, str] = {
     "state": "Project State",
     "decisions": "Decisions",
     "lessons": "Lessons Learned",
-    "context": "External Context",
-    "session_log": "Session Log (Recent)",
+    "index": "Project Index (navigation map)",
 }
-
-# Max number of sessions to include from SESSION_LOG when building the
-# cold resume context or the session-end prompt (READ-time cap).
-_SESSION_LOG_MAX_SESSIONS = 3
-
-# Max number of sessions kept on disk in SESSION_LOG.md after an append
-# at session-end (WRITE-time cap). Kept distinct from the read cap so
-# future readers cannot confuse the two: read-cap trims what the agent
-# sees, write-cap prunes what is persisted.
-_SESSION_LOG_WRITE_CAP = 10
 
 # Entry-boundary regexes per sanity-checked file. The session-end prompt
 # instructs the LLM to emit entries in these formats; the code-side sanity
@@ -407,16 +383,18 @@ class WorkspaceFileManager:
         _key_to_path = {
             "state": self._paths.project_state,
             "decisions": self._paths.decisions,
-            "session_log": self._paths.session_log,
             "lessons": self._paths.lessons,
-            "context": self._paths.context,
+            "index": self._paths.index,
+            "decisions_archive": self._paths.decisions_archive,
+            "lessons_archive": self._paths.lessons_archive,
         }
         return _key_to_path[file_key]
 
     def read(self, file_key: str) -> str | None:
         """Read a workspace file. Returns None if file doesn't exist.
 
-        file_key is one of: state, decisions, session_log, lessons, context
+        file_key is one of: state, decisions, lessons, index,
+        decisions_archive, lessons_archive
         """
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
@@ -467,58 +445,49 @@ class WorkspaceFileManager:
         return os.path.isfile(filepath)
 
     def build_cold_resume_context(self) -> str:
-        """Assemble cold resume context from available files.
+        """Assemble cold resume context from the Layer-1 files.
 
-        Read order (skip missing files):
-        1. PROJECT_STATE  - "where did I leave off"
-        2. DECISIONS      - "what's already been decided"
-        3. LESSONS        - "what should I avoid"
-        4. CONTEXT        - "who/what am I working with"
-        5. SESSION_LOG    - "what's the history" (last 3 sessions only)
+        Standard Layer-1 read (PROJECT_STATE, DECISIONS, LESSONS, INDEX) with no
+        special-casing. SESSION_LOG was retired; cross-session history is no
+        longer kept separately (the Layer-1 files are injected every turn anyway).
 
         Returns assembled markdown string with section headers.
         """
         sections: list[str] = []
-
         for key in _RESUME_ORDER:
             content = self.read(key)
             if content is None:
                 continue
-
-            # For session_log, truncate to last N sessions
-            if key == "session_log":
-                content = _truncate_session_log(content, _SESSION_LOG_MAX_SESSIONS)
-
             header = _SECTION_HEADERS[key]
             sections.append(f"## {header}\n\n{content.strip()}")
-
         return "\n\n---\n\n".join(sections)
 
     def build_session_end_prompt(self, session_summary: dict) -> str:
-        """Build the LLM prompt for session-end file generation.
+        """Build the LLM prompt for the session-end dedup/cleanup pass.
 
-        session_summary contains message_count, tool_calls_count, files_modified,
-        recent_messages, etc.
+        This pass is the CLEANUP, not the state record — state is recorded
+        incrementally during the session. Its job is to merge duplicates,
+        supersede stale entries, and keep one clean, non-contradictory identity.
 
-        Returns a prompt string that asks the LLM to produce JSON with:
-        project_state, decisions, session_log_entry, lessons, context.
+        It is fed the BOUNDED view of each file (<= injection budget) so a
+        bloated project cannot make the call time out (the prior failure: ~26k
+        tokens of input -> 3x timeout -> no cleanup at all).
+
+        Returns a prompt asking for JSON: project_state, decisions, lessons, index.
         """
-        # Read existing files for dedup context
-        existing_state = self.read("state") or "(no existing state)"
-        existing_decisions = self.read("decisions") or "(no existing decisions)"
-        existing_lessons = self.read("lessons") or "(no existing lessons)"
-        existing_context = self.read("context") or "(no existing context)"
+        from agent_os.agent import memory_entries as _mem
 
-        # SESSION_LOG tail (in-memory truncation; disk unchanged here).
-        # Apply the READ-cap so the LLM sees only the most recent entries
-        # for cross-session continuity when writing project_state/lessons.
-        _session_log_raw = self.read("session_log")
-        if _session_log_raw and _session_log_raw.strip():
-            existing_session_log_tail = _truncate_session_log(
-                _session_log_raw, _SESSION_LOG_MAX_SESSIONS
-            ).strip() or "(no prior session log)"
-        else:
-            existing_session_log_tail = "(no prior session log)"
+        def _bounded(file_key: str) -> str:
+            raw = self.read(file_key)
+            if not raw or not raw.strip():
+                return f"(no existing {file_key})"
+            view = _mem.inject_view(raw, file_key, _mem.FILE_BUDGETS[file_key]["hard"])
+            return view or f"(no existing {file_key})"
+
+        existing_state = _bounded("state")
+        existing_decisions = _bounded("decisions")
+        existing_lessons = _bounded("lessons")
+        existing_index = _bounded("index")
 
         # Format recent messages
         recent_lines: list[str] = []
@@ -532,93 +501,29 @@ class WorkspaceFileManager:
         message_count = session_summary.get("message_count", 0)
         tool_calls_count = session_summary.get("tool_calls_count", 0)
 
-        prompt = f"""You are maintaining workspace memory files for an AI agent project.
+        prompt = f"""You maintain the Layer-1 memory of an AI agent project. Your job THIS PASS is to CLEAN UP: merge duplicates, supersede stale entries, and keep ONE clean, non-contradictory project identity. State is already recorded incrementally during the session — you are the editor, not the primary record.
 
-Given the session information below, produce a JSON object with these fields:
+Produce a JSON object with these fields. Return "" for any field that needs no change (preserve the existing file unchanged).
 
-1. "project_state" (REQUIRED): A complete snapshot of current project status.
-   Include: what was accomplished, what's in progress, blockers, next steps.
-   This REPLACES the previous state file entirely.
+1. "project_state" (string): The COMPLETE current-state snapshot — what is true NOW: current focus, in-progress work, blockers, next steps. OVERWRITE intent — this is a living scratchpad, NOT a changelog. Replace stale status with current status; do not append a dated history.
 
-2. "decisions" (string, empty to preserve existing): The COMPLETE updated
-   DECISIONS.md file. This REPLACES the existing file entirely.
-   Scope: significant technical, architectural, or strategic decisions
-   with rationale and rejected alternatives.
-   - Carry forward every still-relevant prior decision
-   - Add any new decisions made THIS SESSION
-   - Drop decisions that have been superseded or are now obsolete
-   - Merge duplicates or closely related decisions into single entries
-   - Cap: 30 entries. Prioritize architectural over tactical; recent over old
-     when contested.
-   - Format each entry: ## YYYY-MM-DD: Title
-                        **Chose:** ...
-                        **Reason:** ...
-                        **Rejected:** ...
-   - Return empty string "" ONLY to indicate "no updates needed, preserve
-     existing file." Do NOT return empty to mean "drop everything."
+2. "decisions" (string): The COMPLETE updated DECISIONS.md. MERGE AND SUPERSEDE — never append a contradiction. When a new decision changes an old one, REPLACE the old entry or mark it superseded; do not leave both. Keep currently-true decisions; drop genuinely obsolete ones. Each entry:
+     ## YYYY-MM-DD: Title
+     **Chose:** ...
+     **Reason:** ...
+     **Rejected:** ...
+   To retire an entry, append " (superseded)" to its title or drop it.
 
-3. "session_log_entry" (REQUIRED): A log entry for this session.
-   Format: ## Session {{id}} -- {{date}} {{start}}--{{end}}\\n- Completed: ...\\n- Attempted: ...
+3. "lessons" (string): The COMPLETE updated LESSONS.md (numbered entries). Merge near-duplicate lessons into one. KEEP detailed technical playbooks intact — do NOT shorten a real lesson to save space. Drop only genuinely obsolete lessons.
 
-4. "lessons" (string, empty to preserve existing): The COMPLETE updated
-   LESSONS.md file. This REPLACES the existing file entirely.
-   Scope: generalizable patterns, pitfalls, and operating rules discovered
-   through experience. Not: session facts, one-shot errors, or decisions.
-   - Include every still-relevant prior entry verbatim or in equivalent form.
-     Do not drop a lesson unless it is genuinely obsolete (the underlying
-     issue was resolved, the advice no longer applies, or an equivalent
-     lesson already exists).
-   - Add any new lessons from THIS SESSION
-   - Merge near-duplicates into single entries
-   - Cap: 20 entries
-   - Return empty string "" ONLY to indicate "no updates needed, preserve
-     existing file."
+4. "index" (string): The COMPLETE updated INDEX.md — NAVIGATION ONLY. A short map: important files/dirs, ONE sentence each ("path — what it is"). NOT a place for decisions, status, or lessons (those live in their own files). If older entries were archived, point to DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md.
 
-5. "context" (string, empty to preserve existing): The COMPLETE updated
-   CONTEXT.md file. This REPLACES the existing file entirely.
-
-   CONTEXT.md is your map of this project and workspace. If you lost all
-   memory except this file, you should be able to resume effective work.
-
-   Use this structure:
-
-   ## Overview
-   2-3 sentences: what this project is and what it does.
-
-   ## Key Files
-   The 10-20 most important files/dirs with one-line purpose each.
-   Not a full file tree — only what matters. Curated by importance.
-
-   ## Architecture
-   How the project is structured — major components, entry points,
-   relationships. A few paragraphs max.
-
-   ## Conventions
-   Naming patterns, tooling, dependencies, style rules discovered.
-
-   ## External Context
-   People, services, platforms, APIs, environmental constraints.
-
-   Rules:
-   - Carry forward still-relevant content from every section
-   - Add what you learned THIS SESSION
-   - Drop stale information
-   - Total file target: under 1000 tokens. Be concise.
-   - Return empty string "" ONLY to preserve existing file unchanged.
-
-   Exclusions (belong in other files):
-   - In-progress task state → PROJECT_STATE.md
-   - Decisions with reasoning → DECISIONS.md
-   - Pitfalls and error patterns → LESSONS.md
-
-IMPORTANT:
-- For decisions, lessons, context: if you return a non-empty string, it
-  must be the COMPLETE updated file (not just new entries). Return empty
-  string "" to preserve the existing file unchanged.
-- For project_state: always produce a complete snapshot.
+RULES:
+- A non-empty field MUST be the COMPLETE updated file. "" preserves the existing file.
+- MERGE AND SUPERSEDE — never append a contradicting entry.
 - Respond with ONLY valid JSON. No markdown fences. No explanation.
 
---- EXISTING FILES (for context, DO NOT duplicate existing content) ---
+--- EXISTING FILES (bounded view; full files are on disk) ---
 PROJECT_STATE.md:
 {existing_state}
 
@@ -628,11 +533,8 @@ DECISIONS.md:
 LESSONS.md:
 {existing_lessons}
 
-CONTEXT.md:
-{existing_context}
-
-SESSION_LOG.md (last 3 entries):
-{existing_session_log_tail}
+INDEX.md:
+{existing_index}
 
 --- THIS SESSION ({message_count} messages, {tool_calls_count} tool calls) ---
 Files modified: {files_modified}
@@ -640,25 +542,6 @@ Recent conversation:
 {recent_formatted}"""
 
         return prompt
-
-
-def _truncate_session_log(content: str, max_sessions: int) -> str:
-    """Extract only the last N sessions from a SESSION_LOG.md content.
-
-    Sessions are delimited by '## Session' headers.
-    """
-    # Split on session headers, keeping the delimiter
-    parts = re.split(r'(?=^## Session )', content, flags=re.MULTILINE)
-
-    # Filter out any preamble (parts before the first session header)
-    session_parts = [p for p in parts if p.strip().startswith("## Session")]
-
-    if not session_parts:
-        return content
-
-    # Take last N sessions
-    recent = session_parts[-max_sessions:]
-    return "\n".join(p.strip() for p in recent)
 
 
 async def run_session_end_routine(
@@ -671,208 +554,207 @@ async def run_session_end_routine(
     bypass_idempotency: bool = False,
     project_id: str = "",
 ) -> None:
-    """Generate and write workspace files at session end.
+    """Session-end cleanup: deterministic size backstop + best-effort LLM merge.
 
-    Uses utility_provider (cheaper model) if available.
-    This runs AFTER the agent loop exits but BEFORE session archival.
+    Repositioned as the CLEANUP, not the state record — state is recorded
+    incrementally during the session (overwrite STATE; stamped append for
+    DECISIONS/LESSONS via the shared persist helper). So even if the LLM pass is
+    skipped or times out, the deterministic hard cap (demote-to-archive for
+    durable files, trim for volatile) still runs and never deletes durable
+    content.
 
-    ``session_uuid`` is the Format-2 JSONL stem (see ``Session`` docstring) and
-    is required (keyword-only). Used to short-circuit duplicate invocations
-    for the same session — both the loop.py fire-and-forget path and
-    ``agent_manager.new_session()`` pre-archival path can fire for the same
-    boundary, and we must not double-write SESSION_LOG / DECISIONS / CONTEXT.
-    The completion set is only updated AFTER all writes succeed, so a failed
-    run allows a second caller to retry. F2 is the right keying granularity:
-    F1 may rotate when ``/new-session`` is invoked, but the *file* is what we
-    need to guard against double-writing.
+    Two gates keep it cheap. (1) An idempotency guard per ``session_uuid`` for
+    the boundary callers. (2) A persisted NO-DELTA gate: if no Layer-1 file
+    changed since the last successful cleanup, this is a no-op with NO LLM call
+    — this is what stops the ``agent_decided`` trigger from firing redundantly
+    (the 78x problem). The trigger set is otherwise unchanged.
 
-    bypass_idempotency: when True, skip the idempotency guard so periodic
-    refresh triggers (turn-count, agent-decided, token-pressure) can call
-    this routine mid-session without being blocked by an earlier /new call.
-    The completion set is also skipped on the write side when bypass=True,
-    so the guard remains intact for future non-bypass calls.
-
-    project_id: optional, used for structured OCC-abort log fields. Empty
-    string is accepted so tests and legacy callers continue to work; in
-    production callers (agent_manager.start_agent, new_session, the
-    periodic-refresh callback) the real project_id should be passed so
-    the cache_thrash_telemetry warnings are attributable.
-
-    OCC (Optimistic Concurrency Control) on metadata writes:
-      PROJECT_STATE.md, DECISIONS.md, LESSONS.md, CONTEXT.md, and
-      SESSION_LOG.md are all gated on a baseline mtime captured before
-      the LLM is invoked. If the user (or any external editor) modifies
-      one of these files while the LLM is generating the new content,
-      the corresponding write is aborted with a structured warning and
-      the other files still write normally. SESSION_LOG.md is a
-      read-modify-write target, so an asyncio.Lock keyed by
-      (project_id, "session_log") wraps its OCC block to prevent two
-      session-end routines from racing on it and burning LLM calls.
+    OCC (Optimistic Concurrency Control): the LLM-merge writes to PROJECT_STATE,
+    DECISIONS, LESSONS, INDEX are each gated on a baseline mtime captured before
+    the LLM runs, so a concurrent user edit aborts that file's write only.
     """
     # Idempotency guard: short-circuit if this session already completed.
-    # Bypassed for periodic mid-session refresh triggers.
     if not bypass_idempotency and session_uuid in _completed_session_ends:
         logger.info("session_end skipped: already completed for %s", session_uuid)
         return
 
-    # OCC baseline: capture mtimes BEFORE the LLM runs. This is the
-    # version of each file that the prompt-builder fed the LLM as input
-    # context. If the file's mtime changes between now and the
-    # post-LLM write, we know a third party touched the file and we
-    # must abort the corresponding write to avoid clobbering their
-    # edits. SESSION_LOG's baseline is captured here for symmetry but
-    # the lock+re-stat below uses a fresh baseline inside the critical
-    # section, since the write content depends on the live file.
-    _occ_baselines: dict[str, int | None] = {
-        key: _stat_mtime_ns(workspace_files._file_path(key))
-        for key in ("state", "decisions", "lessons", "context")
-    }
+    # No-delta gate: skip entirely (no LLM) when nothing changed since the last
+    # successful cleanup. Persisted, so it survives daemon restarts.
+    if not _has_cleanup_delta(workspace_files):
+        logger.info(
+            "session_end: no un-consolidated delta since last cleanup; "
+            "skipping (no LLM call)"
+        )
+        return
 
-    # 1. Gather session summary
+    today = date.today().isoformat()
+
+    # ---- Part A: best-effort LLM dedup/merge (bounded input; never fatal) ----
     summary = _build_session_summary(session)
-
-    # 2. Build prompt
     prompt = workspace_files.build_session_end_prompt(summary)
-
-    # 3. Call LLM (utility model preferred)
     llm = utility_provider if utility_provider is not None else provider
     messages = [
         {"role": "system", "content": "You maintain workspace memory files for an AI agent. Respond with ONLY valid JSON."},
         {"role": "user", "content": prompt},
     ]
-    # orbital-marketing 2026-04-22: a single Moonshot timeout produced an
-    # amnesiac session. Retry on TimeoutError only; non-timeout errors fail fast.
+    _occ_baselines: dict[str, int | None] = {
+        key: _stat_mtime_ns(workspace_files._file_path(key))
+        for key in ("state", "decisions", "lessons", "index")
+    }
+    result: dict | None = None
     _per_attempt_timeouts = [30.0, 60.0, 90.0]
     for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
         try:
             response = await asyncio.wait_for(
                 llm.complete(messages, disable_reasoning=True), timeout=_timeout
             )
+            result = _parse_session_end_response(response.text)
             break
         except asyncio.TimeoutError:
             if _attempt < len(_per_attempt_timeouts):
                 logger.info(
-                    "session_end LLM call: attempt %d timed out, retrying",
-                    _attempt,
+                    "session_end LLM dedup: attempt %d timed out, retrying", _attempt
                 )
             else:
+                # Do NOT propagate — the deterministic backstop below must still
+                # run. The old code raised here, which on a bloated project left
+                # the caps unapplied (3x timeout -> nothing). Now the floor holds.
                 logger.error(
-                    "session_end LLM call: all %d attempts timed out, propagating",
-                    len(_per_attempt_timeouts),
+                    "session_end LLM dedup: all %d attempts timed out; running "
+                    "deterministic backstop only", len(_per_attempt_timeouts),
                 )
-                raise
+        except Exception as e:  # noqa: BLE001 — cleanup must never crash the loop
+            logger.warning(
+                "session_end LLM dedup failed (%s); deterministic backstop only", e
+            )
+            break
 
-    # 4. Parse JSON response
-    result = _parse_session_end_response(response.text)
-    if result is None:
-        logger.warning("Session-end routine: failed to parse LLM response, skipping file updates")
-        return
+    if result:
+        # PROJECT_STATE: overwrite scratchpad (not entry-structured).
+        if result.get("project_state", "").strip():
+            _occ_write_metadata(
+                workspace_files, "state", result["project_state"],
+                _occ_baselines["state"], project_id=project_id,
+            )
+        # DECISIONS / LESSONS: stamp metadata onto the merged file, then write.
+        for key in ("decisions", "lessons"):
+            val = result.get(key, "")
+            if val and val.strip():
+                stamped, warns = _mem.stamp(
+                    val, workspace_files.read(key), key, today=today
+                )
+                for w in warns:
+                    logger.info("session_end stamp: %s", w)
+                _occ_write_metadata(
+                    workspace_files, key, stamped,
+                    _occ_baselines[key], project_id=project_id,
+                )
+        # INDEX: navigation map (overwrite).
+        if result.get("index", "").strip():
+            _occ_write_metadata(
+                workspace_files, "index", result["index"],
+                _occ_baselines["index"], project_id=project_id,
+            )
 
-    # 5. Write files (OCC-gated; see _occ_write_metadata)
-    # PROJECT_STATE: full overwrite (always)
-    if result.get("project_state"):
-        _occ_write_metadata(
-            workspace_files, "state", result["project_state"],
-            _occ_baselines["state"], project_id=project_id,
-        )
+    # ---- Part B: deterministic hard cap (ALWAYS runs; NEVER an LLM call) ----
+    _apply_hard_caps(workspace_files)
 
-    # DECISIONS: full overwrite (LLM returns COMPLETE updated file).
-    # Empty string => preserve existing file (safer than blanking on a
-    # forgetful LLM response).
-    if result.get("decisions", "").strip():
-        decisions_content = _apply_sanity_checks(
-            result["decisions"],
-            _DECISIONS_ENTRY_PATTERN,
-            _DECISIONS_CAP,
-            keep="last",
-            filename="decisions",
-        )
-        _occ_write_metadata(
-            workspace_files, "decisions", decisions_content,
-            _occ_baselines["decisions"], project_id=project_id,
-        )
-    else:
-        logger.info("session_end: no updates for decisions, preserving existing file")
-
-    # SESSION_LOG: read-modify-write under (project_id, "session_log")
-    # asyncio.Lock to avoid two session-end routines racing here and
-    # forcing one of them to abort post-LLM. Inside the lock we capture
-    # a FRESH baseline mtime (because something other than this routine
-    # could have written between the prompt build and now), read the
-    # current contents, append the new entry, then write back atomically
-    # — gated on the baseline being intact. A separate OCC check guards
-    # the cap-driven rewrite that may follow the append.
-    #
-    # Guard: only invoke truncation when the marker count genuinely
-    # exceeds the write cap. _truncate_session_log's split on '## Session'
-    # also discards any pre-header preamble as a side effect; gating on
-    # count keeps malformed-but-harmless files intact when no pruning is
-    # required.
-    if result.get("session_log_entry"):
-        session_log_path = workspace_files._file_path("session_log")
-        async with _get_session_log_lock(project_id):
-            session_log_baseline = _stat_mtime_ns(session_log_path)
-            current_existing = workspace_files.read("session_log") or ""
-            appended = current_existing + "\n" + result["session_log_entry"]
-            if _occ_write_metadata(
-                workspace_files, "session_log", appended,
-                session_log_baseline, project_id=project_id,
-            ):
-                # Re-stat after our own write to set a fresh baseline
-                # for the (optional) cap rewrite. The cap rewrite is a
-                # second mutation of the same file, so it gets its own
-                # OCC guard against any user edit landing between our
-                # append and the truncate.
-                cap_baseline = _stat_mtime_ns(session_log_path)
-                current = workspace_files.read("session_log") or ""
-                before_count = len(re.findall(r'(?m)^## Session ', current))
-                if before_count > _SESSION_LOG_WRITE_CAP:
-                    truncated = _truncate_session_log(current, _SESSION_LOG_WRITE_CAP)
-                    if truncated != current:
-                        after_count = len(re.findall(r'(?m)^## Session ', truncated))
-                        if _occ_write_metadata(
-                            workspace_files, "session_log", truncated,
-                            cap_baseline, project_id=project_id,
-                        ):
-                            logger.info(
-                                "session_log truncated: %d → %d entries",
-                                before_count, after_count,
-                            )
-
-    # LESSONS: full overwrite (LLM returns COMPLETE updated file).
-    # Empty string => preserve existing file.
-    if result.get("lessons", "").strip():
-        lessons_content = _apply_sanity_checks(
-            result["lessons"],
-            _LESSONS_ENTRY_PATTERN,
-            _LESSONS_CAP,
-            keep="first",
-            filename="lessons",
-        )
-        _occ_write_metadata(
-            workspace_files, "lessons", lessons_content,
-            _occ_baselines["lessons"], project_id=project_id,
-        )
-    else:
-        logger.info("session_end: no updates for lessons, preserving existing file")
-
-    # CONTEXT: full overwrite (LLM returns COMPLETE updated file).
-    # Empty string => preserve existing file.
-    if result.get("context", "").strip():
-        context_content = _cap_context_tokens(result["context"])
-        _occ_write_metadata(
-            workspace_files, "context", context_content,
-            _occ_baselines["context"], project_id=project_id,
-        )
-    else:
-        logger.info("session_end: no updates for context, preserving existing file")
-
-    # Mark complete only AFTER all writes succeeded. If any write raised,
-    # this line is skipped and a retry from the second caller will run.
-    # When bypass_idempotency=True (periodic refresh), skip recording so the
-    # guard remains valid for future /new calls.
+    # Record the cleanup marker (post-write mtimes) so the next no-delta check is
+    # accurate, then mark idempotency.
+    _write_cleanup_marker(workspace_files)
     if not bypass_idempotency:
         _completed_session_ends.add(session_uuid)
+
+
+# ---------------------------------------------------------------------------
+# Session-end helpers: no-delta gate (persisted) + deterministic hard cap.
+# ---------------------------------------------------------------------------
+
+# Layer-1 files whose changes count as an un-consolidated delta.
+_DELTA_KEYS = ("state", "decisions", "lessons", "index")
+
+
+def _cleanup_marker_path(workspace_files: "WorkspaceFileManager") -> str:
+    return os.path.join(workspace_files.dir, _CLEANUP_MARKER_FILE)
+
+
+def _current_layer1_mtimes(workspace_files: "WorkspaceFileManager") -> dict[str, int | None]:
+    return {k: _stat_mtime_ns(workspace_files._file_path(k)) for k in _DELTA_KEYS}
+
+
+def _has_cleanup_delta(workspace_files: "WorkspaceFileManager") -> bool:
+    """True if any Layer-1 file changed since the last successful cleanup.
+
+    Missing marker (never cleaned) => delta. Cheap: stat-only.
+    """
+    try:
+        with open(_cleanup_marker_path(workspace_files), "r", encoding="utf-8") as f:
+            stored = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return True
+    current = _current_layer1_mtimes(workspace_files)
+    for k in _DELTA_KEYS:
+        if str(stored.get(k)) != str(current.get(k)):
+            return True
+    return False
+
+
+def _write_cleanup_marker(workspace_files: "WorkspaceFileManager") -> None:
+    try:
+        workspace_files.ensure_dir()
+        with open(_cleanup_marker_path(workspace_files), "w", encoding="utf-8") as f:
+            json.dump(_current_layer1_mtimes(workspace_files), f)
+    except OSError as e:
+        logger.warning("session_end: could not write cleanup marker (%s)", e)
+
+
+def _ensure_index_archive_pointer(workspace_files: "WorkspaceFileManager", archive_filename: str) -> None:
+    """Make sure INDEX points to an archive file after a demotion."""
+    index = workspace_files.read("index") or ""
+    if archive_filename in index:
+        return
+    pointer = f"\n- {archive_filename} — older entries demoted from the live file (read on demand).\n"
+    workspace_files.write("index", (index.rstrip() + "\n" + pointer) if index.strip() else f"# INDEX\n{pointer}")
+
+
+def _apply_hard_caps(workspace_files: "WorkspaceFileManager") -> None:
+    """Deterministic size backstop. Demotes durable / trims volatile. No LLM.
+
+    - DECISIONS/LESSONS: while over hard budget, demote coldest-``touched``
+      entries to the archive (moves, never deletes; protects oldest-3 + pinned).
+    - PROJECT_STATE/INDEX: while over hard budget, trim oldest (volatile).
+    """
+    budgets = _mem.FILE_BUDGETS
+    # Durable: demote to archive.
+    for key in _mem.DURABLE_KEYS:
+        content = workspace_files.read(key)
+        if not content or _mem.est_tokens(content) <= budgets[key]["hard"]:
+            continue
+        kept, demoted = _mem.split_for_demotion(content, key, budgets[key]["hard"])
+        if not demoted:
+            continue
+        archive_key = _mem.ARCHIVE_OF[key]
+        archive_filename = FILE_NAMES[archive_key]
+        existing_archive = workspace_files.read(archive_key) or ""
+        if existing_archive.strip():
+            new_archive = existing_archive.rstrip() + "\n\n" + demoted
+        else:
+            new_archive = f"# {archive_filename} (demoted entries, read-on-demand)\n\n" + demoted
+        workspace_files.write(archive_key, new_archive)
+        workspace_files.write(key, kept)
+        _ensure_index_archive_pointer(workspace_files, archive_filename)
+        logger.info(
+            "hard cap: demoted %d chars from %s to %s", len(demoted), key, archive_key
+        )
+    # Volatile: trim oldest.
+    for key in _mem.VOLATILE_KEYS:
+        content = workspace_files.read(key)
+        if not content or _mem.est_tokens(content) <= budgets[key]["hard"]:
+            continue
+        trimmed = _mem.trim_volatile(content, budgets[key]["hard"])
+        if trimmed != content:
+            workspace_files.write(key, trimmed)
+            logger.info("hard cap: trimmed %s to <= %d tok", key, budgets[key]["hard"])
 
 
 def _build_session_summary(session) -> dict:
