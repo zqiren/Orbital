@@ -953,8 +953,34 @@ async def test_search_handles_empty_results():
 
 
 @pytest.mark.asyncio
-async def test_search_cleans_up_on_error():
-    """search action closes search tab even when an error occurs."""
+async def test_search_falls_back_to_other_engine_on_connection_failure():
+    """When the primary engine's navigation fails (e.g. google.com unreachable
+    from China), search retries on the other engine and returns its results."""
+    page = _make_mock_page()  # original page; evaluate->None => locale None => Google primary
+    search_page = _make_mock_page()
+    # primary (Google) goto fails; fallback (Bing) goto succeeds
+    search_page.goto = AsyncMock(side_effect=[Exception("ERR_CONNECTION_CLOSED"), None])
+    search_page.evaluate = AsyncMock(return_value=[
+        {"title": "Bing result", "url": "https://example.com", "snippet": "s"},
+    ])
+    search_page.is_closed = MagicMock(return_value=False)
+
+    bm = _make_browser_manager(page)
+    page.context = MagicMock()
+    page.context.new_page = AsyncMock(return_value=search_page)
+
+    tool = _make_tool(bm=bm)
+    result = await tool.execute_async(action="search", query="test")
+
+    assert "search results" in result.content.lower()
+    assert result.meta.get("engine") == "bing-cn"   # fell back to the other engine
+    assert search_page.goto.await_count == 2          # primary failed, fallback tried
+
+
+@pytest.mark.asyncio
+async def test_search_cleans_up_when_all_engines_fail():
+    """When every engine's navigation fails, search returns an error and closes
+    each attempt's tab (one per engine tried)."""
     page = _make_mock_page()
     search_page = _make_mock_page()
     search_page.goto = AsyncMock(side_effect=Exception("navigation failed"))
@@ -968,7 +994,7 @@ async def test_search_cleans_up_on_error():
     result = await tool.execute_async(action="search", query="test")
 
     assert "error" in result.content.lower()
-    search_page.close.assert_awaited_once()
+    assert search_page.close.await_count == 2  # both engines attempted + cleaned up
 
 
 @pytest.mark.asyncio

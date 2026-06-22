@@ -12,7 +12,11 @@ leaving Google as the default for everyone else (no behavior change).
 
 import pytest
 
-from agent_os.agent.tools.browser import _pick_search_engine, _is_china_locale
+from agent_os.agent.tools.browser import (
+    _pick_search_engine,
+    _is_china_locale,
+    _search_engine_order,
+)
 
 
 @pytest.mark.parametrize(
@@ -63,3 +67,21 @@ def test_unknown_locale_defaults_to_google_safely():
     # A garbage locale must never strand a non-China user on a China engine.
     eng = _pick_search_engine("xx-YY-garbage")
     assert eng.name == "google"
+
+
+# --- failure fallback ordering: primary by locale, then the OTHER engine ----
+
+def test_search_order_china_is_bing_then_google():
+    # In China, Bing is primary; Google is the fallback for when Bing is down.
+    assert [e.name for e in _search_engine_order("zh-CN")] == ["bing-cn", "google"]
+
+
+def test_search_order_default_is_google_then_bing():
+    # Elsewhere, Google is primary; Bing is the fallback for when Google is
+    # unreachable (e.g. an en-US machine physically in China).
+    assert [e.name for e in _search_engine_order("en-US")] == ["google", "bing-cn"]
+
+
+def test_search_order_always_offers_both_engines():
+    for loc in ("zh-CN", "en-US", "", None, "ja-JP", "zh-TW"):
+        assert {e.name for e in _search_engine_order(loc)} == {"google", "bing-cn"}, loc

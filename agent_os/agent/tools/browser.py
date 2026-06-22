@@ -188,6 +188,20 @@ _BING_EXTRACT_JS = """
 # hydrate results via JS after networkidle). None = extract immediately.
 SearchEngine = namedtuple("SearchEngine", "name url_template extract_js results_selector")
 
+# www.bing.com (not cn.bing.com): renders results when tested from outside
+# China and, inside China, redirects to cn.bing.com/search — so it works
+# without a VPN in both. setmkt forces the China market. Bing hydrates results
+# via JS just after networkidle, hence the results_selector to wait for.
+_GOOGLE = SearchEngine(
+    "google", "https://www.google.com/search?q={q}", _SEARCH_EXTRACT_JS, None
+)
+_BING_CN = SearchEngine(
+    "bing-cn",
+    "https://www.bing.com/search?q={q}&setmkt=zh-CN",
+    _BING_EXTRACT_JS,
+    "li.b_algo",
+)
+
 
 def _is_china_locale(locale) -> bool:
     """True when the locale indicates mainland China, where ``www.google.com``
@@ -204,25 +218,22 @@ def _is_china_locale(locale) -> bool:
 
 
 def _pick_search_engine(locale) -> SearchEngine:
-    """Auto-pick the search engine from the browser-detected locale.
+    """Auto-pick the primary search engine from the browser-detected locale.
 
-    Mainland-China locales get Bing China (``cn.bing.com``) — reachable without
-    a VPN and scrapeable; every other (and unknown) locale keeps Google, so
-    existing behavior is unchanged.
+    Mainland-China locales get Bing China (reachable without a VPN and
+    scrapeable); every other (and unknown) locale keeps Google.
     """
-    if _is_china_locale(locale):
-        # www.bing.com (not cn.bing.com): renders results when tested from
-        # outside China and, inside China, redirects to cn.bing.com/search —
-        # so it works without a VPN in both. setmkt forces the China market.
-        return SearchEngine(
-            "bing-cn",
-            "https://www.bing.com/search?q={q}&setmkt=zh-CN",
-            _BING_EXTRACT_JS,
-            "li.b_algo",
-        )
-    return SearchEngine(
-        "google", "https://www.google.com/search?q={q}", _SEARCH_EXTRACT_JS, None
-    )
+    return _BING_CN if _is_china_locale(locale) else _GOOGLE
+
+
+def _search_engine_order(locale) -> list:
+    """Engines to try, in order: the locale-picked primary, then the OTHER
+    engine as a fallback for when the primary is unreachable — e.g. google.com
+    from mainland China without a VPN, or Bing when it's down.
+    """
+    primary = _pick_search_engine(locale)
+    fallback = _GOOGLE if primary is _BING_CN else _BING_CN
+    return [primary, fallback]
 
 
 class BrowserTool(Tool):
@@ -959,94 +970,109 @@ class BrowserTool(Tool):
 
         original_page = await self._bm.get_page(self._project_id)
 
-        # Auto-pick the search engine from the browser's detected locale:
-        # mainland China can't reach google.com without a VPN, so route there
-        # to Bing China. navigator.language reflects the locale the context was
-        # launched with; fall back to Google on any read failure.
+        # Detect the browser locale to pick the primary engine.
+        # navigator.language reflects the locale the context was launched with.
         locale = None
         try:
             locale = await original_page.evaluate("() => navigator.language")
         except Exception:
             pass
-        engine = _pick_search_engine(locale)
 
-        search_page = None
-        try:
-            search_url = engine.url_template.format(q=_url_encode(query))
-            search_page = await original_page.context.new_page()
-
-            await search_page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        # Try the locale-picked engine, then fall back to the other one when the
+        # primary is unreachable — e.g. google.com from mainland China without a
+        # VPN (ERR_CONNECTION_CLOSED), or Bing when it's down. A reachable engine
+        # that merely returns 0 results does NOT trigger cross-engine fallback;
+        # it uses the per-engine accessibility-tree snapshot below.
+        engines = _search_engine_order(locale)
+        last_error = None
+        for engine in engines:
+            search_page = None
             try:
-                await search_page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                pass  # take what we have
+                search_url = engine.url_template.format(q=_url_encode(query))
+                search_page = await original_page.context.new_page()
 
-            # Some engines (Bing) hydrate results via JS just after networkidle;
-            # wait for the first result so extraction doesn't fire on an empty
-            # container. On timeout (bot-wall / no results) we fall through to
-            # extraction + the AX-tree fallback below, unchanged.
-            if engine.results_selector:
+                await search_page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                 try:
-                    await search_page.wait_for_selector(
-                        engine.results_selector, timeout=6000
+                    await search_page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass  # take what we have
+
+                # Some engines (Bing) hydrate results via JS just after
+                # networkidle; wait for the first result so extraction doesn't
+                # fire on an empty container. On timeout we still extract +
+                # use the AX-tree fallback below.
+                if engine.results_selector:
+                    try:
+                        await search_page.wait_for_selector(
+                            engine.results_selector, timeout=6000
+                        )
+                    except Exception:
+                        pass
+
+                results = await search_page.evaluate(engine.extract_js)
+
+                if not results:
+                    # Structured extraction failed (selectors may be stale).
+                    # Fall back to accessibility tree of the already-loaded page.
+                    try:
+                        ax_tree = await _get_ax_tree(search_page)
+                        if ax_tree:
+                            text, _, _ = serialize_snapshot(ax_tree)
+                            if text and text.strip():
+                                await search_page.close()
+                                search_page = None
+                                await original_page.bring_to_front()
+                                return ToolResult(
+                                    content=(
+                                        f"Search extraction returned 0 results (selectors may be stale). "
+                                        f"Falling back to page snapshot:\n\n{text}"
+                                    ),
+                                    meta={"search_fallback": True, "query": query, "engine": engine.name},
+                                )
+                    except Exception:
+                        pass  # If snapshot also fails, fall through to original path
+
+                    await search_page.close()
+                    search_page = None
+                    await original_page.bring_to_front()
+                    return ToolResult(
+                        content=f"No results found for: {query}",
+                        meta={"query": query, "engine": engine.name},
                     )
-                except Exception:
-                    pass
-
-            results = await search_page.evaluate(engine.extract_js)
-
-            if not results:
-                # Structured extraction failed (selectors may be stale).
-                # Fall back to accessibility tree of the already-loaded page.
-                try:
-                    ax_tree = await _get_ax_tree(search_page)
-                    if ax_tree:
-                        text, _, _ = serialize_snapshot(ax_tree)
-                        if text and text.strip():
-                            await search_page.close()
-                            search_page = None
-                            await original_page.bring_to_front()
-                            return ToolResult(
-                                content=(
-                                    f"Search extraction returned 0 results (selectors may be stale). "
-                                    f"Falling back to page snapshot:\n\n{text}"
-                                ),
-                                meta={"search_fallback": True, "query": query},
-                            )
-                except Exception:
-                    pass  # If snapshot also fails, fall through to original path
 
                 await search_page.close()
                 search_page = None
                 await original_page.bring_to_front()
+
+                formatted = []
+                for i, r in enumerate(results[:10], 1):
+                    title = r.get("title", "")
+                    url = r.get("url", "")
+                    snippet = r.get("snippet", "")
+                    formatted.append(f"{i}. {title}\n   {url}\n   {snippet}")
+
                 return ToolResult(
-                    content=f"No results found for: {query}",
-                    meta={"query": query},
+                    content=f"Search results for: {query}\n\n" + "\n\n".join(formatted),
+                    meta={"query": query, "result_count": len(results), "engine": engine.name},
                 )
 
-            await search_page.close()
-            search_page = None
+            except Exception as e:
+                # This engine was unreachable / errored mid-load. Clean up its
+                # tab and try the next engine in the fallback order.
+                last_error = e
+                try:
+                    if search_page is not None and not search_page.is_closed():
+                        await search_page.close()
+                except Exception:
+                    pass
+
+        # Every engine failed to load.
+        try:
             await original_page.bring_to_front()
-
-            formatted = []
-            for i, r in enumerate(results[:10], 1):
-                title = r.get("title", "")
-                url = r.get("url", "")
-                snippet = r.get("snippet", "")
-                formatted.append(f"{i}. {title}\n   {url}\n   {snippet}")
-
-            return ToolResult(
-                content=f"Search results for: {query}\n\n" + "\n\n".join(formatted),
-                meta={"query": query, "result_count": len(results), "engine": engine.name},
-            )
-
-        except Exception as e:
-            try:
-                if search_page is not None and not search_page.is_closed():
-                    await search_page.close()
-            except Exception:
-                pass
-            return ToolResult(content=f"Error searching: {str(e)}")
+        except Exception:
+            pass
+        tried = " then ".join(e.name for e in engines)
+        return ToolResult(content=f"Error searching (tried {tried}): {last_error}")
 
     async def _action_fetch(self, args: dict) -> ToolResult:
         url = args.get("url", "").strip()
