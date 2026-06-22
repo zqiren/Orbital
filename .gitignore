@@ -81,3 +81,26 @@ docs/testing/
 docs/superpowers/plans/
 RUN-MANUAL-SMOKE.md
 RUN-LOG-*.md
+
+# Brand / marketing assets (local-only — used for launch video, not repo content)
+brand-video/
+orbital-launch.png
+
+# Internal verification / backlog / onboarding notes (local-only, like TASK-*/REPORT-*)
+VERIFY-*.md
+BACKLOG-*.md
+ONBOARDING.md
+
+# Scratch artifacts & tool caches
+artifacts-*/
+.playwright-mcp/
+.vite/
+tmp/
+
+# Working screenshots not referenced by README (keep only README-used images tracked)
+docs/screenshots/i18n/
+docs/screenshots/daemon-installed-only.png
+docs/screenshots/merged-subagents.png
+docs/screenshots/phase3-rendered-stream.png
+docs/screenshots/budget/*
+!docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png
