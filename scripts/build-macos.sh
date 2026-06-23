@@ -90,7 +90,7 @@ echo "  OK: arch=$_HOST_ARCH, ripgrep (arm64+x86_64), web SPA, codesign seal int
 
 # 5. Create DMG
 echo "[5/5] Creating DMG..."
-DMG_NAME="Orbital-0.6.3-macOS.dmg"
+DMG_NAME="Orbital-0.6.4-macOS.dmg"
 
 # Strip user-writable extended attributes (quarantine etc.).
 # com.apple.provenance is restricted and can't be stripped — harmless.
