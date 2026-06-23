@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Developer ID build (required by
+  notarization). These exceptions are what a PyInstaller + pywebview app needs
+  to launch under the hardened runtime:
+
+  - disable-library-validation: PyInstaller bundles many third-party .dylib/.so
+    not signed by our Team ID; without this the runtime blocks them and the app
+    won't start.
+  - allow-unsigned-executable-memory / allow-jit: CPython and some deps allocate
+    executable memory.
+  - allow-dyld-environment-variables: the PyInstaller bootloader relies on DYLD_*.
+
+  NOTE: these are permitted for Developer ID + notarization (our distribution
+  model). They are NOT permitted on the Mac App Store — intentionally, since we
+  ruled out the MAS path (see docs / signing discussion).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

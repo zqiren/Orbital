@@ -60,9 +60,23 @@ cp assets/icon.icns "$APP_RESOURCES/assets/"
 # that aren't in _CodeSignature/CodeResources. macOS Sequoia's Finder
 # validates the seal when drag-installing to /Applications and skips items
 # whose hashes don't match — surfacing as "some items had to be skipped".
-echo "[4b/5] Re-signing bundle ad-hoc after asset copy..."
-codesign --force --deep --sign - dist/Orbital.app
-codesign --verify --deep --strict dist/Orbital.app
+# When ORBITAL_SIGN_IDENTITY is set (e.g. "Developer ID Application: Name (TEAM)")
+# we sign with that identity + hardened runtime + entitlements (notarization-ready).
+# Otherwise we fall back to the ad-hoc re-sign so local dev / unsigned CI still build.
+SIGN_IDENTITY="${ORBITAL_SIGN_IDENTITY:-}"
+ENTITLEMENTS="$PROJECT_ROOT/agent_os/desktop/Orbital.entitlements"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "[4b/5] Signing bundle with Developer ID: $SIGN_IDENTITY"
+    codesign --force --deep --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$SIGN_IDENTITY" dist/Orbital.app
+    codesign --verify --deep --strict --verbose=2 dist/Orbital.app
+    echo "  Signed by: $(codesign -dvv dist/Orbital.app 2>&1 | grep '^Authority=' | head -1)"
+else
+    echo "[4b/5] Re-signing bundle ad-hoc after asset copy (set ORBITAL_SIGN_IDENTITY for Developer ID)..."
+    codesign --force --deep --sign - dist/Orbital.app
+    codesign --verify --deep --strict dist/Orbital.app
+fi
 
 # 4c. Pre-flight asserts — fail the build instead of shipping a broken bundle.
 #     (Each of these has caused a shipped regression before; see CLAUDE.md.)
