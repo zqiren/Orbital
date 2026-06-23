@@ -92,8 +92,13 @@ class TestPTYTransport:
     @pytest.mark.asyncio
     async def test_send_writes_to_stdin(self):
         t = self._make()
+        # Single-line, newline-free -c script: an embedded-newline script passed
+        # through shell=True is split by cmd.exe on Windows (the process then
+        # exits immediately). The comprehension blocks reading stdin on every
+        # platform, which is all this test needs (it asserts start/send/stop
+        # succeed, not the echoed output).
         await t.start("python", ["-u", "-c",
-            "import sys\nfor line in sys.stdin:\n print('GOT:'+line.strip())\n sys.stdout.flush()"],
+            "import sys; [print('GOT:' + line.strip(), flush=True) for line in sys.stdin]"],
             ".")
         result = await t.send("hello")
         assert result is None  # PTY send returns None (streaming)
