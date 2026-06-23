@@ -389,7 +389,8 @@ def soft_flag(content: str | None, key: str) -> str | None:
     suffix = f" ({entry_count(content, key)} entries)" if key in ENTRY_MARKERS else ""
     return (
         f"{DISPLAY_NAME[key]} memory {toks/1000:.1f}k/{soft//1000}k tok{suffix} "
-        f"— consider consolidating (merge duplicates, supersede stale entries)."
+        f"— call the checkpoint_state tool to consolidate (merge duplicates, "
+        f"supersede stale entries), or edit the file directly."
     )
 
 

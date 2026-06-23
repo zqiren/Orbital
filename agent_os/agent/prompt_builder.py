@@ -79,8 +79,10 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "update_trigger": "Update an existing trigger's settings",
     "delete_trigger": "Delete a trigger from this project",
     "checkpoint_state": (
-        "Trigger an immediate checkpoint of project state files. Call when "
-        "meaningful work has accumulated and you want to persist it."
+        "Consolidate the project state files (merge duplicates, supersede stale "
+        "entries) to relieve inflation. Your write/edit calls already saved the "
+        "content; this does NOT persist anything new. Call ONLY when a "
+        "[MEMORY HYGIENE] flag shows a file is over its soft budget."
     ),
     "mark_task_complete": (
         "Signal that the current queued task is finished. Exits the loop "
@@ -478,7 +480,8 @@ class PromptBuilder:
                 "- On confirmation: (1) write the agreed Goals to\n"
                 f"  {context.workspace}/orbital/instructions/project_goals.md using the `write`\n"
                 "  tool (Mission, Triggers, Scope, Rules, Preferences; under 1500 words), then\n"
-                "  (2) call the `checkpoint_state` tool to persist PROJECT_STATE.md and INDEX.md.\n"
+                "  (2) call the `checkpoint_state` tool to seed/tidy PROJECT_STATE.md and INDEX.md\n"
+                "     (a one-time bootstrap seed — afterward call it only on a [MEMORY HYGIENE] flag).\n"
                 "- After writing, announce readiness and begin working."
             )
         if content is None:
@@ -780,8 +783,9 @@ class PromptBuilder:
         """
         if context.last_state_update_turn is None:
             return (
-                "State checkpoint: no checkpoint yet this session. "
-                "Use checkpoint_state tool when meaningful work accumulates."
+                "State checkpoint: no consolidation yet this session. "
+                "Use the checkpoint_state tool only when a [MEMORY HYGIENE] flag "
+                "shows a memory file is over its soft budget."
             )
         lines = [
             f"State checkpoint: last at turn {context.last_state_update_turn} "

@@ -159,7 +159,7 @@ def test_soft_flag_only_over_threshold(monkeypatch):
     big = _decisions(20)
     assert M.soft_flag(small, "decisions") is None
     flag = M.soft_flag(big, "decisions")
-    assert flag and "consolidat" in flag and "tok" in flag and "entries" in flag
+    assert flag and "checkpoint_state" in flag and "consolidat" in flag and "tok" in flag and "entries" in flag
 
 
 # ---------------------------------------------------------------------------

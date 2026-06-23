@@ -2,12 +2,15 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""CheckpointStateTool — agent-decided state refresh trigger.
+"""CheckpointStateTool — agent-decided memory consolidation trigger.
 
-When the agent judges that meaningful work has accumulated, it calls this
-tool to trigger an immediate project-state refresh (PROJECT_STATE, DECISIONS,
-LESSONS, INDEX). The refresh runs via run_session_end_routine
-with bypass_idempotency=True so it serializes like any other write.
+When a [MEMORY HYGIENE] flag reports a Layer-1 file is over its soft budget,
+the agent calls this tool to trigger a consolidation (dedup/cleanup) pass over
+the project state files (PROJECT_STATE, DECISIONS, LESSONS, INDEX): merging
+duplicates and superseding stale entries. The incremental write/edit calls
+already persisted the content; this pass only relieves inflation. It runs via
+run_session_end_routine with bypass_idempotency=True so it serializes like any
+other write.
 
 The actual refresh is performed asynchronously by the AgentLoop trigger
 infrastructure; this tool is only a signal. The tool stores a callback
@@ -16,7 +19,6 @@ infrastructure; this tool is only a signal. The tool stores a callback
 
 import asyncio
 
-from agent_os.agent.loop import COOLDOWN_TURNS
 from .base import Tool, ToolResult
 
 
@@ -35,12 +37,14 @@ class CheckpointStateTool(Tool):
         self._on_checkpoint = on_checkpoint
         self.name = "checkpoint_state"
         self.description = (
-            "Trigger an immediate checkpoint of project state files "
-            "(PROJECT_STATE, DECISIONS, LESSONS, INDEX). "
-            "Call this when you have completed a significant piece of work "
-            f"and want to ensure it is persisted before continuing. "
-            f"Do NOT call this more than once every {COOLDOWN_TURNS} turns — "
-            "a cooldown is enforced automatically."
+            "Consolidate the project state files "
+            "(PROJECT_STATE, DECISIONS, LESSONS, INDEX): merge duplicates and "
+            "supersede stale entries to relieve content inflation. "
+            "Your incremental write/edit calls already SAVED the content — this "
+            "tool does NOT persist anything new; it only cleans up. "
+            "Call it ONLY when a [MEMORY HYGIENE] flag reports a file is over its "
+            "soft budget (i.e. consolidation is actually needed) — not on "
+            "task completion or progress milestones."
         )
         self.parameters = {
             "type": "object",
