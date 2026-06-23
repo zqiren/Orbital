@@ -5,7 +5,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, ChevronRight, Folder, Home, Monitor, FileText, Download, Clock, Loader2 } from 'lucide-react';
 import { api, ApiError } from '../config';
-import { useT } from '../i18n/useT';
+import { useT, translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
 
 interface BrowseEntry {
   name: string;
@@ -47,6 +48,7 @@ const SHORTCUT_ICONS: Record<string, typeof Home> = {
 
 export default function FolderPickerModal({ open, onSelect, onClose }: FolderPickerModalProps) {
   const t = useT();
+  const { locale } = useLocale();
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [shortcuts, setShortcuts] = useState<FolderInfo[]>([]);
@@ -68,12 +70,19 @@ export default function FolderPickerModal({ open, onSelect, onClose }: FolderPic
       if (e instanceof ApiError) {
         setError(e.detail);
       } else {
-        setError(t('folderPicker.browseError'));
+        // Use `translate(locale, ...)` rather than the `t` from useT(): useT()
+        // returns a fresh closure every render, so depending on it here would
+        // give `browse` a new identity every render. The open-effect below
+        // depends on `browse`, so an unstable `browse` re-fires the effect on
+        // every render → an infinite browse/re-render loop (folder list
+        // "blinks" and entries are never clickable). `locale` is a stable
+        // string, so `browse` only changes when the language actually changes.
+        setError(translate(locale, 'folderPicker.browseError'));
       }
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [locale]);
 
   useEffect(() => {
     if (!open) return;
