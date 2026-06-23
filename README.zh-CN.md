@@ -9,8 +9,8 @@
 <p align="center">agent 每完成一件工作,都会成为下一条指令的上下文。<br>project 跑得越久,能力越强——而不是被清零重来。</p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-Setup-0.6.1.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.3/Orbital-0.6.3-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.4/Orbital-Setup-0.6.4.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.4/Orbital-0.6.4-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://youtu.be/D9l0r4gP_RQ"><strong>演示视频</strong></a>
 </p>
 <p align="center">5 分钟装好。不需要 Python 或 Node 环境。</p>
@@ -191,7 +191,7 @@ Orbital 把每个 agent 工作单元当成一个 **project**——而不是一�
 
 ### Windows
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.1) 下载 [`Orbital-Setup-0.6.1.exe`](https://github.com/zqiren/Orbital/releases/download/v0.6.1/Orbital-Setup-0.6.1.exe)（最新 Windows 版本）
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.4) 下载 [`Orbital-Setup-0.6.4.exe`](https://github.com/zqiren/Orbital/releases/download/v0.6.4/Orbital-Setup-0.6.4.exe)（最新 Windows 版本）
 2. 运行安装程序,按提示完成
 3. 从开始菜单或桌面快捷方式启动 Orbital
 
@@ -207,7 +207,7 @@ Orbital 暂未做代码签名,Windows 会提示安全警告:
 
 ### macOS
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.3) 下载 [`Orbital-0.6.3-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.3/Orbital-0.6.3-macOS.dmg)
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.4) 下载 [`Orbital-0.6.4-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.4/Orbital-0.6.4-macOS.dmg)
 2. 打开 DMG,把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
