@@ -1,0 +1,150 @@
+name: CI
+
+# Builds and tests Orbital on every push to main, every PR, and on demand.
+# PyInstaller cannot cross-compile, so the macOS .dmg is built on an Apple
+# Silicon runner (macos-14) and the Windows installer on windows-latest.
+#
+# NOTE: this is the project's first CI. The build steps mirror the manual
+# release runbook in CLAUDE.md (scripts/build-macos.sh, scripts/build-desktop.sh).
+# The installers are unsigned/ad-hoc — signing & notarization remain out of scope.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save runner minutes (macOS/Windows
+# minutes are billed at a premium on private repos).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (tsc + vitest + i18n)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: TypeScript build (zero errors required)
+        run: npx tsc -b
+      - name: Vitest
+        run: npm run test
+      - name: i18n catalog check
+        run: node scripts/check-i18n.mjs
+
+  backend-tests:
+    name: Backend unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # ApiKeyStore.get_api_key() returns this env var BEFORE ever calling
+      # keyring, which otherwise blocks on a headless macOS runner's Keychain.
+      # The null backend neutralizes any stray keyring use elsewhere.
+      AGENT_OS_API_KEY: ci-dummy-key
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[browser,desktop,dev]"
+      - name: Run unit tests
+        # tests/unit/ only. tests/platform/ spawns a real sandbox-exec against
+        # ~/Desktop (can EPERM-lock the tree) and carries 3 documented env-fails,
+        # so it is intentionally excluded from CI — see CLAUDE.md "Known Issues".
+        run: python -m pytest tests/unit/ -q
+
+  build-macos:
+    name: Build macOS .dmg
+    # Gate on the frontend job (validated locally). backend-tests runs as an
+    # independent signal but does NOT block artifact production — so a flaky
+    # platform-specific unit test can't stop the installer from building.
+    needs: [frontend]
+    # Skip the heavy build jobs on PRs; build on push to main, tags, and manual runs.
+    if: github.event_name != 'pull_request'
+    runs-on: macos-14  # Apple Silicon → arm64 build (matches release runbook)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install package + build deps (PyInstaller, patchright, Pillow)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[browser,desktop,dev]"
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+      - name: Build .app + .dmg
+        # Builds the SPA, runs PyInstaller, re-signs ad-hoc, runs the bundle
+        # integrity asserts, and packages the DMG (hdiutil fallback; no brew).
+        run: bash scripts/build-macos.sh
+      - name: Show binary arch
+        run: file dist/Orbital.app/Contents/MacOS/Orbital
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbital-macOS-dmg
+          path: dist/Orbital-*-macOS.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows installer
+    needs: [frontend]  # see build-macos: builds aren't gated on backend-tests
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install package + build deps (PyInstaller, patchright)
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[browser,desktop,dev]"
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+      - name: Install Inno Setup (provides iscc for the installer)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+      - name: Build PyInstaller bundle + Inno Setup installer
+        # build-desktop.sh builds the SPA, runs PyInstaller (onedir), copies the
+        # SPA/icons, and invokes `iscc` when it's on PATH.
+        shell: bash
+        run: bash scripts/build-desktop.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbital-Windows-installer
+          path: installer/Output/Orbital-Setup-*.exe
+          if-no-files-found: error
