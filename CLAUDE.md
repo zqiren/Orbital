@@ -361,7 +361,11 @@ If a bug is reported on a tagged version while main has moved ahead:
 
 ### Things this runbook does NOT cover (intentional)
 
-- CI / GitHub Actions automation — manual builds only for now
+- CI / GitHub Actions: `.github/workflows/ci.yml` now builds + tests on every
+  push to main (frontend on ubuntu; `pytest tests/unit/` on macos-14 +
+  windows-latest; `.dmg`/`.exe` build jobs uploading installer artifacts). It
+  does NOT replace this manual runbook for *tagged releases* (signing,
+  DMG/Inno naming, GitHub Release authoring are still manual).
 - Code signing (Windows or macOS)
 - Auto-update mechanisms
 - Homebrew cask, winget, or other package-manager distribution
@@ -512,7 +516,9 @@ If a bug is reported on a tagged version while main has moved ahead:
 
 ### Out of scope (intentional)
 
-- CI / GitHub Actions automation — manual builds only for now (`.github/workflows/` does not exist).
+- CI / GitHub Actions: `.github/workflows/ci.yml` exists and builds + tests both
+  platforms on every push to main (it produces installer artifacts but does NOT
+  publish tagged releases — signing/naming/Release authoring stay manual, below).
 - Code signing (Windows or macOS).
 - Auto-update mechanisms.
 - Homebrew cask, winget, or other package-manager distribution.
