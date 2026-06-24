@@ -66,12 +66,11 @@ cp assets/icon.icns "$APP_RESOURCES/assets/"
 SIGN_IDENTITY="${ORBITAL_SIGN_IDENTITY:-}"
 ENTITLEMENTS="$PROJECT_ROOT/agent_os/desktop/Orbital.entitlements"
 if [[ -n "$SIGN_IDENTITY" ]]; then
-    echo "[4b/5] Signing bundle with Developer ID: $SIGN_IDENTITY"
-    codesign --force --deep --options runtime --timestamp \
-        --entitlements "$ENTITLEMENTS" \
-        --sign "$SIGN_IDENTITY" dist/Orbital.app
-    codesign --verify --deep --strict --verbose=2 dist/Orbital.app
-    echo "  Signed by: $(codesign -dvv dist/Orbital.app 2>&1 | grep '^Authority=' | head -1)"
+    echo "[4b/5] Signing bundle with Developer ID (inside-out): $SIGN_IDENTITY"
+    # Delegate to the inside-out signer — `codesign --deep` does NOT produce a
+    # notarization-valid bundle (nested binaries keep their ad-hoc signatures).
+    ORBITAL_SIGN_IDENTITY="$SIGN_IDENTITY" ORBITAL_ENTITLEMENTS="$ENTITLEMENTS" \
+        bash "$PROJECT_ROOT/scripts/sign-macos-app.sh" dist/Orbital.app
 else
     echo "[4b/5] Re-signing bundle ad-hoc after asset copy (set ORBITAL_SIGN_IDENTITY for Developer ID)..."
     codesign --force --deep --sign - dist/Orbital.app
@@ -139,16 +138,31 @@ else
     rm -rf dist/dmg_staging
 fi
 
+# 6. Notarize + staple — only when signed with a real Developer ID AND notary
+# credentials are provided. notarytool uploads the DMG to Apple, waits for the
+# malware scan, then stapler attaches the ticket so Gatekeeper accepts the app
+# offline. Without notarization a signed app still triggers a Gatekeeper warning
+# on download, so this is what actually clears the "Apple cannot check it" prompt.
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    NOTARY_KEY="${ORBITAL_NOTARY_KEY:-}"
+    if [[ -n "$NOTARY_KEY" && -f "$NOTARY_KEY" && -n "${ORBITAL_NOTARY_KEY_ID:-}" && -n "${ORBITAL_NOTARY_ISSUER:-}" ]]; then
+        echo "[6/6] Notarizing dist/$DMG_NAME (uploads to Apple; can take several minutes)..."
+        xcrun notarytool submit "dist/$DMG_NAME" \
+            --key "$NOTARY_KEY" \
+            --key-id "$ORBITAL_NOTARY_KEY_ID" \
+            --issuer "$ORBITAL_NOTARY_ISSUER" \
+            --wait
+        echo "[6/6] Stapling notarization ticket..."
+        xcrun stapler staple "dist/$DMG_NAME"
+        xcrun stapler validate "dist/$DMG_NAME"
+        echo "  Notarized + stapled: dist/$DMG_NAME"
+    else
+        echo "[6/6] Signed but no notary credentials — skipping notarization."
+        echo "      Set ORBITAL_NOTARY_KEY (path to .p8) + ORBITAL_NOTARY_KEY_ID + ORBITAL_NOTARY_ISSUER to notarize."
+    fi
+fi
+
 echo ""
 echo "=== Build complete ==="
 echo "App:       dist/Orbital.app"
 echo "DMG:       dist/$DMG_NAME"
-
-# --- Code signing (uncomment when Apple Developer account is ready) ---
-# DEVELOPER_ID="Developer ID Application: Your Name (TEAM_ID)"
-# echo "[signing] Signing .app bundle..."
-# codesign --force --deep --sign "$DEVELOPER_ID" dist/Orbital.app
-# echo "[signing] Notarizing DMG..."
-# xcrun notarytool submit "dist/$DMG_NAME" --keychain-profile "orbital-notarize" --wait
-# xcrun stapler staple "dist/$DMG_NAME"
-# echo "[signing] Signed and notarized."
