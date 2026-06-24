@@ -33,15 +33,20 @@ def _wire(monkeypatch, *, send_result="delivered"):
     ws_manager = MagicMock()
     ws_manager.broadcast = MagicMock()
     agent_manager = MagicMock()
+    # The @mention path now persists via the canonical resolver
+    # AgentManager.persist_mention_message(project_id, session_id, user_msg),
+    # which returns the ONE concrete session id threaded to dispatch + ack +
+    # lifecycle. Mirror its resolution: passthrough a client-supplied id, else
+    # the project's persistent chat session (here a fixed funnel id).
+    agent_manager.persist_mention_message = MagicMock(
+        side_effect=lambda pid, sid, msg: sid or "proj_x_chatfunnel"
+    )
     lifecycle_observer = MagicMock()
     lifecycle_observer.on_message_routed = AsyncMock()
     agents_v2.configure(
         project_store, agent_manager, ws_manager, sub_agent_manager,
         lifecycle_observer=lifecycle_observer,
     )
-    sess = MagicMock()
-    sess.session_uuid = "proj_x_chatfunnel"
-    monkeypatch.setattr(agents_v2, "_get_or_create_session", lambda pid, ws: sess)
     return sub_agent_manager, ws_manager, lifecycle_observer
 
 
@@ -61,6 +66,15 @@ async def test_mention_forwards_client_session_id_to_send(monkeypatch):
     assert ack_payload["session_id"] == "proj_x_sessA"
     # lifecycle transcript marker carries the resolved session
     assert lifecycle.on_message_routed.await_args.kwargs.get("session_id") == "proj_x_sessA"
+    # arg-threading guard (persist_mention_message is mocked here): the route must
+    # hand the resolver (project_id, req.session_id, authored user_msg) so an
+    # arg-threading regression is caught even though the resolver is stubbed.
+    pm = agents_v2._agent_manager.persist_mention_message
+    pm.assert_called_once()
+    call_pid, call_sid, call_msg = pm.call_args.args
+    assert (call_pid, call_sid) == ("proj_x", "proj_x_sessA")
+    assert call_msg["role"] == "user" and call_msg["target"] == "researcher"
+    assert call_msg["content"] == "hi"
 
 
 @pytest.mark.asyncio

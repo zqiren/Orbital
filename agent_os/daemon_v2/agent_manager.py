@@ -1206,6 +1206,40 @@ class AgentManager:
             session.session_id = f1
         return session
 
+    def persist_mention_message(self, project_id: str, session_id: str | None,
+                                user_msg: dict) -> str:
+        """Append an authored @mention user record to the project's canonical
+        chat session and return that session's concrete id — WITHOUT waking the
+        management loop.
+
+        Resolves the session id ONCE through the inject None-policy
+        (``_sid_inject`` → ``_ensure_chat_session``, the single mint funnel), so
+        the record lands in the real chat session via passthrough (a live or
+        on-disk session id), disk-hydrate, or a canonical ``{project}_{hex}``
+        mint — never a fabricated ``subagent_<hex>`` log. This mirrors
+        ``inject_message``'s resolve+hydrate sequence but STOPS before
+        ``start_agent``/``queue_message``: it only appends. The management agent
+        may read the shared JSONL on demand, but a mention never auto-wakes or
+        re-dispatches it (seam 3 / D1 constraint).
+
+        Returns the concrete session id the caller MUST thread to dispatch, the
+        ack broadcast, and the lifecycle marker so persistence and dispatch
+        converge on one session.
+        """
+        resolved = self._sid_inject(project_id, session_id)
+        handle = self._handles.get(make_session_key(project_id, resolved))
+        if handle is not None:
+            session = handle.session
+        else:
+            session = self._load_session_from_disk(project_id, resolved)
+            if session is None:
+                project = (self._project_store.get_project(project_id)
+                           if self._project_store else None)
+                workspace = (project or {}).get("workspace", "") if project else ""
+                session = Session.new(resolved, workspace)
+        session.append(user_msg)
+        return resolved
+
     async def inject_message(self, project_id: str, content: str, *,
                              nonce: str | None = None,
                              session_id: str | None = None,

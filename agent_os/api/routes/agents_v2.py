@@ -331,38 +331,6 @@ def _provider_currency(provider: str, model: str) -> str:
         return "USD"
 
 
-# ---- Session cache for sub-agent-only projects ----
-_sub_agent_sessions: dict = {}  # project_id -> Session
-
-
-def _get_or_create_session(project_id: str, workspace: str):
-    """Get or create a session for sub-agent-only projects.
-
-    Management-agent projects use _agent_manager.get_session().
-    Sub-agent-only projects need their own session for chat persistence.
-    """
-    # Try management agent session first
-    session = _agent_manager.get_session(project_id)
-    if session is not None:
-        return session
-
-    # Use cached sub-agent session
-    if project_id in _sub_agent_sessions:
-        return _sub_agent_sessions[project_id]
-
-    # Create new session for this project
-    from uuid import uuid4
-    from agent_os.agent.session import Session
-
-    # F2 storage stem for the sub-agent-only session (the management-agent
-    # session doesn't exist yet). F1 defaults to DEFAULT_SESSION_ID via
-    # ``Session.new``'s default.
-    session_uuid = f"subagent_{uuid4().hex[:8]}"
-    session = Session.new(session_uuid, workspace)
-    _sub_agent_sessions[project_id] = session
-    return session
-
-
 # ---- Helpers ----
 
 def _workspace_is_empty(workspace: str) -> bool:
@@ -913,7 +881,6 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
             workspace = p.get("workspace", "")
             if workspace:
                 _cleanup_project_files(workspace)
-            _sub_agent_sessions.pop(pid, None)
             _project_store.delete_project(pid)
             deleted += 1
         except Exception:
@@ -944,9 +911,6 @@ async def delete_project(project_id: str):
     workspace = project.get("workspace", "")
     if workspace:
         _cleanup_project_files(workspace)
-
-    # Clear in-memory caches
-    _sub_agent_sessions.pop(project_id, None)
 
     try:
         _project_store.delete_project(project_id)
@@ -1093,20 +1057,16 @@ async def inject_message(project_id: str, req: InjectRequest):
         attachment_dicts = None
 
     if req.target and _sub_agent_manager is not None:
-        # Route to sub-agent (Path B: direct @mention)
-        workspace = project.get("workspace", "")
-        session = _get_or_create_session(project_id, workspace)
-
-        # Seam 3 / D1 (Root A): the @mention sub-agent attaches to a CONCRETE
-        # chat session. send()/start() require a parent session id — their
-        # resolver hard-raises on None (a sub-agent always has a parent) — so
-        # this route must FORWARD the session it already has, not drop it.
-        # Prefer the client-supplied session_id (the open chat session); fall
-        # back to the session this message is persisted into so a session-less
-        # @mention still routes to a concrete session instead of 404-ing.
-        mention_session_id = req.session_id or getattr(session, "session_uuid", None)
-
-        # Persist user message BEFORE sending to sub-agent
+        # Route to sub-agent (Path B: direct @mention).
+        #
+        # Seam 3 / D1: resolve the @mention's chat session EXACTLY ONCE through
+        # the canonical inject funnel (passthrough / disk-hydrate / canonical
+        # mint) and thread the single concrete id to persistence, dispatch, and
+        # lifecycle. This persists the authored mention to the project's REAL
+        # chat session — never a fabricated subagent_<hex> log — and does NOT
+        # auto-wake the management loop: the record sits in the shared session
+        # JSONL for the management agent to read on demand (it must not be
+        # re-dispatched off the mention).
         user_ts = datetime.now(timezone.utc).isoformat()
         user_msg: dict = {
             "role": "user",
@@ -1118,7 +1078,12 @@ async def inject_message(project_id: str, req: InjectRequest):
             user_msg["nonce"] = req.nonce
         if attachment_dicts is not None:
             user_msg["attachments"] = attachment_dicts
-        session.append(user_msg)
+        # Persist the authored user message BEFORE dispatch, and adopt the
+        # resolved concrete session id for dispatch + ack + lifecycle. A pure
+        # resolve-then-append: it never starts/queues the management loop.
+        mention_session_id = _agent_manager.persist_mention_message(
+            project_id, req.session_id, user_msg,
+        )
 
         # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
         # manual try-send -> on-error-start -> re-send dance that used to

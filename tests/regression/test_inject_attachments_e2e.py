@@ -34,21 +34,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_os.api.routes import agents_v2
+from agent_os.agent.project_paths import ProjectPaths
+from agent_os.agent.session import Session
 
 
 @pytest.fixture
 def workspace(tmp_path):
     """Tmp workspace dir. Sub-directories created on demand by tests."""
     return str(tmp_path)
-
-
-@pytest.fixture(autouse=True)
-def reset_sub_agent_sessions():
-    """The route caches sub-agent sessions on a module-level dict; reset it
-    between tests so each one starts with a fresh session."""
-    agents_v2._sub_agent_sessions.clear()
-    yield
-    agents_v2._sub_agent_sessions.clear()
 
 
 def _make_app(workspace, *, with_sub_agent=False):
@@ -60,12 +53,22 @@ def _make_app(workspace, *, with_sub_agent=False):
         "workspace": workspace,
     }
 
-    # Management agent: get_session returns None so the route falls back to
-    # the sub-agent session cache (which creates a real Session writing
-    # JSONL into the workspace).
+    # Management-agent branch: inject_message is mocked (asserted by the
+    # management tests). Sub-agent branch: the route persists the authored
+    # @mention via AgentManager.persist_mention_message → resolve-then-append
+    # into the project's real chat session. Emulate that here so the
+    # persisted-message assertions read a real (canonical, never subagent_) log.
     agent_manager = MagicMock()
-    agent_manager.get_session = MagicMock(return_value=None)
     agent_manager.inject_message = AsyncMock(return_value="delivered")
+
+    def _persist_mention(pid, sid, user_msg):
+        uuid = sid or "proj_test_chat0001"
+        path = os.path.join(ProjectPaths(workspace).sessions_dir, f"{uuid}.jsonl")
+        sess = Session.load(path) if os.path.isfile(path) else Session.new(uuid, workspace)
+        sess.append(user_msg)
+        return uuid
+
+    agent_manager.persist_mention_message = MagicMock(side_effect=_persist_mention)
 
     ws_manager = MagicMock()
     ws_manager.broadcast = MagicMock()
