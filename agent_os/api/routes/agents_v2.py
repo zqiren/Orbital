@@ -2239,7 +2239,10 @@ async def list_providers():
 
 
 class FetchModelsRequest(BaseModel):
-    provider: str
+    # `provider` defaults to "custom" so a local OpenAI-compatible server
+    # (LM Studio / llama.cpp / Ollama) can be queried with just a base_url —
+    # the frontend omits `provider` for the Custom provider.
+    provider: str = "custom"
     api_key: str | None = None
     base_url: str | None = None
 
@@ -2254,14 +2257,21 @@ async def fetch_models(req: FetchModelsRequest):
     if not base_url:
         raise HTTPException(status_code=400, detail="No base_url for provider")
 
-    # Handle Anthropic (different models endpoint)
+    # Handle Anthropic (different models endpoint). Omit the auth header
+    # entirely when there is no key — a keyless local server needs none, and an
+    # empty `Bearer ` (trailing space) is an illegal HTTP header value that
+    # httpx rejects.
     sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
     if sdk == "anthropic":
         models_url = base_url.rstrip("/") + "/v1/models"
-        headers = {"x-api-key": req.api_key or "", "anthropic-version": "2023-06-01"}
+        headers = {"anthropic-version": "2023-06-01"}
+        if req.api_key:
+            headers["x-api-key"] = req.api_key
     else:
         models_url = base_url.rstrip("/") + "/models"
-        headers = {"Authorization": f"Bearer {req.api_key or ''}"}
+        headers = {}
+        if req.api_key:
+            headers["Authorization"] = f"Bearer {req.api_key}"
 
     async with httpx.AsyncClient(timeout=15) as client:
         try:
@@ -2282,9 +2292,14 @@ async def fetch_models(req: FetchModelsRequest):
 
 
 class TestConnectionRequest(BaseModel):
-    provider: str
+    # Local OpenAI-compatible servers (LM Studio / llama.cpp / Ollama) are
+    # reached via the "Custom" provider with no API key. The frontend omits
+    # `provider` (sends undefined) and omits `api_key` when empty, so both must
+    # default — otherwise FastAPI 422s with `type: missing` before the handler
+    # (which already tolerates a custom provider + empty key) ever runs.
+    provider: str = "custom"
     model: str
-    api_key: str
+    api_key: str = ""
     base_url: str | None = None
     sdk: str = "openai"
 
