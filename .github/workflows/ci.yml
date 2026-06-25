@@ -81,6 +81,21 @@ jobs:
     # Skip the heavy build jobs on PRs; build on push to main, tags, and manual runs.
     if: github.event_name != 'pull_request'
     runs-on: macos-14  # Apple Silicon → arm64 build (matches release runbook)
+    env:
+      # Developer ID signing + notarization secrets. SAFE on a public repo:
+      # this job never runs on pull_request (gated above), and GitHub never
+      # exposes secrets to fork-PR runs regardless — so only push-to-main, v*
+      # tags, and manual dispatch (all write-access-only) can read them.
+      # When the secrets are unset every signing step below no-ops and
+      # build-macos.sh falls back to its ad-hoc path: the DMG still builds,
+      # just unsigned. Actual signing only fires on tags / manual dispatch
+      # (see the "Decide whether to sign" gate) to keep main-push builds fast.
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -98,9 +113,57 @@ jobs:
       - name: Install web deps
         working-directory: web
         run: npm ci
+      - name: Decide whether to sign (v* tags + manual dispatch only)
+        # Sign + notarize only for releases (tag pushes) and manual runs, and
+        # only when the signing cert secret is configured. Plain main-push
+        # builds stay ad-hoc so day-to-day CI isn't gated on Apple's notary
+        # service. Flip the ref check here if you want every main build signed.
+        id: gate
+        run: |
+          if [ -n "$MACOS_CERT_P12_BASE64" ] && { [[ "$GITHUB_REF" == refs/tags/v* ]] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; }; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+            echo "Developer ID signing + notarization: ENABLED for this build."
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "Ad-hoc (unsigned) build — signing fires only on v* tags / manual dispatch with secrets set."
+          fi
+      - name: Set up Developer ID keychain + notary key
+        # Imports the .p12 into a throwaway keychain and writes the App Store
+        # Connect .p8 to RUNNER_TEMP so build-macos.sh can sign inside-out and
+        # notarize. Secrets are decoded but never printed.
+        if: ${{ steps.gate.outputs.sign == 'true' }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "$MACOS_NOTARY_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+
+          # Throwaway keychain, unlocked, with the Developer ID cert imported.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Let codesign use the private key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          # Prepend our keychain to the search list so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | sed 's/"//g')
+
+          rm -f "$RUNNER_TEMP/cert.p12"
       - name: Build .app + .dmg
-        # Builds the SPA, runs PyInstaller, re-signs ad-hoc, runs the bundle
-        # integrity asserts, and packages the DMG (hdiutil fallback; no brew).
+        # Builds the SPA, runs PyInstaller, signs (Developer ID inside-out when
+        # ORBITAL_SIGN_IDENTITY is set, else ad-hoc), runs the bundle integrity
+        # asserts, packages the DMG (hdiutil fallback; no brew), and notarizes +
+        # staples when notary creds are present.
+        env:
+          ORBITAL_SIGN_IDENTITY: ${{ steps.gate.outputs.sign == 'true' && env.MACOS_SIGN_IDENTITY || '' }}
+          ORBITAL_NOTARY_KEY: ${{ runner.temp }}/notary.p8
+          ORBITAL_NOTARY_KEY_ID: ${{ env.MACOS_NOTARY_KEY_ID }}
+          ORBITAL_NOTARY_ISSUER: ${{ env.MACOS_NOTARY_ISSUER }}
         run: bash scripts/build-macos.sh
       - name: Show binary arch
         run: file dist/Orbital.app/Contents/MacOS/Orbital
@@ -116,6 +179,13 @@ jobs:
           name: Orbital-macOS-dmg
           path: dist/Orbital-*-macOS.dmg
           if-no-files-found: error
+      - name: Clean up signing keychain + notary key
+        # Belt-and-suspenders on the ephemeral hosted runner; mandatory if this
+        # ever moves to a self-hosted box. Runs even when the build failed.
+        if: ${{ always() && steps.gate.outputs.sign == 'true' }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
 
   build-windows:
     name: Build Windows installer
