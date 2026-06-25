@@ -191,6 +191,34 @@ def wait_for_daemon(port: int, timeout: int = 15) -> bool:
     return False
 
 
+def run_smoke_test() -> int:
+    """Headless self-check used by CI: boot the daemon, confirm its HTTP server
+    answers, then return 0 (pass) or 1 (fail). Starts no GUI / tray / webview.
+
+    This exists to catch a packaged bundle that builds successfully but cannot
+    actually start — e.g. a PyInstaller gap where uvicorn's httptools parser is
+    missing (``module 'httptools' has no attribute 'HttpRequestParser'``). Such
+    a bundle otherwise ships green because CI only checks that the installer
+    file was produced, never that it runs. ``wait_for_daemon`` bounds the run to
+    its timeout, so this can never hang CI.
+    """
+    from agent_os.desktop.migration import run_migrations
+
+    run_migrations()
+    _inherit_shell_path()
+    _prepare_bundled_ripgrep()
+    port = find_free_port(8000)
+    start_daemon(port)
+    ok = wait_for_daemon(port)
+    # In a windowed (console=False) bundle sys.stdout may be redirected/None —
+    # guard print so the check's exit code remains the source of truth.
+    try:
+        print(f"SMOKE_TEST {'PASS' if ok else 'FAIL'} port={port}", flush=True)
+    except Exception:
+        pass
+    return 0 if ok else 1
+
+
 def resolve_icon_path() -> str:
     if getattr(sys, "frozen", False):
         base = _frozen_base_dir()
@@ -520,6 +548,9 @@ def main():
     if "--teardown-sandbox" in sys.argv:
         run_sandbox_teardown()
         return
+
+    if "--smoke-test" in sys.argv:
+        sys.exit(run_smoke_test())
 
     from agent_os.desktop.migration import run_migrations
 

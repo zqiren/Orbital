@@ -104,6 +104,13 @@ jobs:
         run: bash scripts/build-macos.sh
       - name: Show binary arch
         run: file dist/Orbital.app/Contents/MacOS/Orbital
+      - name: Smoke test — packaged daemon boots
+        # Boots the bundled daemon headlessly (--smoke-test) and asserts its
+        # HTTP server answers. Catches a bundle that builds but cannot start —
+        # e.g. the httptools packaging gap that uvicorn dies on. The check
+        # self-terminates within wait_for_daemon's timeout, so a foreground
+        # run is safe and its exit code gates the job.
+        run: ./dist/Orbital.app/Contents/MacOS/Orbital --smoke-test
       - uses: actions/upload-artifact@v4
         with:
           name: Orbital-macOS-dmg
@@ -143,6 +150,19 @@ jobs:
         # SPA/icons, and invokes `iscc` when it's on PATH.
         shell: bash
         run: bash scripts/build-desktop.sh
+      - name: Smoke test — packaged daemon boots
+        # Boots the bundled daemon headlessly (--smoke-test) and asserts its
+        # HTTP server answers. Catches a bundle that builds but cannot start —
+        # e.g. the httptools packaging gap that uvicorn dies on — which
+        # upload-artifact's file-exists check never would. The GUI-subsystem
+        # exe detaches from the shell, so use Start-Process + WaitForExit to
+        # capture the real exit code.
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\Orbital\Orbital.exe" -ArgumentList "--smoke-test" -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill($true); throw "Smoke test timed out (>90s)" }
+          Write-Host "Orbital --smoke-test exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "Smoke test FAILED — packaged daemon did not boot" }
       - uses: actions/upload-artifact@v4
         with:
           name: Orbital-Windows-installer

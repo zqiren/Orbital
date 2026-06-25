@@ -4,8 +4,18 @@ import importlib.util
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
 project_root = os.path.abspath(os.path.join(SPECPATH, '..', '..'))
+
+# httptools is a C-extension package (uvicorn's default HTTP parser). PyInstaller
+# 6.x ships no hook for it, so plain analysis bundles only the compiled .so leaves
+# and drops the pure-Python package glue (httptools/__init__.py,
+# httptools/parser/__init__.py). At runtime `import httptools` then resolves to a
+# PEP 420 namespace package and `httptools.HttpRequestParser` is undefined, so
+# uvicorn crashes on startup. collect_all() pulls in the package modules + binaries.
+_httptools_datas, _httptools_binaries, _httptools_hiddenimports = collect_all('httptools')
 
 # Locate patchright driver for browser tool support.
 # Without this, async_playwright().start() fails with FileNotFoundError.
@@ -20,7 +30,7 @@ if _pr_spec and _pr_spec.submodule_search_locations:
 a = Analysis(
     [os.path.join(project_root, 'agent_os', 'desktop', 'main.py')],
     pathex=[project_root],
-    binaries=[],
+    binaries=_httptools_binaries,
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
@@ -29,7 +39,7 @@ a = Analysis(
         # Must use datas= (not binaries=) so PyInstaller does not rewrite the binary.
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'macos-arm64', 'rg'), 'agent_os/vendor/rg/macos-arm64'),
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'macos-x86_64', 'rg'), 'agent_os/vendor/rg/macos-x86_64'),
-    ] + _patchright_datas,
+    ] + _patchright_datas + _httptools_datas,
     hiddenimports=[
         'uvicorn.logging',
         'uvicorn.loops',
@@ -50,7 +60,7 @@ a = Analysis(
         'multipart',
         'claude_agent_sdk',
         'claude_agent_sdk.types',
-    ],
+    ] + _httptools_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
