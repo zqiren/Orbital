@@ -196,9 +196,30 @@ def resolve_icon_path() -> str:
         base = _frozen_base_dir()
     else:
         base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    # Always use .png — higher quality, works cross-platform
+    # Always use .png — higher quality, works cross-platform.
+    # NOTE: this is the *source* PNG for _png_to_hicon() (the Windows HICON
+    # fallback decodes it via PIL). Do not make this return .ico — that would
+    # reroute the working HICON path through PIL's ICO decoder. The webview
+    # window icon is resolved separately by resolve_window_icon_path().
     icon = os.path.join(base, "assets", "icon.png")
     return os.path.abspath(icon)
+
+
+def resolve_window_icon_path() -> str:
+    """Icon path to hand to webview.start(icon=...).
+
+    On Windows, pywebview forwards this to .NET System.Drawing.Icon, which only
+    accepts .ico — a .png raises ArgumentException and crashes the main thread
+    before any window is created, which in turn kills the daemon thread (GH
+    #37/#38). Other backends (Cocoa on macOS, GTK on Linux) accept the .png.
+    Falls back to the .png if icon.ico is missing from the bundle.
+    """
+    png = resolve_icon_path()
+    if sys.platform == "win32":
+        ico = os.path.join(os.path.dirname(png), "icon.ico")
+        if os.path.exists(ico):
+            return ico
+    return png
 
 
 def _png_to_hicon(png_path: str, size: int):
@@ -378,7 +399,7 @@ def open_window(port: int):
     )
     window = _window
     window.events.closing += _on_closing
-    webview.start(icon=resolve_icon_path(), func=_activate_macos)
+    webview.start(icon=resolve_window_icon_path(), func=_activate_macos)
 
 
 def run_sandbox_setup():
