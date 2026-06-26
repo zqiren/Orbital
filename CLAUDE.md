@@ -206,6 +206,21 @@ are in `docs/i18n/MAINTAINABILITY.md`.
 
 Cutting an Orbital release means producing platform-specific installers (`.exe` for Windows, `.dmg` for macOS), tagging the SHA, and publishing to GitHub Releases. PyInstaller cannot cross-compile, so each platform is built on its native machine.
 
+> **CARDINAL RULE — verify the CI-built installer, never a local build.** Every
+> installer you smoke-test, hand to a user, or attach to a release MUST be the
+> artifact produced by the CI pipeline (`gh workflow run ci.yml --ref <branch>`
+> for a branch, or the v* tag build for a release), then downloaded from that
+> run. **Do not** test a locally-run `bash scripts/build-*.sh` artifact and
+> assume users get the same thing. They do not: local dev builds are ad-hoc
+> signed with **no hardened runtime**, while CI release builds are Developer-ID
+> signed + hardened-runtime + notarized — a different binary with different
+> runtime constraints. This exact gap shipped the v0.6.6 browser regression: the
+> hardened-runtime signing stripped JIT from the bundled `node` driver (no
+> `allow-jit` entitlement → V8 `SIGTRAP`), which was **invisible on every local
+> build** because local builds aren't hardened. If you cannot reproduce a user's
+> environment locally, the answer is to pull the CI installer, not to trust the
+> local one.
+
 ### Pre-flight (run once, on either platform)
 
 1. **Confirm clean working tree:**
