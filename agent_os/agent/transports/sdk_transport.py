@@ -30,6 +30,19 @@ try:
 except ImportError:
     HAS_SDK = False
 
+try:
+    # Background-task lifecycle messages (claude-agent-sdk >= ~0.1.5x). Used to
+    # tell when an AWAITED background task is still running so the dispatch
+    # consumer keeps reading until its continuation turn arrives. Imported
+    # separately so an older SDK lacking them degrades gracefully (the ``()``
+    # sentinel makes ``isinstance(msg, _TaskStarted)`` always False).
+    from claude_agent_sdk.types import (
+        TaskStartedMessage as _TaskStarted,
+        TaskNotificationMessage as _TaskNotification,
+    )
+except ImportError:
+    _TaskStarted = _TaskNotification = ()
+
 logger = logging.getLogger(__name__)
 
 
@@ -282,13 +295,55 @@ class SDKTransport(AgentTransport):
             exc_info=exc,
         )
 
+    # How long the dispatch consumer will keep "running" awaiting a background
+    # task's continuation turn before giving up (so a stuck/never-finishing task
+    # cannot pin the dispatch forever). Generous — real workflows run for
+    # minutes. Fire-and-forget ``local_bash`` is excluded from the wait
+    # entirely (see _track_background_task), so this only bounds genuinely
+    # awaited work.
+    CONTINUATION_BUDGET_S: float = 1800.0
+
+    def _track_background_task(self, msg, outstanding: set) -> None:
+        """Track AWAITED background tasks by id so the dispatch consumer keeps
+        reading until they emit their continuation turn.
+
+        ``TaskStartedMessage`` adds the id; ``TaskNotificationMessage``
+        (terminal status: completed/failed/stopped) removes it. Fire-and-forget
+        ``run_in_background`` shells (``task_type='local_bash'``) are the
+        BackgroundWorkRegistry's domain and are intentionally NOT awaited — the
+        foreground turn ends as before so a never-exiting dev server cannot pin
+        the dispatch.
+        """
+        if _TaskStarted and isinstance(msg, _TaskStarted):
+            if getattr(msg, "task_type", None) != "local_bash":
+                tid = getattr(msg, "task_id", None)
+                if tid:
+                    outstanding.add(tid)
+        elif _TaskNotification and isinstance(msg, _TaskNotification):
+            tid = getattr(msg, "task_id", None)
+            if tid:
+                outstanding.discard(tid)
+
     async def _consume_response_background(self) -> None:
-        """Background task: iterate receive_response(), feed events to queue.
+        """Background task: consume the dispatch's response turn(s), feed events.
+
+        ``receive_response()`` reads exactly ONE turn (up to and including its
+        ``ResultMessage``). A normal turn is a single call. But when that turn
+        kicked off an AWAITED background task (e.g. a multi-agent workflow), the
+        agent's foreground turn ends immediately ("started it, will report when
+        done") and the real result is delivered in a LATER turn on the SAME
+        session stream (wire-confirmed: ``TaskNotification`` → ``AssistantMessage``
+        → ``ResultMessage``, with no new ``query()``). We keep calling
+        ``receive_response()`` while such a task is outstanding so the
+        continuation is surfaced instead of stranded — and emit exactly ONE
+        terminal ``turn_complete``: one boundary per dispatch keeps the
+        management session's i-th ``message_routed`` marker paired with the
+        i-th transcript slice (TASK-subagent-last-message-display).
 
         The closing ``turn_complete`` carries an honest ``cause``:
 
-        - ``success`` — a ``ResultMessage`` arrived AND ``is_error`` is False.
-          NOT a bare got-result flag: ``ResultMessage(is_error=True)``
+        - ``success`` — the final ``ResultMessage`` arrived AND ``is_error`` is
+          False. NOT a bare got-result flag: ``ResultMessage(is_error=True)``
           (context-window-exceeded, API errors) has a result but is a failure
           (TASK-honest-subagent-completion-reporting, path b).
         - ``stopped`` — this task was cancelled, i.e. a deliberate
@@ -301,15 +356,37 @@ class SDKTransport(AgentTransport):
         got_result = False
         result_is_error = False
         cause: str | None = None
+        outstanding: set = set()
+
+        async def _consume_one_turn() -> None:
+            nonlocal got_result, result_is_error
+            async for msg in self._client.receive_response():
+                self._track_background_task(msg, outstanding)
+                if isinstance(msg, ResultMessage):
+                    got_result = True
+                    result_is_error = bool(getattr(msg, "is_error", False))
+                for event in self._message_to_events(msg):
+                    await self._event_queue.put(event)
+
         try:
             try:
-                async for msg in self._client.receive_response():
-                    if isinstance(msg, ResultMessage):
-                        got_result = True
-                        result_is_error = bool(getattr(msg, "is_error", False))
-                    events = self._message_to_events(msg)
-                    for event in events:
-                        await self._event_queue.put(event)
+                while True:
+                    if outstanding:
+                        # Awaiting a background task's continuation turn: bound
+                        # the wait so a stuck task can't pin the dispatch.
+                        await asyncio.wait_for(
+                            _consume_one_turn(),
+                            timeout=self.CONTINUATION_BUDGET_S,
+                        )
+                    else:
+                        await _consume_one_turn()
+                    if not outstanding:
+                        break
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "SDKTransport: awaited background task(s) %s did not finish "
+                    "within %.0fs; ending dispatch without the continuation",
+                    outstanding, self.CONTINUATION_BUDGET_S)
             except Exception as e:
                 logger.warning("SDKTransport: background response consumption failed: %s", e)
                 await self._event_queue.put(TransportEvent(
