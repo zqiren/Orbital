@@ -3,53 +3,64 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * PendingInputNotice — pending-input queue (spec 006, Path A).
+ * PendingInputNotice — pending-input queue (spec 006, Path A · v3).
  *
  * Rendered beneath the kept optimistic bubble whenever the user sent a message
- * to session B while session A holds the project's single active-loop slot. The
- * backend returned 202 `queued_pending_slot`: the message was ACCEPTED and will
- * auto-dispatch when the slot frees. Two affordances:
+ * that was ACCEPTED but whose turn hasn't started yet. Two kinds:
  *
- *   - [Run now] — cancels the HOLDER (A) only (spec §3h F5). No re-inject: the
- *     queued message dispatches itself once the slot frees, so re-injecting
- *     would double-send. The parent wires this to `cancelMessage(holder)`.
- *   - [Stop waiting] — cancels this queued entry (parent wires it to
- *     `cancelPendingInput(projectId, sessionId, nonce)`).
+ *   - `kind === 'cross'` — the project's single active-loop slot is held by
+ *     ANOTHER session; the backend returned 202 `queued_pending_slot`. The
+ *     message auto-dispatches when the slot frees. Offers a single [Run now]
+ *     button that cancels the HOLDER only (the queued message self-dispatches —
+ *     no re-inject, which would double-send; spec §3h F5).
+ *   - `kind === 'same'` — THIS session's own turn is mid-flight; the backend
+ *     returned 200 `queued` (same-session `session._queue`). No Run-now: the
+ *     message drains automatically when the current turn ends.
+ *
+ * Both kinds are EDITABLE: the notice is tappable → recall the queued message
+ * into the composer and dequeue it (the mobile equivalent of the desktop ↑
+ * accelerator; spec v3 §11c + §12 R1). This replaces the v2 [Stop waiting]
+ * button entirely. Recall is server-authoritative in the parent — if the
+ * message already dispatched, the parent no-ops. When the entry carries
+ * attachments, recall would half-restore chips, so editing is disabled
+ * (`canEdit === false`; spec §12 R4).
  *
  * Callback-driven: the parent owns the registry + bubble removal; this
- * component only surfaces the wait copy, the two buttons, and an inline error.
+ * component surfaces the wait copy, the tap-to-edit affordance, the optional
+ * Run-now button, and an inline error.
  */
 
 import { useState } from 'react';
-import { Clock } from 'lucide-react';
+import { Clock, Pencil } from 'lucide-react';
 import { useT } from '../i18n/useT';
 
 export interface PendingInputNoticeProps {
-  /** The slot holder (session A) — a human title when available, else the id. */
-  holder: string;
-  /** [Run now]: cancel the holder ONLY. No inject (the queued msg self-dispatches). */
-  onRunNow: () => Promise<void> | void;
-  /** [Stop waiting]: cancel this queued pending entry. */
-  onStopWaiting: () => Promise<void> | void;
+  /** Cross-session (slot held elsewhere) vs same-session (own turn running). */
+  kind: 'cross' | 'same';
+  /** [Run now]: cancel the holder ONLY. Provided/rendered only for `'cross'`. */
+  onRunNow?: () => Promise<void> | void;
+  /** Tap-to-edit (mobile equivalent of ↑): recall this queued message. */
+  onEdit: () => Promise<void> | void;
+  /** False when the entry has attachments — editing is disabled (no chip half-restore). */
+  canEdit?: boolean;
 }
 
 export default function PendingInputNotice({
-  holder,
+  kind,
   onRunNow,
-  onStopWaiting,
+  onEdit,
+  canEdit = true,
 }: PendingInputNoticeProps) {
   const t = useT();
   const [running, setRunning] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const busy = running || stopping;
 
   async function handleRunNow() {
-    if (busy) return;
+    if (running) return;
     setError(null);
     setRunning(true);
     try {
-      await onRunNow();
+      await onRunNow?.();
       // On success the holder's turn is cancelled; the slot frees and the
       // backend auto-dispatches this message. The parent unmounts this notice
       // when `chat.pending_dispatched` clears the nonce — leave `running` set.
@@ -59,18 +70,23 @@ export default function PendingInputNotice({
     }
   }
 
-  async function handleStopWaiting() {
-    if (busy) return;
+  async function handleEdit() {
+    if (!canEdit) return;
     setError(null);
-    setStopping(true);
     try {
-      await onStopWaiting();
-      // On success the parent removes the bubble + this notice. Leave `stopping`.
+      await onEdit();
+      // On success the parent loads the text into the composer and removes the
+      // bubble + this notice. On a server-authoritative no-op (already
+      // dispatched) the parent also unmounts this notice — nothing to do here.
     } catch {
       setError(t('pending.cancelError'));
-      setStopping(false);
     }
   }
+
+  const body =
+    kind === 'cross'
+      ? t('pending.waiting.crossSession')
+      : t('pending.waiting.sameSession');
 
   return (
     <div
@@ -79,15 +95,29 @@ export default function PendingInputNotice({
       role="status"
       aria-live="polite"
     >
-      <div className="flex items-start gap-2">
+      <button
+        type="button"
+        data-testid="pending-input-notice-edit"
+        aria-label={t('pending.edit')}
+        onClick={handleEdit}
+        disabled={!canEdit}
+        className="group flex w-full items-start gap-2 text-left rounded-[4px] -mx-1 px-1 py-0.5 enabled:hover:bg-card-hover enabled:cursor-pointer disabled:cursor-default transition-colors duration-150"
+      >
         <Clock size={14} className="mt-0.5 shrink-0 text-secondary" />
-        <p
-          className="text-sm text-secondary"
+        <span
+          className="text-sm text-secondary group-enabled:group-hover:text-primary transition-colors duration-150"
           data-testid="pending-input-notice-body"
         >
-          {t('pending.waiting.body', { holder })}
-        </p>
-      </div>
+          {body}
+        </span>
+        {canEdit && (
+          <Pencil
+            size={12}
+            className="mt-0.5 ml-auto shrink-0 text-secondary opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+            aria-hidden="true"
+          />
+        )}
+      </button>
       {error && (
         <p
           className="text-sm text-error mt-2"
@@ -96,26 +126,19 @@ export default function PendingInputNotice({
           {error}
         </p>
       )}
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          data-testid="pending-input-notice-run-now"
-          onClick={handleRunNow}
-          disabled={busy}
-          className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
-        >
-          {running ? t('pending.running') : t('pending.runNow')}
-        </button>
-        <button
-          type="button"
-          data-testid="pending-input-notice-stop"
-          onClick={handleStopWaiting}
-          disabled={busy}
-          className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide border border-border bg-background text-secondary hover:bg-card-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
-        >
-          {stopping ? t('pending.stopping') : t('pending.stopWaiting')}
-        </button>
-      </div>
+      {kind === 'cross' && (
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            data-testid="pending-input-notice-run-now"
+            onClick={handleRunNow}
+            disabled={running}
+            className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wide bg-accent text-white hover:bg-accent/85 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
+          >
+            {running ? t('pending.running') : t('pending.runNow')}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

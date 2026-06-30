@@ -17,7 +17,7 @@ import type { DisplayItem } from '../utils/chatTransform';
 import type { ChatMessage as ChatMessageRow } from '../types';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
-import { buildAttachmentsBlock } from '../lib/attachment-parsing';
+import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
@@ -396,13 +396,23 @@ interface StreamState {
   isComplete: boolean;
 }
 
-// Pending-input queue (spec 006). One queued message awaiting the slot. Keyed
-// by nonce in `pendingInputs`. `content`/`timestamp` mirror the kept optimistic
-// bubble so cancel/dispatch can locate and remove it.
+// Pending-input queue (spec 006 · v3). One queued message awaiting its turn,
+// keyed by nonce in `pendingInputs`. Two kinds (§11c):
+//   - `'cross'` — slot held by ANOTHER session (`_pending_inject`); `holder` is
+//     that session. Offers [Run now].
+//   - `'same'`  — THIS session's own turn is mid-flight (`session._queue`);
+//     `holder` is unused. No Run-now (it drains automatically).
+// `content`/`timestamp` mirror the kept optimistic bubble so cancel/dispatch can
+// locate and remove it. `rawText` is the user's RAW typed text (BEFORE
+// buildAttachmentsBlock) — what ↑/tap-recall loads back into the composer (§12
+// R4). `hasAttachments` gates recall off (don't half-restore chips).
 interface PendingInputEntry {
+  kind: 'cross' | 'same';
   sessionId: string;
   holder: string;
   content: string;
+  rawText: string;
+  hasAttachments: boolean;
   timestamp: string;
 }
 
@@ -826,6 +836,52 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     });
   }, []);
 
+  // Pending-input queue (spec 006 v3 §11c + §12 R2). Recall a queued message
+  // (cross- OR same-session) into the composer for editing — shared by the
+  // desktop ↑ accelerator and the mobile tap-to-edit affordance. This is
+  // SERVER-AUTHORITATIVE: we await the cancel/dequeue and only load the text
+  // when the backend confirms it removed a STILL-QUEUED entry (`removed===true`).
+  // If `removed===false` the message already dispatched (its turn is running) —
+  // we DO NOT load the text (that would double-send); we just drop the stale
+  // overlay entry and the kept bubble becomes a normal sent message. If the
+  // entry carries attachments we no-op entirely (recall can't restore chips;
+  // §12 R4).
+  const recallQueuedMessage = useCallback(
+    async (nonce: string) => {
+      const entry = pendingInputsRef.current.get(nonce);
+      if (!entry) return;
+      if (entry.hasAttachments) return;
+      let res: { removed?: boolean } | undefined;
+      // Surface a network failure to the caller (Finding 3): the tap path shows
+      // pending.cancelError; the ↑ accelerator swallows it. Leaves the overlay
+      // in place so the user can retry.
+      res = await cancelPendingInput(projectId, entry.sessionId, nonce);
+      if (res?.removed === true) {
+        // Still queued — safe to pull it back into the composer for editing.
+        setInputText(entry.rawText);
+        removeOptimisticBubble(entry.content, entry.timestamp);
+        localNoncesRef.current.delete(nonce);
+        setPendingInputs((prev) => {
+          if (!prev.has(nonce)) return prev;
+          const next = new Map(prev);
+          next.delete(nonce);
+          return next;
+        });
+        textareaRef.current?.focus();
+      } else if (res?.removed === false) {
+        // Already dispatched/drained — DO NOT load the text (no double-send).
+        // Drop the stale overlay; the kept bubble is now a normal sent message.
+        setPendingInputs((prev) => {
+          if (!prev.has(nonce)) return prev;
+          const next = new Map(prev);
+          next.delete(nonce);
+          return next;
+        });
+      }
+    },
+    [projectId, cancelPendingInput, removeOptimisticBubble],
+  );
+
   // Pending-input queue (spec 006 §3h). Reconcile the pending overlay from the
   // server (GET /pending) on session load + WS reconnect. Rebuilds the
   // project-scoped `pendingInputs` map from server truth (preserving an existing
@@ -846,15 +902,28 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         for (const p of list) {
           if (!p.nonce) continue;
           const existing = pendingInputsRef.current.get(p.nonce);
-          rebuilt.push([
-            p.nonce,
-            existing ?? {
-              sessionId: p.session_id,
-              holder,
-              content: p.content_preview,
-              timestamp: new Date().toISOString(),
-            },
-          ]);
+          if (existing) {
+            rebuilt.push([p.nonce, existing]);
+          } else {
+            // Persist-at-dispatch means we recover only the wire `content`, not
+            // the raw typed text. Detect an attachments-block prefix: if present
+            // we can't reconstruct the chips, so flag hasAttachments and let
+            // recall no-op (§12 R4); otherwise the content IS the raw text.
+            const hasAttachments =
+              parseAttachmentsBlock(p.content).attachments.length > 0;
+            rebuilt.push([
+              p.nonce,
+              {
+                kind: p.kind,
+                sessionId: p.session_id,
+                holder,
+                content: p.content,
+                rawText: hasAttachments ? '' : p.content,
+                hasAttachments,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          }
           // Keep the nonce alive so the eventual dispatch echo dedups against
           // the rebuilt bubble (don't clobber an existing received-timestamp).
           if (!localNoncesRef.current.has(p.nonce)) {
@@ -1573,12 +1642,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // render here (and exempt from eviction while it sits in pendingInputs).
       localNoncesRef.current.set(e.nonce, 0);
       const ts = new Date().toISOString();
+      // pending_enqueued is always cross-session (it carries a holder). We only
+      // have the wire `content` from another tab — detect an attachments-block
+      // prefix to gate recall (§12 R4); otherwise content IS the raw text.
+      const hasAttachments =
+        parseAttachmentsBlock(e.content).attachments.length > 0;
       setPendingInputs((prev) => {
         const next = new Map(prev);
         next.set(e.nonce, {
+          kind: 'cross',
           sessionId: e.session_id,
           holder: e.holder,
           content: e.content,
+          rawText: hasAttachments ? '' : e.content,
+          hasAttachments,
           timestamp: ts,
         });
         return next;
@@ -2118,14 +2195,46 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           setPendingInputs((prev) => {
             const next = new Map(prev);
             next.set(nonce, {
+              kind: 'cross',
               sessionId: queuedSession,
               holder,
               content: wireContent,
+              rawText: text,
+              hasAttachments: attachmentsPayload.length > 0,
               timestamp: optimisticTimestamp,
             });
             return next;
           });
         }
+        scrollToBottom();
+        return;
+      }
+      // Pending-input queue (spec 006 v3 §11d.4): the same-session 200. The
+      // backend ACCEPTED + queued this message behind the VIEWED session's own
+      // in-flight turn (`session._queue`); it drains automatically when that
+      // turn ends. KEEP the optimistic bubble and add a same-session
+      // `pendingInputs` entry so the bubble shows the "Waiting for the current
+      // response to finish." line and is ↑/tap-recallable. No holder, no
+      // Run-now (there is no other session to cancel).
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'queued_same_session' &&
+        sessionId !== undefined
+      ) {
+        setPendingInputs((prev) => {
+          const next = new Map(prev);
+          next.set(nonce, {
+            kind: 'same',
+            sessionId,
+            holder: '',
+            content: wireContent,
+            rawText: text,
+            hasAttachments: attachmentsPayload.length > 0,
+            timestamp: optimisticTimestamp,
+          });
+          return next;
+        });
         scrollToBottom();
         return;
       }
@@ -2254,6 +2363,36 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (e.key === 'Escape') {
         setShowMentionDropdown(false);
         return;
+      }
+    }
+    // Pending-input queue (spec 006 v3 §11c + §12). ↑ in an EMPTY composer (no
+    // command/mention dropdown open — those guards above already handled ↑ and
+    // returned) recalls the NEWEST queued message for the VIEWED session into
+    // the composer and dequeues it. No cycling, no input history (§12 R5). When
+    // the composer is non-empty, or no queued message exists for this session,
+    // do NOT preventDefault so ↑ still moves the caret normally.
+    if (e.key === 'ArrowUp' && inputText.trim() === '' && sessionId !== undefined) {
+      let newestNonce: string | null = null;
+      let newestTs = '';
+      for (const [nonce, entry] of pendingInputsRef.current) {
+        if (entry.sessionId !== sessionId) continue;
+        if (newestNonce === null || entry.timestamp > newestTs) {
+          newestNonce = nonce;
+          newestTs = entry.timestamp;
+        }
+      }
+      if (newestNonce !== null) {
+        const entry = pendingInputsRef.current.get(newestNonce);
+        // Finding 4: a newest entry with attachments can't be recalled (chips
+        // can't be restored), so recall would no-op — let ↑ move the caret
+        // instead of swallowing the key.
+        if (entry && !entry.hasAttachments) {
+          e.preventDefault();
+          // ↑ accelerator: swallow recall errors (the tap affordance surfaces
+          // them via pending.cancelError). Finding 3.
+          recallQueuedMessage(newestNonce).catch(() => {});
+          return;
+        }
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2693,35 +2832,29 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
-      {/* Pending-input queue (spec 006 §3h): "Waiting for {holder}…" affordance
-          for each queued message targeting the VIEWED session. [Run now] cancels
-          the holder ONLY (the queued message self-dispatches — no re-inject);
-          [Stop waiting] cancels this queued entry by nonce. */}
+      {/* Pending-input queue (spec 006 v3 §11b/§11c/§12): a muted waiting line
+          under each queued message bubble for the VIEWED session. Cross-session
+          entries also get a single [Run now] (cancel the holder ONLY — the
+          queued message self-dispatches, no re-inject). The line is tappable to
+          recall/edit (mobile equivalent of ↑; §12 R1) — no [Stop waiting]. */}
       {Array.from(pendingInputs.entries())
         .filter(([, entry]) => sessionId !== undefined && entry.sessionId === sessionId)
         .map(([nonce, entry]) => (
           <div key={`pending-${nonce}`} className="shrink-0 px-4">
             <PendingInputNotice
-              holder={entry.holder}
-              onRunNow={async () => {
-                // Run now = cancel the HOLDER only (spec §3h F5). NO re-inject:
-                // the queued message dispatches itself when the slot frees.
-                await cancelMessage(projectId, entry.holder);
-              }}
-              onStopWaiting={async () => {
-                await cancelPendingInput(projectId, entry.sessionId, nonce);
-                // Optimistic cleanup (the chat.pending_cancelled echo is
-                // idempotent): drop the dedup nonce, remove the kept bubble,
-                // and clear the map entry.
-                localNoncesRef.current.delete(nonce);
-                removeOptimisticBubble(entry.content, entry.timestamp);
-                setPendingInputs((prev) => {
-                  if (!prev.has(nonce)) return prev;
-                  const next = new Map(prev);
-                  next.delete(nonce);
-                  return next;
-                });
-              }}
+              kind={entry.kind}
+              canEdit={!entry.hasAttachments}
+              onRunNow={
+                entry.kind === 'cross'
+                  ? async () => {
+                      // Run now = cancel the HOLDER only (spec §3h F5). NO
+                      // re-inject: the queued message dispatches itself when the
+                      // slot frees.
+                      await cancelMessage(projectId, entry.holder);
+                    }
+                  : undefined
+              }
+              onEdit={() => recallQueuedMessage(nonce)}
             />
           </div>
         ))}

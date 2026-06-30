@@ -1290,7 +1290,7 @@ class AgentManager:
                              session_id: str | None = None,
                              queue_state: str = "chat") -> "str | dict":
         """Inject a message. Four cases:
-        1. Loop running -> queue (returns "queued")
+        1. Loop running -> queue (returns "queued_same_session")
         1b. Loop paused for approval -> auto-deny pending, deliver, resume
             (returns dict with status="delivered", approval_dismissed=True,
             dismissed_tool_call_id=<id>)
@@ -1363,10 +1363,15 @@ class AgentManager:
             handle.interceptor.deactivate_bypass_all()
 
         if handle.task is not None and not handle.task.done():
-            # Case 1: loop running — queue for next iteration
+            # Case 1: loop running — queue for next iteration. Distinct status so
+            # the FE shows the same-session "Waiting…" + ↑-recall affordance ONLY
+            # for a genuine session._queue message (which gets a
+            # chat.pending_dispatched broadcast when it drains), NOT for the
+            # wait-state append below (which is surfaced via on_completed and is
+            # not recallable). Spec 006 §12, diff-review Finding 1.
             logger.info("inject_message(%s): loop running, queuing message", project_id)
             handle.session.queue_message(content, nonce=nonce)
-            return "queued"
+            return "queued_same_session"
 
         # Case 1b: loop done but paused for approval — auto-deny the
         # pending approval, deliver the new user message, and restart the
@@ -1641,34 +1646,82 @@ class AgentManager:
         return bool(self._pending_inject.get(project_id))
 
     def list_pending(self, project_id: str) -> list[dict]:
-        """Return the queued pending injects (GET /pending recovery)."""
+        """Return queued messages for GET /pending recovery (§12 R3/R4).
+
+        Two kinds of "queued message" (a sent message whose turn hasn't
+        started) are unified here:
+
+        - ``kind:"cross"`` — the slot is held by another session, so the
+          message sits in the project-scoped ``_pending_inject`` registry.
+        - ``kind:"same"`` — this session's own turn is mid-flight, so the
+          message sits in that session's ``_queue`` (drained by
+          ``_on_loop_done``); read non-destructively via ``list_queued``.
+
+        Full ``content`` is returned (not a truncated preview) so the FE can
+        rebuild the optimistic bubble AND recall the raw text on reconnect
+        without a second round-trip.
+        """
         out: list[dict] = []
         for idx, p in enumerate(self._pending_inject.get(project_id, []), start=1):
             out.append({
                 "session_id": p.session_id,
                 "nonce": p.nonce,
-                "content_preview": (p.content or "")[:200],
+                "content": p.content or "",
                 "position": idx,
+                "kind": "cross",
             })
+        # Same-session queued messages live in each live handle's session queue.
+        for (pid, sid), handle in self._handles.items():
+            if pid != project_id or handle.session is None:
+                continue
+            list_queued = getattr(handle.session, "list_queued", None)
+            if list_queued is None:
+                continue
+            for idx, item in enumerate(list_queued(), start=1):
+                if isinstance(item, tuple):
+                    content, nonce = item
+                else:
+                    content, nonce = item, None
+                out.append({
+                    "session_id": sid,
+                    "nonce": nonce,
+                    "content": content or "",
+                    "position": idx,
+                    "kind": "same",
+                })
         return out
 
     def cancel_pending_inject(self, project_id: str, session_id: str,
                               nonce: str | None = None) -> dict:
-        """Cancel pending injects for a session (optionally a single nonce).
+        """Cancel a queued message for a session (optionally a single nonce).
 
-        Queued entries are dropped. In-flight entries (mid ``_fire``) are
-        tombstoned so the dispatch skips them — a cancel beats an in-flight
-        dispatch (B7). Broadcasts ``chat.pending_cancelled``.
+        Removes a STILL-QUEUED entry from EITHER the cross-session registry
+        (``_pending_inject``) OR the target session's same-session queue
+        (``session._queue`` via ``remove_queued_message``) — one endpoint
+        dequeues both kinds. In-flight entries (mid ``_fire``) are tombstoned
+        so the dispatch skips them — a cancel beats an in-flight dispatch
+        (B7) — but a tombstone is NOT counted as a removal because that turn
+        is already being dispatched.
+
+        Returns ``{"status": "cancelled", "removed": bool}`` where ``removed``
+        is ``True`` IFF an actually-still-queued entry was dequeued. This makes
+        the FE recall server-authoritative: it loads the text into the composer
+        and clears the bubble ONLY when ``removed`` is ``True``, killing the
+        recall-vs-dispatch double-send race (§12 R2). Broadcasts
+        ``chat.pending_cancelled``.
         """
         def _matches(p: PendingInject) -> bool:
             return p.session_id == session_id and (
                 nonce is None or p.nonce == nonce
             )
 
-        # Queued entries: drop them outright.
+        removed_any = False
+
+        # Cross-session queued entries: drop them outright.
         queue = self._pending_inject.get(project_id, [])
         removed = [p for p in queue if _matches(p)]
         if removed:
+            removed_any = True
             kept = [p for p in queue if not _matches(p)]
             if kept:
                 self._pending_inject[project_id] = kept
@@ -1677,17 +1730,28 @@ class AgentManager:
             for p in removed:
                 self._pending_dispatching.discard(p.id)
                 self._pending_tombstoned.discard(p.id)
-        # In-flight entries: tombstone so ``_fire`` skips the inject.
+        # In-flight entries: tombstone so ``_fire`` skips the inject. A
+        # tombstone does NOT count as a removal — the turn is already
+        # dispatching, so a recall must no-op (removed stays False here).
         for p in self._pending_inflight.get(project_id, []):
             if _matches(p):
                 self._pending_tombstoned.add(p.id)
+        # Same-session queued message (this session's own ``_queue``): remove
+        # by nonce via the live handle. Only attempted when a nonce is given
+        # (the queue is nonce-keyed). A successful removal counts as a removal.
+        if nonce is not None:
+            handle = self._handles.get(make_session_key(project_id, session_id))
+            if handle is not None and handle.session is not None:
+                remover = getattr(handle.session, "remove_queued_message", None)
+                if remover is not None and remover(nonce) is not None:
+                    removed_any = True
         self._broadcast(project_id, {
             "type": "chat.pending_cancelled",
             "project_id": project_id,
             "session_id": session_id,
             "nonce": nonce,
         }, session_id=session_id)
-        return {"status": "cancelled"}
+        return {"status": "cancelled", "removed": removed_any}
 
     def _purge_pending_for_session(self, project_id: str, session_id: str,
                                    session_uuid: str | None = None) -> None:
@@ -1767,6 +1831,11 @@ class AgentManager:
             try:
                 for idx, p in enumerate(batch):
                     if p.id in self._pending_tombstoned:
+                        # Cancelled mid-flight (recall / Stop won the race): skip
+                        # the inject. No broadcast needed here — cancel_pending_inject
+                        # already emitted chat.pending_cancelled when it tombstoned
+                        # this entry, so the FE has already dropped the bubble
+                        # (diff-review Finding 2 is handled by the cancel path).
                         continue            # cancelled mid-flight
                     try:
                         await self.inject_message(
@@ -1807,6 +1876,30 @@ class AgentManager:
                     else:
                         self._pending_inflight.pop(project_id, None)
         asyncio.ensure_future(_fire())
+
+    def _clear_same_session_pending(self, project_id: str, session_id: str) -> None:
+        """Clear FE same-session "Waiting…" lines for any leftover queued
+        messages when a turn ends terminally (cancel / error / stop) WITHOUT
+        draining its queue — otherwise the line orphans (diff-review Finding 1,
+        terminal paths). The messages stay in ``session._queue`` and still run
+        on the next turn; only the stale visual indicator is cleared, mirroring
+        the normal-drain ``chat.pending_dispatched`` broadcast.
+        """
+        handle = self._handles.get(make_session_key(project_id, session_id))
+        if handle is None:
+            return
+        try:
+            leftover = handle.session.list_queued()
+        except Exception:
+            return
+        for _content, nonce in leftover:
+            if nonce:
+                self._broadcast(project_id, {
+                    "type": "chat.pending_dispatched",
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "nonce": nonce,
+                }, session_id=session_id)
 
     # ── last_terminal_event ────────────────────────────────────────────
     #
@@ -3316,6 +3409,9 @@ class AgentManager:
                     "status": "idle",
                     "source": "management",
                 }, session_id=session_id)
+                # Turn ended terminally without draining its same-session queue
+                # → clear any leftover "Waiting…" lines (Finding 1).
+                self._clear_same_session_pending(project_id, session_id)
                 # Slot freed (cancelled holder — incl. "Run now" on a running
                 # holder) → dispatch pending input (spec 006 §3d).
                 self._release_slot(project_id)
@@ -3341,6 +3437,9 @@ class AgentManager:
                     "reason": str(exc),
                     "source": "management",
                 }, session_id=session_id)
+                # Errored turn left its same-session queue undrained → clear any
+                # leftover "Waiting…" lines (Finding 1).
+                self._clear_same_session_pending(project_id, session_id)
                 # Slot freed by an errored loop (v1 missed this) → dispatch
                 # pending input (spec 006 §3d).
                 self._release_slot(project_id)
@@ -3350,6 +3449,9 @@ class AgentManager:
             if not handle:
                 return
             if handle.session.is_stopped():
+                # Clear leftover same-session "Waiting…" lines BEFORE dropping
+                # the handle (the helper reads session._queue via the handle).
+                self._clear_same_session_pending(project_id, session_id)
                 self._handles.pop(sk, None)
                 self._set_last_terminal_event(
                     project_id, session_id, "stopped",
@@ -3400,6 +3502,17 @@ class AgentManager:
                     if q_nonce:
                         q_msg["nonce"] = q_nonce
                     handle.session.append(q_msg)
+                    # A same-session queued message is now being dispatched —
+                    # tell the FE to clear its waiting line (mirrors the
+                    # cross-session chat.pending_dispatched, spec 006 §11d.3).
+                    # Skip None-nonce drains (no FE bubble to clear).
+                    if q_nonce:
+                        self._broadcast(project_id, {
+                            "type": "chat.pending_dispatched",
+                            "project_id": project_id,
+                            "session_id": session_id,
+                            "nonce": q_nonce,
+                        }, session_id=session_id)
                 asyncio.ensure_future(
                     self._start_loop(project_id, session_id=session_id)
                 )

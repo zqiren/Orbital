@@ -43,6 +43,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent_os.agent.session import Session
 from agent_os.api.routes import agents_v2
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 from agent_os.queue.dispatcher import QueueDispatcher
@@ -618,6 +619,8 @@ async def test_cancel_pending_before_dispatch_no_dispatch():
     try:
         result = mgr.cancel_pending_inject(project_id, "sess-B", nonce="n-b")
         assert result["status"] == "cancelled"
+        # v3: removing a still-queued cross-session entry reports removed=True.
+        assert result["removed"] is True
         assert project_id not in mgr._pending_inject
         cancelled = [p for p in _payloads(mgr)
                      if p.get("type") == "chat.pending_cancelled"]
@@ -653,18 +656,49 @@ async def test_tombstone_race_cancel_after_fire_scheduled():
     mgr._release_slot(project_id)
     assert mgr._pending_inflight.get(project_id), "batch should be in-flight"
 
-    # Cancel before _fire runs → tombstones the in-flight id.
-    mgr.cancel_pending_inject(project_id, "sess-B", nonce="n-b")
+    # Cancel before _fire runs → tombstones the in-flight id. The entry is
+    # already dispatching, so this is NOT a removal (removed=False, §12 R2).
+    cancel_result = mgr.cancel_pending_inject(project_id, "sess-B", nonce="n-b")
+    assert cancel_result == {"status": "cancelled", "removed": False}
     await _flush()
 
-    # _fire ran but skipped the tombstoned entry → no inject, no broadcast of
-    # a dispatch, and not re-queued.
+    # _fire ran but skipped the tombstoned entry → no inject, no dispatch
+    # broadcast, and not re-queued.
     assert inject.await_count == 0
     assert project_id not in mgr._pending_inject
     assert not mgr._pending_inflight.get(project_id)
     disp = [p for p in _payloads(mgr)
             if p.get("type") == "chat.pending_dispatched"]
     assert disp == []
+    # Finding 2: no orphan bubble. cancel_pending_inject already broadcast
+    # chat.pending_cancelled when it tombstoned the in-flight entry, so the FE
+    # drops the bubble via the cancel path (no extra broadcast from _fire).
+    cancelled = [p for p in _payloads(mgr)
+                 if p.get("type") == "chat.pending_cancelled" and p.get("nonce") == "n-b"]
+    assert len(cancelled) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_same_session_pending_broadcasts_on_terminal():
+    """A terminal turn-end (cancel/error/stop) with leftover same-session queued
+    messages broadcasts chat.pending_dispatched per nonce so the FE 'Waiting…'
+    line can't orphan (diff-review Finding 1, terminal paths). None-nonce
+    entries are skipped (no FE bubble to clear)."""
+    project_id = "proj-term"
+    mgr, _, _ = _make_agent_manager()
+    session = _mk_session("sess-A")
+    session.list_queued = MagicMock(
+        return_value=[("more from A", "n-1"), ("noNonce", None)]
+    )
+    mgr._handles[(project_id, "sess-A")] = _mk_handle(session)
+
+    mgr._clear_same_session_pending(project_id, "sess-A")
+
+    disp = [p for p in _payloads(mgr)
+            if p.get("type") == "chat.pending_dispatched"]
+    assert len(disp) == 1  # None-nonce skipped
+    assert disp[0]["session_id"] == "sess-A"
+    assert disp[0]["nonce"] == "n-1"
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +852,7 @@ async def test_same_session_while_running_still_queues_no_pending():
             json={"content": "more from A", "session_id": "sess-A"},
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "queued"}
+        assert resp.json() == {"status": "queued_same_session"}
         # Case-1 same-session queue → NO pending-inject entry created.
         assert project_id not in mgr._pending_inject
     finally:
@@ -880,7 +914,9 @@ async def test_get_pending_and_run_status_count():
         assert body["pending"][0]["session_id"] == "sess-B"
         assert body["pending"][0]["nonce"] == "n-b"
         assert body["pending"][0]["position"] == 1
-        assert "run B" in body["pending"][0]["content_preview"]
+        # v3: GET /pending now returns FULL content (for recall) + a kind tag.
+        assert body["pending"][0]["content"] == "run B"
+        assert body["pending"][0]["kind"] == "cross"
 
         rs = client.get(f"/api/v2/agents/{project_id}/run-status")
         assert rs.status_code == 200, rs.text
@@ -893,6 +929,7 @@ async def test_get_pending_and_run_status_count():
         )
         assert c.status_code == 200, c.text
         assert c.json()["status"] == "cancelled"
+        assert c.json()["removed"] is True
         assert client.get(
             f"/api/v2/agents/{project_id}/run-status"
         ).json()["pending_count"] == 0
@@ -900,3 +937,223 @@ async def test_get_pending_and_run_status_count():
         await _cancel_tasks(tasks)
         client.close()
         _restore(saved)
+
+
+# ---------------------------------------------------------------------------
+# v3 (§11d / §12) — same-session queued messages become first-class
+# ---------------------------------------------------------------------------
+#
+# A "queued message" = a sent message whose turn hasn't started. v2 covered the
+# CROSS-session kind (slot held by another session → _pending_inject). v3 makes
+# the SAME-session kind (this session's turn mid-flight → session._queue)
+# first-class: recallable (Session.remove_queued_message / list_queued),
+# cancellable via the same endpoint (cancel_pending_inject removes from _queue,
+# returns removed=bool), recoverable (list_pending tags kind=same), and its
+# drain broadcasts chat.pending_dispatched per nonce.
+
+
+def _plant_running_real_session(mgr, project_id, sid, workspace, *, tasks=None):
+    """Plant a running handle (slot held) whose session is a REAL Session, so
+    the same-session ``_queue`` / ``remove_queued_message`` / ``list_queued``
+    behaviour is exercised end-to-end (not a mock)."""
+    session = Session.new(sid, str(workspace), session_id=sid)
+    handle = _mk_handle(session)
+
+    async def _never_done():
+        await asyncio.sleep(9999)
+
+    task = asyncio.get_event_loop().create_task(_never_done())
+    handle.task = task
+    mgr._handles[(project_id, sid)] = handle
+    if tasks is not None:
+        tasks.append(task)
+    return handle, session, task
+
+
+# §11d.1 — Session.remove_queued_message (hit + miss) ------------------------
+
+
+def test_session_remove_queued_message_hit_and_miss(tmp_path):
+    session = Session.new("rmq", str(tmp_path))
+    session.queue_message("first", nonce="n1")
+    session.queue_message("second", nonce="n2")
+
+    # Hit: returns content, removes only the matching tuple.
+    assert session.remove_queued_message("n1") == "first"
+    assert session.list_queued() == [("second", "n2")]
+
+    # Miss: returns None, queue unchanged.
+    assert session.remove_queued_message("nope") is None
+    assert session.list_queued() == [("second", "n2")]
+
+
+# §12 R3 — Session.list_queued is non-destructive ---------------------------
+
+
+def test_session_list_queued_non_destructive(tmp_path):
+    session = Session.new("lq", str(tmp_path))
+    session.queue_message("a", nonce="na")
+    session.queue_message("b", nonce=None)
+
+    snapshot = session.list_queued()
+    assert snapshot == [("a", "na"), ("b", None)]
+    # Snapshot is a copy: mutating it must not touch the live queue, and a
+    # second read still returns everything (unlike pop_queued_messages).
+    snapshot.clear()
+    assert session.list_queued() == [("a", "na"), ("b", None)]
+    # pop still drains it (proves list_queued didn't consume).
+    assert session.pop_queued_messages() == [("a", "na"), ("b", None)]
+    assert session.list_queued() == []
+
+
+# §11d.2 / §12 R2 — cancel removes a same-session queued msg → removed=True --
+
+
+@pytest.mark.asyncio
+async def test_cancel_removes_same_session_queued_returns_removed_true(tmp_path):
+    project_id = "proj-cancel-same"
+    mgr, _, _ = _make_agent_manager()
+    tasks: list = []
+    _, session, _t = _plant_running_real_session(
+        mgr, project_id, "sess-A", tmp_path, tasks=tasks,
+    )
+    session.queue_message("queued behind my own turn", nonce="q1")
+
+    try:
+        result = mgr.cancel_pending_inject(project_id, "sess-A", nonce="q1")
+        assert result == {"status": "cancelled", "removed": True}
+        # The same-session queue no longer holds it.
+        assert session.list_queued() == []
+        # chat.pending_cancelled broadcast carries the session + nonce.
+        cancelled = [p for p in _payloads(mgr)
+                     if p.get("type") == "chat.pending_cancelled"]
+        assert len(cancelled) == 1
+        assert cancelled[0]["session_id"] == "sess-A"
+        assert cancelled[0]["nonce"] == "q1"
+    finally:
+        await _cancel_tasks(tasks)
+
+
+# §12 R2 — cancel of an unknown / already-dispatched nonce → removed=False ---
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_nonce_returns_removed_false(tmp_path):
+    project_id = "proj-cancel-unknown"
+    mgr, _, _ = _make_agent_manager()
+    tasks: list = []
+    _, session, _t = _plant_running_real_session(
+        mgr, project_id, "sess-A", tmp_path, tasks=tasks,
+    )
+    # Nothing queued (or already drained/dispatched) for this nonce.
+    try:
+        result = mgr.cancel_pending_inject(project_id, "sess-A", nonce="gone")
+        assert result == {"status": "cancelled", "removed": False}
+        assert session.list_queued() == []
+    finally:
+        await _cancel_tasks(tasks)
+
+
+# §12 R2 — cancel of an IN-FLIGHT (dispatching) entry → removed=False --------
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_flight_entry_returns_removed_false():
+    """An entry that has already left _pending_inject for the in-flight batch
+    is tombstoned (so _fire skips it) but that is NOT a removal — the turn is
+    already dispatching, so recall must no-op (removed=False)."""
+    project_id = "proj-cancel-inflight"
+    mgr, _, _ = _make_agent_manager()
+    mgr.enqueue_pending_inject(project_id, "sess-B", "run B", nonce="n-b")
+    inject = AsyncMock(return_value="started")
+    mgr.inject_message = inject  # type: ignore[assignment]
+
+    # No holder → _release_slot pops B into the in-flight batch + schedules
+    # _fire (which has not awaited yet).
+    mgr._release_slot(project_id)
+    assert mgr._pending_inflight.get(project_id), "batch should be in-flight"
+
+    result = mgr.cancel_pending_inject(project_id, "sess-B", nonce="n-b")
+    assert result == {"status": "cancelled", "removed": False}
+    await _flush()
+    # _fire ran but skipped the tombstoned entry: no inject, not resurrected.
+    assert inject.await_count == 0
+    assert project_id not in mgr._pending_inject
+
+
+# §12 R3 — list_pending includes same-session entries (kind=same, full content)
+
+
+@pytest.mark.asyncio
+async def test_list_pending_includes_same_session_full_content(tmp_path):
+    project_id = "proj-list-same"
+    mgr, _, _ = _make_agent_manager()
+    tasks: list = []
+    _, session, _t = _plant_running_real_session(
+        mgr, project_id, "sess-A", tmp_path, tasks=tasks,
+    )
+    # A holds the slot; A has its own queued message AND B is queued behind it.
+    long_text = "x" * 500  # exceeds the old 200-char preview cap → full content
+    session.queue_message(long_text, nonce="same-1")
+    mgr.enqueue_pending_inject(project_id, "sess-B", "cross msg", nonce="cross-1")
+
+    try:
+        pending = mgr.list_pending(project_id)
+        cross = [p for p in pending if p["kind"] == "cross"]
+        same = [p for p in pending if p["kind"] == "same"]
+
+        assert len(cross) == 1
+        assert cross[0]["session_id"] == "sess-B"
+        assert cross[0]["nonce"] == "cross-1"
+        assert cross[0]["content"] == "cross msg"
+
+        assert len(same) == 1
+        assert same[0]["session_id"] == "sess-A"
+        assert same[0]["nonce"] == "same-1"
+        # FULL content, not a 200-char preview (§12 R3/R4).
+        assert same[0]["content"] == long_text
+        assert "content_preview" not in same[0]
+    finally:
+        await _cancel_tasks(tasks)
+
+
+# §11d.3 — _on_loop_done same-session drain broadcasts chat.pending_dispatched
+
+
+@pytest.mark.asyncio
+async def test_on_loop_done_drain_broadcasts_pending_dispatched_per_nonce():
+    project_id = "proj-drain-bcast"
+    mgr, _, _ = _make_agent_manager()
+    tasks: list = []
+
+    session = _mk_session("sess-A")
+    # Two nonced messages + one None-nonce message in the same-session queue.
+    session.pop_queued_messages = MagicMock(
+        return_value=[("c1", "n1"), ("c2", "n2"), ("c3", None)],
+    )
+    handle = _mk_handle(session)
+
+    async def _done():
+        return None
+
+    main_task = asyncio.get_event_loop().create_task(_done())
+    handle.task = main_task
+    mgr._handles[(project_id, "sess-A")] = handle
+    await main_task
+
+    # The drain hot-resumes the loop via ensure_future(_start_loop); stub it.
+    mgr._start_loop = AsyncMock()  # type: ignore[assignment]
+
+    try:
+        mgr._on_loop_done(project_id, session_id="sess-A")(main_task)
+        await _flush()
+        disp = [p for p in _payloads(mgr)
+                if p.get("type") == "chat.pending_dispatched"]
+        # One broadcast per drained NONCE; the None-nonce drain is skipped.
+        assert [(p["session_id"], p["nonce"]) for p in disp] == [
+            ("sess-A", "n1"), ("sess-A", "n2"),
+        ]
+        # The hot-resume was scheduled exactly once.
+        assert mgr._start_loop.await_count == 1
+    finally:
+        await _cancel_tasks(tasks)

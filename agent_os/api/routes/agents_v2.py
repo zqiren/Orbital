@@ -1233,11 +1233,13 @@ class PendingCancelRequest(BaseModel):
 
 @router.post("/agents/{project_id}/pending/cancel")
 async def cancel_pending(project_id: str, req: PendingCancelRequest) -> dict:
-    """Cancel ("stop waiting") a queued pending inject.
+    """Cancel / recall a queued message (cross-session OR same-session).
 
-    Drops the queued entry (or tombstones it if a dispatch is already in
+    Drops the still-queued entry (or tombstones it if a dispatch is already in
     flight) and broadcasts ``chat.pending_cancelled``. Returns
-    ``{"status": "cancelled"}``.
+    ``{"status": "cancelled", "removed": bool}`` where ``removed`` is True only
+    when an actually-still-queued entry was dequeued — the FE relies on this to
+    avoid a recall-vs-dispatch double-send (spec 006 §12 R2).
     """
     return _agent_manager.cancel_pending_inject(
         project_id, req.session_id, nonce=req.nonce,
@@ -1249,8 +1251,10 @@ async def get_pending(project_id: str):
     """Return the project's pending-input queue (spec 006).
 
     Mobile/relay reconnect recovery, mirroring ``/pending-approval``: lets a
-    client rebuild the "waiting behind {holder}" affordances after a WS drop.
-    ``{holder, pending:[{session_id, nonce, content_preview, position}]}``.
+    client rebuild the waiting affordances after a WS drop. Entries carry FULL
+    ``content`` (for recall) and a ``kind`` of ``"cross"`` (slot held by
+    another session) or ``"same"`` (this session's turn mid-flight). ``{holder,
+    pending:[{session_id, nonce, content, position, kind}]}`` (spec 006 §12).
     """
     holder = _agent_manager.current_holder_session_id(project_id)
     return {

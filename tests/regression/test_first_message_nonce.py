@@ -218,7 +218,7 @@ class TestQueuedMessageNonce:
 
         result = await mgr.inject_message("proj_q", "queued msg", nonce="q-nonce", session_id="sess-nonce-q1")
 
-        assert result == "queued"
+        assert result == "queued_same_session"
         assert len(queue_calls) == 1
         assert queue_calls[0] == ("queued msg", "q-nonce")
 

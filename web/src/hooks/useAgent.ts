@@ -49,18 +49,36 @@ export interface InjectResult extends ActionResult {
   position?: number;
 }
 
-/** GET /agents/{id}/pending — mobile/relay reconnect recovery (spec 006 §3f). */
+/**
+ * GET /agents/{id}/pending — mobile/relay reconnect recovery (spec 006 §3f,
+ * §11d). v3: entries carry the FULL `content` (not a preview) so recall can
+ * rebuild the composer text, and a `kind` discriminating cross-session
+ * (`_pending_inject`, slot held by another session) from same-session
+ * (`session._queue`, this session's turn mid-flight) queued messages.
+ */
 export interface PendingEntry {
   session_id: string;
   nonce: string | null;
-  content_preview: string;
+  content: string;
   position: number;
+  kind: 'cross' | 'same';
 }
 
 export interface PendingListResult {
   /** The session currently holding the slot, or null if free. */
   holder: string | null;
   pending: PendingEntry[];
+}
+
+/**
+ * POST /agents/{id}/pending/cancel response (spec 006 v3 §12 R2). `removed`
+ * is the SERVER-AUTHORITATIVE signal for recall: true when a still-queued
+ * entry was actually removed (safe to load its text into the composer), false
+ * when the message had already dispatched / drained (do NOT load — it is
+ * running; loading would double-send).
+ */
+export interface CancelPendingResult extends ActionResult {
+  removed: boolean;
 }
 
 export function useAgent() {
@@ -137,11 +155,14 @@ export function useAgent() {
     [],
   );
 
-  // Pending-input queue (spec 006). Cancel a queued ("Stop waiting") pending
-  // input for session B. Omit `nonce` to cancel all of B's pending entries.
+  // Pending-input queue (spec 006). Cancel/dequeue a queued pending input for
+  // session B (cross- OR same-session). Omit `nonce` to cancel all of B's
+  // pending entries. v3: returns `{status, removed}` — `removed` tells the
+  // caller whether a still-queued entry was actually removed (server-
+  // authoritative recall, §12 R2).
   const cancelPendingInput = useCallback(
     async (projectId: string, sessionId: string, nonce?: string) => {
-      return api<ActionResult>(
+      return api<CancelPendingResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/pending/cancel`,
         {
           method: 'POST',

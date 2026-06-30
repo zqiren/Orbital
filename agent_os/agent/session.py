@@ -659,6 +659,29 @@ class Session:
         self._queue.clear()
         return queued
 
+    def remove_queued_message(self, nonce: str) -> str | None:
+        """Remove the queued ``(content, nonce)`` tuple matching ``nonce``.
+
+        Returns the removed content, or ``None`` if no entry matched. Supports
+        the ↑-dequeue / recall of a same-session queued message (spec 006
+        §11d): the FE recalls a still-queued message into the composer and the
+        server authoritatively reports whether it removed one.
+        """
+        for idx, (content, q_nonce) in enumerate(self._queue):
+            if q_nonce == nonce:
+                del self._queue[idx]
+                return content
+        return None
+
+    def list_queued(self) -> list[tuple[str, str | None]]:
+        """Non-destructive copy of the queue (GET /pending recovery, §12 R3).
+
+        Unlike ``pop_queued_messages`` this does not clear the queue — it is a
+        read-only snapshot so a reconnecting client can rebuild the
+        same-session waiting line without consuming the pending messages.
+        """
+        return list(self._queue)
+
     # ------------------------------------------------------------------
     # Deferred messages (lifecycle notifications during tool execution)
     # ------------------------------------------------------------------
