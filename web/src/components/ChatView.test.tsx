@@ -100,7 +100,10 @@ vi.mock('../hooks/useWebSocket', () => ({
 
 // Per-test override slot for cancelMessage. The default resolves; tests
 // that need rejection or controlled timing replace this between renders.
-let cancelMessageMock: (projectId: string) => Promise<unknown> = async () => undefined;
+let cancelMessageMock: (...args: unknown[]) => Promise<unknown> = async () => undefined;
+// Records cancelMessage calls (args), so "Run now" tests can assert it fired
+// exactly once with the holder and injectMessage zero times.
+const cancelMessageCalls: unknown[][] = [];
 // Records the args of the most recent injectMessage call so tests can assert
 // the viewed sessionId is threaded through. Replaceable per-test for slot_held.
 let injectMessageMock: (...args: unknown[]) => Promise<unknown> = async () => undefined;
@@ -108,9 +111,23 @@ const injectCalls: unknown[][] = [];
 // Records startAgent calls so the auto-start test can assert it does NOT fire
 // on a session switch.
 const startAgentCalls: string[] = [];
+// Pending-input queue (spec 006): GET /pending recovery + cancelPendingInput.
+let getPendingMock: (projectId: string) => Promise<unknown> = async () => ({
+  holder: null,
+  pending: [],
+});
+let cancelPendingInputMock: (...args: unknown[]) => Promise<unknown> = async () => ({
+  status: 'cancelled',
+});
+const cancelPendingInputCalls: unknown[][] = [];
 
-vi.mock('../hooks/useAgent', () => ({
-  useAgent: () => ({
+// Return a STABLE instance so useAgent's functions keep referential identity
+// across renders (the real hook wraps them in useCallback). The session-load
+// effect now depends on reconcilePending → getPending; a fresh object per
+// render would re-run it every render and break the "exactly one /chat fetch"
+// assertions.
+vi.mock('../hooks/useAgent', () => {
+  const inst = {
     injectMessage: vi.fn((...args: unknown[]) => {
       injectCalls.push(args);
       return injectMessageMock(...args);
@@ -119,10 +136,20 @@ vi.mock('../hooks/useAgent', () => ({
       startAgentCalls.push(projectId);
       return undefined;
     }),
-    cancelMessage: vi.fn((projectId: string) => cancelMessageMock(projectId)),
+    cancelMessage: vi.fn((...args: unknown[]) => {
+      cancelMessageCalls.push(args);
+      return cancelMessageMock(...args);
+    }),
     newSession: vi.fn(async () => undefined),
-  }),
-}));
+    coldStartScan: vi.fn(async () => ({ status: 'ok' })),
+    getPending: vi.fn((projectId: string) => getPendingMock(projectId)),
+    cancelPendingInput: vi.fn((...args: unknown[]) => {
+      cancelPendingInputCalls.push(args);
+      return cancelPendingInputMock(...args);
+    }),
+  };
+  return { useAgent: () => inst };
+});
 
 // Per-test queue state (real backend vocab: running|paused|idle). 'running' =
 // active (composer disabled); 'idle'/'paused' = normal composer visible. Tests
@@ -167,7 +194,12 @@ beforeEach(() => {
   apiWithTotalCalls.length = 0;
   injectCalls.length = 0;
   startAgentCalls.length = 0;
+  cancelMessageCalls.length = 0;
+  cancelPendingInputCalls.length = 0;
   injectMessageMock = async () => undefined;
+  cancelMessageMock = async () => undefined;
+  getPendingMock = async () => ({ holder: null, pending: [] });
+  cancelPendingInputMock = async () => ({ status: 'cancelled' });
   runStatusHolder = null;
   chatInitialResponse = { data: [], total: 0 };
   chatOlderResponse = { data: [], total: 0 };
@@ -743,8 +775,44 @@ describe('T5 ChatView: inject targets the viewed session', () => {
     expect(args[5]).toBe('s7');
   });
 
-  it('renders SlotHeldNotice when inject returns 202 slot_held', async () => {
-    // Inject resolves with a slot_held payload (another session holds the slot).
+  // Spec 006 §6 test 13 (rewrite of the old slot_held test). The 202 happy
+  // path is now `queued_pending_slot`: the message was ACCEPTED + queued. The
+  // optimistic bubble is KEPT (not removed) and a "Waiting for {holder}…"
+  // affordance shows.
+  it('keeps the optimistic bubble and shows the waiting affordance on 202 queued_pending_slot', async () => {
+    injectMessageMock = async () => ({
+      status: 'queued_pending_slot',
+      holding_session_id: 'sess-A',
+      queued_session_id: 's1',
+      nonce: 'ignored-server-nonce',
+      position: 0,
+    });
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('queued message');
+    });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The optimistic bubble is KEPT.
+    expect(container.textContent ?? '').toContain('queued message');
+    // The new waiting affordance is shown with the holder.
+    const notice = container.querySelector('[data-testid="pending-input-notice"]');
+    expect(notice).toBeTruthy();
+    const body = container.querySelector('[data-testid="pending-input-notice-body"]');
+    expect(body?.textContent ?? '').toContain('sess-A');
+    // The OLD slot_held notice is NOT used on the happy path.
+    expect(container.querySelector('[data-testid="slot-held-notice"]')).toBeNull();
+  });
+
+  it('falls back to SlotHeldNotice when inject returns 202 slot_held (enqueue failure)', async () => {
+    // slot_held is retained ONLY as the defensive enqueue-failure fallback.
     injectMessageMock = async () => ({
       status: 'slot_held',
       holding_session_id: 'other-session',
@@ -766,6 +834,237 @@ describe('T5 ChatView: inject targets the viewed session', () => {
     expect(notice).toBeTruthy();
     const holder = container.querySelector('[data-testid="slot-held-notice-holder"]');
     expect(holder?.textContent ?? '').toContain('other-session');
+    // The fallback uses the OLD notice, NOT the new pending-input affordance.
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
+  });
+});
+
+// ─── Spec 006: pending-input queue (frontend §3h, tests 13-19) ─────────────
+
+describe('ChatView: pending-input queue (spec 006)', () => {
+  // Helper: send a message that gets queued (202 queued_pending_slot) into the
+  // viewed session, returning after the optimistic bubble + affordance render.
+  async function sendQueued(sessionId: string, holder: string, text: string) {
+    injectMessageMock = async () => ({
+      status: 'queued_pending_slot',
+      holding_session_id: holder,
+      queued_session_id: sessionId,
+      position: 0,
+    });
+    await renderChat({ agentStatus: 'running', sessionId });
+    await flushEffects();
+    await act(async () => {
+      typeInComposer(text);
+    });
+    // agentStatus 'running' renders the "Queue" button (not "Send").
+    const btn =
+      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null) ??
+      ([...container.querySelectorAll('button')].find(
+        (b) => (b.textContent ?? '').trim() === 'Queue',
+      ) as HTMLButtonElement);
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it('test 14: chat.pending_dispatched clears the waiting affordance for the viewed session', async () => {
+    await sendQueued('s1', 'sess-A', 'hello B');
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+
+    // The dispatch echo for our own nonce: we don't know the internally-minted
+    // nonce, so simulate the real backend ordering — chat.pending_dispatched is
+    // session-scoped and is the SOLE clear trigger. Emit with the matching
+    // session; the handler clears by nonce, so emit using the nonce that the
+    // origin tab tracked. We can't read it, so assert the cross-tab analogue:
+    // emit pending_enqueued from ANOTHER tab/nonce, then dispatch THAT nonce.
+    await act(async () => {
+      emitWs('chat.pending_enqueued', {
+        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
+        holder: 'sess-A', nonce: 'n-dispatch', content: 'second queued', position: 1,
+      });
+    });
+    // Two notices now (origin + cross-tab nonce).
+    expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(2);
+
+    await act(async () => {
+      emitWs('chat.pending_dispatched', {
+        type: 'chat.pending_dispatched', project_id: 'p1', session_id: 's1', nonce: 'n-dispatch',
+      });
+    });
+    // The dispatched nonce's affordance is cleared; the other remains.
+    expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(1);
+  });
+
+  it('test 14b: chat.pending_dispatched for a non-viewed session does not error', async () => {
+    await sendQueued('s1', 'sess-A', 'hello B');
+    await act(async () => {
+      emitWs('chat.pending_dispatched', {
+        type: 'chat.pending_dispatched', project_id: 'p1', session_id: 's-other', nonce: 'whatever',
+      });
+    });
+    // Our viewed-session affordance is untouched (different nonce/session).
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+  });
+
+  it('test 15: switch away during pending then back restores the affordance from GET /pending', async () => {
+    await sendQueued('s1', 'sess-A', 'hello B');
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+
+    // Backend now reports the pending entry via GET /pending (persist-at-dispatch
+    // means it is NOT in B's JSONL, so only /pending recovers it).
+    getPendingMock = async () => ({
+      holder: 'sess-A',
+      pending: [
+        { session_id: 's1', nonce: 'n-recovered', content_preview: 'hello B', position: 0 },
+      ],
+    });
+
+    // Switch away to s2 …
+    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await flushEffects();
+    // s2 is a different session: no affordance for it.
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
+
+    // … and back to s1 — the affordance + bubble are restored from GET /pending.
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeTruthy();
+    expect(container.textContent ?? '').toContain('hello B');
+  });
+
+  it('test 16: long wait (>30s nonce eviction) then dispatch echo → no duplicate bubble', async () => {
+    vi.useFakeTimers();
+    try {
+      // A cross-tab enqueue renders an optimistic bubble + registers the nonce.
+      await renderChat({ agentStatus: 'running', sessionId: 's1' });
+      await act(async () => { await Promise.resolve(); });
+
+      await act(async () => {
+        emitWs('chat.pending_enqueued', {
+          type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
+          holder: 'sess-A', nonce: 'n-long', content: 'long-wait-msg', position: 0,
+        });
+      });
+      const countBubbles = () =>
+        (container.textContent ?? '').split('long-wait-msg').length - 1;
+      expect(countBubbles()).toBe(1);
+
+      // Advance > 30s and trigger the eviction sweep via an unrelated user echo.
+      await act(async () => {
+        vi.advanceTimersByTime(40_000);
+        emitWs('chat.user_message', {
+          type: 'chat.user_message', project_id: 'p1', session_id: 's1',
+          content: 'unrelated', nonce: 'n-unrelated', timestamp: new Date().toISOString(),
+        });
+      });
+
+      // Now the dispatch echo arrives for our pending nonce — it must DEDUP
+      // (the nonce was exempt from eviction), so no second bubble.
+      await act(async () => {
+        emitWs('chat.user_message', {
+          type: 'chat.user_message', project_id: 'p1', session_id: 's1',
+          content: 'long-wait-msg', nonce: 'n-long', timestamp: new Date().toISOString(),
+        });
+      });
+      expect(countBubbles()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('test 17: Run now calls cancelMessage(holder) exactly once and injectMessage zero times', async () => {
+    await sendQueued('s1', 'sess-A', 'hello B');
+    // sendQueued already called injectMessage once (the send). Reset the counter
+    // so we measure ONLY the Run-now path.
+    injectCalls.length = 0;
+    cancelMessageCalls.length = 0;
+
+    const runNow = container.querySelector(
+      '[data-testid="pending-input-notice-run-now"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      runNow.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelMessageCalls.length).toBe(1);
+    expect(cancelMessageCalls[0][0]).toBe('p1');
+    expect(cancelMessageCalls[0][1]).toBe('sess-A');
+    // No re-inject (the queued message dispatches itself).
+    expect(injectCalls.length).toBe(0);
+  });
+
+  it('test 18: multi-tab — chat.pending_enqueued dedups by nonce (no double bubble)', async () => {
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    const evt = {
+      type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
+      holder: 'sess-A', nonce: 'n-dup', content: 'multi-tab-msg', position: 0,
+    };
+    await act(async () => { emitWs('chat.pending_enqueued', evt); });
+    await act(async () => { emitWs('chat.pending_enqueued', evt); }); // relay retry
+
+    const count = (container.textContent ?? '').split('multi-tab-msg').length - 1;
+    expect(count).toBe(1);
+    expect(container.querySelectorAll('[data-testid="pending-input-notice"]').length).toBe(1);
+  });
+
+  it('test 19: Run now vs self-free race — stale cancel(holder) still only calls cancelMessage once, no inject', async () => {
+    // The slot may have already freed (holder gone) by the time the user clicks
+    // Run now. The frontend still just calls cancelMessage(holder) once (a no-op
+    // server-side) and never re-injects — backend guarantees B runs once.
+    await sendQueued('s1', 'sess-A', 'hello B');
+    injectCalls.length = 0;
+    cancelMessageCalls.length = 0;
+    // Simulate the holder already being free: cancelMessage resolves as a no-op.
+    cancelMessageMock = async () => ({ status: 'idle' });
+
+    const runNow = container.querySelector(
+      '[data-testid="pending-input-notice-run-now"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      runNow.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelMessageCalls.length).toBe(1);
+    expect(injectCalls.length).toBe(0);
+  });
+
+  it('Stop waiting calls cancelPendingInput(project, session, nonce) and removes the bubble', async () => {
+    // Use a cross-tab enqueue so we know the nonce (the origin send mints its
+    // own internal nonce we can't read).
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      emitWs('chat.pending_enqueued', {
+        type: 'chat.pending_enqueued', project_id: 'p1', session_id: 's1',
+        holder: 'sess-A', nonce: 'n-stop', content: 'stop-me', position: 0,
+      });
+    });
+    expect(container.textContent ?? '').toContain('stop-me');
+
+    const stop = container.querySelector(
+      '[data-testid="pending-input-notice-stop"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      stop.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelPendingInputCalls.length).toBe(1);
+    expect(cancelPendingInputCalls[0][0]).toBe('p1'); // projectId
+    expect(cancelPendingInputCalls[0][1]).toBe('s1'); // sessionId
+    expect(cancelPendingInputCalls[0][2]).toBe('n-stop'); // nonce
+    // Optimistic cleanup removed the bubble + the notice.
+    expect(container.textContent ?? '').not.toContain('stop-me');
+    expect(container.querySelector('[data-testid="pending-input-notice"]')).toBeNull();
   });
 });
 

@@ -30,10 +30,37 @@ export interface InjectResult extends ActionResult {
    * 202 with `status: "slot_held"` because the requested session_id does
    * not currently hold the project's active-loop slot. The frontend should
    * render SlotHeldNotice and offer cancel-and-resend.
+   *
+   * Pending-input queue (spec 006): also present on the new happy-path 202
+   * `status: "queued_pending_slot"` — the holder (A) of the slot, shown in
+   * the "Waiting for {holder}…" affordance.
    */
   holding_session_id?: string;
   /** Human-readable description that accompanies `status: "slot_held"`. */
   message?: string;
+  /**
+   * Pending-input queue (spec 006) 202 `queued_pending_slot` fields: the
+   * message was accepted and queued (NOT rejected) and will auto-dispatch
+   * when the slot frees. The optimistic bubble is KEPT and a waiting
+   * affordance is shown (see ChatView `pendingInputs`).
+   */
+  queued_session_id?: string;
+  nonce?: string;
+  position?: number;
+}
+
+/** GET /agents/{id}/pending — mobile/relay reconnect recovery (spec 006 §3f). */
+export interface PendingEntry {
+  session_id: string;
+  nonce: string | null;
+  content_preview: string;
+  position: number;
+}
+
+export interface PendingListResult {
+  /** The session currently holding the slot, or null if free. */
+  holder: string | null;
+  pending: PendingEntry[];
 }
 
 export function useAgent() {
@@ -110,6 +137,32 @@ export function useAgent() {
     [],
   );
 
+  // Pending-input queue (spec 006). Cancel a queued ("Stop waiting") pending
+  // input for session B. Omit `nonce` to cancel all of B's pending entries.
+  const cancelPendingInput = useCallback(
+    async (projectId: string, sessionId: string, nonce?: string) => {
+      return api<ActionResult>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/pending/cancel`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            session_id: sessionId,
+            ...(nonce !== undefined && { nonce }),
+          }),
+        },
+      );
+    },
+    [],
+  );
+
+  // Pending-input queue (spec 006). Recovery fetch for reconnect / switch-back:
+  // returns the slot holder plus all queued pending inputs for the project.
+  const getPending = useCallback(async (projectId: string) => {
+    return api<PendingListResult>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/pending`,
+    );
+  }, []);
+
   const approveToolCall = useCallback(
     async (
       projectId: string,
@@ -152,5 +205,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, cancelPendingInput, getPending, approveToolCall, denyToolCall };
 }

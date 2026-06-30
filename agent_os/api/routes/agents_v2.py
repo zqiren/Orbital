@@ -870,6 +870,9 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
     for p in to_delete:
         pid = p["project_id"]
         try:
+            # Drop the pending-input queue before teardown (spec 006 §3g).
+            if hasattr(_agent_manager, "purge_pending"):
+                _agent_manager.purge_pending(pid)
             if _agent_manager.is_running(pid):
                 # Seam 3 / D1 (Root C): is_running is holder-aware but
                 # stop_agent is passthrough-None — forward the holder session so
@@ -894,6 +897,11 @@ async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Drop the pending-input queue BEFORE stopping the holder: stop_agent frees
+    # the slot and would otherwise dispatch a queued message into a project that
+    # is being deleted (spec 006 §3g).
+    if hasattr(_agent_manager, "purge_pending"):
+        _agent_manager.purge_pending(project_id)
     # Stop agent if running. is_running is holder-aware but stop_agent is
     # passthrough-None (seam 3 / D1, Root C): forward the holder session so the
     # running loop is stopped rather than orphaned (a bare stop_agent(project_id)
@@ -1132,11 +1140,51 @@ async def inject_message(project_id: str, req: InjectRequest):
         except ValueError:
             # The manager rejected the inject — most commonly because another
             # session holds the project's active-loop slot (start_agent raised).
-            # Translate that into the same 202 `slot_held` payload the frontend
-            # expects, instead of a 500. Re-check the holder to confirm it is a
-            # genuine slot conflict; re-raise anything else.
+            # Re-check the holder to confirm it is a genuine slot conflict;
+            # re-raise anything else.
             holder = _agent_manager.current_holder_session_id(project_id)
             if holder is not None and holder != req.session_id:
+                # Path A (spec 006): enqueue the message for delivery when the
+                # slot frees, instead of rejecting. The single-slot invariant is
+                # preserved — B runs *next*, not concurrently. ``slot_held`` is
+                # retained ONLY as the defensive fallback (no session_id to
+                # target, or enqueue itself raised).
+                enq = None
+                if req.session_id is not None:
+                    try:
+                        enq = _agent_manager.enqueue_pending_inject(
+                            project_id, req.session_id, effective_content,
+                            nonce=req.nonce, attachments=attachment_dicts,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "enqueue_pending_inject failed for %s/%s",
+                            project_id, req.session_id, exc_info=True,
+                        )
+                        enq = None
+                if enq is not None:
+                    # Broadcast the optimistic bubble (text + nonce) so OTHER
+                    # clients render it; the origin tab dedups by nonce.
+                    _ws_manager.broadcast(project_id, {
+                        "type": "chat.pending_enqueued",
+                        "project_id": project_id,
+                        "session_id": req.session_id,
+                        "holder": holder,
+                        "nonce": req.nonce,
+                        "content": effective_content,
+                        "position": enq["position"],
+                    })
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "queued_pending_slot",
+                            "holding_session_id": holder,
+                            "queued_session_id": req.session_id,
+                            "nonce": req.nonce,
+                            "position": enq["position"],
+                        },
+                    )
+                # Fallback: legacy slot_held contract.
                 return JSONResponse(
                     status_code=202,
                     content={
@@ -1163,7 +1211,52 @@ async def agent_run_status(project_id: str):
     """
     status = _agent_manager.get_run_status(project_id)
     holder = _agent_manager.current_holder_session_id(project_id)
-    return {"project_id": project_id, "status": status, "current_holder_session_id": holder}
+    return {
+        "project_id": project_id,
+        "status": status,
+        "current_holder_session_id": holder,
+        # Number of interactive messages queued behind the slot holder
+        # (spec 006, pending-input queue).
+        "pending_count": len(_agent_manager.list_pending(project_id)),
+    }
+
+
+class PendingCancelRequest(BaseModel):
+    """Body for cancelling a queued pending inject (spec 006).
+
+    ``session_id`` identifies the chat session whose pending message(s) to
+    drop; ``nonce`` optionally narrows it to a single queued message.
+    """
+    session_id: str
+    nonce: str | None = None
+
+
+@router.post("/agents/{project_id}/pending/cancel")
+async def cancel_pending(project_id: str, req: PendingCancelRequest) -> dict:
+    """Cancel ("stop waiting") a queued pending inject.
+
+    Drops the queued entry (or tombstones it if a dispatch is already in
+    flight) and broadcasts ``chat.pending_cancelled``. Returns
+    ``{"status": "cancelled"}``.
+    """
+    return _agent_manager.cancel_pending_inject(
+        project_id, req.session_id, nonce=req.nonce,
+    )
+
+
+@router.get("/agents/{project_id}/pending")
+async def get_pending(project_id: str):
+    """Return the project's pending-input queue (spec 006).
+
+    Mobile/relay reconnect recovery, mirroring ``/pending-approval``: lets a
+    client rebuild the "waiting behind {holder}" affordances after a WS drop.
+    ``{holder, pending:[{session_id, nonce, content_preview, position}]}``.
+    """
+    holder = _agent_manager.current_holder_session_id(project_id)
+    return {
+        "holder": holder,
+        "pending": _agent_manager.list_pending(project_id),
+    }
 
 
 @router.get("/agents/{project_id}/pending-approval")

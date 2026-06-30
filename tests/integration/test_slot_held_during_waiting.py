@@ -173,9 +173,13 @@ async def test_current_holder_returns_session_when_waiting():
 
 @pytest.mark.asyncio
 async def test_cross_session_inject_during_waiting_returns_202():
-    """End-to-end: HTTP inject to a different session while session A is
-    in ``waiting`` must return 202 ``slot_held`` with sess-A as the
-    holding session."""
+    """End-to-end: HTTP inject to a different session while session A is in
+    ``waiting`` is ENQUEUED (Path A, spec 006) → 202 ``queued_pending_slot``
+    with sess-A as the holding session.
+
+    Rewritten from the old ``slot_held`` reject contract (spec 006 §5): a
+    waiting holder still holds the slot, so B's message is queued for delivery
+    when the slot frees rather than rejected."""
     mgr, project_store = _make_agent_manager()
     project_id = "proj_waiting_inject_202"
     project_store.get_project.return_value = {
@@ -193,12 +197,16 @@ async def test_cross_session_inject_during_waiting_returns_202():
             json={"content": "hi from B", "session_id": "sess-B"},
         )
         assert resp.status_code == 202, (
-            f"Expected 202 slot_held during waiting, got "
+            f"Expected 202 queued_pending_slot during waiting, got "
             f"{resp.status_code}: {resp.text}"
         )
         body = resp.json()
-        assert body["status"] == "slot_held"
+        assert body["status"] == "queued_pending_slot"
         assert body["holding_session_id"] == "sess-A"
+        assert body["queued_session_id"] == "sess-B"
+        assert body["position"] == 1
+        # Enqueued in the registry; nothing dispatched while A still waits.
+        assert len(mgr._pending_inject[project_id]) == 1
     finally:
         client.close()
         _restore(saved)

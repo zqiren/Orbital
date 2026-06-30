@@ -336,6 +336,9 @@ import type {
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
   WorkspaceClaudemdWarningEvent,
+  PendingEnqueuedEvent,
+  PendingDispatchedEvent,
+  PendingCancelledEvent,
   WebSocketEvent,
   Project,
 } from '../types';
@@ -347,6 +350,7 @@ import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import SlotHeldNotice from './SlotHeldNotice';
+import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
 
@@ -390,6 +394,16 @@ interface StreamState {
   text: string;
   source: string;
   isComplete: boolean;
+}
+
+// Pending-input queue (spec 006). One queued message awaiting the slot. Keyed
+// by nonce in `pendingInputs`. `content`/`timestamp` mirror the kept optimistic
+// bubble so cancel/dispatch can locate and remove it.
+interface PendingInputEntry {
+  sessionId: string;
+  holder: string;
+  content: string;
+  timestamp: string;
 }
 
 interface PendingApproval {
@@ -459,6 +473,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       }
     | null
   >(null);
+  // Pending-input queue (spec 006, Path A). A NONCE-KEYED OVERLAY — NOT a flag
+  // in `items` (the historyItems memo reseed would stomp that). Each entry is a
+  // message the user sent to a session while another session held the project's
+  // single active-loop slot; the backend accepted + queued it (202
+  // `queued_pending_slot`) and auto-dispatches it when the slot frees. The map
+  // is PROJECT-scoped; the waiting affordance renders only for entries whose
+  // `sessionId` is the viewed session. `content`/`timestamp` identify the kept
+  // optimistic bubble so cancel/dispatch can locate it. Cleared per-nonce on
+  // `chat.pending_dispatched` (sole clear trigger) / `chat.pending_cancelled`,
+  // and rebuilt from GET /pending on session load + WS reconnect.
+  const [pendingInputs, setPendingInputs] = useState<Map<string, PendingInputEntry>>(new Map());
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
@@ -479,7 +504,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, cancelMessage, newSession, coldStartScan } = useAgent();
+  const { injectMessage, cancelMessage, newSession, coldStartScan, cancelPendingInput, getPending } = useAgent();
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
@@ -500,6 +525,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Latest holder, readable synchronously inside WS handlers.
   const holderSessionIdRef = useRef<string | null>(holderSessionId);
   holderSessionIdRef.current = holderSessionId;
+  // Latest pending-input map, readable synchronously inside WS handlers and the
+  // nonce-eviction sweep (which must EXEMPT pending nonces — spec §3h F4 — so a
+  // long wait can't evict the nonce before the dispatch echo dedups against the
+  // kept optimistic bubble). Never read a value mutated inside a setState
+  // updater (React 19 batching) — read this committed ref instead.
+  const pendingInputsRef = useRef<Map<string, PendingInputEntry>>(pendingInputs);
+  pendingInputsRef.current = pendingInputs;
   // Seam 3 / Phase 3: live WS events are routed STRICTLY by session_id. Every
   // live event now carries the canonical session_id (Phases 1+2), so a handler
   // renders an event into the viewed conversation iff
@@ -769,6 +801,96 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId]);
 
+  // Pending-input queue (spec 006). Remove a kept optimistic bubble (identified
+  // by its content + timestamp) from BOTH the live `items` and `rawMessages`
+  // (so the transform-once reseed doesn't re-emit it). Walks from the end so
+  // concurrent appends of unrelated bubbles are left intact.
+  const removeOptimisticBubble = useCallback((content: string, timestamp: string) => {
+    setItems((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const it = prev[i];
+        if (it.type === 'user_message' && it.content === content && it.timestamp === timestamp) {
+          return [...prev.slice(0, i), ...prev.slice(i + 1)];
+        }
+      }
+      return prev;
+    });
+    setRawMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.role === 'user' && m.content === content && m.timestamp === timestamp) {
+          return [...prev.slice(0, i), ...prev.slice(i + 1)];
+        }
+      }
+      return prev;
+    });
+  }, []);
+
+  // Pending-input queue (spec 006 §3h). Reconcile the pending overlay from the
+  // server (GET /pending) on session load + WS reconnect. Rebuilds the
+  // project-scoped `pendingInputs` map from server truth (preserving an existing
+  // entry's bubble identity so the kept optimistic bubble isn't duplicated), and
+  // re-appends optimistic bubbles for the VIEWED session into `rawMessages` (the
+  // transform-once memo + seed then render them — surviving the reseed). Fixes
+  // switch-away-and-back stale/lost-affordance (F3).
+  const reconcilePending = useCallback(() => {
+    getPending(projectId)
+      .then((res) => {
+        if (!res) return;
+        const list = res.pending ?? [];
+        const holder = res.holder ?? '';
+        const viewed = sessionIdRef.current;
+        // Build the next map from server truth, preserving any existing entry's
+        // content/timestamp (its bubble identity) via the committed ref.
+        const rebuilt: Array<[string, PendingInputEntry]> = [];
+        for (const p of list) {
+          if (!p.nonce) continue;
+          const existing = pendingInputsRef.current.get(p.nonce);
+          rebuilt.push([
+            p.nonce,
+            existing ?? {
+              sessionId: p.session_id,
+              holder,
+              content: p.content_preview,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+          // Keep the nonce alive so the eventual dispatch echo dedups against
+          // the rebuilt bubble (don't clobber an existing received-timestamp).
+          if (!localNoncesRef.current.has(p.nonce)) {
+            localNoncesRef.current.set(p.nonce, 0);
+          }
+        }
+        setPendingInputs(() => new Map(rebuilt));
+        // Ensure a bubble exists in rawMessages for each viewed-session entry.
+        if (viewed === undefined) return;
+        setRawMessages((prev) => {
+          let next = prev;
+          for (const [, entry] of rebuilt) {
+            if (entry.sessionId !== viewed) continue;
+            const has = next.some(
+              (m) => m.role === 'user' && m.content === entry.content,
+            );
+            if (!has) {
+              next = [
+                ...next,
+                {
+                  role: 'user',
+                  content: entry.content,
+                  source: 'user',
+                  timestamp: entry.timestamp,
+                },
+              ];
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // best effort — leave the prior overlay in place
+      });
+  }, [projectId, getPending]);
+
   // Keep the holder fresh: on mount/project change, on every agentStatus
   // transition (a status change always implies the slot may have been
   // acquired/released), and whenever the viewed session changes (so the
@@ -833,6 +955,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           setRawMessages([]);
           setItems([]);
         }
+        // Pending-input queue (spec 006 §3h): after the session's history is
+        // loaded, rebuild the pending overlay + re-append the kept optimistic
+        // bubble(s) for this session from GET /pending. Runs after the history
+        // setState above so the bubble append lands on top (switch-away-and-back
+        // restores the affordance; the queued message is NOT in JSONL yet).
+        if (!cancelled) reconcilePending();
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -842,7 +970,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     return () => {
       cancelled = true;
     };
-  }, [projectId, sessionId, project.workspace]);
+  }, [projectId, sessionId, project.workspace, reconcilePending]);
 
   const hasMore = totalMessages > loadedOffset;
 
@@ -1031,8 +1159,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // case where the mount fetch raced ahead of the server becoming
       // ready. Let it run — the dedup Map guarantees no duplicates.
       fetchPendingApproval();
+      // Pending-input queue (spec 006 §3h): a relay tunnel drop / mobile
+      // foreground may have missed pending_enqueued/dispatched/cancelled events.
+      // Rebuild the overlay from GET /pending so waiting affordances survive.
+      reconcilePending();
     }
-  }, [connectionState, fetchPendingApproval]);
+  }, [connectionState, fetchPendingApproval, reconcilePending]);
 
   // Fix 2B: Status poll fallback — if agent appears stuck as "running"
   // with no stream activity for 15 seconds, poll REST for actual status.
@@ -1293,9 +1425,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       const e = event as UserMessageEvent;
       if (e.project_id !== projectId) return;
 
-      // Evict nonces older than 30s on each incoming message
+      // Evict nonces older than 30s on each incoming message. EXEMPT pending
+      // nonces (spec 006 §3h F4): a queued message may wait far longer than 30s,
+      // and the nonce must survive so the dispatch-time persisted echo dedups
+      // against the kept optimistic bubble (no duplicate on long waits).
       const now = Date.now();
       for (const [n, ts] of localNoncesRef.current) {
+        if (pendingInputsRef.current.has(n)) continue;
         if (ts > 0 && now - ts > 30_000) localNoncesRef.current.delete(n);
       }
 
@@ -1421,6 +1557,86 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
     }
 
+    // Pending-input queue (spec 006 §3h). A message was accepted + queued behind
+    // the slot holder. Dedup by nonce (mirroring handleUserMessage): the origin
+    // tab already rendered the optimistic bubble + map entry in handleSend, so it
+    // ignores its own echo; OTHER tabs render the optimistic bubble + add the
+    // map entry. The bubble renders only for the viewed session, but the map
+    // entry is project-scoped (the affordance gates on the viewed session).
+    function handlePendingEnqueued(event: WebSocketEvent) {
+      const e = event as PendingEnqueuedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      // Our own send (origin) or a relay retry already handled — ignore.
+      if (localNoncesRef.current.has(e.nonce)) return;
+      // Register so the eventual dispatch echo dedups against the bubble we
+      // render here (and exempt from eviction while it sits in pendingInputs).
+      localNoncesRef.current.set(e.nonce, 0);
+      const ts = new Date().toISOString();
+      setPendingInputs((prev) => {
+        const next = new Map(prev);
+        next.set(e.nonce, {
+          sessionId: e.session_id,
+          holder: e.holder,
+          content: e.content,
+          timestamp: ts,
+        });
+        return next;
+      });
+      // Optimistic bubble only for the viewed session — pushed to BOTH items
+      // and rawMessages so the transform-once reseed reproduces it.
+      if (e.session_id !== sessionIdRef.current) return;
+      setItems((prev) => {
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          { type: 'user_message', content: e.content, timestamp: ts },
+        ];
+      });
+      setRawMessages((prev) => [
+        ...prev,
+        { role: 'user', content: e.content, source: 'user', timestamp: ts },
+      ]);
+      scrollToBottom();
+    }
+
+    // Pending-input queue (spec 006 §3h). The queued message started dispatching
+    // — clear ITS waiting affordance by removing the nonce from pendingInputs.
+    // This is the SOLE clear trigger (agent.status carries no session_id). The
+    // kept optimistic bubble stays; the real turn streams via the per-session
+    // path and the persisted echo dedups against the bubble by nonce.
+    function handlePendingDispatched(event: WebSocketEvent) {
+      const e = event as PendingDispatchedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      const nonce = e.nonce;
+      setPendingInputs((prev) => {
+        if (!prev.has(nonce)) return prev;
+        const next = new Map(prev);
+        next.delete(nonce);
+        return next;
+      });
+    }
+
+    // Pending-input queue (spec 006 §3h). The queued message was cancelled
+    // ("Stop waiting" / orphan cleanup). Remove the optimistic bubble + map
+    // entry, and drop the nonce from the dedup map.
+    function handlePendingCancelled(event: WebSocketEvent) {
+      const e = event as PendingCancelledEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      const nonce = e.nonce;
+      const entry = pendingInputsRef.current.get(nonce);
+      localNoncesRef.current.delete(nonce);
+      if (entry) removeOptimisticBubble(entry.content, entry.timestamp);
+      setPendingInputs((prev) => {
+        if (!prev.has(nonce)) return prev;
+        const next = new Map(prev);
+        next.delete(nonce);
+        return next;
+      });
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -1430,6 +1646,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
     on('workspace_claudemd_warning', handleClaudemdWarning);
+    on('chat.pending_enqueued', handlePendingEnqueued);
+    on('chat.pending_dispatched', handlePendingDispatched);
+    on('chat.pending_cancelled', handlePendingCancelled);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -1441,8 +1660,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
       off('workspace_claudemd_warning', handleClaudemdWarning);
+      off('chat.pending_enqueued', handlePendingEnqueued);
+      off('chat.pending_dispatched', handlePendingDispatched);
+      off('chat.pending_cancelled', handlePendingCancelled);
     };
-  }, [projectId, project.name, on, off, scrollToBottom]);
+  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
 
   // Fingerprint for the last item. DisplayItem has no stable id; use a
   // composite of type + a discriminating field per variant.
@@ -1878,11 +2100,40 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
         sessionId,
       );
-      // Track J Phase 1: backend returned 202 with `slot_held` because
-      // another session in this project holds the active-loop slot.
-      // Strip the optimistic user_message we just appended (it didn't
-      // land), restore the typed text to the composer, and surface the
-      // intermediate notice with [Wait] / [Cancel-and-send] affordances.
+      // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
+      // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
+      // when the slot frees. KEEP the optimistic bubble (unlike slot_held below,
+      // which removes it) and add a nonce→entry to `pendingInputs` so the bubble
+      // shows a "Waiting for {holder}…" affordance. The kept bubble's nonce is
+      // exempt from the 30s eviction so the dispatch echo dedups against it.
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'queued_pending_slot' &&
+        result.holding_session_id
+      ) {
+        const holder = result.holding_session_id;
+        const queuedSession = result.queued_session_id ?? sessionId;
+        if (queuedSession !== undefined) {
+          setPendingInputs((prev) => {
+            const next = new Map(prev);
+            next.set(nonce, {
+              sessionId: queuedSession,
+              holder,
+              content: wireContent,
+              timestamp: optimisticTimestamp,
+            });
+            return next;
+          });
+        }
+        scrollToBottom();
+        return;
+      }
+      // Track J Phase 1 (now the ENQUEUE-FAILURE fallback only): backend
+      // returned 202 with `slot_held` because enqueue itself raised. Strip the
+      // optimistic user_message we just appended (it didn't land), restore the
+      // typed text to the composer, and surface the intermediate notice with
+      // [Wait] / [Cancel-and-send] affordances.
       if (
         result &&
         typeof result === 'object' &&
@@ -2441,6 +2692,39 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           />
         </div>
       )}
+
+      {/* Pending-input queue (spec 006 §3h): "Waiting for {holder}…" affordance
+          for each queued message targeting the VIEWED session. [Run now] cancels
+          the holder ONLY (the queued message self-dispatches — no re-inject);
+          [Stop waiting] cancels this queued entry by nonce. */}
+      {Array.from(pendingInputs.entries())
+        .filter(([, entry]) => sessionId !== undefined && entry.sessionId === sessionId)
+        .map(([nonce, entry]) => (
+          <div key={`pending-${nonce}`} className="shrink-0 px-4">
+            <PendingInputNotice
+              holder={entry.holder}
+              onRunNow={async () => {
+                // Run now = cancel the HOLDER only (spec §3h F5). NO re-inject:
+                // the queued message dispatches itself when the slot frees.
+                await cancelMessage(projectId, entry.holder);
+              }}
+              onStopWaiting={async () => {
+                await cancelPendingInput(projectId, entry.sessionId, nonce);
+                // Optimistic cleanup (the chat.pending_cancelled echo is
+                // idempotent): drop the dedup nonce, remove the kept bubble,
+                // and clear the map entry.
+                localNoncesRef.current.delete(nonce);
+                removeOptimisticBubble(entry.content, entry.timestamp);
+                setPendingInputs((prev) => {
+                  if (!prev.has(nonce)) return prev;
+                  const next = new Map(prev);
+                  next.delete(nonce);
+                  return next;
+                });
+              }}
+            />
+          </div>
+        ))}
 
       {cancelTimeoutNotice && (
         <div className="shrink-0 px-4 py-1">

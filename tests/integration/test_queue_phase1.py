@@ -58,6 +58,10 @@ def _make_mock_manager(session_id: str = "sess_phase1"):
     # here, which the guard reads as "another session holds the slot" → the
     # dispatcher defers forever and never records an attempt. Model a free slot.
     mgr.current_holder_session_id = MagicMock(return_value=None)
+    # Pending-input defer-check (spec 006 §3e): same MagicMock hazard — a bare
+    # mock auto-fabricates a TRUTHY return, which the dispatcher reads as
+    # "interactive input is waiting" → defers forever. Model an empty queue.
+    mgr.has_pending_inject = MagicMock(return_value=False)
     mgr.inject_message = AsyncMock(return_value="delivered")
     # Corrective-turn path awaits inject_system_message; mock it as async.
     mgr.inject_system_message = AsyncMock(return_value=None)

@@ -334,6 +334,49 @@ export interface AgentNotifyEvent {
   timestamp: string;
 }
 
+/**
+ * Pending-input queue (spec 006, Path A). A message the user sent to session B
+ * while session A holds the project's single active-loop slot was ACCEPTED and
+ * queued; it dispatches when the slot frees. These three events are additive
+ * (unknown types are ignored by old clients) and carry the canonical target
+ * `session_id` (the queued session B), never the holder's.
+ */
+export interface PendingEnqueuedEvent {
+  type: 'chat.pending_enqueued';
+  project_id: string;
+  /** The queued chat session (B) the message will dispatch into. */
+  session_id: string;
+  /** The session (A) currently holding the slot — shown in the wait notice. */
+  holder: string;
+  /** Origin's nonce, so other clients render the optimistic bubble and the
+   *  origin tab dedups its own echo. */
+  nonce: string;
+  /** Full message content, so other clients can render the optimistic bubble. */
+  content: string;
+  /** FIFO position in the project's pending queue at enqueue time. */
+  position: number;
+}
+
+export interface PendingDispatchedEvent {
+  type: 'chat.pending_dispatched';
+  project_id: string;
+  /** The queued session (B) whose pending message just started dispatching. */
+  session_id: string;
+  /** The dispatched batch's nonce (clears that nonce's waiting affordance).
+   *  Nullable to mirror the backend (a pending entry may carry no nonce). */
+  nonce: string | null;
+}
+
+export interface PendingCancelledEvent {
+  type: 'chat.pending_cancelled';
+  project_id: string;
+  /** The queued session (B) whose pending message was cancelled. */
+  session_id: string;
+  /** The cancelled entry's nonce (removes its optimistic bubble + map entry).
+   *  Nullable to mirror the backend cancel-by-session path. */
+  nonce: string | null;
+}
+
 export interface DeviceStatusEvent {
   type: 'device.status';
   status: 'online' | 'offline';
@@ -489,6 +532,9 @@ export type WebSocketEvent =
   | SubAgentLifecycleEvent
   | UserMessageEvent
   | AgentNotifyEvent
+  | PendingEnqueuedEvent
+  | PendingDispatchedEvent
+  | PendingCancelledEvent
   | DeviceStatusEvent
   | TriggerCreatedEvent
   | TriggerDeletedEvent
