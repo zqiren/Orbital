@@ -217,7 +217,6 @@ _CONFLICT_TOKENS = (
     "do not read",
     "ignore project",
     "ignore orbital",
-    "bypass",
 )
 
 
