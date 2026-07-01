@@ -70,11 +70,17 @@ export default function FilePreviewDrawer({
   useEffect(() => {
     if (open) {
       prevFocusRef.current = document.activeElement as HTMLElement | null;
-      closeBtnRef.current?.focus();
+      // preventScroll: the panel starts translated OFF-SCREEN and slides in.
+      // WebKit's focus scroll-into-view targets the element's VISUAL (still
+      // off-screen) position, scrolling the whole document ~420px to reach the
+      // close button — the "chat slides in from the left" jump in pywebview.
+      // Chromium uses the layout position, so it never showed. Suppress it.
+      closeBtnRef.current?.focus({ preventScroll: true });
     } else {
       const prev = prevFocusRef.current;
       prevFocusRef.current = null;
-      if (prev && document.contains(prev)) prev.focus();
+      // Same rationale on restore — don't let refocusing the opener scroll.
+      if (prev && document.contains(prev)) prev.focus({ preventScroll: true });
     }
   }, [open]);
 

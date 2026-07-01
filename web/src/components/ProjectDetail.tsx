@@ -93,8 +93,19 @@ export default function ProjectDetail({
         return;
       }
       setPreviewContent(data);
-      setRoute((prev) =>
-        prev.name === 'project' ? { ...prev, previewPath: path } : prev,
+      // Two-frame open (WKWebView "blink" fix). Render the content into the
+      // drawer's OFF-SCREEN compositing layer first, then trigger the slide-in
+      // one paint later — so WebKit can't composite the layer's stale/empty
+      // backing store for the first animation frame (the blink you see in
+      // pywebview but not Chromium). The double rAF guarantees a paint landed
+      // between "content in" and "start sliding".
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (latestPreviewReqRef.current !== path) return;
+          setRoute((prev) =>
+            prev.name === 'project' ? { ...prev, previewPath: path } : prev,
+          );
+        }),
       );
     },
     [getFileContent, project.project_id, setRoute, t],
@@ -211,7 +222,11 @@ export default function ProjectDetail({
         </OpenPathContext.Provider>
         <FilePreviewDrawer
           open={previewPath !== null}
-          selectedPath={previewPath}
+          // Content-driven (NOT previewPath): the drawer renders its content
+          // while still off-screen so the slide-in reveals an already-painted
+          // layer. Also keeps content during the close slide-out (no empty
+          // "select a file" flash on close either).
+          selectedPath={previewContent?.path ?? null}
           fileContent={previewContent}
           loading={previewLoading}
           onClose={handleClosePreview}
