@@ -185,7 +185,7 @@ class SubAgentManager:
 
     async def start(self, project_id: str, handle: str, depth: int = 0,
                     *, session_id: str | None = None,
-                    announce: bool = True) -> str:
+                    announce: bool = True, fresh: bool = False) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
@@ -195,6 +195,11 @@ class SubAgentManager:
         broadcast still fires) — used when the spawn is internal to a
         spawn-on-demand ``send`` so one action yields one session message
         (TASK-collapse-dispatch-to-send H2).
+
+        ``fresh=True`` (BACKLOG 005 §4d) forces a reset for this spawn: no
+        resume (a brand-new provider session) and a brand-new transcript file,
+        bypassing the §4b ``.latest`` reuse. The prior thread/transcript stay
+        archived on disk.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -214,6 +219,7 @@ class SubAgentManager:
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
                 project_id, handle, session_id=session_id, announce=announce,
+                fresh=fresh,
             )
 
         # Legacy path: use adapter_configs
@@ -258,9 +264,11 @@ class SubAgentManager:
             project = self._project_store.get_project(project_id) if self._project_store else {}
             workspace = project.get("workspace", "") if project else ""
             if workspace:
-                from uuid import uuid4
                 from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
-                transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+                # §4b: reuse the handle's .latest transcript across respawns
+                # (continuous UI); §4d fresh=True mints a new one.
+                transcript = SubAgentTranscript.open_for_handle(
+                    workspace, handle, fresh=fresh)
                 self._transcripts[(project_id, session_id, handle)] = transcript
 
         await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
@@ -498,6 +506,11 @@ class SubAgentManager:
         if reason == "resume_failed":
             return ("fresh session — prior session could not be resumed; "
                     "re-brief any context it needs")
+        if reason == "explicit_reset":
+            # §4d: the caller passed fresh=True deliberately to drop prior
+            # context — say so, so the orchestrator knows the reset took.
+            return ("fresh session — reset requested (prior conversation "
+                    "intentionally dropped)")
         return "fresh session — first spawn"
 
     def _get_pipe_config(self, slug: str):
@@ -592,8 +605,13 @@ class SubAgentManager:
 
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
                                    *, session_id: str | None = None,
-                                   announce: bool = True) -> str:
-        """Start a sub-agent using the manifest registry and setup engine."""
+                                   announce: bool = True,
+                                   fresh: bool = False) -> str:
+        """Start a sub-agent using the manifest registry and setup engine.
+
+        ``fresh=True`` (BACKLOG 005 §4d) forces a reset: skip resume and mint a
+        new transcript (bypass §4b reuse). See ``start``.
+        """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
         if sk in self._stopping:
@@ -740,9 +758,18 @@ class SubAgentManager:
         # (SessionKey, handle) record and pre-check its on-disk source
         # BEFORE building the transport, so a live record resumes and a
         # dead one starts fresh — and says so.
-        resume_record, resume_status, resume_reason = self._determine_resume(
-            workspace, project_id, handle, session_id,
-        )
+        #
+        # §4d reset: fresh=True force-skips resume entirely. No persisted record
+        # is consulted; the provider gets NO resume id, so a brand-new upstream
+        # session starts. The old record stays on disk until the new turn's
+        # on_thread_update overwrites it.
+        if fresh:
+            resume_record, resume_status, resume_reason = (
+                None, "fresh", "explicit_reset")
+        else:
+            resume_record, resume_status, resume_reason = self._determine_resume(
+                workspace, project_id, handle, session_id,
+            )
 
         # Resolve transport from manifest. May raise ValueError for invalid
         # manifest combinations (e.g. claude-code with transport: acp).
@@ -793,12 +820,14 @@ class SubAgentManager:
                 self._adapters[sk] = {}
             self._adapters[sk][handle] = adapter
 
-        # Create transcript for this sub-agent
+        # Create transcript for this sub-agent. §4b: reuse the handle's
+        # .latest transcript across respawns so the UI stays continuous; §4d
+        # fresh=True mints a new file (prior one archived on disk).
         transcript = None
         if workspace:
-            from uuid import uuid4
             from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
-            transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+            transcript = SubAgentTranscript.open_for_handle(
+                workspace, handle, fresh=fresh)
             self._transcripts[(project_id, session_id, handle)] = transcript
 
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
@@ -823,7 +852,8 @@ class SubAgentManager:
         )
 
     async def send(self, project_id: str, handle: str, message: str,
-                   *, session_id: str | None = None, depth: int = 0) -> str:
+                   *, session_id: str | None = None, depth: int = 0,
+                   fresh: bool = False) -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -841,9 +871,23 @@ class SubAgentManager:
 
         ``session_id`` selects which session's adapter slate to dispatch
         through; defaults to ``DEFAULT_SESSION_ID``.
+
+        ``fresh=True`` (BACKLOG 005 §4d) resets this handle's thread before
+        dispatching: any live adapter is torn down so the spawn below starts a
+        brand-new provider session (no resume) with a new transcript, rather
+        than continuing the in-memory client. Without the teardown, a handle
+        that is already running would silently keep its old context and the
+        reset would be a no-op.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+
+        # §4d reset: drop any live adapter for this handle so the spawn-on-
+        # demand block below actually re-spawns fresh (the default branch only
+        # spawns when the handle is absent). Done OUTSIDE the dispatch lock —
+        # stop() takes the same per-session lock internally.
+        if fresh and handle in self._adapters.get(sk, {}):
+            await self.stop(project_id, handle, session_id=session_id)
 
         # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
         # the same per-session lifecycle lock internally (non-reentrant), so
@@ -854,7 +898,7 @@ class SubAgentManager:
         if handle not in self._adapters.get(sk, {}):
             start_result = await self.start(
                 project_id, handle, depth=depth,
-                session_id=session_id, announce=False,
+                session_id=session_id, announce=False, fresh=fresh,
             )
             if start_result.startswith("Error"):
                 return start_result

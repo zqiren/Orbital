@@ -198,6 +198,37 @@ class ProcessManager:
                         last_error_text = ""
                         self._turn_open[key] = False
                         continue
+                    if chunk.chunk_type == "thread_started":
+                        # BACKLOG 005 §4a — eager resume-record persistence.
+                        # The transport surfaced the upstream session id at
+                        # turn START (SDK init message). Persist it NOW, before
+                        # the turn completes, so a concurrent @-mention/dispatch
+                        # in the same chat session re-attaches at the provider
+                        # level instead of starting cold. The terminal
+                        # turn_complete still re-records (refreshing model/pid),
+                        # so this is purely additive. A control event — never
+                        # written to the transcript, never broadcast.
+                        meta = getattr(chunk, "metadata", None) or {}
+                        sid = meta.get("session_id")
+                        if self._lifecycle and sid:
+                            proc = getattr(
+                                getattr(adapter, "_transport", None),
+                                "_proc", None)
+                            try:
+                                proc_pid = proc.pid
+                                proc_create_time = proc.create_time()
+                            except Exception:
+                                proc_pid, proc_create_time = None, None
+                            await self._lifecycle.on_thread_update(
+                                project_id, handle,
+                                claude_session_id=sid,
+                                model=meta.get("model"),
+                                session_id=session_id,
+                                proc_pid=proc_pid,
+                                proc_create_time=proc_create_time,
+                                rollout_path=meta.get("rollout_path"),
+                            )
+                        continue
                     entry = {
                         "source": handle,
                         "content": chunk.text,

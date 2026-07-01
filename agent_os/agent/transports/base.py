@@ -63,6 +63,11 @@ def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
         # last-response "summary" and a failed turn was reported as
         # completed (TASK-honest-subagent-completion-reporting, fix 1).
         "error": "error",
+        # BACKLOG 005 §4a: an eager resume-identity control event. Must keep
+        # its own chunk_type so ProcessManager records the resume id and does
+        # NOT treat it as response content (the "response" default would write
+        # it to the transcript and broadcast it as a sub-agent message).
+        "thread_started": "thread_started",
     }
     return OutputChunk(
         text=event.raw_text or event.data.get("text", ""),

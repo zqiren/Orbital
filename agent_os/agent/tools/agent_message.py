@@ -31,7 +31,9 @@ class AgentMessageTool(Tool):
         self.name = "agent_message"
         self.description = (
             "Communicate with sub-agents: send (dispatches a task — spawns "
-            "the agent automatically if it is not running), stop, list, status."
+            "the agent automatically if it is not running), stop, list, status. "
+            "A send resumes the sub-agent's prior conversation in this chat "
+            "session by default; pass fresh=true to start a clean thread."
         )
         self._max_sends_per_run = max_sends_per_run
         self._send_count = 0
@@ -49,6 +51,18 @@ class AgentMessageTool(Tool):
                 },
                 "agent": {"type": "string", "description": "Agent handle"},
                 "message": {"type": "string", "description": "The task to dispatch (required for send)"},
+                "fresh": {
+                    "type": "boolean",
+                    "description": (
+                        "Only for action=send. Default false: the send "
+                        "continues the sub-agent's prior conversation in this "
+                        "chat session (its earlier context is still there). "
+                        "Set true ONLY when delegating a genuinely unrelated "
+                        "task, or to reset a sub-agent thread that has grown "
+                        "too long; this starts a clean session and drops the "
+                        "prior context. Otherwise omit it."
+                    ),
+                },
             },
             "required": ["action", "agent"],
         }
@@ -57,7 +71,8 @@ class AgentMessageTool(Tool):
         """Reset per-run state. Called by ToolRegistry.reset_run_state()."""
         self._send_count = 0
 
-    async def execute(self, action: str, agent: str = "", message: str = "", **kwargs) -> ToolResult:
+    async def execute(self, action: str, agent: str = "", message: str = "",
+                      fresh: bool = False, **kwargs) -> ToolResult:
         try:
             if self.sub_agent_manager is None:
                 return ToolResult(content="Error: sub-agent support not yet available.")
@@ -107,6 +122,7 @@ class AgentMessageTool(Tool):
                     self.project_id, agent, message,
                     session_id=self.session_id,
                     depth=self._depth + 1,
+                    fresh=bool(fresh),
                 )
                 # A failed dispatch (unknown agent, spawn failure, shutdown)
                 # must NOT yield — surface the error so the LLM can react.
