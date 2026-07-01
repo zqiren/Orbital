@@ -78,6 +78,7 @@ orbital-marketing-bug-analysis.html
 # Internal scratch docs — investigations, test-run logs/artifacts, planning notes (keep local, don't track)
 docs/investigations/
 docs/testing/
+docs/research/
 docs/superpowers/plans/
 RUN-MANUAL-SMOKE.md
 RUN-LOG-*.md
@@ -90,6 +91,11 @@ orbital-launch.png
 VERIFY-*.md
 BACKLOG-*.md
 ONBOARDING.md
+# Orbital dogfooding: the curated roadmap file BACKLOG.md IS tracked; its
+# spec/diagram working dir BACKLOG/ stays local. (!BACKLOG.md is defensive —
+# nothing above matches it today, but it guards against a future BACKLOG* rule.)
+BACKLOG/
+!BACKLOG.md
 
 # Scratch artifacts & tool caches
 artifacts-*/
