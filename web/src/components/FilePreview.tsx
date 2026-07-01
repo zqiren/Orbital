@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useState, type IframeHTMLAttributes } from 'react';
-import { File, Download, Copy, Check } from 'lucide-react';
+import { useCallback, useEffect, useState, type IframeHTMLAttributes } from 'react';
+import { File, Download, Copy, Check, Pencil } from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
 import { useT } from '../i18n/useT';
@@ -12,6 +12,13 @@ export interface FilePreviewProps {
   fileContent: FileContent | null;
   loading: boolean;
   selectedPath: string | null;
+  /**
+   * Persist edited content for a `.md` file (last-write-wins). Resolves `true`
+   * on success, `false` on failure. Its presence is what makes markdown
+   * EDITABLE — omit it and the pane stays read-only (chat/Files both pass it,
+   * threading the project id). Never wired for a truncated file (see `editable`).
+   */
+  onSave?: (path: string, content: string) => Promise<boolean>;
 }
 
 // Defense-in-depth CSP for the HTML preview iframe (spec 003 §0.1). The
@@ -29,12 +36,33 @@ const HTML_IFRAME_CSP =
  * `FilePreviewDrawer` (clickable chat paths) share one renderer. Behavior is
  * unchanged: image / binary / text(+markdown) variants, copy + download.
  */
-export default function FilePreview({ fileContent, loading, selectedPath }: FilePreviewProps) {
+export default function FilePreview({ fileContent, loading, selectedPath, onSave }: FilePreviewProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   // HTML preview view mode. Ephemeral + shared across files (spec 003 §3.6):
   // defaults to "rendered", a toggle drops back to the source <pre>.
   const [htmlViewMode, setHtmlViewMode] = useState<'rendered' | 'source'>('rendered');
+  // Markdown editing state (all hooks live ABOVE the early returns — rules of
+  // hooks). `draft` is the textarea buffer; `override` holds the just-saved
+  // draft so the view pane reflects the save even though `fileContent` is a
+  // prop the parent hasn't re-fetched. `editView` toggles the textarea vs. a
+  // live MarkdownContent preview of the draft.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [editView, setEditView] = useState<'write' | 'preview'>('write');
+  const [override, setOverride] = useState<string | null>(null);
+  // Selecting a different file discards any in-flight edit + saved override so
+  // one file's draft never bleeds into the next.
+  useEffect(() => {
+    setEditing(false);
+    setDraft('');
+    setSaving(false);
+    setSaveError(false);
+    setEditView('write');
+    setOverride(null);
+  }, [selectedPath]);
   // Save raw text/HTML to disk. A `download` anchor writes a file and never
   // renders/executes in the app origin — safe even though blob: URLs are
   // SAME-ORIGIN with the app (which is exactly why we must NOT window.open one:
@@ -102,7 +130,9 @@ export default function FilePreview({ fileContent, loading, selectedPath }: File
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(fileContent.content);
+      // Copy the currently-shown content — the saved override when present, so
+      // Copy after an edit yields the new text, not the stale prop.
+      await navigator.clipboard.writeText(override ?? fileContent.content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -233,18 +263,110 @@ export default function FilePreview({ fileContent, loading, selectedPath }: File
     );
   }
 
-  // Text preview (default, backward compatible)
+  // Text preview (default, backward compatible). Markdown (`.md`) is
+  // additionally EDITABLE when an `onSave` handler is supplied and the file was
+  // not truncated (editing a partial draft would clobber the tail on save).
+  const isMarkdown = fileName.toLowerCase().endsWith('.md');
+  const editable = isMarkdown && !!onSave && !fileContent.truncated;
+  // View-mode content: the saved override wins over the fetched prop.
+  const viewContent = override ?? fileContent.content;
+
+  const handleStartEdit = () => {
+    setDraft(viewContent);
+    setSaveError(false);
+    setEditView('write');
+    setEditing(true);
+  };
+  const handleCancelEdit = () => {
+    setEditing(false);
+    setDraft('');
+    setSaveError(false);
+  };
+  const handleSave = async () => {
+    if (!onSave) return;
+    setSaving(true);
+    setSaveError(false);
+    const ok = await onSave(fileContent.path, draft);
+    if (ok) {
+      // Reflect the save locally (parent doesn't re-fetch) and exit edit mode.
+      setOverride(draft);
+      setEditing(false);
+    } else {
+      // Keep the draft so the user doesn't lose edits; surface the failure.
+      setSaveError(true);
+    }
+    setSaving(false);
+  };
+
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors ml-2 shrink-0"
-        >
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {editing ? (
+            <>
+              {/* Write | Preview segmented toggle (mirrors the html Rendered|Source control). */}
+              <div className="flex items-center rounded-md border border-border overflow-hidden">
+                <button
+                  onClick={() => setEditView('write')}
+                  aria-pressed={editView === 'write'}
+                  className={`text-xs px-2 py-1 transition-colors ${
+                    editView === 'write' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
+                  }`}
+                >
+                  {t('fileExplorer.editWrite')}
+                </button>
+                <button
+                  onClick={() => setEditView('preview')}
+                  aria-pressed={editView === 'preview'}
+                  className={`text-xs px-2 py-1 transition-colors ${
+                    editView === 'preview' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
+                  }`}
+                >
+                  {t('fileExplorer.editPreview')}
+                </button>
+              </div>
+              <button
+                onClick={handleCancelEdit}
+                disabled={saving}
+                className="text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
+              >
+                {t('fileExplorer.cancel')}
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="bg-accent text-white text-xs font-medium rounded-md px-2.5 py-1 hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? t('fileExplorer.saving') : t('fileExplorer.save')}
+              </button>
+            </>
+          ) : (
+            <>
+              {editable && (
+                <button
+                  onClick={handleStartEdit}
+                  className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+                >
+                  <Pencil size={14} />
+                  {t('fileExplorer.edit')}
+                </button>
+              )}
+              {isMarkdown && fileContent.truncated && (
+                <span className="text-xs text-secondary opacity-70" aria-disabled="true">
+                  {t('fileExplorer.editTooLarge')}
+                </span>
+              )}
+              <button
+                onClick={handleCopy}
+                className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {fileContent.truncated && (
         <div className="px-4 py-2 bg-sidebar border-b border-border">
@@ -253,17 +375,38 @@ export default function FilePreview({ fileContent, loading, selectedPath }: File
           </p>
         </div>
       )}
-      <div className="flex-1 overflow-auto">
-        {fileName.toLowerCase().endsWith('.md') ? (
-          <div className="bg-sidebar p-4 min-h-full">
-            <MarkdownContent content={fileContent.content} />
+      {saveError && (
+        <div className="px-4 py-2 bg-error/10 border-b border-error/30">
+          <p className="text-xs text-error">{t('fileExplorer.saveFailed')}</p>
+        </div>
+      )}
+      {editing ? (
+        editView === 'preview' ? (
+          <div className="flex-1 overflow-auto bg-sidebar p-4 min-h-0">
+            <MarkdownContent content={draft} />
           </div>
         ) : (
-          <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
-            {fileContent.content}
-          </pre>
-        )}
-      </div>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            spellCheck={false}
+            aria-label={t('fileExplorer.edit')}
+            className="flex-1 w-full min-h-0 resize-none font-mono text-sm text-primary bg-sidebar p-4 outline-none border-0"
+          />
+        )
+      ) : (
+        <div className="flex-1 overflow-auto">
+          {isMarkdown ? (
+            <div className="bg-sidebar p-4 min-h-full">
+              <MarkdownContent content={viewContent} />
+            </div>
+          ) : (
+            <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
+              {viewContent}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -65,9 +65,10 @@ export default function ProjectDetail({
 
   // File preview drawer (spec 002). The open/close state lives on the route
   // (`previewPath`); the fetched content + lazy 404 probe live here. Opening is
-  // optimistic (drawer slides in with a loading skeleton) and resolves on the
-  // probe: 404/error closes it and surfaces a toast, never a dead empty panel.
-  const { getFileContent } = useFiles();
+  // PROBE-FIRST: fetch the content, then open the drawer only once it's in hand
+  // (404/error just toasts, never opening) — so the panel never flashes blank
+  // and a missing file never opens-then-closes.
+  const { getFileContent, saveFileContent } = useFiles();
   const [previewContent, setPreviewContent] = useState<FileContent | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewToast, setPreviewToast] = useState<string | null>(null);
@@ -79,23 +80,22 @@ export default function ProjectDetail({
   const handleOpenPath = useCallback(
     async (path: string) => {
       latestPreviewReqRef.current = path;
-      setPreviewContent(null);
       setPreviewLoading(true);
-      setRoute((prev) =>
-        prev.name === 'project' ? { ...prev, previewPath: path } : prev,
-      );
+      // Probe-first: fetch BEFORE opening so the drawer never slides in blank.
+      // On replace-on-click the already-open drawer keeps showing the prior
+      // content until the new content is ready — no flash there either.
       const data = await getFileContent(project.project_id, path);
       // Drop the result if a newer open superseded this one.
       if (latestPreviewReqRef.current !== path) return;
       setPreviewLoading(false);
       if (!data) {
         setPreviewToast(t('chat.path.notFound'));
-        setRoute((prev) =>
-          prev.name === 'project' ? { ...prev, previewPath: undefined } : prev,
-        );
         return;
       }
       setPreviewContent(data);
+      setRoute((prev) =>
+        prev.name === 'project' ? { ...prev, previewPath: path } : prev,
+      );
     },
     [getFileContent, project.project_id, setRoute, t],
   );
@@ -215,6 +215,7 @@ export default function ProjectDetail({
           fileContent={previewContent}
           loading={previewLoading}
           onClose={handleClosePreview}
+          onSave={(path, content) => saveFileContent(project.project_id, path, content)}
         />
         {previewToast && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-[13px] shadow-lg max-w-[90%] text-center pointer-events-none">

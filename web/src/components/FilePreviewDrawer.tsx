@@ -25,6 +25,8 @@ interface FilePreviewDrawerProps {
   fileContent: FileContent | null;
   loading: boolean;
   onClose: () => void;
+  /** Persist an edited `.md` file (last-write-wins); forwarded to FilePreview. */
+  onSave?: (path: string, content: string) => Promise<boolean>;
 }
 
 /**
@@ -43,6 +45,7 @@ export default function FilePreviewDrawer({
   fileContent,
   loading,
   onClose,
+  onSave,
 }: FilePreviewDrawerProps) {
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -143,7 +146,7 @@ export default function FilePreviewDrawer({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto min-h-0">
-          <FilePreview fileContent={fileContent} loading={loading} selectedPath={selectedPath} />
+          <FilePreview fileContent={fileContent} loading={loading} selectedPath={selectedPath} onSave={onSave} />
         </div>
       </div>
     </>

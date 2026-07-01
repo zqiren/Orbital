@@ -73,6 +73,25 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
     [projectId],
   );
 
+  // Persist an edited `.md` file (last-write-wins). Mirrors `useFiles`'
+  // saveFileContent — FileExplorer manages its own file I/O via `api`, so the
+  // save path is local rather than routed through the hook. `api` auto-sets the
+  // JSON Content-Type for the string body.
+  const saveFileContent = useCallback(
+    async (path: string, content: string): Promise<boolean> => {
+      try {
+        await api(
+          `/api/v2/projects/${encodeURIComponent(projectId)}/files/content`,
+          { method: 'PUT', body: JSON.stringify({ path, content }) },
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [projectId],
+  );
+
   const refreshRoot = useCallback(() => {
     setRootLoading(true);
     fetchDirectory('').then((entries) => {
@@ -309,6 +328,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
           fileContent={fileContent}
           loading={contentLoading}
           selectedPath={selectedPath}
+          onSave={saveFileContent}
         />
       </div>
     </div>

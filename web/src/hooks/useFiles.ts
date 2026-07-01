@@ -55,5 +55,31 @@ export function useFiles() {
     [],
   );
 
-  return { directory, fileContent, loading, error, listDirectory, getFileContent };
+  const saveFileContent = useCallback(
+    async (projectId: string, path: string, content: string): Promise<boolean> => {
+      try {
+        await api(
+          `/api/v2/projects/${encodeURIComponent(projectId)}/files/content`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ path, content }),
+          },
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
+  return {
+    directory,
+    fileContent,
+    loading,
+    error,
+    listDirectory,
+    getFileContent,
+    saveFileContent,
+  };
 }

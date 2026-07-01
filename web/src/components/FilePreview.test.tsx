@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FilePreview from './FilePreview';
 import type { FileContent } from '../types';
@@ -126,5 +126,130 @@ describe('FilePreview — html branch (spec 003)', () => {
       />,
     );
     expect(screen.getByText(/truncated/i)).toBeInTheDocument();
+  });
+});
+
+const MD_BODY = '# Notes\n\nsome original body\n';
+
+function mdContent(overrides: Partial<FileContent> = {}): FileContent {
+  return {
+    path: 'notes.md',
+    content: MD_BODY,
+    size: MD_BODY.length,
+    truncated: false,
+    type: 'text',
+    ...overrides,
+  };
+}
+
+describe('FilePreview — markdown editing (spec: editable .md)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows an Edit button for a .md text file when onSave is provided', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('shows NO Edit button when onSave is omitted', () => {
+    render(
+      <FilePreview fileContent={mdContent()} loading={false} selectedPath="notes.md" />,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+  });
+
+  it('hides Edit and shows a too-large hint for a truncated markdown file', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent({ truncated: true })}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.getByText(/too large to edit/i)).toBeInTheDocument();
+  });
+
+  it('shows no Edit button for a non-.md text file even with onSave', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent({ path: 'notes.txt' })}
+        loading={false}
+        selectedPath="notes.txt"
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+  });
+
+  it('clicking Edit reveals a textarea bound to the file content', () => {
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const textarea = screen.getByRole('textbox');
+    expect(textarea).toBeInTheDocument();
+    expect((textarea as HTMLTextAreaElement).value).toBe(MD_BODY);
+  });
+
+  it('Save calls onSave with the edited text and the pane then shows the new content', async () => {
+    const onSave = vi.fn().mockResolvedValue(true);
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={onSave}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'edited-body-marker' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith('notes.md', 'edited-body-marker'),
+    );
+    // Back in view mode: the just-saved draft renders through MarkdownContent,
+    // even though `fileContent` (a prop) still carries the old body.
+    await screen.findByText('edited-body-marker');
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('keeps the draft and surfaces a failure message when onSave returns false', async () => {
+    const onSave = vi.fn().mockResolvedValue(false);
+    render(
+      <FilePreview
+        fileContent={mdContent()}
+        loading={false}
+        selectedPath="notes.md"
+        onSave={onSave}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'unsaved-draft-marker' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await screen.findByText(/couldn't save/i);
+    // Still editing, draft intact — edits are not lost on failure.
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      'unsaved-draft-marker',
+    );
   });
 });
