@@ -632,7 +632,7 @@ export interface FileContent {
   content: string;
   size: number;
   truncated: boolean;
-  type?: 'text' | 'image' | 'binary';
+  type?: 'text' | 'image' | 'binary' | 'html';
   mime?: string;
   download_url?: string;
 }

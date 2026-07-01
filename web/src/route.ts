@@ -32,4 +32,12 @@ export type Route =
        * surface in App's content switch. Back returns to settings.
        */
       pricing?: boolean;
+      /**
+       * Workspace-relative path of the file to preview in the slide-out
+       * FilePreviewDrawer (spec 002). Set when a user clicks a clickable path
+       * in chat; the drawer is open iff this is non-null. Does NOT change the
+       * active `tab` — the chat stays mounted underneath. In-memory only (not
+       * persisted across reload), like the rest of the route model.
+       */
+      previewPath?: string;
     };

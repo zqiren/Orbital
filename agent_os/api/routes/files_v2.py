@@ -47,6 +47,12 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
+# HTML files are read as UTF-8 text but tagged ``type: "html"`` so the frontend
+# can render them in a sandboxed iframe (spec 003). ``.svg`` deliberately stays
+# on the image branch above — it renders via a ``data:`` image URL, not the
+# HTML document path.
+HTML_EXTENSIONS = {".html", ".htm"}
+
 
 def _resolve_path(project_id: str, path: str):
     """Resolve a relative path within the project workspace.
@@ -118,6 +124,23 @@ async def get_file_content(project_id: str, path: str):
             "type": "image",
             "mime": mime_type,
             "size": size,
+        }
+
+    # HTML files: same UTF-8 read + preview cap as text, but tagged "html" so
+    # the client renders them in a sandboxed iframe rather than as a <pre> blob.
+    if ext in HTML_EXTENSIONS:
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                content = f.read(MAX_PREVIEW_BYTES)
+        except (UnicodeDecodeError, ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
+        return {
+            "path": path,
+            "content": content,
+            "type": "html",
+            "mime": "text/html",
+            "size": size,
+            "truncated": size > MAX_PREVIEW_BYTES,
         }
 
     # Try reading as text

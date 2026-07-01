@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -343,6 +343,7 @@ import type {
   Project,
 } from '../types';
 import ChatMessage from './ChatMessage';
+import { OpenPathContext } from './FilePreviewDrawer';
 import StreamingMessage from './StreamingMessage';
 import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';
@@ -429,6 +430,9 @@ interface PendingApproval {
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
+  // Spec 002: open a clicked workspace path in the FilePreviewDrawer. Provided
+  // by ProjectDetail (which owns setRoute); null when no provider is present.
+  const onOpenPath = useContext(OpenPathContext) ?? undefined;
   // FE-1 (transform-once): loaded chat history is stored as RAW messages
   // across all paginated pages (initial page + each "Load earlier" prepend),
   // then transformed in a SINGLE pass via the useMemo below. This eliminates
@@ -2481,9 +2485,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             let rendered: React.ReactNode = null;
 
             if (item.type === 'user_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} workspace={project.workspace} onOpenPath={onOpenPath} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} workspace={project.workspace} onOpenPath={onOpenPath} />;
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               const label =
