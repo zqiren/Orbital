@@ -191,6 +191,39 @@ async def test_send_sets_last_response(tmp_path, stub_worker_deps):
 
 
 @pytest.mark.asyncio
+async def test_send_strips_inline_think_block_from_last_response(tmp_path):
+    """QUALITY fix: a provider that emits raw inline ``<think>...</think>``
+    reasoning (e.g. a reasoning-model config gap that skips the upstream
+    openai_compat.py split) must not leak that reasoning into
+    ``_last_response`` — and therefore not into transcripts or fanout join
+    summaries. Only the visible answer survives."""
+    deps = WorkerDeps(
+        provider=_StubProvider("<think>reasoning</think>\nactual answer"),
+        workspace=str(tmp_path),
+        project_id="proj-1",
+        parent_session_id="parent-sess-1",
+        make_tool_registry=_make_registry_factory(_StubToolRegistry()),
+    )
+    a = NativeWorkerAdapter(deps=deps, handle="worker:x-2",
+                            display_name="t2", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("compute the answer")
+    assert a._last_response == "actual answer"
+
+    # The RAW text (think block included) is still what the worker's own
+    # session JSONL stores — the strip is applied only where
+    # _read_final_response derives _last_response, never to persisted
+    # storage.
+    raw_contents = [
+        msg.get("content") for msg in a._session.get_messages()
+        if msg.get("role") == "assistant"
+    ]
+    assert any(
+        isinstance(c, str) and "<think>" in c for c in raw_contents
+    ), raw_contents
+
+
+@pytest.mark.asyncio
 async def test_send_failure_encoded_not_raised(tmp_path, stub_worker_deps_err):
     a = NativeWorkerAdapter(deps=stub_worker_deps_err, handle="worker:x-1",
                             display_name="t1", allowed_paths=None,

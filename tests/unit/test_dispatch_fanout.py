@@ -430,6 +430,39 @@ async def test_full_lifecycle_all_succeed_joins_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_full_lifecycle_reaps_adapters_after_join(tmp_path):
+    """CRITICAL fix: a completed fanout's worker adapters must be reaped
+    from ``_adapters`` once the join resolves — workers are one-shot
+    (native_worker.py), so leaving terminal adapters registered forever
+    only wastes a MAX_CONCURRENT_SUBAGENTS slot. Before the fix, both
+    handles stay in ``_adapters``/``list_active`` as 'idle' after the join,
+    so a second same-session fanout hits the cap error with nothing
+    actually running."""
+    mgr, rec = _make_manager(
+        tmp_path, provider_factory=lambda: _StubProvider("done: 42"))
+    observer = LifecycleObserver(rec, rec)
+    observer.fanout_registry = mgr._fanout_registry
+    mgr._lifecycle_observer = observer
+
+    sk = (PID, SID)
+    await mgr.dispatch_fanout(PID, _two_tasks(), session_id=SID)
+    await _wait_until(lambda: len(rec.injected) >= 1)
+
+    assert mgr._adapters.get(sk, {}) == {}
+    assert mgr.list_active(PID, session_id=SID) == []
+
+    # A second fanout of 5 tasks in the same session must now succeed — a
+    # cap check that still sees the first batch's leaked terminal adapters
+    # would reject this with a capacity error.
+    tasks = [{"brief": f"b{i}", "label": f"l{i}"} for i in range(5)]
+    result = await mgr.dispatch_fanout(PID, tasks, session_id=SID)
+    assert result.startswith("Fanout "), result
+
+    adapters = mgr._adapters.get(sk, {})
+    await _wait_until(lambda: all(not a.is_running() for a in adapters.values()))
+
+
+@pytest.mark.asyncio
 async def test_full_lifecycle_all_error_joins_with_partial_report(tmp_path):
     mgr, rec = _make_manager(
         tmp_path, provider_factory=lambda: _RaisingProvider())

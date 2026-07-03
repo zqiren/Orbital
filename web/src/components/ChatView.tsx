@@ -14,6 +14,7 @@ import {
   mergeRecoveredAssistantMessage,
 } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { ChatMessage as ChatMessageRow } from '../types';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
@@ -1500,6 +1501,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // Strict session routing (seam 3 / Phase 3): sub-agent replies carry the
       // parent session_id; render only those for the viewed session.
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      // Fanout workers are ephemeral task executors, not persistent
+      // collaborators (spec 009 §0.5-8) — their live turn output must not
+      // leak into the main chat as bubbles. The progress card (fanout tool
+      // call render) and the join summary are the only sanctioned surfaces;
+      // mirrors SubAgentStatusBar.tsx's own `worker:` filter.
+      if (isWorkerHandle(e.source)) return;
 
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();

@@ -234,35 +234,15 @@ class FanoutRegistry:
                     if now - task.last_activity >= group.stall_after_s:
                         stalled.append(task)
                 if stalled:
-                    for task in stalled:
-                        task.status = "stalled"
-                    for task in stalled:
-                        try:
-                            await self._stop_worker(
-                                group.project_id, task.handle,
-                                session_id=group.session_id,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "fanout watchdog: stop_worker failed for %s",
-                                task.handle,
-                            )
+                    # Status flip + stop_worker for every non-terminal task
+                    # (not just the ones that literally tripped the stall
+                    # check — a stall resolves the WHOLE group) now happens
+                    # once, inside resolve_group's own reap loop below —
+                    # see that loop's docstring for why this consolidation
+                    # matters (avoids double stop_worker calls).
                     await self.resolve_group(group, reason="stalled")
                     return
                 if now - group.created_at >= group.max_runtime_s:
-                    for task in group.tasks.values():
-                        if task.status in _NON_TERMINAL_STATUSES:
-                            task.status = "stalled"
-                            try:
-                                await self._stop_worker(
-                                    group.project_id, task.handle,
-                                    session_id=group.session_id,
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "fanout watchdog: stop_worker failed for %s",
-                                    task.handle,
-                                )
                     await self.resolve_group(group, reason="max_runtime")
                     return
         except asyncio.CancelledError:
@@ -332,20 +312,36 @@ class FanoutRegistry:
                 and group._watchdog_task is not asyncio.current_task()):
             group._watchdog_task.cancel()
 
-        # Stop any task still running (timeout/interrupted paths land here
-        # with non-terminal members; the all-complete path never does).
+        # Reap EVERY task's adapter registration here — not just stragglers.
+        # A task still "running" at this point (timeout/interrupted paths;
+        # the all-complete path never has one) is force-flipped to
+        # "stalled" before stopping, same as before. A task that is already
+        # terminal (completed/error/interrupted, recorded by
+        # absorb_terminal) is stopped too, WITHOUT touching its status —
+        # workers are one-shot (native_worker.py) and never reused once
+        # terminal, so leaving them registered in
+        # ``SubAgentManager._adapters`` forever only wastes a
+        # MAX_CONCURRENT_SUBAGENTS slot (the cap check in dispatch_fanout
+        # counts every registered adapter regardless of status) — this is
+        # exactly the completed-fanout cap-exhaustion bug this reap closes.
+        # ``stop_worker`` (``SubAgentManager.stop``) is safe to call on an
+        # already-idle/terminal ``NativeWorkerAdapter``: it is the silent
+        # reap path (no lifecycle/observer event fires from it), and
+        # ``AgentLoop.cancel_turn()`` is an idempotent no-op when no turn is
+        # in flight, so calling it here after ``_background_send`` has
+        # already completed is harmless.
         for task in group.tasks.values():
             if task.status in _NON_TERMINAL_STATUSES:
                 task.status = "stalled"
-                try:
-                    await self._stop_worker(
-                        group.project_id, task.handle,
-                        session_id=group.session_id,
-                    )
-                except Exception:
-                    logger.exception(
-                        "resolve_group: stop_worker failed for %s", task.handle,
-                    )
+            try:
+                await self._stop_worker(
+                    group.project_id, task.handle,
+                    session_id=group.session_id,
+                )
+            except Exception:
+                logger.exception(
+                    "resolve_group: stop_worker failed for %s", task.handle,
+                )
 
         # FROZEN format (frontend parses this — see fanout.py module
         # docstring reference / task-2-report.md): original task order

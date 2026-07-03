@@ -764,6 +764,52 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
   });
 });
 
+describe('ChatView: fanout worker messages do not leak into main chat (spec 009 §0.5-8)', () => {
+  // Fanout workers are ephemeral task executors (worker:<fanout_id>-<index>
+  // handles), not persistent collaborators — their live turn output is
+  // surfaced only via the fanout progress card / join summary, never as a
+  // main-chat bubble. This mirrors SubAgentStatusBar's own `worker:` filter
+  // (chips bar), which already excludes them.
+
+  it('does NOT render a chat.sub_agent_message whose source is a worker: handle', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.sub_agent_message', {
+        type: 'chat.sub_agent_message',
+        project_id: 'p1',
+        session_id: 's1',
+        content: 'WORKER-LEAK-TEXT should never render',
+        source: 'worker:abcd1234-0',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    expect(container.textContent ?? '').not.toContain('WORKER-LEAK-TEXT');
+  });
+
+  it('still renders a chat.sub_agent_message from a non-worker (persistent) sub-agent handle', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('chat.sub_agent_message', {
+        type: 'chat.sub_agent_message',
+        project_id: 'p1',
+        session_id: 's1',
+        content: 'CLAUDE-CODE-REPLY visible text',
+        source: 'claude-code',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    expect(container.textContent ?? '').toContain('CLAUDE-CODE-REPLY visible text');
+  });
+});
+
 describe('T5 ChatView: inject targets the viewed session', () => {
   it('passes the viewed sessionId as the 6th injectMessage argument', async () => {
     runStatusHolder = 's1';

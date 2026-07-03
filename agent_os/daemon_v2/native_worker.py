@@ -29,6 +29,7 @@ from agent_os.agent.context import ContextManager
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
+from agent_os.agent.providers.think_splitter import InlineThinkSplitter
 from agent_os.agent.session import Session
 from agent_os.daemon_v2.models import detect_os
 
@@ -108,6 +109,32 @@ def _sanitize_for_filename(text: str) -> str:
     is safe to embed in a session filename cross-platform — ``:`` is a
     reserved character on Windows filesystems."""
     return _HANDLE_SANITIZE_RE.sub("_", text)
+
+
+def _strip_inline_think(text: str) -> str:
+    """Strip a leading/embedded inline ``<think>...</think>`` reasoning
+    block from a worker's final response text, reusing the same
+    ``InlineThinkSplitter`` the streaming provider layer uses for live chat
+    display (agent_os/agent/providers/think_splitter.py).
+
+    Defensive, not the primary fix: for a correctly-registered provider the
+    split already happens upstream in ``openai_compat.py`` before text ever
+    reaches ``AgentLoop`` / the session JSONL. But a worker's provider can
+    still persist raw ``<think>`` text into its assistant message (e.g. a
+    reasoning-model config gap), and that raw text is exactly what
+    ``_read_final_response`` reads back — surfacing as reasoning leaking
+    into transcripts and fanout join summaries. Text with no think tag
+    passes through UNCHANGED (the cheap membership check below short-
+    circuits before constructing a splitter), so this never reformats a
+    normal response. Falls back to the original text if stripping would
+    otherwise produce an empty string (never surface a blank response)."""
+    if "<think>" not in text:
+        return text
+    splitter = InlineThinkSplitter()
+    visible, _ = splitter.feed(text)
+    tail, _ = splitter.flush()
+    stripped = (visible + tail).strip()
+    return stripped or text
 
 
 def _fanout_id_from_handle(handle: str) -> str:
@@ -387,7 +414,7 @@ class NativeWorkerAdapter:
                 continue
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                return content
+                return _strip_inline_think(content)
             # Newest assistant row carries no usable text — the turn did not
             # end on a text-only response. No earlier assistant row (from a
             # prior tool-calling iteration of this SAME turn) is a better

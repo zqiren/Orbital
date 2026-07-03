@@ -212,4 +212,49 @@ async def test_fanout_end_to_end_through_real_wiring(monkeypatch, tmp_path):
                 for e in body["entries"]
             ), body["entries"]
 
+        # ── CRITICAL fix: completed workers are reaped, not left idle ────
+        # Before the fix, both worker handles stay registered in
+        # SubAgentManager._adapters forever (list_active never drops a
+        # terminal one-shot worker), so they keep counting toward
+        # MAX_CONCURRENT_SUBAGENTS and a second same-session fanout hits
+        # the cap error with nothing actually running.
+        status_resp = client.get(
+            f"/api/v2/agents/{pid}/sub-agents/status",
+            params={"session_id": sid},
+        )
+        assert status_resp.status_code == 200
+        status_handles = {a["handle"] for a in status_resp.json()["agents"]}
+        assert not (status_handles & set(worker_handles)), (
+            f"completed fanout workers still listed as active: {status_handles}"
+        )
+
+        # ── Transcript endpoint still serves both workers post-reap ──────
+        for wh in worker_handles:
+            resp = client.get(
+                f"/api/v2/agents/{pid}/sub-agents/{wh}/transcript",
+                params={"session_id": sid},
+            )
+            assert resp.status_code == 200, (wh, resp.status_code, resp.text)
+
+        # ── A SECOND fanout (5 tasks — full width) in the same session ───
+        # must succeed: before the fix this fails with a capacity error
+        # because the first batch's 2 completed-but-never-reaped adapters
+        # still occupy slots.
+        second_tasks = [
+            {"brief": f"analyze part {i}", "label": f"task {i}"}
+            for i in range(5)
+        ]
+        second_ack = await sub_agent_manager.dispatch_fanout(
+            pid, second_tasks, session_id=sid,
+        )
+        assert not second_ack.startswith("Error"), second_ack
+
+        await _wait(
+            lambda: sum(
+                1 for e in events
+                if e.get("type") == "fanout.completed"
+            ) >= 2,
+            timeout=15.0, what="second fanout.completed broadcast",
+        )
+
         client.close()
