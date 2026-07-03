@@ -294,6 +294,31 @@ class FanoutRegistry:
         (frontend-parsed; see the format block above ``_clean_summary``) and
         has no slot for it. It's logged here for operator observability and
         still carried on the ``fanout.completed`` broadcast payload.
+
+        CRITICAL (round-3 review): all three watchdog-internal call sites in
+        ``_watchdog_loop`` call this method directly (``await
+        self.resolve_group(...)``) from WITHIN ``group._watchdog_task``
+        itself — i.e. this coroutine can be executing AS that very task.
+        Cancelling a task from inside its own execution is a SELF-cancel:
+        ``Task.cancel()`` has no ``_fut_waiter`` to cancel immediately (the
+        task isn't suspended — it IS the caller), so it only sets
+        ``_must_cancel`` and takes effect at the task's NEXT genuine
+        suspension. Every ``await`` below this point that actually yields to
+        the event loop (real ``stop_worker``/``inject`` implementations both
+        do) would then have ``CancelledError`` thrown into it instead of
+        resuming normally — a ``BaseException`` that blows past every
+        ``except Exception`` guard here, aborting resolution mid-flight
+        (join injection and/or ``fanout.completed`` never fire) and leaking
+        the group (``resolved`` is already ``True``, but the cleanup at the
+        bottom never runs, and nothing re-triggers it). The
+        ``absorb_terminal``-triggered path (the "last task lands" case)
+        does NOT have this problem — it spawns resolve_group via
+        ``asyncio.create_task``, a genuinely different task than the
+        watchdog's, so cancelling the watchdog there is a normal cross-task
+        cancel. Guard against the self-cancel case specifically rather than
+        skipping the cancel unconditionally (a live watchdog from a
+        DIFFERENT task, e.g. the absorb_terminal path resolving while the
+        watchdog is still polling, must still be stopped).
         """
         if group.resolved:
             return
@@ -302,7 +327,9 @@ class FanoutRegistry:
             "fanout group %s resolving (reason=%s)", group.fanout_id, reason,
         )
 
-        if group._watchdog_task is not None and not group._watchdog_task.done():
+        if (group._watchdog_task is not None
+                and not group._watchdog_task.done()
+                and group._watchdog_task is not asyncio.current_task()):
             group._watchdog_task.cancel()
 
         # Stop any task still running (timeout/interrupted paths land here

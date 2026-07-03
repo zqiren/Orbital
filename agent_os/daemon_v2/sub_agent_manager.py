@@ -1024,46 +1024,68 @@ class SubAgentManager:
             deps = self._worker_deps_factory(project_id, session_id)
             workspace = deps.workspace
 
-            for i, task in enumerate(tasks):
-                handle = make_worker_handle(fanout_id, i)
-                files_scope = task.get("files_scope") or {}
-                allowed = files_scope.get("allowed")
-                forbidden = files_scope.get("forbidden")
+            # IMPORTANT (round-3 review): construction must never raise out
+            # of dispatch_fanout — every other public verb on this class
+            # returns "Error: ..." on failure (mirrors start()'s convention
+            # at :258-266). A mid-batch failure (e.g. task 2 of 4's adapter
+            # construction raises) must not leave earlier-registered
+            # transcripts as residue, so track them and unwind on failure.
+            # ``self._adapters`` itself is updated ONLY after the whole
+            # try block succeeds (last line before the except), so a
+            # failure here never needs to unwind that dict at all.
+            registered_handles: list[str] = []
+            try:
+                for i, task in enumerate(tasks):
+                    handle = make_worker_handle(fanout_id, i)
+                    files_scope = task.get("files_scope") or {}
+                    allowed = files_scope.get("allowed")
+                    forbidden = files_scope.get("forbidden")
 
-                # WorkerDeps is one shared instance per batch (Task 1); bind
-                # on_activity to THIS handle right before constructing THIS
-                # adapter — the adapter reads it once at __init__, so
-                # mutating the shared deps between constructions is safe.
-                deps.on_activity = self._make_activity_callback(
-                    project_id, handle, session_id)
+                    # WorkerDeps is one shared instance per batch (Task 1);
+                    # bind on_activity to THIS handle right before
+                    # constructing THIS adapter — the adapter reads it once
+                    # at __init__, so mutating the shared deps between
+                    # constructions is safe.
+                    deps.on_activity = self._make_activity_callback(
+                        project_id, handle, session_id)
 
-                adapter = NativeWorkerAdapter(
-                    deps=deps, handle=handle, display_name=task["label"],
-                    allowed_paths=allowed, forbidden_paths=forbidden,
+                    adapter = NativeWorkerAdapter(
+                        deps=deps, handle=handle, display_name=task["label"],
+                        allowed_paths=allowed, forbidden_paths=forbidden,
+                    )
+                    adapters[handle] = adapter
+
+                    transcript = SubAgentTranscript.open_for_handle(
+                        workspace, handle, fresh=True)
+                    self._transcripts[(project_id, session_id, handle)] = transcript
+                    registered_handles.append(handle)
+
+                    fanout_tasks.append(FanoutTask(
+                        handle=handle,
+                        label=task["label"],
+                        brief=task["brief"],
+                        allowed_paths=allowed,
+                        forbidden_paths=forbidden,
+                        status="running",
+                        transcript_path=transcript.filepath,
+                        last_activity=time.monotonic(),
+                    ))
+
+                group = self._fanout_registry.create_group(
+                    project_id, session_id, fanout_tasks,
+                    max_runtime_s=max_runtime_s,
                 )
-                adapters[handle] = adapter
+                self._adapters.setdefault(sk, {}).update(adapters)
+            except Exception as e:
+                logger.exception(
+                    "dispatch_fanout: worker construction failed for "
+                    "project=%s fanout=%s", project_id, fanout_id,
+                )
+                for handle in registered_handles:
+                    self._transcripts.pop(
+                        (project_id, session_id, handle), None)
+                return f"Error: fanout worker construction failed: {e}"
 
-                transcript = SubAgentTranscript.open_for_handle(
-                    workspace, handle, fresh=True)
-                self._transcripts[(project_id, session_id, handle)] = transcript
-
-                fanout_tasks.append(FanoutTask(
-                    handle=handle,
-                    label=task["label"],
-                    brief=task["brief"],
-                    allowed_paths=allowed,
-                    forbidden_paths=forbidden,
-                    status="running",
-                    transcript_path=transcript.filepath,
-                    last_activity=time.monotonic(),
-                ))
-
-            self._adapters.setdefault(sk, {}).update(adapters)
-
-            group = self._fanout_registry.create_group(
-                project_id, session_id, fanout_tasks,
-                max_runtime_s=max_runtime_s,
-            )
             await self._fanout_registry.start_watchdog(group)
 
             for task, fanout_task in zip(tasks, fanout_tasks):
@@ -1170,7 +1192,27 @@ class SubAgentManager:
                         # failures as "Error:"-prefixed response strings
                         # (pipe timeout / non-zero exit, SDK send errors).
                         # Those are failures, not completion summaries.
-                        if response.startswith("Error"):
+                        #
+                        # IMPORTANT (round-3 review): a NativeWorkerAdapter
+                        # stopped via stop_all/user-stop ALSO produces an
+                        # "Error: task was cancelled..." response (its
+                        # AgentLoop.run() returns normally after
+                        # cancel_turn(), and _read_final_response()'s
+                        # exit_reason=="cancelled" fallback is "Error:"-
+                        # prefixed) — that's a deliberate stop, not a
+                        # failure, and must not be reported to the fanout
+                        # join / management session as "broke". Route those
+                        # to on_turn_interrupted instead. getattr defaults
+                        # to False for adapters with no such flag (CLI
+                        # adapters), so this is additive-only for them.
+                        if response.startswith("Error") and getattr(
+                                adapter, "_stop_requested", False):
+                            await self._lifecycle_observer.on_turn_interrupted(
+                                project_id, handle,
+                                transcript.filepath,
+                                session_id=session_id,
+                            )
+                        elif response.startswith("Error"):
                             await self._lifecycle_observer.on_error(
                                 project_id, handle,
                                 response[:500],

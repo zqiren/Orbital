@@ -213,10 +213,15 @@ class LifecycleObserver:
                                   transcript_path: str = "unknown",
                                   *, session_id: str | None = None) -> None:
         """A sub-agent turn ended `interrupted` while the agent stays alive
-        (Codex `cancel` approval decision — no teardown ran). The management
-        session may be AWAITING the dispatch result; silence here is the
-        Piece-3 Part-C silent-hang class. Honest framing: stopped before
-        completing — NOT a completion (no result), NOT an error."""
+        (Codex `cancel` approval decision — no teardown ran). Also produced
+        by a NativeWorkerAdapter deliberately torn down mid-turn (stop_all /
+        user stop — round-3 review IMPORTANT 3): `_background_send` routes
+        here instead of `on_error` when the adapter's `_stop_requested` flag
+        is set, so a fanout worker stopped on purpose is never reported as
+        having failed. The management session may be AWAITING the dispatch
+        result; silence here is the Piece-3 Part-C silent-hang class.
+        Honest framing: stopped before completing — NOT a completion (no
+        result), NOT an error."""
         content = (
             f"[Sub-agent] {handle} was stopped before completing its current "
             f"task (turn interrupted — e.g. an approval denied with stop). "

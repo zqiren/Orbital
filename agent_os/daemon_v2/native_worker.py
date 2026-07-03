@@ -95,7 +95,7 @@ class WorkerDeps:
     project_id: str
     parent_session_id: str
     make_tool_registry: Callable[
-        [list[tuple[str, str]] | None, list[str] | None], ToolRegistryLike
+        [list[str] | None, list[str] | None], ToolRegistryLike
     ]
     on_activity: Callable[[], None] | None = None
 
@@ -191,6 +191,14 @@ class NativeWorkerAdapter:
         self._idle = True
         self._broken = False
         self._running = False
+        # Round-3 review, IMPORTANT 3: set by stop() so _background_send
+        # (sub_agent_manager.py) can tell "the turn was cancelled because
+        # something deliberately stopped this worker" apart from "the turn
+        # genuinely failed" — both produce the same "Error: task was
+        # cancelled..." _last_response via _read_final_response()'s
+        # exit_reason=="cancelled" fallback, but only the former should
+        # route to on_turn_interrupted instead of on_error.
+        self._stop_requested = False
         # Strong-ref slot for a future background-task wrapper, mirroring
         # CLIAdapter's field of the same name (sub_agent_manager.py owns the
         # actual task; this adapter never assigns it itself).
@@ -320,7 +328,16 @@ class NativeWorkerAdapter:
 
     async def stop(self) -> None:
         """Cancel the in-flight turn and mark the adapter stopped. Safe to
-        call with no turn in flight (``cancel_turn`` is a no-op then)."""
+        call with no turn in flight (``cancel_turn`` is a no-op then).
+
+        Sets ``_stop_requested`` BEFORE cancelling — a deliberate teardown
+        (project stop_all, user stop) races against ``send()``'s own
+        ``AgentLoop.run()`` returning with a cancelled-turn result; setting
+        the flag first guarantees ``_background_send`` observes it as True
+        by the time it inspects the response, regardless of exactly when
+        ``cancel_turn()``'s effects propagate.
+        """
+        self._stop_requested = True
         await self._loop.cancel_turn()
         self._running = False
         self._idle = True

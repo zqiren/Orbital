@@ -61,6 +61,22 @@ class _RaisingProvider:
         yield  # pragma: no cover — makes this an async generator
 
 
+class _SlowProvider:
+    """Provider whose stream() blocks on a long sleep before ever yielding —
+    models a worker turn genuinely still in flight when stop_all interrupts
+    it mid-turn (IMPORTANT 3, round-3 review)."""
+
+    def __init__(self):
+        self.provider = "stub"
+        self.model = "stub-model"
+        self.sdk = "stub-sdk"
+
+    async def stream(self, messages, tools=None):
+        await asyncio.sleep(10)
+        yield StreamChunk(text="should never get here")  # pragma: no cover
+        yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+
 class _StubToolRegistry:
     def schemas(self) -> list[dict]:
         return []
@@ -112,10 +128,13 @@ class _Recorder:
         self.broadcasts.append((project_id, payload))
 
 
-def _make_manager(tmp_path, *, provider_factory=None):
+def _make_manager(tmp_path, *, provider_factory=None, registry_factory=None):
     """A SubAgentManager wired for fanout, with the worker registry factory
     stubbed. ``provider_factory()`` builds the (shared) provider each fanout
-    batch's WorkerDeps carries; defaults to an always-succeeding stub."""
+    batch's WorkerDeps carries; defaults to an always-succeeding stub.
+    ``registry_factory`` overrides the ``make_tool_registry`` callable
+    itself (default: always returns a fresh ``_StubToolRegistry``) — used
+    to simulate a mid-batch construction failure."""
     pm = MagicMock()
     pm.start = AsyncMock()
     pm.stop = AsyncMock()
@@ -126,6 +145,8 @@ def _make_manager(tmp_path, *, provider_factory=None):
     )
     if provider_factory is None:
         provider_factory = lambda: _StubProvider("done: 42")
+    if registry_factory is None:
+        registry_factory = _make_registry_factory()
 
     def _worker_deps_factory(project_id, session_id):
         return WorkerDeps(
@@ -133,7 +154,7 @@ def _make_manager(tmp_path, *, provider_factory=None):
             workspace=str(tmp_path),
             project_id=project_id,
             parent_session_id=session_id,
-            make_tool_registry=_make_registry_factory(),
+            make_tool_registry=registry_factory,
         )
 
     mgr._worker_deps_factory = _worker_deps_factory
@@ -219,6 +240,47 @@ async def test_fanout_registry_unwired(tmp_path):
     mgr._fanout_registry = None
     result = await mgr.dispatch_fanout(PID, _two_tasks(), session_id=SID)
     assert result.startswith("Error")
+
+
+@pytest.mark.asyncio
+async def test_construction_failure_returns_error_and_cleans_up(tmp_path):
+    """IMPORTANT (round-3 review): a mid-batch construction failure (task
+    index 1 of 3's NativeWorkerAdapter raises, via a make_tool_registry that
+    fails on its 2nd call) must return an Error string — never raise out of
+    dispatch_fanout — and must leave NO residue: no adapters registered
+    (the bulk self._adapters update happens only after the whole batch
+    succeeds), no leaked transcript entries for the task that DID construct
+    successfully before the failure, and no group registered with the
+    FanoutRegistry."""
+    calls = {"n": 0}
+
+    def _failing_registry_factory(allowed_paths, forbidden_paths):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("boom: registry construction failed")
+        return _StubToolRegistry()
+
+    mgr, rec = _make_manager(tmp_path, registry_factory=_failing_registry_factory)
+    tasks = [
+        {"brief": "x", "label": "a"},
+        {"brief": "y", "label": "b"},
+        {"brief": "z", "label": "c"},
+    ]
+    result = await mgr.dispatch_fanout(PID, tasks, session_id=SID)
+
+    assert result.startswith("Error")
+    assert calls["n"] == 2  # confirms it failed on task index 1, not task 0
+
+    # No adapter residue at all — the bulk self._adapters update never ran.
+    assert mgr._adapters.get((PID, SID), {}) == {}
+    # No leaked transcript for task 0, which DID construct successfully
+    # before task 1 raised.
+    assert not any(
+        key[0] == PID and key[1] == SID for key in mgr._transcripts
+    )
+    # No group registered with the registry either.
+    assert mgr._fanout_registry._groups == {}
+    assert mgr._fanout_registry._by_handle == {}
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +447,54 @@ async def test_full_lifecycle_all_error_joins_with_partial_report(tmp_path):
 
     per_worker_errors = [p for (_, p) in rec.broadcasts if p["type"] == "sub_agent.error"]
     assert len(per_worker_errors) == 2
+
+
+@pytest.mark.asyncio
+async def test_stop_all_mid_flight_reports_interrupted_not_error(tmp_path):
+    """IMPORTANT 3 (round-3 review): a worker torn down by stop_all (project
+    stop / user stop mid-flight) must be reported 'interrupted', not
+    'error' — a deliberate stop is not a failure. Traced path: stop_all ->
+    SubAgentManager.stop() -> NativeWorkerAdapter.stop() sets
+    _stop_requested THEN cancels the turn -> AgentLoop.run() returns
+    normally with exit_reason='cancelled' -> _read_final_response()'s
+    fallback produces an 'Error: task was cancelled...' response ->
+    _background_send's routing must recognize _stop_requested and route to
+    on_turn_interrupted instead of on_error."""
+    mgr, rec = _make_manager(tmp_path, provider_factory=lambda: _SlowProvider())
+    observer = LifecycleObserver(rec, rec)
+    observer.fanout_registry = mgr._fanout_registry
+    mgr._lifecycle_observer = observer
+
+    await mgr.dispatch_fanout(PID, _two_tasks(), session_id=SID)
+    # Let both background sends actually enter their turn (reach the
+    # provider's blocking stream()) before tearing down mid-flight.
+    await asyncio.sleep(0.05)
+
+    await mgr.stop_all(PID, session_id=SID)
+
+    await _wait_until(lambda: len(rec.injected) >= 1)
+    assert len(rec.injected) == 1
+    content = rec.injected[0][1]
+    # Both tasks interrupted, never "error" — a deliberate stop is not a
+    # failure (this is the exact mislabeling the fix corrects).
+    assert "[interrupted]" in content
+    assert "[error]" not in content
+
+    per_worker_interrupted = [
+        p for (_, p) in rec.broadcasts
+        if p["type"] == "sub_agent.turn_interrupted"
+    ]
+    assert len(per_worker_interrupted) == 2
+    per_worker_errors = [
+        p for (_, p) in rec.broadcasts if p["type"] == "sub_agent.error"
+    ]
+    assert len(per_worker_errors) == 0
+
+    completed = [
+        p for (_, p) in rec.broadcasts if p["type"] == "fanout.completed"
+    ]
+    assert len(completed) == 1
+    assert completed[0]["succeeded"] == 0
 
 
 # ---------------------------------------------------------------------------

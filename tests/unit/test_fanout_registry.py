@@ -6,10 +6,21 @@
 reporting, non-fanout handle passthrough, and the stall watchdog.
 
 Spec 009 (subagent fanout), Task 2 brief.
+
+Round-3 review (CRITICAL 1): the ``inject``/``stop_worker`` doubles below
+are deliberately SUSPENDING (``await asyncio.sleep(0)``) rather than plain
+synchronous-under-the-hood coroutines — production's real collaborators
+(``AgentManager.inject_system_message`` via ``_start_loop``,
+``SubAgentManager.stop`` via ``wait_for(shield(...))``) both genuinely
+suspend, and a non-suspending double would silently absorb the
+self-cancellation bug this round fixed (see ``resolve_group``'s
+``asyncio.current_task()`` guard and task-2-report.md's "Round 3" section
+for the full analysis + RED/GREEN evidence).
 """
 
 import asyncio
 import re
+import time
 
 import pytest
 
@@ -18,13 +29,27 @@ from agent_os.daemon_v2.fanout import FanoutRegistry, FanoutTask
 
 def make_registry(events):
     async def inject(pid, content, session_id=None):
+        await asyncio.sleep(0)   # genuine suspension — see module docstring
         events.append(("inject", pid, content, session_id))
     def broadcast(pid, payload):
         events.append(("ws", pid, payload))
     async def stop_worker(pid, handle, session_id=None):
+        await asyncio.sleep(0)   # genuine suspension — see module docstring
         events.append(("stop", pid, handle))
     return FanoutRegistry(inject=inject, broadcast=broadcast,
                           stop_worker=stop_worker)
+
+
+async def _wait_until(cond, *, timeout: float = 2.0, interval: float = 0.005):
+    """Poll ``cond`` until true, rather than guessing a fixed number of
+    ``asyncio.sleep(0)`` yields — the honest (suspending) stub doubles above
+    need more than one event-loop tick to fully resolve a group."""
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    while not cond():
+        if loop.time() - start > timeout:
+            raise AssertionError(f"condition not met within {timeout}s")
+        await asyncio.sleep(interval)
 
 
 @pytest.mark.asyncio
@@ -41,7 +66,7 @@ async def test_join_injects_once_when_all_complete():
     assert injections == []                      # no inject yet
     assert r.absorb_terminal("p1", "worker:f-1", "s1", kind="completed",
                              summary="ok1", transcript_path="t1") is True
-    await asyncio.sleep(0)                       # let resolve task run
+    await _wait_until(lambda: any(e[0] == "inject" for e in events))
     injections = [e for e in events if e[0] == "inject"]
     assert len(injections) == 1
     assert "2/2 succeeded" in injections[0][2]
@@ -63,7 +88,7 @@ async def test_partial_failure_reported():
                       summary="ok", transcript_path="t0")
     r.absorb_terminal("p1", "worker:f-1", "s1", kind="error",
                       summary="ProviderError: 429", transcript_path="t1")
-    await asyncio.sleep(0)
+    await _wait_until(lambda: any(e[0] == "inject" for e in events))
     inj = [e for e in events if e[0] == "inject"][0][2]
     assert "1/2 succeeded" in inj and "429" in inj
 
@@ -116,7 +141,7 @@ async def test_join_summary_matches_frozen_format():
     r.absorb_terminal("p1", "worker:a1b2c3d4-2", "s1", kind="completed",
                       summary="Plan drafted in docs/plan.md",
                       transcript_path="/path/t2.jsonl")
-    await asyncio.sleep(0)
+    await _wait_until(lambda: any(e[0] == "inject" for e in events))
 
     content = [e for e in events if e[0] == "inject"][0][2]
     lines = content.split("\n")
@@ -171,10 +196,12 @@ async def test_resolve_group_guards_inject_failure():
     events = []
 
     async def raising_inject(pid, content, session_id=None):
+        await asyncio.sleep(0)
         raise RuntimeError("session is gone")
     def broadcast(pid, payload):
         events.append(("ws", pid, payload))
     async def stop_worker(pid, handle, session_id=None):
+        await asyncio.sleep(0)
         events.append(("stop", pid, handle))
 
     r = FanoutRegistry(inject=raising_inject, broadcast=broadcast,
@@ -189,6 +216,20 @@ async def test_resolve_group_guards_inject_failure():
     assert len(completed) == 1
 
 
+# ---------------------------------------------------------------------------
+# Watchdog-internal resolve_group call sites (CRITICAL 1 — self-cancellation)
+#
+# All three of these call `resolve_group` from INSIDE `_watchdog_loop`, i.e.
+# from the very task `group._watchdog_task` refers to. `resolve_group`
+# unconditionally tries to cancel `group._watchdog_task` — cancelling the
+# CURRENTLY RUNNING task is a self-cancel: the CancelledError doesn't fire
+# immediately, it fires at the next genuine suspension point (a `BaseException`,
+# so it blows past every `except Exception` guard), aborting resolve_group
+# mid-flight and leaking the group. The `inject`/`stop_worker` doubles must
+# genuinely suspend (see module docstring) for these tests to actually
+# exercise that failure mode instead of silently absorbing it.
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
 async def test_watchdog_stalls_silent_worker():
     events = []
@@ -198,10 +239,69 @@ async def test_watchdog_stalls_silent_worker():
         max_runtime_s=3600)
     g.stall_after_s = 0.01                       # test override
     await r.start_watchdog(g)
-    await asyncio.sleep(0.05)
+    await _wait_until(lambda: g.resolved)
     assert [e for e in events if e[0] == "stop"]  # straggler stopped
     inj = [e for e in events if e[0] == "inject"]
     assert len(inj) == 1 and "stalled" in inj[0][2]
+    completed = [e for e in events if e[0] == "ws"
+                 and e[2]["type"] == "fanout.completed"]
+    assert len(completed) == 1
+    # No leak: a resolved group's routing entries must be freed.
+    assert r._groups == {}
+    assert r._by_handle == {}
+
+
+@pytest.mark.asyncio
+async def test_watchdog_max_runtime_ceiling_resolves_group():
+    """The hard max_runtime_s ceiling fires (and must resolve the group)
+    even when the task is NOT stalled by activity — the SECOND distinct
+    watchdog-internal resolve_group call site."""
+    events = []
+    r = make_registry(events)
+    g = r.create_group("p1", "s1",
+        [FanoutTask(handle="worker:f-0", label="a", brief="x",
+                    last_activity=time.monotonic())],
+        max_runtime_s=3600)
+    g.stall_after_s = 1.0     # keeps the poll interval sane (~50ms) so the
+                              # stall check (fresh last_activity) never fires
+    g.max_runtime_s = 0.01    # ceiling fires on the very first poll
+    await r.start_watchdog(g)
+    await _wait_until(lambda: g.resolved)
+    assert [e for e in events if e[0] == "stop"]
+    inj = [e for e in events if e[0] == "inject"]
+    assert len(inj) == 1
+    completed = [e for e in events if e[0] == "ws"
+                 and e[2]["type"] == "fanout.completed"]
+    assert len(completed) == 1
+    assert r._groups == {}
+    assert r._by_handle == {}
+
+
+@pytest.mark.asyncio
+async def test_watchdog_error_still_resolves_group():
+    """A crash INSIDE the watchdog's own poll loop (not a guarded
+    stop_worker/inject call — those are individually try/excepted already)
+    must still resolve the group (R4: never orphan). Synthesized via a
+    deliberately malformed task (``last_activity=None``) that TypeErrors
+    during the stall-time comparison — landing in the loop's own
+    ``except Exception`` handler, the THIRD watchdog-internal resolve_group
+    call site."""
+    events = []
+    r = make_registry(events)
+    g = r.create_group("p1", "s1",
+        [FanoutTask(handle="worker:f-0", label="a", brief="x")],
+        max_runtime_s=3600)
+    g.tasks["worker:f-0"].last_activity = None  # forces TypeError in the loop
+    g.stall_after_s = 0.01
+    await r.start_watchdog(g)
+    await _wait_until(lambda: g.resolved)
+    inj = [e for e in events if e[0] == "inject"]
+    assert len(inj) == 1
+    completed = [e for e in events if e[0] == "ws"
+                 and e[2]["type"] == "fanout.completed"]
+    assert len(completed) == 1
+    assert r._groups == {}
+    assert r._by_handle == {}
 
 
 @pytest.mark.asyncio
@@ -215,9 +315,11 @@ async def test_stop_worker_called_keyword_only_session_id():
     events = []
 
     async def strict_stop_worker(project_id, handle, *, session_id=None):
+        await asyncio.sleep(0)
         events.append(("stop", project_id, handle, session_id))
 
     async def inject(pid, content, session_id=None):
+        await asyncio.sleep(0)
         events.append(("inject", pid, content, session_id))
     def broadcast(pid, payload):
         events.append(("ws", pid, payload))
@@ -229,7 +331,7 @@ async def test_stop_worker_called_keyword_only_session_id():
         max_runtime_s=3600)
     g.stall_after_s = 0.01
     await r.start_watchdog(g)
-    await asyncio.sleep(0.05)
+    await _wait_until(lambda: g.resolved)
     stops = [e for e in events if e[0] == "stop"]
     assert len(stops) == 1
     assert stops[0][3] == "s1"  # session_id landed correctly via keyword
