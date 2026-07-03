@@ -34,6 +34,7 @@ from agent_os.daemon_v2.credential_store import ApiKeyStore, UserCredentialStore
 from agent_os.daemon_v2.settings_store import SettingsStore
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 from agent_os.daemon_v2.lifecycle_observer import LifecycleObserver
+from agent_os.daemon_v2.fanout import FanoutRegistry
 from agent_os.agents.registry import AgentRegistry
 from agent_os.agents.setup_engine import SetupEngine
 from agent_os.daemon_v2.trigger_manager import TriggerManager
@@ -282,6 +283,23 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     sub_agent_manager._session_resolver = (
         lambda pid, sid: agent_manager.get_session(pid, session_id=sid)
     )
+
+    # 6a2. Fanout registry (spec 009, Task 2/6): join/gather core for parallel
+    # native-worker dispatch. Wired post-construction, mirrors lifecycle_observer
+    # above. stop_worker=sub_agent_manager.stop is passed directly (a bound
+    # method) — FanoutRegistry always calls it with session_id= as a keyword,
+    # matching that method's keyword-only session_id parameter.
+    fanout_registry = FanoutRegistry(
+        inject=agent_manager.inject_system_message,
+        broadcast=ws_manager.broadcast,
+        stop_worker=sub_agent_manager.stop,
+    )
+    sub_agent_manager._fanout_registry = fanout_registry
+    lifecycle_observer.fanout_registry = fanout_registry
+    # Worker-deps factory (Task 3): resolves provider/workspace/tool-registry
+    # per fanout batch. Bound method, not called here — dispatch_fanout invokes
+    # it once per dispatch as (project_id, session_id) -> WorkerDeps.
+    sub_agent_manager._worker_deps_factory = agent_manager.build_worker_deps
 
     # 6b. Trigger manager
     trigger_manager = TriggerManager(project_store, agent_manager, ws_manager=ws_manager)

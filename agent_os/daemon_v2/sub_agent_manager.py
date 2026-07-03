@@ -237,8 +237,13 @@ class SubAgentManager:
         if config is None:
             return f"Error: no adapter config for handle '{handle}'"
 
-        # Configure network isolation for this project
-        if self._platform_provider is not None:
+        # Configure network isolation for this project. Native workers
+        # (handle == "worker:<fanout_id>-<i>") never reach this path today —
+        # dispatch_fanout constructs NativeWorkerAdapter directly and never
+        # calls start() — but guard anyway (belt-and-braces): a worker handle
+        # must never trigger the per-start allowlist rewrite this CLI path
+        # does.
+        if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
                 rules = NetworkRules(
                     mode="allowlist",
@@ -667,8 +672,9 @@ class SubAgentManager:
             args=config_dict.get("args"),
         )
 
-        # Configure network isolation
-        if self._platform_provider is not None:
+        # Configure network isolation. Same worker guard as the legacy start()
+        # path above — belt-and-braces, currently unreachable for workers.
+        if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
                 domains = config_dict.get("network_domains", []) + list(DEFAULT_ALLOWLIST_DOMAINS)
                 rules = NetworkRules(mode="allowlist", domains=domains)
