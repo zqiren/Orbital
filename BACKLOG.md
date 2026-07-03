@@ -18,13 +18,14 @@
 
 | # | Feature | Notes |
 |---|---------|-------|
-| 9 | **Sub-agent fanout — parallel native worker sessions** | 2026-07-04 · **In implementation** on `feature/backlog-9-subagent-fanout`. All scope decisions + §7 open questions resolved (spec §0/§0.5): native worker sessions, `fanout` batch tool, wait-for-all join with activity watchdog (10 min stall / 60 min cap), utility-model workers, fanout progress card + nested drill-in UX (workers read-only, claude/codex resumable). Spec at [`BACKLOG/specs/009-…md`](BACKLOG/specs/009-subagent-fanout-parallel-workers.md). |
+| 9 | **Sub-agent fanout — parallel native worker sessions** | 2026-07-04 · **Implementation complete** on `feature/backlog-9-subagent-fanout` (14 commits, final whole-branch review verdict READY TO MERGE). All gates green (unit 2219, tsc, vitest 658) + real-wiring integration test + live MiniMax end-to-end smoke (2 fanouts, joins `2/2 succeeded`, workers reaped post-join). Known limitations + follow-ups in spec §7b (restart-orphan documented; worker spend unledgered; web search/fetch tools don't exist yet so worker inclusion is a no-op). Awaiting user mobile QR pass → merge decision. Spec at [`BACKLOG/specs/009-…md`](BACKLOG/specs/009-subagent-fanout-parallel-workers.md). |
 
 ## Next (queued)
 
 | # | Feature | Notes |
 |---|---------|-------|
-|   |         |       |
+| 11 | **Connectors + the workspace layer** (calendar surface, two-zone sidebar, onboarding, settings index) | 2026-07-04 · Design aligned with user same day: MCP-client substrate (catalog manifests, not per-service code), auth global / enable per-project, two-tier surface rule (email = tools only, calendar = first UI surface, global + per-project lens), two-zone sidebar (Workspace / Projects, Quick Tasks promoted), connectors in onboarding (merged with browser sign-in), sandbox wizard step removed (Windows → installer UAC step), settings index rail (scrollspy, both surfaces). Phased A/B/C. Spec at [`BACKLOG/specs/011-…md`](BACKLOG/specs/011-connectors-and-workspace-layer.md); see Spec 11 note below. |
+| 12 | **Cross-project scope for Quick Tasks** (the global lens) | 2026-07-04 · Design aligned with user same day: opt-in **all-projects read-only** for Quick Tasks (writes stay in scratch), full-computer access deferred to a separate loud opt-in, dispatch-to-project-agents deferred to post-fanout. Prerequisite fix: per-project portal scoping (today the shared provider's global `_portal_paths` lets project A's shell read project B — a real leak, fixed regardless). Independent of Spec 11; can ship first. Spec at [`BACKLOG/specs/012-…md`](BACKLOG/specs/012-cross-project-scope-quick-tasks.md); see Spec 12 note below. |
 
 ## Later (someday / ideas)
 
@@ -160,3 +161,36 @@ User said: *"we will want to support group projects in future, where all members
 Spec: **[`BACKLOG/specs/010-group-projects-shared-state.md`](BACKLOG/specs/010-group-projects-shared-state.md)**
 
 → Parked as `idea`: merge-boundary question open (turn-end auto-commit vs session close vs explicit action); transport/membership/identity blocked behind Spec 001's 6 open questions.
+
+### Spec 11 — Connectors + the workspace layer
+**Status:** shaped · **Added:** 2026-07-04 · **Design aligned:** 2026-07-04
+
+User said: *"we need to enable connector for services such as gmail and calendar, and there are many of them, we need to have one place to host it and a way to scale the addition of these services."* Follow-ups: calendar deserves a UI (*"a place where human and agent can collaborate"*), connectors at onboarding, sandbox wizard step removed, settings need an index.
+
+**Resolved decisions (spec §0):**
+- **Substrate = MCP client in the daemon** — connectors are catalog *manifests*, not per-service code; tools reflect namespaced into the existing `ToolRegistry`; adding a Tier-1 connector ≈ a ~20-line manifest + icon + smoke test (friction model in spec §3, incl. Tier-0 user-added custom MCP servers and the Google OAuth verification caveat).
+- **Auth global, enable per-project** (project = trust boundary; tokens in keychain `UserCredentialStore`); writes gated by autonomy, unknown tools fail closed.
+- **Two-tier surface rule:** email = tools only; **calendar = first surface**, one component mounted as global calendar + per-project lens (external calendar stays source of truth; project linkage = Orbital metadata).
+- **IA: two-zone sidebar** (Workspace zone: Calendar, promoted Quick Tasks · Projects zone unchanged); connectors get *no* sidebar surface — Global Settings section + Project Settings toggles.
+- **Onboarding:** wizard → `api_key → connect your accounts` (featured-but-skippable, merged with browser sign-in); sandbox step deleted (macOS vestigial, **Windows setup moves to the installer** via the existing `--setup-sandbox` elevated path).
+- **Settings index:** generalize the one-off `settingsAnchor: 'budget'` into a named-section scrollspy rail on both settings surfaces (rejected paged settings — preserves single-form-save).
+
+Spec: **[`BACKLOG/specs/011-connectors-and-workspace-layer.md`](BACKLOG/specs/011-connectors-and-workspace-layer.md)**
+
+→ `shaped`, phased A (connector core, L) / B (calendar surface, M-L) / C (onboarding + installer + settings index, M). Awaiting §7 answers — biggest: Google OAuth app strategy (Q1, likely decides launch set), calendar sync mechanism (Q2), remote-only vs local MCP servers (Q4).
+
+### Spec 12 — Cross-project scope for Quick Tasks (the global lens)
+**Status:** shaped · **Added:** 2026-07-04 · **Design aligned:** 2026-07-04
+
+User said: *"sometimes he needs an overview of all projects or maybe even full access of the computer … projects are assets, but there are different ways to look at assets — work in progress or historical reference."* (Corporate-trainer scenario: search all client projects for prior deck style/content.)
+
+**Resolved decisions (spec §0):**
+- **Principle: every asset has two lenses** — WIP (project agent, read-write) vs reference (cross-project, read-only). Quick Tasks is the *agent* of the global lens.
+- **Quick Tasks gets opt-in all-projects READ-ONLY scope** — reads resolve across all project workspaces, Write/Edit stay in scratch; agreed scope-down from the user's original "full access" phrasing.
+- **Full computer access** = separate loudly-consented opt-in, deferred; **dispatch-to-project-agents** deferred to post-fanout (composes with Spec 9 machinery).
+- **Prerequisite fix ships regardless:** per-project portal scoping — today `_portal_paths` is a process-global dict on the shared provider, so project A's *shell* can already read+write project B once both started (`agent_manager.py:514` + `macos/provider.py:194-198`). Real isolation leak.
+- Other projects' `orbital/` runtime dirs excluded from reference reads (work product only, not agent internals).
+
+Spec: **[`BACKLOG/specs/012-cross-project-scope-quick-tasks.md`](BACKLOG/specs/012-cross-project-scope-quick-tasks.md)**
+
+→ `shaped`, effort ≈ M/L (~1.5 wks), independent of Spec 11 and can ship first. Awaiting §7 answers — biggest: toggle default (Q1), read-exclusion list (Q2), Windows read-only ACL mechanics (Q5).
