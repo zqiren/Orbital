@@ -478,6 +478,17 @@ export function transformChatHistory(
   // Fanout calls awaiting their tool result (which carries the fanout_id —
   // see the FANOUT_ACK_RE comment above). Keyed by tool_call_id.
   const pendingFanoutCalls = new Map<string, { labels: string[]; timestamp: string }>();
+  // fanout_card(s) whose ack arrived while ANOTHER tool call in the SAME
+  // capsule still had a 'pending' result (e.g. tool_calls: [fanout, read] with
+  // the fanout ack processed before read's result). Finalizing the capsule
+  // right then would flush `read` still pending and permanently orphan its
+  // result once it does arrive (the pairing loop only searches the OPEN
+  // capsule). So the card waits here instead, and is drained by
+  // finalizeCapsule() the moment the capsule actually finalizes — whether
+  // that's because every row settled (see the `role === 'tool'` pairing
+  // branch below) or an unrelated later boundary (next assistant/user
+  // message, session boundary, end of stream) finalizes it first.
+  let deferredFanoutCards: Extract<DisplayItem, { type: 'fanout_card' }>[] = [];
 
   function tsToMs(ts: string): number {
     const n = Date.parse(ts);
@@ -490,31 +501,36 @@ export function transformChatHistory(
   }
 
   function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
-    if (!currentCapsule || currentCapsule.items.length === 0) {
-      currentCapsule = null;
-      return;
-    }
-    const counts: Record<string, number> = {};
-    let hasThinking = false;
-    for (const it of currentCapsule.items) {
-      if (it.type === 'tool_call_row') {
-        counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
-      } else if (it.type === 'reasoning_block') {
-        hasThinking = true;
+    if (currentCapsule && currentCapsule.items.length > 0) {
+      const counts: Record<string, number> = {};
+      let hasThinking = false;
+      for (const it of currentCapsule.items) {
+        if (it.type === 'tool_call_row') {
+          counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
+        } else if (it.type === 'reasoning_block') {
+          hasThinking = true;
+        }
       }
+      items.push({
+        type: 'agent_run',
+        capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
+        status,
+        items: currentCapsule.items,
+        tool_call_count_by_name: counts,
+        has_thinking: hasThinking,
+        started_at: currentCapsule.startedAtMs,
+        ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+        ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
+      });
     }
-    items.push({
-      type: 'agent_run',
-      capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
-      status,
-      items: currentCapsule.items,
-      tool_call_count_by_name: counts,
-      has_thinking: hasThinking,
-      started_at: currentCapsule.startedAtMs,
-      ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
-      ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
-    });
     currentCapsule = null;
+    // Every finalizeCapsule() call site is a safe point to drain: whatever
+    // capsule content existed just got flushed above (or there was none), so
+    // a deferred card can never land ahead of the capsule it was waiting on.
+    if (deferredFanoutCards.length > 0) {
+      for (const card of deferredFanoutCards) items.push(card);
+      deferredFanoutCards = [];
+    }
   }
 
   while (i < messages.length) {
@@ -847,12 +863,7 @@ export function transformChatHistory(
         const match = content.match(FANOUT_ACK_RE);
         if (match) {
           const fanoutId = match[1];
-          // Flush whatever capsule is currently open FIRST, so it lands in
-          // `items` in the correct chronological position relative to the
-          // fanout_card (fixes: an earlier tool call in the same turn, e.g.
-          // `read`, would otherwise still be sitting un-flushed here).
-          finalizeCapsule();
-          items.push({
+          const card: Extract<DisplayItem, { type: 'fanout_card' }> = {
             type: 'fanout_card',
             fanout_id: fanoutId,
             tasks: pendingFanout.labels.map((label, idx) => ({
@@ -860,7 +871,27 @@ export function transformChatHistory(
               label,
             })),
             timestamp: pendingFanout.timestamp,
-          });
+          };
+          const hasOtherPending = !!currentCapsule?.items.some(
+            (it) => it.type === 'tool_call_row' && it.result_status === 'pending',
+          );
+          if (hasOtherPending) {
+            // Another tool call in this SAME turn (e.g. `read`) is still
+            // awaiting its own result — finalizing now would flush it
+            // pending and permanently orphan that result once it arrives
+            // (residual of Critical 2: this is the [fanout, read] ordering,
+            // ack processed before read's result). Defer instead of
+            // emitting; finalizeCapsule() drains it once the capsule is
+            // actually safe to flush (see the pairing branch below and the
+            // drain step in finalizeCapsule itself).
+            deferredFanoutCards.push(card);
+          } else {
+            // No other call is pending — safe to flush whatever capsule is
+            // open right now, so the card lands in `items` in the correct
+            // chronological position relative to it.
+            finalizeCapsule();
+            items.push(card);
+          }
         }
         // No match (malformed/missing ack) — drop silently, mirroring the
         // orphan-tool-result precedent below.
@@ -885,6 +916,18 @@ export function transformChatHistory(
           }
         }
         currentCapsule.endedAtMs = tsToMs(msg.timestamp);
+        // A deferred fanout_card may have been waiting on THIS row (the
+        // last still-pending one) to settle before the capsule is safe to
+        // flush. Once nothing is pending anymore, finalize right away
+        // instead of waiting for an unrelated later boundary — this is what
+        // actually emits the card in the [fanout, read] ordering (ack
+        // processed before read's result).
+        if (
+          deferredFanoutCards.length > 0 &&
+          !currentCapsule.items.some((it) => it.type === 'tool_call_row' && it.result_status === 'pending')
+        ) {
+          finalizeCapsule();
+        }
       }
       // Orphan tool results (no open capsule, or no matching call) are
       // dropped — the LLM never associated them with a visible call.

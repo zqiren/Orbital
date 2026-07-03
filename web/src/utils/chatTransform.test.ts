@@ -1252,38 +1252,85 @@ describe('transformChatHistory — fanout tool call -> fanout_card', () => {
     expect(items.some((i) => i.type === 'fanout_card')).toBe(false);
   });
 
-  it('a fanout call mixed with a regular tool call in the same turn keeps the regular call in its own capsule', () => {
-    const messages: ChatMessage[] = [
-      asst({
-        content: null,
-        tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
-        timestamp: TS,
-      }),
-      tool('c1', 'contents of a.txt', TS2),
-      tool('c2', 'Fanout cafebabe dispatched: 1 tasks', TS3),
-    ];
-    const items = transformChatHistory(messages);
-    const itemTypes = items.map((i) => i.type);
-    expect(itemTypes).toEqual(['agent_message', 'agent_run', 'fanout_card']);
-
-    const capsule = items[1];
-    expect(capsule.type).toBe('agent_run');
-    if (capsule.type === 'agent_run') {
-      expect(capsule.items.length).toBe(1);
-      // Regression (review round 2, Critical 2): the `read` call's result
-      // arrives BEFORE the fanout's ack — the fanout branch used to finalize
-      // (flush) the capsule as soon as it SAW the fanout tool call, before
-      // `read`'s own result message had even been processed, so the
-      // result-pairing loop (which only searches the OPEN capsule) found
-      // nothing and silently dropped it, leaving `read` stuck pending
-      // forever. Assert the full resolved shape, not just tool_name.
-      expect(capsule.items[0]).toMatchObject({
-        type: 'tool_call_row',
-        tool_name: 'read',
-        result_status: 'received',
-        result_content: 'contents of a.txt',
-      });
+  // Review round 2 found Critical 2 (tool_calls: [read, fanout], results in
+  // that same order) then a residual of the SAME bug class (tool_calls:
+  // [fanout, read], results in that same order — the fanout ack processed
+  // BEFORE read's result). Both the tool_calls declaration order AND the
+  // order results actually arrive in matter independently, so all four
+  // combinations are covered explicitly. Every case asserts BOTH: (a) `read`
+  // ends up resolved with its real content, never orphaned, and (b) exactly
+  // one fanout_card is emitted.
+  describe('fanout mixed with a regular tool call in the same turn — all four call/result orderings', () => {
+    function assertReadResolvedAndCardEmitted(items: ReturnType<typeof transformChatHistory>, fanoutId: string) {
+      const capsule = items.find((i) => i.type === 'agent_run');
+      expect(capsule).toBeDefined();
+      if (capsule && capsule.type === 'agent_run') {
+        const readRow = capsule.items.find((it) => it.type === 'tool_call_row' && it.tool_name === 'read');
+        expect(readRow).toMatchObject({
+          type: 'tool_call_row',
+          tool_name: 'read',
+          result_status: 'received',
+          result_content: 'contents of a.txt',
+        });
+      }
+      const cards = items.filter((i) => i.type === 'fanout_card');
+      expect(cards.length).toBe(1);
+      if (cards[0].type === 'fanout_card') {
+        expect(cards[0].fanout_id).toBe(fanoutId);
+      }
     }
+
+    it('tool_calls [read, fanout], results [read, fanout] (declaration order, the original Critical 2 case)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
+          timestamp: TS,
+        }),
+        tool('c1', 'contents of a.txt', TS2),
+        tool('c2', 'Fanout cafeba01 dispatched: 1 tasks', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba01');
+    });
+
+    it('tool_calls [read, fanout], results [fanout, read] (ack-first, out-of-order)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
+          timestamp: TS,
+        }),
+        tool('c2', 'Fanout cafeba02 dispatched: 1 tasks', TS2),
+        tool('c1', 'contents of a.txt', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba02');
+    });
+
+    it('tool_calls [fanout, read], results [fanout, read] (declaration order — the residual bug case)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}'), tc('c2', 'read', '{"path":"a.txt"}')],
+          timestamp: TS,
+        }),
+        tool('c1', 'Fanout cafeba03 dispatched: 1 tasks', TS2),
+        tool('c2', 'contents of a.txt', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba03');
+    });
+
+    it('tool_calls [fanout, read], results [read, fanout] (ack-second, out-of-order)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}'), tc('c2', 'read', '{"path":"a.txt"}')],
+          timestamp: TS,
+        }),
+        tool('c2', 'contents of a.txt', TS2),
+        tool('c1', 'Fanout cafeba04 dispatched: 1 tasks', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba04');
+    });
   });
 
   it('marks the fanout_card isHistorical when it precedes the last session_separator, like other items', () => {
