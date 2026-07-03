@@ -1,0 +1,267 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Native worker adapter: an in-process ``AgentLoop`` wrapped in the duck-typed
+adapter interface ``SubAgentManager``'s dispatch machinery already expects from
+CLI adapters (spec 009, W1).
+
+A worker is a one-shot, anonymous session: the fanout spawner (Task 2) mints
+one ``NativeWorkerAdapter`` per dispatched sub-task, calls ``send()`` exactly
+once with the task brief, and reads the result back off ``_last_response``
+once the turn completes. Keeping ``_transport`` at ``None`` routes every
+``send()`` through ``SubAgentManager._dispatch_async``'s ``_background_send``
+fallback (sub_agent_manager.py:939-1036) — the same non-blocking-dispatch path
+PTY/Pipe/ACP CLI adapters use — with zero changes to that machinery.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable, Protocol
+
+from agent_os.agent.context import ContextManager
+from agent_os.agent.loop import AgentLoop
+from agent_os.agent.project_paths import ProjectPaths
+from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
+from agent_os.agent.session import Session
+from agent_os.daemon_v2.models import detect_os
+
+logger = logging.getLogger(__name__)
+
+
+def make_worker_handle(fanout_id: str, index: int) -> str:
+    """Return the per-task worker handle: ``worker:<fanout_id>-<index>``."""
+    return f"worker:{fanout_id}-{index}"
+
+
+class ToolRegistryLike(Protocol):
+    """Shape of a tool registry as consumed by ``AgentLoop`` (mirrors
+    ``agent_os.agent.tools.registry.ToolRegistry``). Documentation-only —
+    Task 2's ``make_tool_registry`` factory returns the real, path-restricted
+    registry; tests here use a plain stub satisfying this shape."""
+
+    def schemas(self) -> list[dict]: ...
+    def is_async(self, name: str) -> bool: ...
+    def execute(self, name: str, arguments: dict): ...
+    async def execute_async(self, name: str, arguments: dict): ...
+    def reset_run_state(self) -> None: ...
+
+
+@dataclass
+class WorkerDeps:
+    """Bundle of project-level dependencies the fanout spawner (Task 2)
+    resolves ONCE per fanout batch and hands to each ``NativeWorkerAdapter``.
+
+    ``provider`` is already the correct model for workers (the project's
+    utility model when configured, else the main model — resolved by the
+    spawner, never here). ``make_tool_registry`` is the restricted-registry
+    factory the spawner provides; this task only defines its call shape.
+    """
+
+    provider: object
+    workspace: str
+    project_id: str
+    parent_session_id: str
+    make_tool_registry: Callable[
+        [list[tuple[str, str]] | None, list[str] | None], ToolRegistryLike
+    ]
+
+
+_HANDLE_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+
+def _sanitize_for_filename(text: str) -> str:
+    """Replace anything not alnum/underscore (e.g. ``:``, ``-``) so a handle
+    is safe to embed in a session filename cross-platform — ``:`` is a
+    reserved character on Windows filesystems."""
+    return _HANDLE_SANITIZE_RE.sub("_", text)
+
+
+def _fanout_id_from_handle(handle: str) -> str:
+    """Best-effort recover the fanout id from a ``worker:<fanout_id>-<index>``
+    handle, for the session's ``session_kind`` meta tag. Falls back to the
+    whole handle body for a handle that doesn't match the convention —
+    forensic metadata only, never used for routing."""
+    body = handle.split(":", 1)[-1]
+    fanout_id, _, _ = body.rpartition("-")
+    return fanout_id or body
+
+
+class NativeWorkerAdapter:
+    """In-process ``AgentLoop`` wrapped in the sub-agent adapter duck-type.
+
+    Attributes read by the existing dispatch/status machinery (duck-type
+    contract, not inheritance — a worker has no process to start/read-stream,
+    so it does not implement the ``AgentAdapter`` ABC's ``start``/
+    ``read_stream``/``is_idle``/``is_alive``):
+      - ``_transport``: always ``None`` (forces the background-send fallback).
+      - ``_last_response``: set by ``send()`` for ``_background_send`` to read.
+      - ``_idle`` / ``_broken``: read by status/list_active paths (Task 2/3).
+      - ``display_name``: task label, shown in the fanout progress card.
+    """
+
+    agent_type = "native-worker"
+
+    def __init__(self, *, deps: WorkerDeps, handle: str, display_name: str,
+                 allowed_paths: list[str] | None,
+                 forbidden_paths: list[str] | None) -> None:
+        self.handle = handle
+        self.display_name = display_name
+        self._deps = deps
+
+        self._transport = None
+        self._last_response: str | None = None
+        self._idle = True
+        self._broken = False
+        self._running = False
+        # Strong-ref slot for a future background-task wrapper, mirroring
+        # CLIAdapter's field of the same name (sub_agent_manager.py owns the
+        # actual task; this adapter never assigns it itself).
+        self._background_send_task: asyncio.Task | None = None
+
+        registry = deps.make_tool_registry(allowed_paths, forbidden_paths)
+
+        # Requirement 1: mint a real session JSONL in the project workspace,
+        # same directory as any other session (Session.new / ProjectPaths).
+        session_uuid = (
+            f"worker_{_sanitize_for_filename(handle)}_{uuid.uuid4().hex[:8]}"
+        )
+        self._session_path = ProjectPaths(deps.workspace).session_file(session_uuid)
+        self._session = Session.new(
+            session_uuid, deps.workspace, project_id=deps.project_id,
+            provider=getattr(deps.provider, "provider", "unknown"),
+            model=getattr(deps.provider, "model", "unknown"),
+            sdk=getattr(deps.provider, "sdk", "unknown"),
+        )
+        # Tag immediately (not lazily on first send()) so a worker that is
+        # stopped before ever being messaged is still discoverable as a
+        # worker thread on disk. list_sessions filters kind="worker" out of
+        # the default sidebar listing (spec 009 §3a).
+        self._session.append_meta(
+            "session_kind",
+            kind="worker",
+            parent_session_id=deps.parent_session_id,
+            fanout_id=_fanout_id_from_handle(handle),
+            task_label=display_name,
+        )
+
+        # Requirement 2: mirror the AgentLoop construction path
+        # agent_manager.start_agent uses (~agent_manager.py:775-851), through
+        # WorkerDeps rather than reading config/keychain here. Deliberately
+        # OMITTED relative to that path:
+        #   - interceptor: none. HANDS_OFF for workers — the fanout tool call
+        #     itself is the approval boundary (spec 009 §0.5-7), not a
+        #     per-worker one.
+        #   - on_session_end / on_session_end_refresh: none. Workers are
+        #     one-shot, fresh sessions with no resume/summarization lifecycle.
+        #   - project_dir / get_budget_config / on_budget_event: none.
+        #     loop._emit_ledger_event hardcodes source=SOURCE_MANAGEMENT, so
+        #     wiring project_dir here would misattribute worker LLM spend as
+        #     management spend. Leaving it unset means workers keep the loop's
+        #     token-budget safety net but skip ledger/budget-guard wiring;
+        #     proper sub-agent spend attribution is a follow-up if needed.
+        # Iteration cap / repetition / ping-pong guards stay on: repetition
+        # and ping-pong detection are unconditional in AgentLoop.run(); the
+        # iteration cap uses the loop's own default (unbounded) since
+        # WorkerDeps carries no config.max_iterations to forward — the fanout
+        # stall watchdog (spec 009 §0.5-5) is a separate activity-timeout
+        # applied externally by the spawner/join layer, not this loop's cap.
+        prompt_builder = PromptBuilder(workspace=deps.workspace)
+        base_ctx = PromptContext(
+            workspace=deps.workspace,
+            model=getattr(deps.provider, "model", "unknown"),
+            autonomy=Autonomy.HANDS_OFF,
+            enabled_agents=[],
+            tool_names=list(getattr(registry, "tool_names", lambda: [])()),
+            os_type=detect_os(),
+            datetime_now=datetime.now().isoformat(),
+            project_id=deps.project_id,
+            agent_name=display_name,
+        )
+        context_manager = ContextManager(self._session, prompt_builder, base_ctx)
+
+        self._loop = AgentLoop(self._session, deps.provider, registry, context_manager)
+
+    async def send(self, message: str) -> None:
+        """Run ONE full ``AgentLoop`` turn with ``message`` as the user
+        message. Blocks until the turn completes. Never raises for
+        task-level failures — the loop's own exception surface (an arbitrary
+        provider/tool exception escaping ``AgentLoop.run``) is caught here and
+        encoded into ``_last_response`` as ``"Error: ..."``, matching the
+        adapter contract ``_background_send`` relies on to route completion
+        vs. error (sub_agent_manager.py:986)."""
+        self._idle = False
+        self._running = True
+        try:
+            try:
+                await self._loop.run(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — task-level failure, never raise
+                logger.exception(
+                    "NativeWorkerAdapter %s: turn raised inside AgentLoop.run",
+                    self.handle,
+                )
+                self._broken = True
+                self._last_response = f"Error: {e}"
+                return
+            self._last_response = self._read_final_response()
+        finally:
+            self._running = False
+            self._idle = True
+
+    async def stop(self) -> None:
+        """Cancel the in-flight turn and mark the adapter stopped. Safe to
+        call with no turn in flight (``cancel_turn`` is a no-op then)."""
+        await self._loop.cancel_turn()
+        self._running = False
+        self._idle = True
+
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def session_path(self) -> str:
+        """Path of the worker's session JSONL (for drill-in links)."""
+        return self._session_path
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _read_final_response(self) -> str:
+        """Return the worker's final assistant text, or an ``Error: ...``
+        description derived from the loop's completion state when the turn
+        ended without a usable trailing assistant message (e.g.
+        ``mark_task_blocked``, a mid-turn stop, or a guard exit with no
+        final text). Never returns an empty string — ``_background_send``
+        treats a falsy response as "no output happened" and skips its
+        completion/error routing entirely (sub_agent_manager.py:963)."""
+        for msg in reversed(self._session.get_messages()):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+            # Newest assistant row carries no usable text — the turn did not
+            # end on a text-only response. No earlier assistant row (from a
+            # prior tool-calling iteration of this SAME turn) is a better
+            # answer, so stop looking and fall through to completion state.
+            break
+
+        exit_reason, exit_summary, exit_block_reason = self._loop.get_completion_state()
+        if exit_reason == "complete":
+            return exit_summary or "Task completed."
+        if exit_reason == "blocked":
+            return f"Error: task blocked ({exit_block_reason or 'no reason given'})"
+        if exit_reason == "cancelled":
+            return "Error: task was cancelled before producing a result."
+        if exit_reason == "budget_blocked":
+            return "Error: stopped — project budget limit reached."
+        return "Error: worker turn ended with no output."
