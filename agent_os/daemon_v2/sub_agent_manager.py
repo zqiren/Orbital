@@ -1871,3 +1871,51 @@ class SubAgentManager:
                         pass
 
         return entries
+
+    def read_transcript_entries(self, project_id: str, handle: str,
+                                session_id: str | None = None) -> "list[dict] | None":
+        """Read one sub-agent's transcript entries for the drill-in endpoint.
+
+        Returns ``None`` when no transcript exists for (project, handle) —
+        the caller's 404 signal. Returns ``[]`` (not None) for a transcript
+        file that exists but has produced zero chunks yet (started, nothing
+        streamed) — that is a legitimate empty transcript, not a 404.
+
+        Works for BOTH live and non-live handles:
+        - live / recently-reset: prefers the in-memory ``Transcript`` for
+          this exact (project_id, session_id, handle) via ``get_transcript``
+          — accurate even right after a §4d ``fresh=True`` reset, where the
+          on-disk ``.latest`` pointer and an in-memory handle from a
+          different session could otherwise disagree.
+        - non-live (daemon restarted, sub-agent already stopped, or no
+          in-memory entry at all): falls back to the on-disk ``.latest``
+          pointer for (workspace, handle) — the same continuity convention
+          ``SubAgentTranscript.open_for_handle`` uses to resume a handle's
+          transcript across respawns. Storage is keyed by (workspace,
+          handle) only, not by session (see BACKLOG 005 §4b) — this is why
+          the disk fallback needs no session_id.
+        """
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        filepath: str | None = None
+        transcript = self.get_transcript(project_id, handle, session_id)
+        if transcript is not None:
+            filepath = transcript.filepath
+        else:
+            workspace = ""
+            if self._project_store is not None:
+                project = self._project_store.get_project(project_id)
+                workspace = (project.get("workspace", "") if project else "")
+            if workspace:
+                from agent_os.agent.project_paths import ProjectPaths
+                sub_dir = ProjectPaths(workspace).sub_agent_dir(handle)
+                latest_id = SubAgentTranscript._read_latest_id(sub_dir)
+                if latest_id is not None:
+                    filepath = os.path.join(sub_dir, f"{latest_id}.jsonl")
+
+        if filepath is None or not os.path.isfile(filepath):
+            return None
+        try:
+            return SubAgentTranscript.read(filepath)
+        except (OSError, json.JSONDecodeError):
+            return None

@@ -2717,6 +2717,73 @@ async def stop_sub_agent(project_id: str, handle: str,
     return result
 
 
+# Handles include both plain CLI slugs ("claude-code") and native fanout
+# worker handles ("worker:<fanout_id>-<index>", native_worker.make_worker_handle)
+# — colon is allowed for the latter. No dots/slashes: the handle is joined
+# directly into a filesystem path (ProjectPaths.sub_agent_dir), so this also
+# doubles as the path-traversal guard.
+_TRANSCRIPT_HANDLE_RE = re.compile(r"^[A-Za-z0-9_:-]+$")
+
+
+@router.get("/agents/{project_id}/sub-agents/{handle}/transcript")
+async def sub_agent_transcript(project_id: str, handle: str,
+                               session_id: str | None = None):
+    """Read-only transcript playback for one sub-agent handle (spec 009
+    Section 0.5, Task 4) — the SOLE data source for the frontend drill-in
+    view (Task 5, already committed). Response shape is FROZEN; see
+    web/src/types.ts's ``SubAgentTranscriptResult`` — do not change field
+    names/types here without updating that contract in lockstep.
+
+    ``kind`` is derived purely from the handle prefix: native fanout workers
+    are minted as ``worker:<fanout_id>-<index>``; everything else is a CLI
+    adapter slug. ``resumable`` mirrors ``kind == "cli"`` — workers are
+    one-shot, anonymous sessions with no composer.
+
+    ``session_id`` defaults to the project's active-loop holder (same
+    no-sentinel resolution ``/sub-agents/status`` and the stop route use
+    above). It only affects which live adapter's ``display_name`` is
+    preferred — the on-disk transcript itself is keyed by (workspace,
+    handle), not by session (BACKLOG 005 §4b), so omitting it still finds
+    the transcript; it just falls back to the handle for ``display_name``.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    if not _TRANSCRIPT_HANDLE_RE.match(handle):
+        raise HTTPException(status_code=400, detail="Invalid agent handle")
+
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+
+    raw_entries = _sub_agent_manager.read_transcript_entries(project_id, handle, sid)
+    if raw_entries is None:
+        raise HTTPException(status_code=404, detail="No transcript found for this handle")
+
+    # turn_complete rows are empty-content turn-boundary instrumentation
+    # (ProcessManager._append_turn_boundary) — never rendered anywhere else
+    # in the codebase (the /chat unfiltered merge drops them too); must not
+    # leak into the drill-in playback.
+    entries = [e for e in raw_entries if e.get("chunk_type") != "turn_complete"]
+
+    kind = "worker" if handle.startswith("worker:") else "cli"
+
+    # display_name: prefer the live adapter's name for this session; a
+    # worker's label only exists in-memory (native_worker task label), so a
+    # non-live handle gracefully falls back to the raw handle.
+    display_name = handle
+    if sid is not None:
+        for a in _sub_agent_manager.list_active(project_id, session_id=sid):
+            if a["handle"] == handle:
+                display_name = a["display_name"]
+                break
+
+    return {
+        "handle": handle,
+        "display_name": display_name,
+        "kind": kind,
+        "resumable": kind == "cli",
+        "entries": entries,
+    }
+
+
 def _installed_sub_agents() -> list[dict]:
     """Compute the list of ALL installed (non-built-in) sub-agents.
 
