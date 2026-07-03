@@ -13,6 +13,8 @@ one turn and never raises for task-level failures, ``_last_response`` carries
 the outcome.
 """
 
+import json
+
 import pytest
 
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
@@ -47,6 +49,35 @@ class _StubProvider:
     async def stream(self, messages, tools=None):
         yield StreamChunk(text=self._text)
         yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=10, output_tokens=5))
+
+
+class _ToolCallProvider:
+    """Provider that emits a single ``mark_task_complete`` tool call — models
+    a turn that ends via a tool signal rather than a trailing text-only
+    assistant message, so ``_read_final_response()``'s completion-state
+    fallback is exercised for real. ``mark_task_complete``/``mark_task_blocked``
+    are detected by AgentLoop.run() directly off the response's tool_calls
+    (loop.py's "queue signal short-circuit"), so this needs no tool actually
+    registered in the stub registry."""
+
+    def __init__(self, tool_name: str, arguments: dict):
+        self.provider = "stub"
+        self.model = "stub-model"
+        self.sdk = "stub-sdk"
+        self._tool_name = tool_name
+        self._arguments = arguments
+
+    async def stream(self, messages, tools=None):
+        yield StreamChunk(tool_calls_delta=[{
+            "index": 0,
+            "id": "tc1",
+            "type": "function",
+            "function": {
+                "name": self._tool_name,
+                "arguments": json.dumps(self._arguments),
+            },
+        }])
+        yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=5, output_tokens=5))
 
 
 class _RaisingProvider:
@@ -182,3 +213,38 @@ async def test_stop_cancels_turn(tmp_path, stub_worker_deps):
     await a.stop()
     assert a.is_running() is False
     assert a._idle is True
+
+
+@pytest.mark.asyncio
+async def test_tool_completion_falls_back_to_completion_state(tmp_path):
+    """A turn that ends via mark_task_complete (not a trailing text-only
+    assistant message) exercises _read_final_response()'s fallback to
+    loop.get_completion_state() for real — the loop's own tool-call
+    short-circuit path, not a mocked _read_final_response()."""
+    deps = WorkerDeps(
+        provider=_ToolCallProvider("mark_task_complete", {"summary": "did the thing"}),
+        workspace=str(tmp_path),
+        project_id="proj-1",
+        parent_session_id="parent-sess-1",
+        make_tool_registry=_make_registry_factory(_StubToolRegistry()),
+    )
+    a = NativeWorkerAdapter(deps=deps, handle="worker:x-2", display_name="t2",
+                            allowed_paths=None, forbidden_paths=None)
+    await a.send("do it")
+    assert a._last_response == "did the thing"
+
+
+@pytest.mark.asyncio
+async def test_send_reentrancy_guard(tmp_path, stub_worker_deps):
+    """A second send() while a turn is already in flight fails fast with an
+    Error response instead of running two loop.run() invocations on one
+    Session — a worker is one-shot by construction, so this is a defensive
+    guard against a caller bug, not a normal code path."""
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-3",
+                            display_name="t3", allowed_paths=None,
+                            forbidden_paths=None)
+    a._running = True  # simulate a turn already in flight
+    await a.send("second message")
+    assert a._last_response == "Error: worker is already running a task"
+    # The guard must not touch the in-flight turn's own state.
+    assert a.is_running() is True

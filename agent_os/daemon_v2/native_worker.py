@@ -51,6 +51,7 @@ class ToolRegistryLike(Protocol):
     def execute(self, name: str, arguments: dict): ...
     async def execute_async(self, name: str, arguments: dict): ...
     def reset_run_state(self) -> None: ...
+    def tool_names(self) -> list[str]: ...
 
 
 @dataclass
@@ -195,14 +196,23 @@ class NativeWorkerAdapter:
         provider/tool exception escaping ``AgentLoop.run``) is caught here and
         encoded into ``_last_response`` as ``"Error: ..."``, matching the
         adapter contract ``_background_send`` relies on to route completion
-        vs. error (sub_agent_manager.py:986)."""
+        vs. error (sub_agent_manager.py:986).
+
+        Re-entrancy guard: a worker is one-shot by construction (the fanout
+        spawner calls ``send()`` exactly once per adapter), so a second
+        concurrent call while a turn is in flight is a caller bug, not a
+        legitimate retry. Fail fast rather than run two ``loop.run()``
+        invocations on one ``Session`` (``AgentLoop.run()`` itself would raise
+        on true re-entry, but only after both calls have already raced to
+        append onto the same session)."""
+        if self._running:
+            self._last_response = "Error: worker is already running a task"
+            return
         self._idle = False
         self._running = True
         try:
             try:
                 await self._loop.run(message)
-            except asyncio.CancelledError:
-                raise
             except Exception as e:  # noqa: BLE001 — task-level failure, never raise
                 logger.exception(
                     "NativeWorkerAdapter %s: turn raised inside AgentLoop.run",
