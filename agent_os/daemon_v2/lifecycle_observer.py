@@ -21,6 +21,35 @@ class LifecycleObserver:
     def __init__(self, agent_manager, ws_manager):
         self._agent_manager = agent_manager
         self._ws = ws_manager
+        # Fanout join core (spec 009, Task 2/6): None until app startup wires
+        # it post-construction (mirrors SubAgentManager._fanout_registry).
+        # When set, every terminal-event method below routes the event
+        # through it FIRST — a fanout-member handle's per-worker session
+        # injection is absorbed into the group's single join summary instead
+        # of firing individually.
+        self.fanout_registry = None
+
+    def _absorb_terminal(self, project_id: str, handle: str,
+                         session_id: str | None, *, kind: str,
+                         summary: str, transcript_path: str) -> bool:
+        """Route a terminal event through ``fanout_registry`` if wired.
+        Returns True when the caller must skip its own ``_inject`` (the WS
+        broadcast still fires unconditionally — the progress card needs it
+        regardless of fanout membership)."""
+        if self.fanout_registry is None:
+            return False
+        try:
+            return self.fanout_registry.absorb_terminal(
+                project_id, handle, session_id, kind=kind, summary=summary,
+                transcript_path=transcript_path,
+            )
+        except Exception:
+            logger.exception(
+                "fanout_registry.absorb_terminal raised for %s/%s "
+                "(kind=%s) — falling back to per-worker injection",
+                project_id, handle, kind,
+            )
+            return False
 
     async def on_started(self, project_id: str, handle: str, initiator: str,
                          transcript_path: str = "unknown",
@@ -82,7 +111,12 @@ class LifecycleObserver:
             f"[Sub-agent] {handle} completed. Summary: {summary_text}. "
             f"Transcript: {transcript_path}.{guidance}"
         )
-        await self._inject(project_id, content, session_id=session_id)
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="completed",
+            summary=summary_text, transcript_path=transcript_path,
+        )
+        if not absorbed:
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,
@@ -96,7 +130,12 @@ class LifecycleObserver:
                        *, session_id: str | None = None) -> None:
         """Sub-agent encountered an error."""
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
-        await self._inject(project_id, content, session_id=session_id)
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="error",
+            summary=error, transcript_path=transcript_path,
+        )
+        if not absorbed:
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.error",
             "project_id": project_id,
@@ -119,7 +158,16 @@ class LifecycleObserver:
             f"[Sub-agent] {handle} failed: {reason}. "
             f"The dispatched task did not complete."
         )
-        await self._inject(project_id, content, session_id=session_id)
+        # No transcript_path parameter on this event — "" defers to the
+        # task's dispatch-time path already recorded in the fanout group
+        # (FanoutRegistry.absorb_terminal keeps the existing value when
+        # passed a falsy transcript_path).
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="failed",
+            summary=reason, transcript_path="",
+        )
+        if not absorbed:
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.failed",
             "project_id": project_id,
@@ -145,7 +193,14 @@ class LifecycleObserver:
                 f" Terminated {len(terminated)} background process(es): "
                 f"{cmds}. This background work did NOT complete."
             )
-        await self._inject(project_id, content, session_id=session_id)
+        # No transcript_path parameter on this event either — "" defers to
+        # the task's already-recorded transcript path (see on_failed above).
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="stopped",
+            summary=content, transcript_path="",
+        )
+        if not absorbed:
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.stopped",
             "project_id": project_id,
@@ -168,7 +223,13 @@ class LifecycleObserver:
             f"No result was produced. The agent remains available. "
             f"Transcript: {transcript_path}"
         )
-        await self._inject(project_id, content, session_id=session_id)
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="interrupted",
+            summary="turn interrupted before completion",
+            transcript_path=transcript_path,
+        )
+        if not absorbed:
+            await self._inject(project_id, content, session_id=session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.turn_interrupted",
             "project_id": project_id,

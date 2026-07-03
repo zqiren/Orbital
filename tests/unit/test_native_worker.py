@@ -80,6 +80,34 @@ class _ToolCallProvider:
         yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=5, output_tokens=5))
 
 
+class _MultiToolCallProvider:
+    """Provider that emits ``num_tool_calls`` REAL tool calls (a distinct
+    ``some_tool`` call per iteration — routed through the tool registry's
+    ``execute()``, unlike ``_ToolCallProvider``'s ``mark_task_complete``
+    short-circuit) before ending the turn with a plain text response. Models
+    a multi-tool-call turn for exercising per-tool-call activity bumps."""
+
+    def __init__(self, num_tool_calls: int):
+        self.provider = "stub"
+        self.model = "stub-model"
+        self.sdk = "stub-sdk"
+        self._num_tool_calls = num_tool_calls
+        self._iteration = 0
+
+    async def stream(self, messages, tools=None):
+        self._iteration += 1
+        if self._iteration <= self._num_tool_calls:
+            yield StreamChunk(tool_calls_delta=[{
+                "index": 0,
+                "id": f"tc{self._iteration}",
+                "type": "function",
+                "function": {"name": "some_tool", "arguments": "{}"},
+            }])
+        else:
+            yield StreamChunk(text="all done")
+        yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=5, output_tokens=5))
+
+
 class _RaisingProvider:
     """Provider whose stream() raises mid-turn — simulates a task-level
     failure (network error, API error, etc.) inside the worker's loop."""
@@ -215,6 +243,44 @@ async def test_stop_cancels_turn(tmp_path, stub_worker_deps):
     assert a._idle is True
 
 
+def test_is_alive_and_is_idle_fresh_adapter(tmp_path, stub_worker_deps):
+    """A freshly-constructed worker is alive (not broken) and idle (no turn
+    in flight) — the state every _adapters[sk] scanner (list_active/status,
+    and QueueDispatcher._continuation_pending outside this package) expects
+    on registration, mirroring CLIAdapter.is_alive()/is_idle()'s call shape
+    (plain methods returning bool)."""
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-7",
+                            display_name="t7", allowed_paths=None,
+                            forbidden_paths=None)
+    assert a.is_alive() is True
+    assert a.is_idle() is True
+
+
+@pytest.mark.asyncio
+async def test_is_idle_false_while_running(tmp_path, stub_worker_deps):
+    """is_idle() reflects is_running() live, not just at construction."""
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-8",
+                            display_name="t8", allowed_paths=None,
+                            forbidden_paths=None)
+    a._running = True  # simulate a turn in flight (mirrors the reentrancy test)
+    assert a.is_idle() is False
+    assert a.is_alive() is True
+
+
+@pytest.mark.asyncio
+async def test_is_alive_false_once_broken(tmp_path, stub_worker_deps_err):
+    """A worker whose turn raised (task-level failure) is marked _broken —
+    is_alive() must reflect that so status()/list_active() report it as
+    'stopped' rather than crashing or reporting a live worker."""
+    a = NativeWorkerAdapter(deps=stub_worker_deps_err, handle="worker:x-9",
+                            display_name="t9", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("boom")
+    assert a._broken is True
+    assert a.is_alive() is False
+    assert a.is_idle() is True  # the turn ended; not running any more
+
+
 @pytest.mark.asyncio
 async def test_tool_completion_falls_back_to_completion_state(tmp_path):
     """A turn that ends via mark_task_complete (not a trailing text-only
@@ -248,3 +314,67 @@ async def test_send_reentrancy_guard(tmp_path, stub_worker_deps):
     assert a._last_response == "Error: worker is already running a task"
     # The guard must not touch the in-flight turn's own state.
     assert a.is_running() is True
+
+
+@pytest.mark.asyncio
+async def test_on_activity_fires_at_turn_start_and_end(tmp_path, stub_worker_deps):
+    """Task 2 activity plumbing: WorkerDeps.on_activity, when set, fires once
+    at send() start and once at send() end — the turn-boundary bumps. This
+    turn's stub provider makes no tool calls, so no additional per-tool-call
+    bumps fire (see test_on_activity_fires_per_tool_call for that case)."""
+    calls = []
+    stub_worker_deps.on_activity = lambda: calls.append("tick")
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-4",
+                            display_name="t4", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("compute the answer")
+    assert calls == ["tick", "tick"]
+
+
+@pytest.mark.asyncio
+async def test_on_activity_fires_per_tool_call(tmp_path, stub_worker_deps):
+    """Correction (team-lead, spec 009): turn-boundary-only bumps are
+    insufficient for a single-turn worker — a long multi-tool-call turn
+    would never advance last_activity until the whole turn ends, defeating
+    the point of the stall watchdog for exactly the long investigative
+    tasks it's meant to protect. WorkerDeps.on_activity must also fire per
+    tool execution, via the registry wrap (_ActivityTrackingRegistry) —
+    verified here with a provider that makes 2 real tool calls (routed
+    through the stub registry's execute(), NOT the mark_task_complete/
+    blocked short-circuit) before ending the turn with text."""
+    calls = []
+    stub_worker_deps.on_activity = lambda: calls.append("tick")
+    stub_worker_deps.provider = _MultiToolCallProvider(num_tool_calls=2)
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-11",
+                            display_name="t11", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("do multi-step work")
+    assert a._last_response == "all done"
+    # 2 turn-boundary bumps (start + end) + at least 2 per-tool-call bumps.
+    assert calls.count("tick") >= 4
+
+
+@pytest.mark.asyncio
+async def test_on_activity_none_is_safe(tmp_path, stub_worker_deps):
+    """The default (no on_activity set) must not error — most callers
+    (non-fanout construction, existing tests) never set it."""
+    assert stub_worker_deps.on_activity is None
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-5",
+                            display_name="t5", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("compute the answer")
+    assert a._last_response == "done: 42"
+
+
+@pytest.mark.asyncio
+async def test_on_activity_exception_does_not_break_turn(tmp_path, stub_worker_deps):
+    """A broken caller-supplied on_activity hook must not corrupt the
+    worker's own turn result."""
+    def _boom():
+        raise RuntimeError("hook exploded")
+    stub_worker_deps.on_activity = _boom
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-6",
+                            display_name="t6", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("compute the answer")
+    assert a._last_response == "done: 42"

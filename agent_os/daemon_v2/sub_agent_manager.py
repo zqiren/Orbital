@@ -100,6 +100,16 @@ class SubAgentManager:
         # 2026-05-20). Intercepting claude.exe's I/O is architectural rework,
         # explicitly out of F4's scope (§5.3).
         self._memory_write_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # Fanout wiring (spec 009, Task 2/6): both None until app startup sets
+        # them post-construction (mirrors ``_lifecycle_observer``'s own
+        # pattern above). ``_fanout_registry`` is the join/gather core
+        # (agent_os/daemon_v2/fanout.py); ``_worker_deps_factory`` is
+        # ``(project_id, session_id) -> WorkerDeps``, built by Task 6 from
+        # Task 3's ``make_tool_registry``. Either being None means
+        # ``dispatch_fanout`` cannot run yet — it fails closed with an
+        # "unavailable" error rather than raising.
+        self._fanout_registry = None
+        self._worker_deps_factory = None
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
@@ -936,6 +946,167 @@ class SubAgentManager:
 
         return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
 
+    async def dispatch_fanout(self, project_id: str, tasks: list[dict], *,
+                              session_id: str, max_runtime_s: int = 3600,
+                              depth: int = 0) -> str:
+        """Spawn N native-worker sub-tasks in parallel and register them as
+        one join group (spec 009, W2/W3).
+
+        ``tasks``: ``[{"brief": str, "label": str, "files_scope": {"allowed":
+        [...], "forbidden": [...]} | None}, ...]``. Errors return
+        ``"Error: ..."`` strings — never raises to the calling tool (mirrors
+        every other public verb on this class). ``depth`` is accepted for
+        signature parity with ``send``/``start`` (nesting depth + 1 from the
+        caller); the MAX_DEPTH gate itself lives in the tool layer
+        (``FanoutTool`` mirrors ``AgentMessageTool``), not here — same
+        division of responsibility as the existing dispatch verbs.
+        """
+        if not (2 <= len(tasks) <= MAX_CONCURRENT_SUBAGENTS):
+            return (
+                f"Error: fanout requires 2-{MAX_CONCURRENT_SUBAGENTS} tasks "
+                f"(got {len(tasks)}). A single task should use agent_message "
+                f"or be done inline."
+            )
+        for i, task in enumerate(tasks):
+            if not isinstance(task, dict) or not task.get("brief") or not task.get("label"):
+                return (
+                    f"Error: task {i} is missing a required 'brief' and/or "
+                    f"'label'"
+                )
+        if self._worker_deps_factory is None:
+            return "Error: fanout is not available (worker factory unwired)"
+        if self._fanout_registry is None:
+            return "Error: fanout is not available (fanout registry unwired)"
+
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+
+        import time
+        import uuid as _uuid
+
+        from agent_os.daemon_v2.fanout import FanoutTask
+        from agent_os.daemon_v2.native_worker import (
+            NativeWorkerAdapter,
+            make_worker_handle,
+        )
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        fanout_id = _uuid.uuid4().hex[:8]
+        adapters: dict[str, object] = {}
+        fanout_tasks: list[FanoutTask] = []
+
+        # Atomic cap check + adapter construction/registration/dispatch, ALL
+        # under the per-session lock (closes the TOCTOU at :210-216/:621-627
+        # for the fanout path). Holding the lock across this whole block is
+        # deliberate, not just for the cap check: registering an adapter into
+        # ``_adapters[sk]`` and then releasing the lock BEFORE dispatching or
+        # creating the join group would open a window where a concurrent
+        # ``stop_all``/``stop`` (which also takes this lock) could tear a
+        # freshly-registered worker down before its brief was ever sent, or
+        # before ``create_group`` existed to absorb that teardown as a
+        # fanout event instead of a stray per-worker one. Every call made
+        # here is synchronous or a bare ``asyncio.create_task(...)`` (no
+        # blocking await) — mirrors ``send()``'s own pattern of dispatching
+        # while holding this same lock — and this method never calls
+        # ``start()``/``stop()`` (the only other lock acquirers), so holding
+        # it across the whole block cannot deadlock.
+        lock = self._get_lock(project_id, session_id=session_id)
+        async with lock:
+            current_count = len(self._adapters.get(sk, {}))
+            if current_count + len(tasks) > MAX_CONCURRENT_SUBAGENTS:
+                return (
+                    f"Error: fanout would exceed the concurrent sub-agent "
+                    f"limit (max {MAX_CONCURRENT_SUBAGENTS} per project; "
+                    f"{current_count} already running, {len(tasks)} "
+                    f"requested). Stop an existing sub-agent first."
+                )
+
+            deps = self._worker_deps_factory(project_id, session_id)
+            workspace = deps.workspace
+
+            for i, task in enumerate(tasks):
+                handle = make_worker_handle(fanout_id, i)
+                files_scope = task.get("files_scope") or {}
+                allowed = files_scope.get("allowed")
+                forbidden = files_scope.get("forbidden")
+
+                # WorkerDeps is one shared instance per batch (Task 1); bind
+                # on_activity to THIS handle right before constructing THIS
+                # adapter — the adapter reads it once at __init__, so
+                # mutating the shared deps between constructions is safe.
+                deps.on_activity = self._make_activity_callback(
+                    project_id, handle, session_id)
+
+                adapter = NativeWorkerAdapter(
+                    deps=deps, handle=handle, display_name=task["label"],
+                    allowed_paths=allowed, forbidden_paths=forbidden,
+                )
+                adapters[handle] = adapter
+
+                transcript = SubAgentTranscript.open_for_handle(
+                    workspace, handle, fresh=True)
+                self._transcripts[(project_id, session_id, handle)] = transcript
+
+                fanout_tasks.append(FanoutTask(
+                    handle=handle,
+                    label=task["label"],
+                    brief=task["brief"],
+                    allowed_paths=allowed,
+                    forbidden_paths=forbidden,
+                    status="running",
+                    transcript_path=transcript.filepath,
+                    last_activity=time.monotonic(),
+                ))
+
+            self._adapters.setdefault(sk, {}).update(adapters)
+
+            group = self._fanout_registry.create_group(
+                project_id, session_id, fanout_tasks,
+                max_runtime_s=max_runtime_s,
+            )
+            await self._fanout_registry.start_watchdog(group)
+
+            for task, fanout_task in zip(tasks, fanout_tasks):
+                await self._dispatch_async(
+                    adapters[fanout_task.handle], project_id,
+                    fanout_task.handle, task["brief"], session_id=session_id,
+                )
+
+        ws = self._ws()
+        if ws is not None:
+            try:
+                ws.broadcast(project_id, {
+                    "type": "fanout.started",
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "fanout_id": fanout_id,
+                    "tasks": [
+                        {"handle": t.handle, "label": t.label}
+                        for t in fanout_tasks
+                    ],
+                })
+            except Exception:
+                logger.exception(
+                    "failed to broadcast fanout.started for project=%s "
+                    "fanout=%s", project_id, fanout_id,
+                )
+
+        labels = ", ".join(t.label for t in fanout_tasks)
+        return (
+            f"Fanout {fanout_id} dispatched: {len(fanout_tasks)} tasks — "
+            f"{labels}. Results will arrive together when all tasks finish."
+        )
+
+    def _make_activity_callback(self, project_id: str, handle: str,
+                                session_id: str):
+        """Zero-arg closure bound to one worker handle, handed to that
+        worker's ``WorkerDeps.on_activity`` (see ``dispatch_fanout``)."""
+        def _on_activity() -> None:
+            if self._fanout_registry is not None:
+                self._fanout_registry.note_activity(
+                    project_id, handle, session_id)
+        return _on_activity
+
     async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
                               *, session_id: str | None = None) -> None:
         """Dispatch message to adapter without blocking on response.
@@ -956,6 +1127,22 @@ class SubAgentManager:
 
         async def _background_send():
             from datetime import datetime, timezone
+            # Fanout activity plumbing (Task 2, spec 009 §0.5-5): bump the
+            # watchdog's last-activity clock at dispatch time. A no-op for
+            # non-fanout handles (owner_group lookup misses) and when no
+            # registry is wired yet. This is turn-START coverage from the
+            # dispatch side; NativeWorkerAdapter's own on_activity callback
+            # (wired by the spawner) covers turn-start/end from inside the
+            # loop — belt-and-braces per the brief, not a duplicate bug.
+            if self._fanout_registry is not None:
+                try:
+                    self._fanout_registry.note_activity(
+                        project_id, handle, session_id)
+                except Exception:
+                    logger.exception(
+                        "fanout note_activity raised for %s/%s",
+                        project_id, handle,
+                    )
             try:
                 await adapter.send(message)
                 # Pipe/ACP transports store the response in _last_response

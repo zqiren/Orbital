@@ -2727,6 +2727,7 @@ class AgentManager:
             stored_name = None  # name on the session_start meta, if present
             origin = "chat"  # session_start meta origin; legacy logs → chat
             first_user_content = None  # for name backfill
+            is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
             try:
                 with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
                     first_real = None  # first non-meta (conversation) record
@@ -2747,6 +2748,14 @@ class AgentManager:
                                     stored_name = rec["name"]
                                 if rec.get("origin"):
                                     origin = rec["origin"]
+                            elif (rec.get("event") == "session_kind"
+                                  and rec.get("kind") == "worker"):
+                                # Fanout native-worker session (spec 009 §3a):
+                                # a one-shot, anonymous sub-task thread tagged
+                                # immediately at construction. Never a sidebar
+                                # entry — reachable only via transcript links
+                                # in the fanout join summary / drill-in.
+                                is_worker = True
                             continue
                         if first_real is None:
                             first_real = rec
@@ -2757,6 +2766,8 @@ class AgentManager:
                 continue
             if first_real is None:
                 continue  # empty / meta-only log — not a materialized session
+            if is_worker:
+                continue  # worker thread — excluded from the session sidebar
             if last_real is not None:
                 last_activity_at = last_real.get("timestamp")
             # Name: stored meta name wins; else derive from first user message

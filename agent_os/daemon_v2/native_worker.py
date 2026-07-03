@@ -63,6 +63,31 @@ class WorkerDeps:
     utility model when configured, else the main model — resolved by the
     spawner, never here). ``make_tool_registry`` is the restricted-registry
     factory the spawner provides; this task only defines its call shape.
+
+    ``on_activity`` (Task 2 activity plumbing, spec 009 §0.5-5): an optional
+    zero-arg callback the adapter fires so the fanout watchdog's
+    ``last_activity`` clock advances. ``WorkerDeps`` is one shared
+    instance per fanout batch (not per task), so a spawner dispatching N
+    tasks must rebind ``deps.on_activity`` to a per-handle closure
+    immediately before constructing EACH adapter — the adapter reads it once
+    at ``__init__`` time, so mutating the shared ``deps`` between
+    constructions is safe and does not race.
+
+    Granularity: fires at ``send()`` start/end (turn boundaries) AND before
+    every tool execution, via ``_ActivityTrackingRegistry`` wrapping
+    whatever ``make_tool_registry`` returns. ``AgentLoop`` itself has no
+    per-tool-call hook to wire (checked at the loop's constructor,
+    ``agent_os/agent/loop.py:81-97``) — wrapping the registry gets true
+    per-tool-call granularity without touching ``loop.py``, since the loop
+    calls the registry for every tool call regardless (``loop.py:1087-
+    1097``). This matters because a worker is single-turn by design:
+    without the registry wrap, a long multi-tool-call turn would never
+    advance ``last_activity`` until the whole turn ends, and the default
+    600s stall threshold would kill any task running past 10 minutes —
+    precisely the long investigative work the activity design exists to
+    protect. A long gap with NO tool calls (one slow LLM generation) still
+    counts toward stall; accepted as pathological past 10 minutes of
+    uninterrupted streaming.
     """
 
     provider: object
@@ -72,6 +97,7 @@ class WorkerDeps:
     make_tool_registry: Callable[
         [list[tuple[str, str]] | None, list[str] | None], ToolRegistryLike
     ]
+    on_activity: Callable[[], None] | None = None
 
 
 _HANDLE_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -94,16 +120,54 @@ def _fanout_id_from_handle(handle: str) -> str:
     return fanout_id or body
 
 
+class _ActivityTrackingRegistry:
+    """Wraps a ``ToolRegistryLike`` so every tool execution fires the
+    worker's activity hook BEFORE delegating — true per-tool-call
+    granularity for the fanout stall watchdog (see ``WorkerDeps.on_activity``
+    docstring for why turn-boundary-only bumps are insufficient). Delegates
+    every other member unchanged; only ``execute``/``execute_async`` fire
+    the hook, since those are the only members ``AgentLoop`` calls per tool
+    call (``loop.py:1087-1097``)."""
+
+    def __init__(self, inner, fire_activity) -> None:
+        self._inner = inner
+        self._fire_activity = fire_activity
+
+    def schemas(self) -> list[dict]:
+        return self._inner.schemas()
+
+    def is_async(self, name: str) -> bool:
+        return self._inner.is_async(name)
+
+    def execute(self, name: str, arguments: dict):
+        self._fire_activity()
+        return self._inner.execute(name, arguments)
+
+    async def execute_async(self, name: str, arguments: dict):
+        self._fire_activity()
+        return await self._inner.execute_async(name, arguments)
+
+    def reset_run_state(self) -> None:
+        return self._inner.reset_run_state()
+
+    def tool_names(self) -> list[str]:
+        return self._inner.tool_names()
+
+
 class NativeWorkerAdapter:
     """In-process ``AgentLoop`` wrapped in the sub-agent adapter duck-type.
 
-    Attributes read by the existing dispatch/status machinery (duck-type
-    contract, not inheritance — a worker has no process to start/read-stream,
-    so it does not implement the ``AgentAdapter`` ABC's ``start``/
-    ``read_stream``/``is_idle``/``is_alive``):
+    Attributes/methods read by the existing dispatch/status machinery
+    (duck-type contract, not inheritance — a worker has no process to
+    ``start``/``read_stream``, so those two ``AgentAdapter`` ABC members are
+    not implemented; ``is_idle``/``is_alive`` ARE implemented below, since
+    every caller that scans ``SubAgentManager._adapters`` unconditionally —
+    ``list_active``/``status`` and, notably, ``QueueDispatcher.
+    _continuation_pending`` (outside this package) — calls them on every
+    registered adapter regardless of type):
       - ``_transport``: always ``None`` (forces the background-send fallback).
       - ``_last_response``: set by ``send()`` for ``_background_send`` to read.
-      - ``_idle`` / ``_broken``: read by status/list_active paths (Task 2/3).
+      - ``_idle`` / ``_broken``: backing state for ``is_idle()``/``is_alive()``.
       - ``display_name``: task label, shown in the fanout progress card.
     """
 
@@ -115,6 +179,12 @@ class NativeWorkerAdapter:
         self.handle = handle
         self.display_name = display_name
         self._deps = deps
+        # Read once at construction time (not a live `deps` reference) — see
+        # WorkerDeps.on_activity docstring: the spawner rebinds
+        # `deps.on_activity` to a per-handle closure between constructing
+        # each adapter in a batch, so capturing it now is what makes sharing
+        # one WorkerDeps instance across N adapters safe.
+        self._on_activity = deps.on_activity
 
         self._transport = None
         self._last_response: str | None = None
@@ -127,6 +197,13 @@ class NativeWorkerAdapter:
         self._background_send_task: asyncio.Task | None = None
 
         registry = deps.make_tool_registry(allowed_paths, forbidden_paths)
+        if self._on_activity is not None:
+            # Per-tool-call activity granularity (see WorkerDeps.on_activity
+            # docstring) — wrap AFTER the factory call so allowed/forbidden
+            # scoping (Task 3's ScopedToolRegistry) is unaffected; this layer
+            # only observes execute()/execute_async(), never alters args or
+            # results.
+            registry = _ActivityTrackingRegistry(registry, self._fire_activity)
 
         # Requirement 1: mint a real session JSONL in the project workspace,
         # same directory as any other session (Session.new / ProjectPaths).
@@ -210,6 +287,7 @@ class NativeWorkerAdapter:
             return
         self._idle = False
         self._running = True
+        self._fire_activity()  # turn start
         try:
             try:
                 await self._loop.run(message)
@@ -225,6 +303,20 @@ class NativeWorkerAdapter:
         finally:
             self._running = False
             self._idle = True
+            self._fire_activity()  # turn end
+
+    def _fire_activity(self) -> None:
+        """Best-effort ``on_activity`` invocation — a broken caller-supplied
+        hook must never break the worker's turn."""
+        if self._on_activity is None:
+            return
+        try:
+            self._on_activity()
+        except Exception:
+            logger.exception(
+                "NativeWorkerAdapter %s: on_activity callback raised",
+                self.handle,
+            )
 
     async def stop(self) -> None:
         """Cancel the in-flight turn and mark the adapter stopped. Safe to
@@ -235,6 +327,26 @@ class NativeWorkerAdapter:
 
     def is_running(self) -> bool:
         return self._running
+
+    def is_alive(self) -> bool:
+        """Mirrors ``CLIAdapter.is_alive()``'s call shape (plain method
+        returning ``bool``) for the shared duck-type contract every
+        ``_adapters[sk]`` scanner relies on (Task 2 hardening — see class
+        docstring). A worker has no process to be alive/dead; "alive" here
+        means "still a valid, usable slot" — true until something marks it
+        broken. A cleanly stopped worker is popped from ``_adapters``
+        entirely (``SubAgentManager.stop``'s ``_kill_confirm_and_release``),
+        so it is never observed here as not-alive; only an in-place failure
+        (e.g. an unhandled ``_background_send`` exception) sets ``_broken``
+        on a still-registered adapter.
+        """
+        return not self._broken
+
+    def is_idle(self) -> bool:
+        """Mirrors ``CLIAdapter.is_idle()``'s call shape — see ``is_alive``.
+        A worker's only state is "turn in flight or not", so idle is simply
+        the negation of ``is_running()``."""
+        return not self.is_running()
 
     @property
     def session_path(self) -> str:
