@@ -12,17 +12,12 @@
 
 import { useEffect, useState } from 'react';
 import { useT } from '../i18n/useT';
-import type { FanoutTaskStatus } from '../types';
+import type { FanoutTaskDescriptor, FanoutTaskStatus } from '../types';
 import type { StringKey } from '../i18n/strings';
-
-export interface FanoutCardTask {
-  handle: string;
-  label: string;
-}
 
 interface FanoutCardProps {
   fanoutId: string;
-  tasks: FanoutCardTask[];
+  tasks: FanoutTaskDescriptor[];
   /** handle -> status. A task with no entry yet defaults to 'running' (it was
    *  just dispatched and no update has arrived). */
   statuses: Record<string, FanoutTaskStatus>;
@@ -90,7 +85,7 @@ export default function FanoutCard({
     >
       <div className="px-4 py-1.5 border-b border-border/60">
         <span className="text-[10.5px] uppercase tracking-[0.6px] text-secondary font-semibold">
-          {t('fanout.card.title', { n: tasks.length })}
+          {t(tasks.length === 1 ? 'fanout.card.title.one' : 'fanout.card.title.other', { n: tasks.length })}
         </span>
       </div>
       <div className="divide-y divide-border/40">

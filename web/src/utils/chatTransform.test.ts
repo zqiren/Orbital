@@ -1270,7 +1270,19 @@ describe('transformChatHistory — fanout tool call -> fanout_card', () => {
     expect(capsule.type).toBe('agent_run');
     if (capsule.type === 'agent_run') {
       expect(capsule.items.length).toBe(1);
-      expect(capsule.items[0]).toMatchObject({ type: 'tool_call_row', tool_name: 'read' });
+      // Regression (review round 2, Critical 2): the `read` call's result
+      // arrives BEFORE the fanout's ack — the fanout branch used to finalize
+      // (flush) the capsule as soon as it SAW the fanout tool call, before
+      // `read`'s own result message had even been processed, so the
+      // result-pairing loop (which only searches the OPEN capsule) found
+      // nothing and silently dropped it, leaving `read` stuck pending
+      // forever. Assert the full resolved shape, not just tool_name.
+      expect(capsule.items[0]).toMatchObject({
+        type: 'tool_call_row',
+        tool_name: 'read',
+        result_status: 'received',
+        result_content: 'contents of a.txt',
+      });
     }
   });
 
@@ -1286,5 +1298,100 @@ describe('transformChatHistory — fanout tool call -> fanout_card', () => {
     if (card) {
       expect((card as { isHistorical?: boolean }).isHistorical).toBe(true);
     }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Review round 2, Critical 1 + Critical 3: the join-summary system message
+// the daemon writes when a fanout batch completes. It must (a) render as a
+// visible system row (`fanout_summary`) and (b) backfill the matching
+// fanout_card's per-task terminal statuses + a join epoch ms — otherwise a
+// reload of an already-COMPLETED fanout shows every row stuck "running"
+// forever (no live WS event will ever arrive to correct a done session).
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — fanout join-summary parsing (Critical 1 + 3)', () => {
+  it('parses the join summary into a fanout_summary row AND backfills the fanout_card statuses + completedAtMs', () => {
+    const summary = [
+      '[Fanout a1b2c3d4] 3/4 succeeded.',
+      '- [completed] Research A (worker:a1b2c3d4-0): Found 3 sources | transcript: /tmp/a.jsonl',
+      '- [completed] Research B (worker:a1b2c3d4-1): Found 5 sources | transcript: /tmp/b.jsonl',
+      '- [error] Research C (worker:a1b2c3d4-2): timed out | transcript: /tmp/c.jsonl',
+      '- [stalled] Research D (worker:a1b2c3d4-3): no output | transcript: /tmp/d.jsonl',
+    ].join('\n');
+
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["Research A","Research B","Research C","Research D"]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'Fanout a1b2c3d4 dispatched: 4 tasks', TS2),
+      sys(summary, TS3),
+    ];
+
+    const items = transformChatHistory(messages);
+    expect(items.map((i) => i.type)).toEqual(['agent_message', 'fanout_card', 'fanout_summary']);
+
+    const card = items[1];
+    expect(card.type).toBe('fanout_card');
+    if (card.type === 'fanout_card') {
+      expect(card.statuses).toEqual({
+        'worker:a1b2c3d4-0': 'completed',
+        'worker:a1b2c3d4-1': 'completed',
+        'worker:a1b2c3d4-2': 'error',
+        'worker:a1b2c3d4-3': 'stalled',
+      });
+      expect(card.completedAtMs).toBe(Date.parse(TS3));
+    }
+
+    const summaryItem = items[2];
+    expect(summaryItem.type).toBe('fanout_summary');
+    if (summaryItem.type === 'fanout_summary') {
+      expect(summaryItem.fanout_id).toBe('a1b2c3d4');
+      expect(summaryItem.content).toBe(summary);
+    }
+  });
+
+  it('ignores a trailing guidance paragraph after the task lines', () => {
+    const summary = [
+      '[Fanout deadbeef] 1/1 succeeded.',
+      '- [completed] Only task (worker:deadbeef-0): done | transcript: /tmp/x.jsonl',
+      '',
+      'All tasks finished — consider reviewing the transcripts before continuing.',
+    ].join('\n');
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["Only task"]}')], timestamp: TS }),
+      tool('c1', 'Fanout deadbeef dispatched: 1 tasks', TS2),
+      sys(summary, TS3),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.statuses).toEqual({ 'worker:deadbeef-0': 'completed' });
+    }
+  });
+
+  it('a fanout with NO join summary in history stays with no baked statuses (legitimate "still running" residual)', () => {
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')], timestamp: TS }),
+      tool('c1', 'Fanout 87654321 dispatched: 1 tasks', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.statuses).toBeUndefined();
+      expect(card.completedAtMs).toBeUndefined();
+    }
+  });
+
+  it('a non-fanout system message is not mistaken for a join summary', () => {
+    const messages: ChatMessage[] = [
+      sys('[Fanout not-a-valid-header] something else entirely', TS),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.some((i) => i.type === 'fanout_summary')).toBe(false);
   });
 });

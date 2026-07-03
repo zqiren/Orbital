@@ -40,6 +40,12 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   const [composerText, setComposerText] = useState('');
   const [sending, setSending] = useState(false);
   const aliveRef = useRef(true);
+  // Guards the 3s status poll: null when not currently polling. Cleared
+  // (and the timer stopped) the moment a tick observes the handle is idle,
+  // so the poll doesn't run forever once the task is done — `startStatusPoll`
+  // is called again from `handleSend` to resume it, covering the case where
+  // the user sends a follow-up that respawns work after it went idle.
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchTranscript = useCallback(async () => {
     try {
@@ -65,8 +71,12 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   }, [fetchTranscript]);
 
   // Poll every 3s while this handle's status is non-idle (matches
-  // SubAgentStatusBar's polling pattern / status source).
-  useEffect(() => {
+  // SubAgentStatusBar's polling pattern / status source). Stops itself the
+  // moment a tick sees idle — otherwise this would poll the status endpoint
+  // forever for as long as the drill-in view stays open, long after the
+  // task finished.
+  const startStatusPoll = useCallback(() => {
+    if (pollTimerRef.current) return; // already polling
     const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
     const tick = async () => {
       try {
@@ -74,16 +84,31 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
           `/api/v2/agents/${projectId}/sub-agents/status${qs}`,
         );
         const agent = data?.agents?.find((a) => a.handle === handle);
-        if (agent && agent.status !== 'idle' && aliveRef.current) {
-          fetchTranscript();
+        const running = !!agent && agent.status !== 'idle';
+        if (!running) {
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+          return;
         }
+        if (aliveRef.current) fetchTranscript();
       } catch {
-        /* daemon may be restarting — skip this tick */
+        /* daemon may be restarting — skip this tick, keep polling */
       }
     };
-    const timer = setInterval(tick, POLL_MS);
-    return () => clearInterval(timer);
+    pollTimerRef.current = setInterval(tick, POLL_MS);
   }, [projectId, handle, sessionId, fetchTranscript]);
+
+  useEffect(() => {
+    startStatusPoll();
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [startStatusPoll]);
 
   async function handleSend() {
     const text = composerText.trim();
@@ -93,6 +118,9 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
       await injectMessage(projectId, text, handle, undefined, undefined, sessionId);
       setComposerText('');
       await fetchTranscript();
+      // The poll may have stopped (handle had gone idle) — a follow-up send
+      // likely respawned work, so resume it.
+      startStatusPoll();
     } finally {
       if (aliveRef.current) setSending(false);
     }

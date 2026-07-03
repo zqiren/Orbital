@@ -144,4 +144,39 @@ describe('SubAgentDrillIn', () => {
     );
     expect(await screen.findByText('research task A')).toBeInTheDocument();
   });
+
+  // Review round 2, Important 5: the status poll used to run forever (a
+  // setInterval created once on mount, never cleared on its own) — every 3s,
+  // for as long as the drill-in view stayed open, even long after the task
+  // had gone idle. It must stop itself once a tick observes idle.
+  it('stops polling /sub-agents/status once the handle goes idle', async () => {
+    vi.useFakeTimers();
+    try {
+      getSubAgentTranscriptMock.mockResolvedValue(workerTranscript());
+      apiMock
+        .mockResolvedValueOnce({ agents: [{ handle: 'worker:a1b2c3d4-0', status: 'running' }] })
+        .mockResolvedValueOnce({ agents: [{ handle: 'worker:a1b2c3d4-0', status: 'idle' }] })
+        .mockResolvedValue({ agents: [{ handle: 'worker:a1b2c3d4-0', status: 'running' }] });
+
+      render(
+        <SubAgentDrillIn
+          projectId="p1"
+          sessionId="s1"
+          handle="worker:a1b2c3d4-0"
+          displayName="research task A"
+          onBack={() => {}}
+        />,
+      );
+      await vi.advanceTimersByTimeAsync(0); // flush the mount-time transcript fetch
+
+      await vi.advanceTimersByTimeAsync(3000); // tick #1: running
+      await vi.advanceTimersByTimeAsync(3000); // tick #2: idle -> poll stops itself
+      expect(apiMock).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(3000 * 5); // plenty more time passes
+      expect(apiMock).toHaveBeenCalledTimes(2); // unchanged — no more ticks
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

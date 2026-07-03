@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { ChatMessage, ToolCall, ActivityCategory } from '../types';
+import type { ChatMessage, ToolCall, ActivityCategory, FanoutTaskStatus } from '../types';
 import { translate } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -142,6 +142,32 @@ export type DisplayItem =
       type: 'fanout_card';
       fanout_id: string;
       tasks: Array<{ handle: string; label: string }>;
+      timestamp: string;
+      isHistorical?: boolean;
+      /**
+       * Backfilled when a later join-summary system message (see
+       * `parseFanoutSummary`) names this fanout_id: terminal per-task status
+       * + the join's epoch ms. Without this, a fanout that already finished
+       * before this history was (re)loaded would show every row defaulting
+       * to "running" forever — there are no live WS events to correct it,
+       * since those only fire for a fanout that's still in flight in THIS
+       * tab. ChatView merges this with the live overlay at render time (live
+       * wins per-key when present).
+       */
+      statuses?: Record<string, FanoutTaskStatus>;
+      completedAtMs?: number;
+    }
+  | {
+      /**
+       * Spec 009 §0.5 item 4: the join-summary system message the daemon
+       * writes when a fanout batch completes. Rendered as a plain system row
+       * — no dedicated component in v1, the persisted text is shown verbatim
+       * (mirrors how sub_agent_activity has no separate component file).
+       * Also drives the `fanout_card.statuses`/`completedAtMs` backfill above.
+       */
+      type: 'fanout_summary';
+      fanout_id: string;
+      content: string;
       timestamp: string;
       isHistorical?: boolean;
     };
@@ -335,6 +361,30 @@ function parseFanoutTaskLabels(argsJson: string): string[] {
     }
     return `Task ${i + 1}`;
   });
+}
+
+// Fanout join-summary system message (spec 009 §0.5 item 4). Format is
+// FROZEN by the backend:
+//   Line 1: `[Fanout <id8>] <k>/<N> succeeded.`
+//   Per task, in order: `- [<status>] <label> (<handle>): <text> | transcript: <path>`
+//   Optionally a trailing guidance paragraph — ignored (it won't match the
+//   per-task line pattern, so it's naturally skipped rather than parsed).
+const FANOUT_SUMMARY_HEADER_RE = /^\[Fanout ([a-z0-9]{8})\]\s+\d+\/\d+\s+succeeded\.$/;
+const FANOUT_SUMMARY_TASK_LINE_RE = /^-\s*\[(completed|error|stalled|interrupted)\]\s+.+?\s+\(([^)]+)\):/;
+
+function parseFanoutSummary(
+  content: string,
+): { fanoutId: string; statuses: Record<string, FanoutTaskStatus> } | null {
+  const lines = content.split('\n');
+  const header = lines[0]?.match(FANOUT_SUMMARY_HEADER_RE);
+  if (!header) return null;
+  const statuses: Record<string, FanoutTaskStatus> = {};
+  for (const line of lines.slice(1)) {
+    const m = line.match(FANOUT_SUMMARY_TASK_LINE_RE);
+    if (!m) continue;
+    statuses[m[2]] = m[1] as FanoutTaskStatus;
+  }
+  return { fanoutId: header[1], statuses };
 }
 
 type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
@@ -577,6 +627,35 @@ export function transformChatHistory(
         i++;
         continue;
       }
+      // Fanout join-summary (spec 009 §0.5 item 4): renders as a plain system
+      // row AND backfills the matching fanout_card's terminal statuses so a
+      // reload of a COMPLETED fanout doesn't show every row stuck "running"
+      // forever (see the `statuses`/`completedAtMs` doc comment on
+      // fanout_card). Checked before the [Sub-agent] markers below since the
+      // two prefixes are disjoint (`[Fanout ` vs `[Sub-agent] `).
+      const fanoutSummary = parseFanoutSummary(msg.content ?? '');
+      if (fanoutSummary) {
+        finalizeCapsule();
+        for (let k = items.length - 1; k >= 0; k--) {
+          const it = items[k];
+          if (it.type === 'fanout_card' && it.fanout_id === fanoutSummary.fanoutId) {
+            items[k] = {
+              ...it,
+              statuses: fanoutSummary.statuses,
+              completedAtMs: tsToMs(msg.timestamp),
+            };
+            break;
+          }
+        }
+        items.push({
+          type: 'fanout_summary',
+          fanout_id: fanoutSummary.fanoutId,
+          content: msg.content ?? '',
+          timestamp: msg.timestamp,
+        });
+        i++;
+        continue;
+      }
       // [Sub-agent] lifecycle markers — surface them as compact timeline rows.
       // Finalize the open capsule first so the marker appears AFTER the
       // capsule that contains the originating dispatch tool call (chronologic
@@ -724,22 +803,21 @@ export function transformChatHistory(
         if (hasTools) {
           for (const tc of msg.tool_calls!) {
             if (tc.function.name === 'fanout') {
-              // Standalone card, never a capsule row: close out whatever
-              // capsule is open so far in this turn (dropped silently if
-              // empty — see finalizeCapsule), then wait for the tool RESULT
-              // to learn the fanout_id before emitting anything.
-              finalizeCapsule();
+              // Standalone card, never a capsule row — but do NOT finalize
+              // the capsule here. An earlier tool call in this SAME turn
+              // (e.g. `read`) may still be sitting in it awaiting its own
+              // result; the result-pairing branch below only searches the
+              // OPEN capsule, so finalizing early would flush it before that
+              // result arrives and the pairing would silently miss (a fixed
+              // bug — the capsule is left open on purpose). It gets
+              // finalized instead at ack-resolution time (the `role ===
+              // 'tool'` branch below), right before the fanout_card is
+              // pushed, which flushes it in the correct chronological spot.
               pendingFanoutCalls.set(tc.id, {
                 labels: parseFanoutTaskLabels(tc.function.arguments),
                 timestamp: msg.timestamp,
               });
               continue;
-            }
-            // A fanout call earlier in this SAME tool_calls array may have
-            // just finalized (nulled) the capsule — re-open a fresh one for
-            // any remaining calls in this turn.
-            if (!currentCapsule) {
-              currentCapsule = openCapsuleAt(msg.timestamp, false);
             }
             const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
             currentCapsule.items.push({
@@ -769,6 +847,11 @@ export function transformChatHistory(
         const match = content.match(FANOUT_ACK_RE);
         if (match) {
           const fanoutId = match[1];
+          // Flush whatever capsule is currently open FIRST, so it lands in
+          // `items` in the correct chronological position relative to the
+          // fanout_card (fixes: an earlier tool call in the same turn, e.g.
+          // `read`, would otherwise still be sitting un-flushed here).
+          finalizeCapsule();
           items.push({
             type: 'fanout_card',
             fanout_id: fanoutId,

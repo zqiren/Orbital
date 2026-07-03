@@ -1750,6 +1750,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
       setItems((prev) => {
+        // Duplicate guard (mirrors the approval_card dedup precedent below):
+        // a relay retry or a reconnect replaying the same event must not
+        // append a second card for the same fanout_id.
+        if (prev.some((it) => it.type === 'fanout_card' && it.fanout_id === e.fanout_id)) {
+          return prev;
+        }
         const afterCapsule = finalizeLiveCapsule(prev, 'completed');
         return [
           ...afterCapsule,
@@ -1860,6 +1866,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // Identity-only, like approval_card — live status ticks flow through
       // the separate fanoutStatuses overlay, not the item itself.
       return `fanout_card:${item.fanout_id}`;
+    }
+    if (item.type === 'fanout_summary') {
+      return `fanout_summary:${item.fanout_id}`;
     }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
@@ -2735,16 +2744,41 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 </div>
               );
             } else if (item.type === 'fanout_card') {
+              // Merge the persisted-history backfill (item.statuses /
+              // item.completedAtMs — set by chatTransform when a join-summary
+              // system message was found later in history) with the live WS
+              // overlay, which wins per-key when present. Without this merge
+              // a card rebuilt from a COMPLETED fanout's history would show
+              // every row defaulting to "running" forever (no live events
+              // ever arrive for a session that's already done).
+              const liveStatuses = fanoutStatuses.get(item.fanout_id);
+              const mergedStatuses = { ...(item.statuses ?? {}), ...(liveStatuses ?? {}) };
+              const mergedCompletedAtMs =
+                fanoutCompletedAt.get(item.fanout_id) ?? item.completedAtMs ?? null;
               rendered = (
                 <FanoutCard
                   key={`fanout-${item.fanout_id}`}
                   fanoutId={item.fanout_id}
                   tasks={item.tasks}
-                  statuses={fanoutStatuses.get(item.fanout_id) ?? {}}
+                  statuses={mergedStatuses}
                   startedAtMs={tsToMsSafe(item.timestamp)}
-                  completedAtMs={fanoutCompletedAt.get(item.fanout_id) ?? null}
+                  completedAtMs={mergedCompletedAtMs}
                   onSelectTask={(handle, label) => setDrillIn({ handle, label })}
                 />
+              );
+            } else if (item.type === 'fanout_summary') {
+              // Join-summary system message (spec 009 §0.5 item 4): a plain
+              // system row, no dedicated component — v1 just shows the
+              // persisted text verbatim (mirrors sub_agent_activity's inline
+              // rendering, which also has no separate component file).
+              rendered = (
+                <div
+                  key={`fanout-summary-${item.fanout_id}-${index}`}
+                  data-testid="fanout-summary"
+                  className="px-2 py-1 text-[11.5px] font-mono text-secondary whitespace-pre-wrap"
+                >
+                  {item.content}
+                </div>
               );
             } else if (item.type === 'approval_card') {
               const resolved = approvals.get(item.tool_call_id)?.resolved ?? item.resolved;
