@@ -130,6 +130,20 @@ export type DisplayItem =
       limit: number | null;
       currency: string;
       timestamp: string;
+    }
+  | {
+      /**
+       * Spec 009 §0.5: the management agent's `fanout` tool dispatches N
+       * parallel worker sessions. Rendered as a standalone card (never a
+       * regular tool_call_row inside an agent_run capsule) so the rows stay
+       * clickable and independently status-able. See the fanout parsing
+       * block in transformChatHistory for how fanout_id/handles are derived.
+       */
+      type: 'fanout_card';
+      fanout_id: string;
+      tasks: Array<{ handle: string; label: string }>;
+      timestamp: string;
+      isHistorical?: boolean;
     };
 
 const WINDOWS_PATH_RE = /[A-Za-z]:\\(?:Users|Windows|Program)[^\s"';&|>]*/gi;
@@ -294,6 +308,35 @@ const SUB_AGENT_SENT_RE = /^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):\s*(.*)$
 const SUB_AGENT_COMPLETED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+completed\.\s*Summary:\s*([\s\S]*)$/;
 const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
 
+// Fanout tool call (spec 009 §0.5). The tool call's OWN arguments only carry
+// the requested task labels — handles don't exist yet, the backend assigns
+// them at dispatch time. The fanout_id instead comes from the tool RESULT's
+// ack text, so a fanout call can't be turned into a fanout_card until BOTH
+// halves have been seen (handled via `pendingFanoutCalls` in
+// transformChatHistory). Once we have the fanout_id, per-task handles are
+// synthesized as `worker:<fanout_id>-<index>` — this mirrors the wire format
+// Task 2's `fanout.started` WS event uses for real, backend-assigned handles,
+// so a card built from persisted history keys identically to one built live.
+const FANOUT_ACK_RE = /Fanout ([a-z0-9]{8}) dispatched/;
+
+function parseFanoutTaskLabels(argsJson: string): string[] {
+  let args: unknown;
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return [];
+  }
+  const raw = (args as Record<string, unknown> | null)?.tasks;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((t, i) => {
+    if (typeof t === 'string') return t;
+    if (t && typeof t === 'object' && typeof (t as Record<string, unknown>).label === 'string') {
+      return (t as Record<string, unknown>).label as string;
+    }
+    return `Task ${i + 1}`;
+  });
+}
+
 type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
 
 function parseSubAgentSystemMessage(
@@ -382,6 +425,9 @@ export function transformChatHistory(
   let currentSessionId: string | undefined;
   let capsuleCounter = 0;
   let currentCapsule: OpenCapsule | null = null;
+  // Fanout calls awaiting their tool result (which carries the fanout_id —
+  // see the FANOUT_ACK_RE comment above). Keyed by tool_call_id.
+  const pendingFanoutCalls = new Map<string, { labels: string[]; timestamp: string }>();
 
   function tsToMs(ts: string): number {
     const n = Date.parse(ts);
@@ -677,6 +723,24 @@ export function transformChatHistory(
         }
         if (hasTools) {
           for (const tc of msg.tool_calls!) {
+            if (tc.function.name === 'fanout') {
+              // Standalone card, never a capsule row: close out whatever
+              // capsule is open so far in this turn (dropped silently if
+              // empty — see finalizeCapsule), then wait for the tool RESULT
+              // to learn the fanout_id before emitting anything.
+              finalizeCapsule();
+              pendingFanoutCalls.set(tc.id, {
+                labels: parseFanoutTaskLabels(tc.function.arguments),
+                timestamp: msg.timestamp,
+              });
+              continue;
+            }
+            // A fanout call earlier in this SAME tool_calls array may have
+            // just finalized (nulled) the capsule — re-open a fresh one for
+            // any remaining calls in this turn.
+            if (!currentCapsule) {
+              currentCapsule = openCapsuleAt(msg.timestamp, false);
+            }
             const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
             currentCapsule.items.push({
               type: 'tool_call_row',
@@ -698,6 +762,28 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'tool') {
+      const pendingFanout = pendingFanoutCalls.get(msg.tool_call_id ?? '');
+      if (pendingFanout) {
+        pendingFanoutCalls.delete(msg.tool_call_id ?? '');
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        const match = content.match(FANOUT_ACK_RE);
+        if (match) {
+          const fanoutId = match[1];
+          items.push({
+            type: 'fanout_card',
+            fanout_id: fanoutId,
+            tasks: pendingFanout.labels.map((label, idx) => ({
+              handle: `worker:${fanoutId}-${idx}`,
+              label,
+            })),
+            timestamp: pendingFanout.timestamp,
+          });
+        }
+        // No match (malformed/missing ack) — drop silently, mirroring the
+        // orphan-tool-result precedent below.
+        i++;
+        continue;
+      }
       if (currentCapsule) {
         const tcId = msg.tool_call_id ?? '';
         const content = typeof msg.content === 'string' ? msg.content : '';

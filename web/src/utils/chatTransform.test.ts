@@ -1180,3 +1180,111 @@ describe('transformChatHistory — budget_blocked timeline row', () => {
     expect(out.some((i) => i.type === 'budget_event')).toBe(false);
   });
 });
+
+// --------------------------------------------------------------------------
+// Task 5 (spec 009 §0.5): the `fanout` tool call becomes a standalone
+// `fanout_card` DisplayItem — never a regular tool_call_row inside a capsule.
+// The tool call's own arguments only carry the requested task labels (the
+// backend hasn't assigned handles yet); the fanout_id is recovered from the
+// tool RESULT's ack text ("Fanout <8hex> dispatched..."), and per-task handles
+// are synthesized as `worker:<fanout_id>-<index>` to match the wire format
+// Task 2's WS events use (`fanout.started` tasks carry that exact shape).
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — fanout tool call -> fanout_card', () => {
+  it('a fanout tool call + ack result produces a fanout_card with synthesized handles', () => {
+    const messages: ChatMessage[] = [
+      user('research these in parallel', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["Research A","Research B"]}')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'Fanout a1b2c3d4 dispatched: 2 tasks', TS3),
+    ];
+
+    const items = transformChatHistory(messages);
+    const itemTypes = items.map((i) => i.type);
+    // Anchor header (agent turn had no visible text, no reasoning, only the
+    // fanout tool call) then the standalone card — no agent_run capsule.
+    expect(itemTypes).toEqual(['user_message', 'agent_message', 'fanout_card']);
+
+    const card = items[2];
+    expect(card.type).toBe('fanout_card');
+    if (card.type === 'fanout_card') {
+      expect(card.fanout_id).toBe('a1b2c3d4');
+      expect(card.tasks).toEqual([
+        { handle: 'worker:a1b2c3d4-0', label: 'Research A' },
+        { handle: 'worker:a1b2c3d4-1', label: 'Research B' },
+      ]);
+      expect(card.timestamp).toBe(TS2);
+    }
+  });
+
+  it('supports object-shaped task args ({label: ...}) in addition to bare strings', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":[{"label":"Audit the schema"},{"label":"Write the migration"}]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'Fanout deadbeef dispatched: 2 tasks', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.tasks.map((t) => t.label)).toEqual(['Audit the schema', 'Write the migration']);
+      expect(card.tasks.map((t) => t.handle)).toEqual(['worker:deadbeef-0', 'worker:deadbeef-1']);
+    }
+  });
+
+  it('drops the fanout call silently when the result has no recognizable ack (orphan, mirrors tool-result-drop precedent)', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'some unrelated error text', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.some((i) => i.type === 'fanout_card')).toBe(false);
+  });
+
+  it('a fanout call mixed with a regular tool call in the same turn keeps the regular call in its own capsule', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'contents of a.txt', TS2),
+      tool('c2', 'Fanout cafebabe dispatched: 1 tasks', TS3),
+    ];
+    const items = transformChatHistory(messages);
+    const itemTypes = items.map((i) => i.type);
+    expect(itemTypes).toEqual(['agent_message', 'agent_run', 'fanout_card']);
+
+    const capsule = items[1];
+    expect(capsule.type).toBe('agent_run');
+    if (capsule.type === 'agent_run') {
+      expect(capsule.items.length).toBe(1);
+      expect(capsule.items[0]).toMatchObject({ type: 'tool_call_row', tool_name: 'read' });
+    }
+  });
+
+  it('marks the fanout_card isHistorical when it precedes the last session_separator, like other items', () => {
+    const messages: ChatMessage[] = [
+      { ...asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')], timestamp: TS }), session_id: 's1' },
+      { ...tool('c1', 'Fanout 12345678 dispatched: 1 tasks', TS2), session_id: 's1' },
+      { ...asst({ content: 'moving on', timestamp: TS3 }), session_id: 's2' },
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card) {
+      expect((card as { isHistorical?: boolean }).isHistorical).toBe(true);
+    }
+  });
+});

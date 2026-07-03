@@ -61,6 +61,13 @@ function formatToolBreakdown(counts: Record<string, number>): string {
 type CapsuleTr = (key: StringKey, vars?: Record<string, string | number>) => string;
 const EN_CAPSULE: CapsuleTr = (k, v) => translate('en', k, v);
 
+/** Parse an ISO timestamp to epoch ms, falling back to "now" for anything
+ *  unparseable — used for the fanout_card's batch-duration start point. */
+function tsToMsSafe(ts: string): number {
+  const n = Date.parse(ts);
+  return Number.isFinite(n) ? n : Date.now();
+}
+
 function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr = EN_CAPSULE): string {
   if (!endedAt || endedAt <= startedAt) return tr('duration.lessThan1s');
   const ms = endedAt - startedAt;
@@ -339,6 +346,10 @@ import type {
   PendingEnqueuedEvent,
   PendingDispatchedEvent,
   PendingCancelledEvent,
+  FanoutStartedEvent,
+  FanoutTaskUpdateEvent,
+  FanoutCompletedEvent,
+  FanoutTaskStatus,
   WebSocketEvent,
   Project,
 } from '../types';
@@ -354,6 +365,8 @@ import SlotHeldNotice from './SlotHeldNotice';
 import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
+import FanoutCard from './FanoutCard';
+import SubAgentDrillIn from './SubAgentDrillIn';
 
 interface ChatViewProps {
   projectId: string;
@@ -511,6 +524,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // in-flight gap between click and the WS event arriving.
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelTimeoutNotice, setCancelTimeoutNotice] = useState<string | null>(null);
+  // Fanout live overlay (spec 009 §0.5): per-fanout, per-handle status —
+  // NOT baked into the fanout_card DisplayItem itself, same pattern as the
+  // `approvals` Map overlaying `approval_card` items. Fed by
+  // fanout.task_update; fanoutCompletedAt records when fanout.completed
+  // fired so FanoutCard can freeze its (batch-level) duration display.
+  const [fanoutStatuses, setFanoutStatuses] = useState<Map<string, Record<string, FanoutTaskStatus>>>(new Map());
+  const [fanoutCompletedAt, setFanoutCompletedAt] = useState<Map<string, number>>(new Map());
+  // Row-click drill-in target (spec 009 §0.5): replaces the chat message area
+  // (NOT a modal) with SubAgentDrillIn. null = showing the normal chat.
+  const [drillIn, setDrillIn] = useState<{ handle: string; label: string } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1718,6 +1741,54 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
     }
 
+    // Spec 009 §0.5: fanout.started arrives with the real, backend-assigned
+    // tasks (handle + label) — append the card directly, no need to wait for
+    // the tool-result ack text the way the persisted-history transform does.
+    function handleFanoutStarted(event: WebSocketEvent) {
+      const e = event as FanoutStartedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      setItems((prev) => {
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          {
+            type: 'fanout_card' as const,
+            fanout_id: e.fanout_id,
+            tasks: e.tasks,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+      });
+      scrollToBottom();
+    }
+
+    function handleFanoutTaskUpdate(event: WebSocketEvent) {
+      const e = event as FanoutTaskUpdateEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      setFanoutStatuses((prev) => {
+        const next = new Map(prev);
+        next.set(e.fanout_id, { ...(next.get(e.fanout_id) ?? {}), [e.handle]: e.status });
+        return next;
+      });
+    }
+
+    function handleFanoutCompleted(event: WebSocketEvent) {
+      const e = event as FanoutCompletedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      setFanoutCompletedAt((prev) => {
+        if (prev.has(e.fanout_id)) return prev;
+        const next = new Map(prev);
+        next.set(e.fanout_id, Date.now());
+        return next;
+      });
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -1730,6 +1801,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('chat.pending_enqueued', handlePendingEnqueued);
     on('chat.pending_dispatched', handlePendingDispatched);
     on('chat.pending_cancelled', handlePendingCancelled);
+    on('fanout.started', handleFanoutStarted);
+    on('fanout.task_update', handleFanoutTaskUpdate);
+    on('fanout.completed', handleFanoutCompleted);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -1744,6 +1818,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('chat.pending_enqueued', handlePendingEnqueued);
       off('chat.pending_dispatched', handlePendingDispatched);
       off('chat.pending_cancelled', handlePendingCancelled);
+      off('fanout.started', handleFanoutStarted);
+      off('fanout.task_update', handleFanoutTaskUpdate);
+      off('fanout.completed', handleFanoutCompleted);
     };
   }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
 
@@ -1778,6 +1855,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // No content field — key off timestamp + action BEFORE the content
       // fallthrough below (which would crash on undefined.slice).
       return `budget_event:${item.timestamp}:${item.action}`;
+    }
+    if (item.type === 'fanout_card') {
+      // Identity-only, like approval_card — live status ticks flow through
+      // the separate fanoutStatuses overlay, not the item itself.
+      return `fanout_card:${item.fanout_id}`;
     }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
@@ -2432,6 +2514,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       )}
       {/* Piece 3 Part D: honest sub-agent status badge + user stop control */}
       <SubAgentStatusBar projectId={projectId} sessionId={sessionId} />
+      {drillIn ? (
+        <SubAgentDrillIn
+          projectId={projectId}
+          sessionId={sessionId}
+          handle={drillIn.handle}
+          displayName={drillIn.label}
+          onBack={() => setDrillIn(null)}
+        />
+      ) : (
+      <>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">
@@ -2641,6 +2733,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 >
                   <p className="text-xs font-medium text-error">{text}</p>
                 </div>
+              );
+            } else if (item.type === 'fanout_card') {
+              rendered = (
+                <FanoutCard
+                  key={`fanout-${item.fanout_id}`}
+                  fanoutId={item.fanout_id}
+                  tasks={item.tasks}
+                  statuses={fanoutStatuses.get(item.fanout_id) ?? {}}
+                  startedAtMs={tsToMsSafe(item.timestamp)}
+                  completedAtMs={fanoutCompletedAt.get(item.fanout_id) ?? null}
+                  onSelectTask={(handle, label) => setDrillIn({ handle, label })}
+                />
               );
             } else if (item.type === 'approval_card') {
               const resolved = approvals.get(item.tool_call_id)?.resolved ?? item.resolved;
@@ -3037,6 +3141,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

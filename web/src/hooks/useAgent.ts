@@ -4,6 +4,7 @@
 
 import { useCallback } from 'react';
 import { api } from '../config';
+import type { SubAgentTranscriptResult } from '../types';
 
 interface ActionResult {
   status: string;
@@ -184,6 +185,20 @@ export function useAgent() {
     );
   }, []);
 
+  // Sub-agent fanout drill-in (spec 009 §0.5, Task 4's contract): read-only
+  // transcript for one worker/cli handle. `session_id` scopes the lookup to
+  // the parent chat session that dispatched it (same query param convention
+  // as `/sub-agents/status`).
+  const getSubAgentTranscript = useCallback(
+    async (projectId: string, handle: string, sessionId?: string) => {
+      const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+      return api<SubAgentTranscriptResult>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/sub-agents/${encodeURIComponent(handle)}/transcript${qs}`,
+      );
+    },
+    [],
+  );
+
   const approveToolCall = useCallback(
     async (
       projectId: string,
@@ -226,5 +241,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, cancelPendingInput, getPending, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, cancelPendingInput, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
 }

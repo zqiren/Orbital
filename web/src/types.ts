@@ -315,6 +315,60 @@ export interface SubAgentLifecycleEvent {
  * (SDK claude-code only; other transports report two-state). */
 export type SubAgentRunStatus = 'running' | 'background-running' | 'idle';
 
+/**
+ * One entry in a sub-agent transcript, returned by
+ * GET /api/v2/agents/{project_id}/sub-agents/{handle}/transcript (spec 009
+ * §0.5, Task 4's contract). Read-only playback for the drill-in view.
+ */
+export interface SubAgentTranscriptEntry {
+  source: string;
+  content: string;
+  timestamp: string;
+  chunk_type: string;
+}
+
+export interface SubAgentTranscriptResult {
+  handle: string;
+  display_name: string;
+  kind: 'worker' | 'cli';
+  resumable: boolean;
+  entries: SubAgentTranscriptEntry[];
+}
+
+/** Fanout task status vocabulary (spec 009 §0.5), reported per worker handle
+ *  via `fanout.task_update`. */
+export type FanoutTaskStatus = 'running' | 'completed' | 'error' | 'stalled' | 'interrupted';
+
+/** One dispatched task, as carried by `fanout.started`. */
+export interface FanoutTaskDescriptor {
+  handle: string;
+  label: string;
+}
+
+export interface FanoutStartedEvent {
+  type: 'fanout.started';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+  tasks: FanoutTaskDescriptor[];
+}
+
+export interface FanoutTaskUpdateEvent {
+  type: 'fanout.task_update';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+  handle: string;
+  status: FanoutTaskStatus;
+}
+
+export interface FanoutCompletedEvent {
+  type: 'fanout.completed';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+}
+
 export interface UserMessageEvent {
   type: 'chat.user_message';
   project_id: string;
@@ -548,7 +602,10 @@ export type WebSocketEvent =
   | QueueItemAdvancedEvent
   | QueueStateChangedEvent
   | QueueReorderedEvent
-  | BlockedCountChangedEvent;
+  | BlockedCountChangedEvent
+  | FanoutStartedEvent
+  | FanoutTaskUpdateEvent
+  | FanoutCompletedEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';

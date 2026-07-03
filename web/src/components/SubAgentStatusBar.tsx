@@ -69,7 +69,9 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
         `/api/v2/agents/${projectId}/sub-agents/status${qs}`,
       );
       if (alive.current) {
-        const next = data?.agents ?? [];
+        // Fanout workers (spec 009 §0.5) get their own live surface —
+        // FanoutCard — and must NOT also show up as chips here.
+        const next = (data?.agents ?? []).filter((a) => !a.handle.startsWith('worker:'));
         // Identity-stable update: unchanged payloads keep the previous array
         // reference so effects keyed on state don't re-fire (and unstable
         // hook identities — e.g. test mocks recreating on/off per render —
