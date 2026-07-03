@@ -935,6 +935,11 @@ class AgentManager:
         except ImportError:
             pass
         try:
+            from agent_os.agent.tools.fanout import FanoutTool
+            registry.register(FanoutTool(sub_agent_manager=self._sub_agent_manager, project_id=project_id, session_id=session_id, depth=0))
+        except ImportError:
+            pass
+        try:
             from agent_os.agent.tools.browser import BrowserTool
             if self._browser_manager is not None:
                 registry.register(BrowserTool(
@@ -992,6 +997,80 @@ class AgentManager:
             ))
         except ImportError:
             pass
+
+    def build_worker_deps(self, project_id: str, session_id: str) -> "WorkerDeps":
+        """Build the ``WorkerDeps`` bundle a fanout batch (spec 009, W2/W3)
+        shares across every ``NativeWorkerAdapter`` it constructs.
+
+        NOT wired into ``SubAgentManager`` here — a later task assigns this
+        method (bound) to ``SubAgentManager._worker_deps_factory``.
+
+        Provider: reuses the calling session's ALREADY-CONSTRUCTED utility
+        provider (``AgentLoop._utility_provider``, set from
+        ``_build_llm_providers`` at ``start_agent`` time — itself already
+        "project's utility_model when set, else the main model", spec 009
+        §0.5-4) when the session has a live handle, instead of
+        re-authenticating here. ``dispatch_fanout`` is only ever invoked from
+        inside that very session's running loop (the fanout tool call), so in
+        production this branch always applies; the from-scratch fallback
+        below exists for callers/tests with no live handle and intentionally
+        reuses ``_build_agent_config_from_project`` + ``_build_llm_providers``
+        rather than duplicating credential/model resolution.
+
+        Tool registry: a minimal, restricted set — read/write/edit/grep/glob/
+        shell — EXCLUDING browser (shared resource), request_credential
+        (a worker can't pause for user input), agent_message and fanout (no
+        recursive fanout in v1). Wrapped in ``ScopedToolRegistry`` when the
+        per-task ``files_scope`` (``allowed``/``forbidden``) is given.
+        """
+        from agent_os.agent.tools.edit import EditTool
+        from agent_os.agent.tools.glob_tool import GlobTool
+        from agent_os.agent.tools.grep_tool import GrepTool
+        from agent_os.agent.tools.read import ReadTool
+        from agent_os.agent.tools.scoped_registry import ScopedToolRegistry
+        from agent_os.agent.tools.shell import ShellTool
+        from agent_os.agent.tools.write import WriteTool
+        from agent_os.daemon_v2.native_worker import WorkerDeps
+
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "")
+
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
+        utility_provider = getattr(getattr(handle, "loop", None), "_utility_provider", None)
+        if utility_provider is not None:
+            provider = utility_provider
+        else:
+            config = self._build_agent_config_from_project(project_id)
+            _, _, provider, _ = self._build_llm_providers(config)
+            workspace = workspace or config.workspace
+
+        platform_provider = self._platform_provider
+
+        def make_tool_registry(allowed, forbidden):
+            registry = ToolRegistry()
+            registry.register(ReadTool(workspace=workspace))
+            registry.register(WriteTool(workspace=workspace))
+            registry.register(EditTool(workspace=workspace))
+            registry.register(GlobTool(workspace=workspace))
+            registry.register(GrepTool(workspace=workspace))
+            registry.register(ShellTool(
+                workspace=workspace,
+                os_type=detect_os(),
+                platform_provider=platform_provider,
+                project_id=project_id,
+            ))
+            if allowed is not None or forbidden is not None:
+                return ScopedToolRegistry(registry, allowed, forbidden, workspace=workspace)
+            return registry
+
+        return WorkerDeps(
+            provider=provider,
+            workspace=workspace,
+            project_id=project_id,
+            parent_session_id=session_id,
+            make_tool_registry=make_tool_registry,
+        )
 
     def has_handle(self, project_id: str) -> bool:
         """Return True if an agent handle exists for the project.
