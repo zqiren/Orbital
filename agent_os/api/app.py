@@ -294,6 +294,22 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         session_opener=streamable_http_opener,
     )
 
+    # 5f. Calendar hub (spec 011 §0.4/§2, Task G1) — normalizes macOS EventKit
+    # and a connected Google-Calendar connector into one event feed with a
+    # project-linkage store. Sources construct lazily (EventKit touches the
+    # store — and triggers the TCC prompt — only on first real access, never
+    # here) and degrade to unavailable/empty; the hub never raises.
+    from agent_os.calendar_hub import CalendarHub, Linkage
+    from agent_os.calendar_hub.sources import EventKitSource, McpCalendarSource
+
+    calendar_hub = CalendarHub(
+        sources=[
+            EventKitSource(),
+            McpCalendarSource(connector_manager, "google-calendar"),
+        ],
+        linkage=Linkage(store_dir),
+    )
+
     # 6. Agent manager
     agent_manager = AgentManager(
         connector_manager=connector_manager,
@@ -410,6 +426,11 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     from agent_os.api.routes import connectors as connector_routes
     connector_routes.configure(connector_manager)
     app.include_router(connector_routes.router)
+
+    # 7c3. Calendar routes (spec 011 §0.4, Task G1)
+    from agent_os.api.routes import calendar as calendar_routes
+    calendar_routes.configure(calendar_hub)
+    app.include_router(calendar_routes.router)
 
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
     # validated override PUT). Stateless — reads providers.json defaults and

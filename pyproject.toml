@@ -29,6 +29,12 @@ dependencies = [
 browser = [
     "patchright>=1.40",
 ]
+macos = [
+    # EventKit calendar source (Spec 011 §0.5). macOS-only; the calendar hub
+    # degrades gracefully when it is absent, so this stays optional and is
+    # never installed in CI / on non-macOS.
+    "pyobjc-framework-EventKit>=10.0",
+]
 desktop = [
     "pywebview>=5.0",
     "pystray>=0.19",
