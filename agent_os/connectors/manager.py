@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import webbrowser
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -305,16 +305,34 @@ class ConnectorManager:
             connector_id, lambda s: s.call_tool(tool, args or {})
         )
 
+    @asynccontextmanager
+    async def _scoped_session(self, connector_id: str):
+        """A fresh session opened and closed within the CALLING task.
+
+        The mcp SDK's streamable-HTTP transport is an anyio context manager
+        bound to the task that enters it. The daemon serves each API request
+        in its own task, so a session cached across requests corrupts the
+        transport (observed: Google MCP 400s + BaseExceptionGroup escaping to
+        a 500). Per-call sessions trade a handshake (~1-2s) for correctness;
+        callers that need throughput cache RESULTS (see CalendarHub's TTL).
+        """
+        m = self._require_manifest(connector_id)
+        headers = await self._auth_headers(m)
+        async with AsyncExitStack() as stack:
+            session = await stack.enter_async_context(
+                self._session_opener(m.server_url, headers))
+            await session.initialize()
+            yield session
+
     async def _with_session(self, connector_id: str, fn: Callable[[object], Awaitable]):
-        session = await self.session(connector_id)
         try:
-            return await fn(session)
+            async with self._scoped_session(connector_id) as session:
+                return await fn(session)
         except _RECONNECT_ERRORS:
-            # Server dropped — discard the dead session and try once more.
-            logger.info("MCP session for %s dropped; reconnecting", connector_id)
-            await self._close_session(connector_id)
-            session = await self.session(connector_id)
-            return await fn(session)
+            # Server dropped mid-call — retry once on a brand-new session.
+            logger.info("MCP session for %s dropped; retrying once", connector_id)
+            async with self._scoped_session(connector_id) as session:
+                return await fn(session)
 
     async def _close_session(self, connector_id: str) -> None:
         live = self._sessions.pop(connector_id, None)

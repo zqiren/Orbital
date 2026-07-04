@@ -55,9 +55,11 @@ class McpCalendarSource:
         if not self.available:
             return []
         try:
+            # Param names per Google's Calendar MCP list_events inputSchema
+            # (calendarId defaults to the primary calendar when omitted).
             result = await self._manager.call_tool(
                 self._connector_id, self._list_tool,
-                {"timeMin": start, "timeMax": end},
+                {"startTime": start, "endTime": end},
             )
         except Exception:
             logger.warning("MCP list_events call failed for %s", self._connector_id, exc_info=True)

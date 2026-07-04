@@ -160,7 +160,7 @@ class LoopbackOAuthFlow:
                 )
                 writer.write(
                     "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/html\r\n"
+                    "Content-Type: text/html; charset=utf-8\r\n"
                     f"Content-Length: {len(body)}\r\n"
                     "Connection: close\r\n\r\n"
                     f"{body}".encode()
@@ -180,6 +180,9 @@ class LoopbackOAuthFlow:
         try:
             async with server:
                 await server.start_serving()
+                # webbrowser.open can silently no-op (detached/headless daemon);
+                # log the URL so an operator can open it by hand.
+                logger.info("OAuth consent URL (open manually if no browser appeared): %s", auth_url)
                 self._open_browser(auth_url)
                 try:
                     await asyncio.wait_for(done.wait(), timeout=self._timeout)
