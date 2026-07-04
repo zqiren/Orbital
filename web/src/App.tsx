@@ -32,6 +32,7 @@ import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
+import CalendarPage from './components/CalendarPage';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 
@@ -85,6 +86,17 @@ export default function App() {
     api<{ llm?: { model?: string } }>('/api/v2/settings')
       .then((d) => setDefaultModel(d?.llm?.model || ''))
       .catch(() => {});
+  }, []);
+
+  // Calendar availability (EventKit hub / connected calendar source). Fetched
+  // once on mount; any error (incl. the endpoint not existing until the backend
+  // lands this wave) is treated as unavailable. Gates the per-project calendar
+  // lens tab in ProjectDetail.
+  const [calendarAvailable, setCalendarAvailable] = useState(false);
+  useEffect(() => {
+    api<{ available?: boolean }>('/api/v2/calendar/availability')
+      .then((d) => setCalendarAvailable(d?.available === true))
+      .catch(() => setCalendarAvailable(false));
   }, []);
 
   // Derive selected project ID from route for convenience
@@ -371,6 +383,13 @@ export default function App() {
     setMobileView('content');
   }
 
+  // Workspace-zone Calendar item — a top-level surface. Mobile behavior mirrors
+  // a project tap (swap to the content pane).
+  function handleSelectCalendar() {
+    setRoute({ name: 'calendar' });
+    setMobileView('content');
+  }
+
   function handleNewProject() {
     setRoute({ name: 'create' });
     setMobileView('content');
@@ -448,6 +467,7 @@ export default function App() {
           route={route}
           connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
           onSelectProject={handleSelectProject}
+          onSelectCalendar={handleSelectCalendar}
           onNewProject={handleNewProject}
           onSettings={() => {
             setRoute({ name: 'settings' });
@@ -482,6 +502,10 @@ export default function App() {
             onBack={() => { setRoute({ name: 'list' }); setMobileView('sidebar'); }}
           />
         )}
+
+        {/* Global calendar surface (spec 011 §0.4). Placeholder body until
+            Wave 3; the component is kept so that swap is body-only. */}
+        {route.name === 'calendar' && <CalendarPage />}
 
         {route.name === 'create' && (
           <CreateProject
@@ -533,6 +557,7 @@ export default function App() {
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
                 globalDefaultModel={defaultModel}
+                calendarAvailable={calendarAvailable}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
@@ -556,6 +581,12 @@ export default function App() {
                 )}
                 {route.tab === 'files' && (
                   <FileExplorer projectId={selectedProject.project_id} />
+                )}
+                {route.tab === 'calendar' && (
+                  <CalendarPage
+                    key={`calendar-${selectedProject.project_id}`}
+                    projectId={selectedProject.project_id}
+                  />
                 )}
               </ProjectDetail>
             )}

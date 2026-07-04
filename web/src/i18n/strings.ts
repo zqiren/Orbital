@@ -744,6 +744,12 @@ export const STRINGS = {
   "wizard.setupFailed": { en: "Setup failed", zh: "配置失败" },
   "wizard.skip": { en: "Skip", zh: "跳过" },
   "wizard.welcome": { en: "Welcome to Orbital", zh: "欢迎使用 Orbital" },
+
+  // workspace — two-zone sidebar Workspace zone + calendar surface (spec 011 §0.5)
+  "workspace.zone.label": { en: "Workspace", zh: "工作区" },
+  "workspace.calendar.nav": { en: "Calendar", zh: "日历" },
+  "workspace.calendar.title": { en: "Calendar", zh: "日历" },
+  "workspace.calendar.comingSoon": { en: "The calendar surface is coming in this branch.", zh: "日历功能即将在此版本中推出。" },
 } as const satisfies Record<string, StringEntry>;
 
 export type StringKey = keyof typeof STRINGS;

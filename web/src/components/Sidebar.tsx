@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { Calendar } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import BlockedBadge from './BlockedBadge';
@@ -17,6 +18,7 @@ interface SidebarProps {
   route: Route;
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
+  onSelectCalendar: () => void;
   onNewProject: () => void;
   onSettings: () => void;
 }
@@ -54,14 +56,46 @@ export default function Sidebar({
   route,
   connectionState,
   onSelectProject,
+  onSelectCalendar,
   onNewProject,
   onSettings,
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
-  function handleSelectProject(id: string) {
-    onSelectProject(id);
+  // Quick Tasks (is_scratch) is promoted into the Workspace zone; the Projects
+  // zone below lists only non-scratch projects so it is never duplicated.
+  const scratchProjects = projects.filter((p) => p.is_scratch);
+  const regularProjects = projects.filter((p) => !p.is_scratch);
+
+  // Shared project-row renderer — identical status dot / summary / active-state
+  // behavior wherever a project appears (Quick Tasks in Workspace, projects in
+  // the Projects zone). Keeps Quick Tasks' promotion from changing its behavior.
+  function renderProjectRow(project: Project) {
+    const isActive = project.project_id === selectedProjectId;
+    const dotColor = getProjectDotColor(project.project_id, agentStatuses, pendingApprovals);
+    const summary = statusSummaries[project.project_id];
+    return (
+      <button
+        key={project.project_id}
+        onClick={() => onSelectProject(project.project_id)}
+        className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+          isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+        }`}
+      >
+        <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`} />
+        <div className="min-w-0 flex-1">
+          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+            {truncate(project.name, 20)}
+          </span>
+          {summary && (
+            <span className="text-[10px] text-secondary block truncate mt-0.5">
+              {summary}
+            </span>
+          )}
+        </div>
+      </button>
+    );
   }
 
   return (
@@ -79,98 +113,41 @@ export default function Sidebar({
         <BlockedBadge />
       </div>
 
+      {/* Workspace zone — global surfaces (Calendar) + Quick Tasks, above Projects */}
+      <div className="flex items-center px-4 pt-2 pb-1">
+        <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
+          {t('workspace.zone.label')}
+        </span>
+      </div>
+      <div className="px-2 pb-1 space-y-0.5">
+        <button
+          onClick={onSelectCalendar}
+          aria-current={route.name === 'calendar' ? 'page' : undefined}
+          className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+            route.name === 'calendar' ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+          }`}
+        >
+          <Calendar size={14} className="shrink-0 text-secondary" aria-hidden="true" />
+          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+            {t('workspace.calendar.nav')}
+          </span>
+        </button>
+        {scratchProjects.map(renderProjectRow)}
+      </div>
+
       {/* Projects section header */}
       <div className="flex items-center justify-between px-4 pt-2 pb-1">
         <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
           {t('sidebar.projects')}
         </span>
         <span className="font-mono text-[9.5px] text-secondary">
-          {projects.length}
+          {regularProjects.length}
         </span>
       </div>
 
-      {/* Project list */}
+      {/* Project list (non-scratch only) */}
       <nav className="flex-1 overflow-y-auto px-2">
-        {(() => {
-          const scratchProjects = projects.filter(p => p.is_scratch);
-          const regularProjects = projects.filter(p => !p.is_scratch);
-
-          return (
-            <>
-              {scratchProjects.map((project) => {
-                const isActive = project.project_id === selectedProjectId;
-                const dotColor = getProjectDotColor(
-                  project.project_id,
-                  agentStatuses,
-                  pendingApprovals,
-                );
-                const summary = statusSummaries[project.project_id];
-
-                return (
-                  <button
-                    key={project.project_id}
-                    onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-                      isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
-                    }`}
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
-                        {truncate(project.name, 20)}
-                      </span>
-                      {summary && (
-                        <span className="text-[10px] text-secondary block truncate mt-0.5">
-                          {summary}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-
-              {scratchProjects.length > 0 && regularProjects.length > 0 && (
-                <div className="border-b border-border mx-2 my-1.5" />
-              )}
-
-              {regularProjects.map((project) => {
-                const isActive = project.project_id === selectedProjectId;
-                const dotColor = getProjectDotColor(
-                  project.project_id,
-                  agentStatuses,
-                  pendingApprovals,
-                );
-                const summary = statusSummaries[project.project_id];
-
-                return (
-                  <button
-                    key={project.project_id}
-                    onClick={() => handleSelectProject(project.project_id)}
-                    className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-                      isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
-                    }`}
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
-                        {truncate(project.name, 20)}
-                      </span>
-                      {summary && (
-                        <span className="text-[10px] text-secondary block truncate mt-0.5">
-                          {summary}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </>
-          );
-        })()}
+        {regularProjects.map(renderProjectRow)}
       </nav>
 
       {/* Bottom section */}

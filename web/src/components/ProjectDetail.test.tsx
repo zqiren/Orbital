@@ -165,3 +165,66 @@ describe('ProjectDetail — model header label', () => {
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
   });
 });
+
+describe('ProjectDetail — calendar lens tab visibility', () => {
+  it('hides the Calendar tab by default (no availability, no connector)', () => {
+    renderProjectDetail();
+    expect(screen.queryByRole('button', { name: /^Calendar$/i })).toBeNull();
+  });
+
+  it('shows the Calendar tab when calendarAvailable is true', () => {
+    render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+        calendarAvailable
+      />,
+    );
+    expect(screen.getByRole('button', { name: /^Calendar$/i })).toBeInTheDocument();
+  });
+
+  it('shows the Calendar tab when the project has the google-calendar connector enabled', () => {
+    const project = { ...mockProject, enabled_connectors: ['google-calendar'] } as Project;
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /^Calendar$/i })).toBeInTheDocument();
+  });
+
+  it('keeps the Calendar tab hidden for an unrelated enabled connector', () => {
+    const project = { ...mockProject, enabled_connectors: ['gmail'] } as Project;
+    render(
+      <ProjectDetail
+        project={project}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /^Calendar$/i })).toBeNull();
+  });
+
+  it('clicking the Calendar tab routes to tab:calendar (clearing settings)', () => {
+    const setRoute = vi.fn();
+    render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={setRoute}
+        calendarAvailable
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Calendar$/i }));
+    expect(setRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: 'calendar', settings: false }),
+    );
+  });
+});

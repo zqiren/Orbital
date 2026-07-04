@@ -14,10 +14,11 @@ export type Route =
   | { name: 'create' }
   | { name: 'blocked' }
   | { name: 'settings' }
+  | { name: 'calendar' }
   | {
       name: 'project';
       projectId: string;
-      tab: 'queue' | 'chat' | 'files';
+      tab: 'queue' | 'chat' | 'files' | 'calendar';
       sessionId?: string;
       settings?: boolean;
       /**

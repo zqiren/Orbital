@@ -31,10 +31,19 @@ interface ProjectDetailProps {
    * substitute for `agent_name` — a model id, not an identity.
    */
   globalDefaultModel?: string;
+  /**
+   * Gate for the per-project calendar lens tab (spec 011 §0.4). True when the
+   * EventKit hub reports an available source (`GET /api/v2/calendar/availability`);
+   * the tab is ALSO shown when the project has a calendar connector enabled
+   * (checked here off the project record). Either condition reveals the tab.
+   */
+  calendarAvailable?: boolean;
   children?: React.ReactNode;
 }
 
-const TABS: { key: 'queue' | 'chat' | 'files'; labelKey: StringKey }[] = [
+type TabKey = 'queue' | 'chat' | 'files' | 'calendar';
+
+const BASE_TABS: { key: TabKey; labelKey: StringKey }[] = [
   { key: 'chat', labelKey: 'projectDetail.tab.chat' },
   { key: 'queue', labelKey: 'projectDetail.tab.queue' },
   { key: 'files', labelKey: 'projectDetail.tab.files' },
@@ -50,12 +59,22 @@ export default function ProjectDetail({
   onTriggerToggle,
   onTriggerDelete,
   globalDefaultModel,
+  calendarAvailable,
   children,
 }: ProjectDetailProps) {
   const t = useT();
 
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
+
+  // Calendar lens tab visibility: EventKit availability (from App) OR the
+  // project having a calendar connector enabled. `enabled_connectors` is read
+  // off the project record via a narrow cast — the Connector types on Project
+  // are owned by another surface; this stays correct once they land.
+  const enabledConnectors = (project as { enabled_connectors?: string[] }).enabled_connectors;
+  const showCalendarTab =
+    calendarAvailable === true || Boolean(enabledConnectors?.includes('google-calendar'));
+  const tabs = showCalendarTab ? [...BASE_TABS, { key: 'calendar' as const, labelKey: 'workspace.calendar.nav' as StringKey }] : BASE_TABS;
 
   // Tab count badges (queue only — Chat's session count lives in the sidebar).
   const { snapshot } = useQueue(project.project_id);
@@ -128,7 +147,7 @@ export default function ProjectDetail({
   // Navigating to another tab/surface closes the preview drawer — it is a
   // chat overlay, not a persistent panel (clearing `previewPath` so it can't
   // linger over the Files tab or strand open after a settings round-trip).
-  function handleTabChange(tab: 'queue' | 'chat' | 'files') {
+  function handleTabChange(tab: TabKey) {
     setRoute({ ...route, tab, settings: false, previewPath: undefined });
   }
 
@@ -188,7 +207,7 @@ export default function ProjectDetail({
 
       {/* Tab bar */}
       <div className="flex gap-1 px-6 border-b border-border max-md:px-4">
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           // Chat shows no count badge — the session count lives in the
           // sidebar header. Only the queue badge (pending/running items) shows.
           const count = tab.key === 'queue' ? queueCount : 0;
