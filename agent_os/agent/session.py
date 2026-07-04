@@ -840,6 +840,40 @@ class Session:
             self.on_stream(chunk)
 
     # ------------------------------------------------------------------
+    # Meta record preservation (JSONL rewrite helper)
+    # ------------------------------------------------------------------
+
+    def _collect_meta_lines(self) -> list[str]:
+        """Raw ``role: meta`` JSONL lines currently on disk (file order),
+        prefixed by a still-pending session_start if one exists.
+
+        Rewrite paths (stub truncation, compaction) regenerate the file from
+        ``self._messages``, which deliberately excludes meta records — without
+        this carry-over the first rewrite erases session identity
+        (``session_start``) and the worker tag (``session_kind``), which is
+        what leaked fanout worker sessions into the sidebar. Caller must hold
+        ``self._lock`` + ``self._file_lock``.
+        """
+        lines: list[str] = []
+        if self._pending_meta is not None:
+            lines.append(json.dumps(self._pending_meta, ensure_ascii=False) + "\n")
+        try:
+            with open(self._filepath, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw_s = raw.strip()
+                    if not raw_s:
+                        continue
+                    try:
+                        rec = json.loads(raw_s)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("role") == "meta":
+                        lines.append(raw_s + "\n")
+        except OSError:
+            pass
+        return lines
+
+    # ------------------------------------------------------------------
     # Tool result lifecycle
     # ------------------------------------------------------------------
 
@@ -867,12 +901,16 @@ class Session:
         tmp_path = self._filepath + ".tmp"
         with self._lock:
             with self._file_lock:
+                meta_lines = self._collect_meta_lines()
                 with open(tmp_path, "w", encoding="utf-8") as f:
+                    for line in meta_lines:
+                        f.write(line)
                     for msg in self._messages:
                         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
+                self._pending_meta = None
 
     # ------------------------------------------------------------------
     # Compaction support (PRIVATE)
@@ -887,7 +925,10 @@ class Session:
         tmp_path = self._filepath + ".tmp"
         with self._lock:
             with self._file_lock:
+                meta_lines = self._collect_meta_lines()
                 with open(tmp_path, "w", encoding="utf-8") as f:
+                    for line in meta_lines:
+                        f.write(line)
                     for msg in new_messages:
                         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                     f.flush()
