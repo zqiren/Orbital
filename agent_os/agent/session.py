@@ -934,4 +934,5 @@ class Session:
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
+                self._pending_meta = None
         self._messages = new_messages

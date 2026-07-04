@@ -53,3 +53,25 @@ def test_compact_preserves_meta_records(tmp_path):
     assert {m["event"] for m in metas} == {"session_start", "session_kind"}
     assert recs[0]["event"] == "session_start"
     assert any(r.get("content") == "[SUMMARY]" for r in recs)
+
+
+def test_stub_rewrite_flushes_pending_session_start(tmp_path):
+    # Rewrite while the deferred session_start is still pending (no append()
+    # ever ran, so _pending_meta was never flushed and no file exists yet):
+    # _collect_meta_lines must emit it first, and the rewrite must clear it.
+    stem = "worker_worker_ab12cd34_0_deadbeef"
+    s = Session.new(stem, str(tmp_path))
+    s._messages.append({"role": "user", "content": "brief", "source": "user"})
+    s._messages.append({
+        "role": "assistant", "content": "", "source": "management",
+        "tool_calls": [{"id": "c1", "type": "function",
+                        "function": {"name": "read", "arguments": "{}"}}],
+    })
+    s._messages.append({"role": "tool", "content": "X" * 600,
+                        "tool_call_id": "c1", "source": "management"})
+    assert s._pending_meta is not None  # precondition: still unflushed
+    s.replace_tool_results_with_stubs({"c1": "[stub]"})
+    recs = _records(tmp_path, stem)
+    assert recs[0]["role"] == "meta"
+    assert recs[0]["event"] == "session_start"
+    assert s._pending_meta is None
