@@ -103,6 +103,23 @@ export interface BudgetResetOutcome {
   budget_anchor_ts: string | null;
 }
 
+/** Cross-project read-scope mode for a scratch (Quick Tasks) session. */
+export type SessionScopeMode = 'all' | 'selected' | 'off';
+
+/**
+ * Per-session cross-project READ scope record (Spec 012), carried by
+ * GET/PUT /api/v2/agents/{project_id}/sessions/{session_id}/scope.
+ *
+ * Reads resolve against the in-scope project workspaces; writes always stay
+ * in the scratch (Quick Tasks) workspace. Only the scratch project accepts
+ * PUT (409 otherwise); PUT returns the stored record. New scratch sessions
+ * default to mode 'all'.
+ */
+export interface SessionScope {
+  mode: SessionScopeMode;
+  selected_project_ids: string[];
+}
+
 export interface ToolCallFunction {
   name: string;
   arguments: string;

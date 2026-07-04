@@ -545,6 +545,7 @@ export default function App() {
                   <ChatTab
                     key={selectedProject.project_id}
                     project={selectedProject}
+                    projects={projects}
                     agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
                     statusTick={statusTicks[selectedProject.project_id] ?? 0}
                     mentionAgents={agentsAvailable ?? []}

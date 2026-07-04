@@ -485,6 +485,19 @@ export const STRINGS = {
   "refreshTurn.trigger.agentDecided": { en: "agent-decided", zh: "Agent发起" },
   "refreshTurn.trigger.tokenPressure": { en: "token-pressure", zh: "上下文受限" },
   "refreshTurn.trigger.turnCount": { en: "turn-count", zh: "回合数" },
+  // --- scopeChip: Quick Tasks cross-project read scope (Spec 012 §2c) ---
+  "scopeChip.chip.aria": { en: "Cross-project read access for this session" },
+  "scopeChip.error.update": { en: "Couldn't update access scope" },
+  "scopeChip.footnote": { en: "Writes always stay in the Quick Tasks workspace." },
+  "scopeChip.label.all": { en: "Access: All projects" },
+  "scopeChip.label.off": { en: "Access: This workspace" },
+  "scopeChip.label.selected.one": { en: "Access: {n} project" },
+  "scopeChip.label.selected.other": { en: "Access: {n} projects" },
+  "scopeChip.popover.aria": { en: "Quick Tasks access scope" },
+  "scopeChip.projects.empty": { en: "No other projects yet." },
+  "scopeChip.projects.heading": { en: "Readable projects" },
+  "scopeChip.toggle.all": { en: "Read all projects" },
+  // --- end scopeChip ---
   "sessionGlyph.errored": { en: "Session errored", zh: "会话错误" },
   "sessionGlyph.errored.withDetails": { en: "Session errored: {details}", zh: "会话错误：{details}" },
   "sessionItem.aria": { en: "Session {label}", zh: "会话 {label}" },
@@ -593,6 +606,13 @@ export const STRINGS = {
   "settingsModal.back": { en: "Back to {project}", zh: "返回 {project}" },
   "settingsModal.subtitle": { en: "Configure agent behaviour, LLM provider, autonomy, and more for this project.", zh: "配置该项目空间的Agent行为模式、模型商、权限级别等。" },
   "settingsModal.title": { en: "Project settings — {project}", zh: "项目空间设置 — {project}" },
+  // --- settingsRail: settings index rail (spec 011 §0.8, Task D1). Section
+  // labels reuse each group's existing heading key; only rail-specific
+  // strings and labels for groups WITHOUT a stable heading key live here. ---
+  "settingsRail.aria": { en: "Settings sections", zh: "设置分区" },
+  "settingsRail.connectors": { en: "Connectors", zh: "连接器" },
+  "settingsRail.jump": { en: "Jump to section…", zh: "跳转到分区…" },
+  "settingsRail.phone": { en: "Phone Pairing", zh: "手机配对" },
   "setupGate.intro": { en: "A secure sandbox environment needs to be configured before you can create and manage agents. This requires administrator permissions and may take a moment.", zh: "在你创建和管理Agent之前，需要先配置一个安全沙箱环境。这需要管理员权限，可能需要片刻时间。" },
   "setupGate.retry": { en: "Retry Setup", zh: "重试" },
   "setupGate.settingUp": { en: "Setting up sandbox environment. This may take up to 30 seconds...", zh: "正在配置沙箱环境。这可能需要长达 30 秒…" },
