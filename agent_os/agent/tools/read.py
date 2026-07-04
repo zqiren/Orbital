@@ -44,11 +44,24 @@ class ReadTool(Tool):
         # ``None`` → single-root [workspace], byte-identical to the old path.
         self._read_roots = read_roots
         self.name = "read"
-        self.description = "Read a file or list a directory within the workspace."
+        if read_roots is None:
+            self.description = "Read a file or list a directory within the workspace."
+            path_desc = "Path within your workspace. Use a relative path like 'src/main.py' or 'docs/notes.md'. Do NOT start with '/' and do NOT pass an absolute path."
+        else:
+            self.description = (
+                "Read a file or list a directory. Defaults to your own workspace; "
+                "this session can ALSO read files in other in-scope project "
+                "workspaces (read-only) by absolute path."
+            )
+            path_desc = (
+                "Relative path (e.g. 'src/main.py') reads from YOUR workspace. To "
+                "read a file in another in-scope project, pass its ABSOLUTE path. "
+                "Other projects' orbital/ and .git/ internals are not readable."
+            )
         self.parameters = {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path within your workspace. Use a relative path like 'src/main.py' or 'docs/notes.md'. Do NOT start with '/' and do NOT pass an absolute path."},
+                "path": {"type": "string", "description": path_desc},
             },
             "required": ["path"],
         }

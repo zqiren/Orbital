@@ -119,6 +119,14 @@ class GrepTool(Tool):
             "Supports regex by default, or literal matches via fixed_strings. "
             "Returns matches in 'path:line:content' format, capped at 100 matches."
         )
+        if read_roots is None:
+            path_desc = "Directory or file within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes.md'). Defaults to workspace root. Do NOT start with '/'."
+        else:
+            path_desc = (
+                "Directory or file to search. Relative paths stay in YOUR workspace; "
+                "by default ALL in-scope project workspaces are searched and "
+                "cross-project matches are prefixed with [project: <name>]."
+            )
         self.parameters = {
             "type": "object",
             "properties": {
@@ -128,7 +136,7 @@ class GrepTool(Tool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes.md'). Defaults to workspace root. Do NOT start with '/'.",
+                    "description": path_desc,
                 },
                 "glob_filter": {
                     "type": "string",

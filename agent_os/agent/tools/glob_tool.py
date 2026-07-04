@@ -35,6 +35,14 @@ class GlobTool(Tool):
             "Returns paths relative to workspace root, sorted alphabetically, "
             "capped at 1000 results."
         )
+        if read_roots is None:
+            dir_desc = "Directory within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes'). Defaults to workspace root. Do NOT start with '/'."
+        else:
+            dir_desc = (
+                "Directory to search. Relative paths stay in YOUR workspace; by "
+                "default ALL in-scope project workspaces are searched and "
+                "cross-project matches are prefixed with [project: <name>]."
+            )
         self.parameters = {
             "type": "object",
             "properties": {
@@ -44,7 +52,7 @@ class GlobTool(Tool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes'). Defaults to workspace root. Do NOT start with '/'.",
+                    "description": dir_desc,
                 },
             },
             "required": ["pattern"],
