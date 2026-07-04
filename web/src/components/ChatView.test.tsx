@@ -704,6 +704,27 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
     expect(container.textContent ?? '').toContain('visible-file.txt');
   });
 
+  it('does NOT render a live capsule row for the fanout tool call', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      emitWs('agent.activity', {
+        type: 'agent.activity',
+        project_id: 'p1',
+        session_id: 's1',
+        category: 'tool_use',
+        tool_name: 'fanout',
+        description: 'fanout: 3 tasks',
+        id: 'act-fanout-1',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    expect(container.textContent ?? '').not.toContain('fanout: 3 tasks');
+  });
+
   it('MULTI-SESSION LEAK TEST: no event type leaks from session s2 into s1 — and s1 events still render', async () => {
     // Covers stream_delta PLUS the two formerly-always-on handlers (approval
     // request + agent.notify). None may default to "show": an event for s2

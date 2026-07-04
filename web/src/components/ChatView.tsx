@@ -1420,6 +1420,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
 
+      // The fanout tool call never renders as a capsule row — the
+      // fanout.started card IS its representation (spec 009 §0.5), and the
+      // persisted-history transform skips it the same way, so live and
+      // reloaded views agree. Its ack (a tool_result event) is harmless:
+      // markLatestLiveCallResultReceived no-ops when nothing is pending.
+      if (e.tool_name === 'fanout') {
+        return;
+      }
+
       // Tool-use family: route into the live capsule. The live
       // ActivityEvent does not carry tool_call_id for tool_use; the
       // event id is used as a synthetic key — pairing with tool_result
