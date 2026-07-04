@@ -10,6 +10,7 @@ import CredentialStore from './CredentialStore';
 import BrowserSignInCard from './BrowserSignInCard';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
+import ConnectorSettings from './ConnectorSettings';
 import SettingsRail, { type SettingsRailSection } from './SettingsRail';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
@@ -207,6 +208,12 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         {/* Browser Sign-In */}
         <div data-settings-section="browser-sign-in" className="mt-8 pt-6 border-t border-border scroll-mt-4">
           <BrowserSignInCard />
+        </div>
+
+        {/* Connectors — global catalog + auth (spec 011 §0.2/§0.6, Task E1).
+            Mounting this fills the reserved 'connectors' rail entry. */}
+        <div data-settings-section="connectors" className="mt-8 pt-6 border-t border-border scroll-mt-4">
+          <ConnectorSettings />
         </div>
 
         {/* Sub-agents */}

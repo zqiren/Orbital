@@ -78,6 +78,8 @@ class ProjectUpdate(BaseModel):
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
+    # Spec 011 — per-project connector enablement (gates tool reflection).
+    enabled_connectors: list[str] | None = None
     agent_credentials: dict | None = None
     agent_name: str | None = None
     project_goals_content: str | None = None

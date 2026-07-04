@@ -18,6 +18,7 @@ import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
 import BudgetSection from './BudgetSection';
+import ProjectConnectorToggles from './ProjectConnectorToggles';
 import SettingsRail, {
   scrollToSettingsSection,
   type SettingsRailSection,
@@ -144,6 +145,13 @@ export default function SettingsView({
     project.disabled_sub_agents ?? [],
   );
 
+  // Per-project connector enablement (spec 011 §0.2 — authenticate globally,
+  // enable per project). Saved through THIS form's payload, like every other
+  // project field; the toggles component only reads/writes this state.
+  const [enabledConnectors, setEnabledConnectors] = useState<string[]>(
+    project.enabled_connectors ?? [],
+  );
+
   // Budget state. Spend is NOT tracked here anymore — the Budget section reads
   // it exclusively from GET /cost via useCost (P3-F coupled removal of the
   // legacy budget_spent_usd accumulator).
@@ -190,6 +198,9 @@ export default function SettingsView({
         if (detail.budget_currency) setBudgetCurrency(detail.budget_currency);
         if (detail.budget_period) setBudgetPeriod(detail.budget_period);
         setBudgetAction(detail.budget_action === 'stop' ? 'stop' : 'pause');
+        if (Array.isArray(detail.enabled_connectors)) {
+          setEnabledConnectors(detail.enabled_connectors);
+        }
       })
       .catch(() => {
         // On error, leave textareas with current (likely empty) values
@@ -344,6 +355,7 @@ export default function SettingsView({
       budget_period: budgetPeriod,
       budget_action: budgetAction,
       disabled_sub_agents: disabledSubAgents,
+      enabled_connectors: enabledConnectors,
     };
     if (llm.api_key) {
       data.api_key = llm.api_key;
@@ -655,6 +667,18 @@ export default function SettingsView({
             onActionChange={setBudgetAction}
             onEditPricing={onEditPricing}
             costRefreshKey={costRefreshKey}
+          />
+        </div>
+
+        {/* Connectors — per-project enablement (spec 011 §0.2/§0.6, Task E1).
+            One switch per globally-connected connector, writing
+            enabled_connectors through this form's save. Mounting this fills
+            the reserved 'connectors' rail entry (DOM order: budget → connectors
+            → danger, matching PROJECT_SETTINGS_SECTIONS). */}
+        <div data-settings-section="connectors" className="scroll-mt-4">
+          <ProjectConnectorToggles
+            enabledConnectors={enabledConnectors}
+            onChange={setEnabledConnectors}
           />
         </div>
 

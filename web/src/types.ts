@@ -54,6 +54,10 @@ export interface Project {
   budget_anchor_ts?: string | null;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Connector ids enabled for this project (Spec 011 §0.2 — authenticate
+   *  globally, enable per project). Only enabled connectors' tools are
+   *  reflected into this project's registry. */
+  enabled_connectors?: string[];
 }
 
 export interface ProjectCreateRequest {
@@ -94,6 +98,9 @@ export interface ProjectUpdateRequest {
   reset_budget_anchor?: boolean;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Connector ids enabled for this project (rides the existing
+   *  project-update flow — per-project enablement is NOT a connector route). */
+  enabled_connectors?: string[];
 }
 
 /** PUT /projects response field carrying the reset outcome (codes only). */
@@ -118,6 +125,48 @@ export type SessionScopeMode = 'all' | 'selected' | 'off';
 export interface SessionScope {
   mode: SessionScopeMode;
   selected_project_ids: string[];
+}
+
+/** Connector catalog status (Spec 011). ``pending_verification`` entries are
+ *  visible in the catalog but not connectable (e.g. Gmail while Google's
+ *  restricted-scope verification is in flight). */
+export type ConnectorStatus = 'available' | 'pending_verification';
+
+/** The locked auth-spec enum (Spec 011 §0.5). The launch catalog only uses
+ *  'oauth2'; 'none' covers unauthenticated custom Tier-0 servers. */
+export type ConnectorAuthType = 'oauth2' | 'app_password' | 'local_native' | 'none';
+
+/**
+ * A connector card from GET /api/v2/connectors: the catalog manifest fields
+ * flattened together with live connection status (Task B3 `_serialize`).
+ *
+ * NOTE: tokens are PROVIDER-scoped — connectors sharing an `auth_provider`
+ * (e.g. every Google service) share one account token, so disconnecting any
+ * of them disconnects the whole provider.
+ */
+export interface Connector {
+  id: string;
+  name: string;
+  icon: string;
+  auth_provider: string;
+  auth_type: ConnectorAuthType;
+  server_url: string | null;
+  oauth_scopes: string[];
+  tool_overrides: Record<string, 'read' | 'write'>;
+  /** Drives the onboarding "connect your accounts" card. */
+  featured: boolean;
+  status: ConnectorStatus;
+  connected: boolean;
+  /** Account identity the provider token is bound to (null when disconnected). */
+  account: string | null;
+  /** Non-null when the connector is enabled somewhere but unusable (e.g. its
+   *  MCP session failed) — dynamic backend text, rendered untranslated. */
+  enabled_error: string | null;
+}
+
+/** Response shape of GET /api/v2/connectors. */
+export interface ConnectorListResponse {
+  connectors: Connector[];
 }
 
 export interface ToolCallFunction {
