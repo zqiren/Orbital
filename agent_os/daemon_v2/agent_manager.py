@@ -2952,6 +2952,7 @@ class AgentManager:
         if not workspace:
             return []
         sessions_dir = ProjectPaths(workspace).sessions_dir
+        from agent_os.daemon_v2.native_worker import is_worker_session_stem
         try:
             fnames = os.listdir(sessions_dir)
         except OSError:
@@ -2961,6 +2962,10 @@ class AgentManager:
             if not fname.endswith(".jsonl"):
                 continue
             uuid = fname[:-6]
+            if is_worker_session_stem(uuid):
+                # Fanout worker thread whose session_kind meta was lost to a
+                # pre-fix rewrite — never a sidebar entry (spec 009 §3a).
+                continue
             if uuid in seen_uuids:
                 continue  # already represented by a live in-memory handle
             last_activity_at = None

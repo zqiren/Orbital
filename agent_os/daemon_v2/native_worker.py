@@ -41,6 +41,20 @@ def make_worker_handle(fanout_id: str, index: int) -> str:
     return f"worker:{fanout_id}-{index}"
 
 
+# Filename/uuid stem prefix of every fanout worker session JSONL: the adapter
+# mints f"worker_{_sanitize_for_filename(handle)}_{uuid8}" and the handle is
+# itself "worker:<fanout_id>-<i>", so sanitization yields a double prefix.
+# Kept adjacent to the minting so the two cannot drift. Session listers use
+# this as the legacy fallback for worker files whose session_kind meta was
+# destroyed by pre-fix JSONL rewrites (see Session._collect_meta_lines).
+WORKER_SESSION_STEM_PREFIX = "worker_worker_"
+
+
+def is_worker_session_stem(stem: str) -> bool:
+    """True when a session JSONL filename stem belongs to a fanout worker."""
+    return stem.startswith(WORKER_SESSION_STEM_PREFIX)
+
+
 class ToolRegistryLike(Protocol):
     """Shape of a tool registry as consumed by ``AgentLoop`` (mirrors
     ``agent_os.agent.tools.registry.ToolRegistry``). Documentation-only —

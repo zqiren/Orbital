@@ -1935,10 +1935,13 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
     if not os.path.isdir(sessions_dir):
         return [], 0
 
+    from agent_os.daemon_v2.native_worker import is_worker_session_stem
     # List and sort session files by mtime (oldest first)
     session_files = []
     for fname in os.listdir(sessions_dir):
         if fname.endswith(".jsonl"):
+            if is_worker_session_stem(fname[:-6]):
+                continue  # fanout worker transcript — not management chat
             fpath = os.path.join(sessions_dir, fname)
             session_files.append((os.path.getmtime(fpath), fpath))
     session_files.sort(key=lambda x: x[0])
