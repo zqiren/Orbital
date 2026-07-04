@@ -686,7 +686,8 @@ class Session:
     # Deferred messages (lifecycle notifications during tool execution)
     # ------------------------------------------------------------------
 
-    def defer_message(self, content: str, role: str = "system", source: str = "daemon") -> None:
+    def defer_message(self, content: str, role: str = "system",
+                      source: str = "daemon", meta: dict | None = None) -> None:
         """Queue a message for insertion after the current tool batch completes.
 
         Used for lifecycle notifications that must not interrupt tool execution."""
@@ -695,6 +696,7 @@ class Session:
             "content": content,
             "source": source,
             "timestamp": _now(),
+            **({"_meta": meta} if meta else {}),
         })
 
     def pop_deferred_messages(self) -> list[dict]:

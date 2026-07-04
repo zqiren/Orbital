@@ -1375,7 +1375,8 @@ class AgentManager:
         return True
 
     async def inject_system_message(self, project_id: str, content: str,
-                                    *, session_id: str | None = None) -> str:
+                                    *, session_id: str | None = None,
+                                    meta: dict | None = None) -> str:
         """Inject a system message into the management agent's session.
 
         Used by the lifecycle observer for sub-agent state notifications.
@@ -1385,6 +1386,11 @@ class AgentManager:
 
         ``session_id`` selects which chat session within the project to
         target; defaults to the single-loop default session.
+
+        ``meta``, when provided, is stamped onto the appended/deferred
+        message as ``_meta`` (e.g. ``{"display_content": ...}`` for the
+        fanout join summary — the UI renders the trimmed display copy while
+        the LLM still sees the full ``content``).
         """
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
@@ -1414,6 +1420,7 @@ class AgentManager:
                 "content": content,
                 "source": "daemon",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                **({"_meta": meta} if meta else {}),
             })
             try:
                 config = self._build_agent_config_from_project(project_id)
@@ -1437,12 +1444,14 @@ class AgentManager:
                 "content": content,
                 "source": "daemon",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                **({"_meta": meta} if meta else {}),
             })
             await self._start_loop(project_id, session_id=session_id)
             return "delivered"
 
         # Loop is running — defer for safe insertion after tool batch
-        handle.session.defer_message(content, role="system", source="daemon")
+        handle.session.defer_message(content, role="system", source="daemon",
+                                     meta=meta)
         return "deferred"
 
     def _read_session_f1(self, filepath: str) -> str | None:

@@ -120,8 +120,13 @@ class _Recorder:
         self.injected: list[tuple] = []
         self.broadcasts: list[tuple] = []
 
-    async def inject_system_message(self, project_id, content, *, session_id=None):
-        self.injected.append((project_id, content, session_id))
+    async def inject_system_message(self, project_id, content, *,
+                                    session_id=None, meta=None):
+        # ``meta`` mirrors the real AgentManager.inject_system_message
+        # signature (Task 6: fanout join summaries pass
+        # meta={"display_content": ...}); recorded as a 4th tuple element so
+        # existing positional assertions (indices 0-2) are untouched.
+        self.injected.append((project_id, content, session_id, meta))
         return "delivered"
 
     def broadcast(self, project_id, payload):

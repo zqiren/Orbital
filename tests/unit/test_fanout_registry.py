@@ -27,10 +27,17 @@ import pytest
 from agent_os.daemon_v2.fanout import FanoutRegistry, FanoutTask
 
 
-def make_registry(events):
-    async def inject(pid, content, session_id=None):
+def make_registry(events, inject_calls=None):
+    """``inject_calls``, when passed, records every inject call as
+    ``(project_id, content, kwargs)`` — used by tests that need to inspect
+    the ``meta`` kwarg without disturbing the ``events`` tuple shape
+    (``("inject", pid, content, session_id)``) that the older tests below
+    already assert on positionally."""
+    async def inject(pid, content, **kwargs):
         await asyncio.sleep(0)   # genuine suspension — see module docstring
-        events.append(("inject", pid, content, session_id))
+        events.append(("inject", pid, content, kwargs.get("session_id")))
+        if inject_calls is not None:
+            inject_calls.append((pid, content, kwargs))
     def broadcast(pid, payload):
         events.append(("ws", pid, payload))
     async def stop_worker(pid, handle, session_id=None):
@@ -74,6 +81,38 @@ async def test_join_injects_once_when_all_complete():
     completed = [e for e in events if e[0] == "ws"
                  and e[2]["type"] == "fanout.completed"]
     assert len(completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_meta_display_content_excludes_guidance():
+    """The join summary's trailing 'Synthesize these results...' paragraph
+    is agent-facing guidance, not something the user should see rendered as
+    a chat bubble. ``_meta.display_content`` carries the header + per-task
+    lines only; the full LLM-facing ``content`` keeps the FROZEN format
+    (header + task lines + guidance) unchanged."""
+    events = []
+    inject_calls = []
+    r = make_registry(events, inject_calls)
+    g = r.create_group("p1", "s1",
+        [FanoutTask(handle="worker:f-0", label="a", brief="x"),
+         FanoutTask(handle="worker:f-1", label="b", brief="y")],
+        max_runtime_s=3600)
+    r.absorb_terminal("p1", "worker:f-0", "s1", kind="completed",
+                      summary="ok0", transcript_path="t0")
+    r.absorb_terminal("p1", "worker:f-1", "s1", kind="completed",
+                      summary="ok1", transcript_path="t1")
+    await _wait_until(lambda: len(inject_calls) > 0)
+
+    project_id, content = inject_calls[0][0], inject_calls[0][1]
+    kwargs = inject_calls[0][2]
+    meta = kwargs["meta"]
+    display = meta["display_content"]
+    assert display.startswith("[Fanout ")
+    assert "| transcript:" in display
+    assert "Synthesize these results" not in display
+    # Full LLM-facing content is unchanged (FROZEN format + guidance).
+    assert "Synthesize these results" in content
+    assert content.startswith(display)
 
 
 @pytest.mark.asyncio
@@ -195,7 +234,7 @@ async def test_resolve_group_guards_inject_failure():
     watchdog's caller or leave the group unresolved."""
     events = []
 
-    async def raising_inject(pid, content, session_id=None):
+    async def raising_inject(pid, content, **kwargs):
         await asyncio.sleep(0)
         raise RuntimeError("session is gone")
     def broadcast(pid, payload):
@@ -318,9 +357,9 @@ async def test_stop_worker_called_keyword_only_session_id():
         await asyncio.sleep(0)
         events.append(("stop", project_id, handle, session_id))
 
-    async def inject(pid, content, session_id=None):
+    async def inject(pid, content, **kwargs):
         await asyncio.sleep(0)
-        events.append(("inject", pid, content, session_id))
+        events.append(("inject", pid, content, kwargs.get("session_id")))
     def broadcast(pid, payload):
         events.append(("ws", pid, payload))
 

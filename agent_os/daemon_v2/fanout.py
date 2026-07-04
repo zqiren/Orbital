@@ -358,6 +358,12 @@ class FanoutRegistry:
                 f"- [{t.status}] {t.label} ({t.handle}): {text} "
                 f"| transcript: {t.transcript_path or 'unknown'}"
             )
+        # Display split (UI leak fix): the header + per-task lines are what
+        # the user should see; the trailing guidance paragraph is agent-facing
+        # and rides only in the LLM content. The frontend renders
+        # _meta.display_content when present and falls back to content for
+        # legacy messages.
+        display_content = "\n".join(lines)
         lines.append("")
         lines.append(
             "Synthesize these results into a single reply for the user — "
@@ -374,7 +380,8 @@ class FanoutRegistry:
             # positional call here would TypeError against production wiring
             # the moment a real project used fanout end-to-end.
             await self._inject(group.project_id, content,
-                               session_id=group.session_id)
+                               session_id=group.session_id,
+                               meta={"display_content": display_content})
         except Exception:
             # Guard failures (Task-2 brief teardown requirement): a dead
             # session must not raise out of resolution — the group is
