@@ -41,6 +41,9 @@ a = Analysis(
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'macos-x86_64', 'rg'), 'agent_os/vendor/rg/macos-x86_64'),
     ] + _patchright_datas + _httptools_datas,
     hiddenimports=[
+        # macOS EventKit calendar source (spec 011) — pyobjc framework is
+        # imported lazily at runtime, so PyInstaller needs the explicit hint.
+        'EventKit',
         'uvicorn.logging',
         'uvicorn.loops',
         'uvicorn.loops.auto',
