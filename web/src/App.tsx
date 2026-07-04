@@ -93,6 +93,11 @@ export default function App() {
   // lands this wave) is treated as unavailable. Gates the per-project calendar
   // lens tab in ProjectDetail.
   const [calendarAvailable, setCalendarAvailable] = useState(false);
+  // Sandbox-repair affordance: the wizard's old sandbox step carried the only
+  // Retry Setup button; with that step removed (spec 011 §0.7) the warning
+  // banner hosts it instead. triggerSetup re-fetches status on success, which
+  // hides the banner when setup completes.
+  const [sandboxRetrying, setSandboxRetrying] = useState(false);
   useEffect(() => {
     api<{ available?: boolean }>('/api/v2/calendar/availability')
       .then((d) => setCalendarAvailable(d?.available === true))
@@ -493,7 +498,20 @@ export default function App() {
             <span className="text-warning font-medium">{t('app.sandboxWarning.title')}</span>{' '}
             <span className="text-secondary">
               {t('app.sandboxWarning.body')}
-            </span>
+            </span>{' '}
+            <button
+              type="button"
+              disabled={sandboxRetrying}
+              onClick={() => {
+                setSandboxRetrying(true);
+                platform.triggerSetup()
+                  .catch(() => {})
+                  .finally(() => setSandboxRetrying(false));
+              }}
+              className="underline text-warning hover:opacity-80 disabled:opacity-50"
+            >
+              {sandboxRetrying ? t('app.sandboxWarning.retrying') : t('app.sandboxWarning.retry')}
+            </button>
           </div>
         )}
 
