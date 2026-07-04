@@ -1198,13 +1198,27 @@ class AgentManager:
 
         platform_provider = self._platform_provider
 
+        # Cross-project read scope (Spec 12 §2a) for WORKERS: a scratch
+        # (Quick Tasks) fanout inherits the PARENT session's read scope so a
+        # dispatched investigation can actually read the projects the manager
+        # can. write/edit stay single-root (and ScopedToolRegistry clamps them
+        # per task on top). Callables — a mid-batch scope change applies on
+        # the worker's next tool call, mirroring _register_tools.
+        read_roots_cb = None
+        root_labels_cb = None
+        if project and project.get("is_scratch"):
+            read_roots_cb = lambda: self._compute_scope_roots(project_id, session_id)[0]
+            root_labels_cb = lambda: self._compute_scope_roots(project_id, session_id)[1]
+
         def make_tool_registry(allowed, forbidden):
             registry = ToolRegistry()
-            registry.register(ReadTool(workspace=workspace))
+            registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb))
             registry.register(WriteTool(workspace=workspace))
             registry.register(EditTool(workspace=workspace))
-            registry.register(GlobTool(workspace=workspace))
-            registry.register(GrepTool(workspace=workspace))
+            registry.register(GlobTool(workspace=workspace,
+                                       read_roots=read_roots_cb, root_labels=root_labels_cb))
+            registry.register(GrepTool(workspace=workspace,
+                                       read_roots=read_roots_cb, root_labels=root_labels_cb))
             registry.register(ShellTool(
                 workspace=workspace,
                 os_type=detect_os(),

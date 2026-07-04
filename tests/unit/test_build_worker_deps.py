@@ -26,10 +26,20 @@ from agent_os.daemon_v2.models import SessionKey, make_session_key
 from agent_os.daemon_v2.native_worker import WorkerDeps
 
 
-def _make_manager(project=None):
+def _make_manager(project=None, projects=None):
+    """``projects`` (dict of project_id -> project dict) drives a live,
+    multi-project ``get_project``/``list_projects`` double — needed for
+    ``_compute_scope_roots`` (Spec 12 §2a) to actually walk the store, as
+    opposed to the single fixed-project stub used by the rest of this file.
+    """
     ws = MagicMock()
     project_store = MagicMock()
-    project_store.get_project = MagicMock(return_value=project or {"workspace": "/tmp/ws-x"})
+    if projects is not None:
+        project_store.get_project = MagicMock(side_effect=lambda pid: projects.get(pid))
+        project_store.list_projects = MagicMock(return_value=list(projects.values()))
+    else:
+        project_store.get_project = MagicMock(return_value=project or {"workspace": "/tmp/ws-x"})
+        project_store.list_projects = MagicMock(return_value=[])
     sub_agent_manager = MagicMock()
     activity_translator = MagicMock()
     process_manager = MagicMock()
@@ -151,3 +161,58 @@ class TestFanoutToolRegisteredOnManagementRegistry:
         names = registry.tool_names()
         assert "fanout" in names
         assert "agent_message" in names
+
+
+class TestWorkerReadRootsInheritScratchScope:
+    """Spec 12 §2a: a fanout worker dispatched from a scratch (Quick Tasks)
+    session inherits the PARENT session's cross-project read scope, computed
+    live via ``_compute_scope_roots`` (real project-store entries — this is
+    the integration point, not a mock of the method under test). Normal
+    projects keep single-root (``_read_roots is None``), byte-identical to
+    before this change.
+    """
+
+    def test_worker_registry_inherits_scratch_read_roots(self, tmp_path):
+        scratch_ws = tmp_path / "scratch"
+        other_ws = tmp_path / "other"
+        scratch_ws.mkdir()
+        other_ws.mkdir()
+        projects = {
+            "p_scratch": {
+                "project_id": "p_scratch", "workspace": str(scratch_ws),
+                "model": "gpt-4o", "api_key": "k", "is_scratch": True,
+            },
+            "p_other": {
+                "project_id": "p_other", "workspace": str(other_ws),
+                "model": "gpt-4o", "api_key": "k", "is_scratch": False,
+            },
+        }
+        mgr = _make_manager(projects=projects)
+        deps = mgr.build_worker_deps("p_scratch", "quick_tasks_11112222")
+        registry = deps.make_tool_registry(None, None)
+        read_tool = registry._tools["read"]
+        assert read_tool._read_roots is not None
+        roots = read_tool._read_roots()
+        assert roots[0] == str(tmp_path / "scratch")
+        assert str(tmp_path / "other") in roots
+
+    def test_worker_registry_single_root_for_normal_project(self, tmp_path):
+        scratch_ws = tmp_path / "scratch"
+        other_ws = tmp_path / "other"
+        scratch_ws.mkdir()
+        other_ws.mkdir()
+        projects = {
+            "p_scratch": {
+                "project_id": "p_scratch", "workspace": str(scratch_ws),
+                "model": "gpt-4o", "api_key": "k", "is_scratch": True,
+            },
+            "p_other": {
+                "project_id": "p_other", "workspace": str(other_ws),
+                "model": "gpt-4o", "api_key": "k", "is_scratch": False,
+            },
+        }
+        mgr = _make_manager(projects=projects)
+        deps = mgr.build_worker_deps("p_other", "sess_1")
+        registry = deps.make_tool_registry(None, None)
+        read_tool = registry._tools["read"]
+        assert read_tool._read_roots is None
