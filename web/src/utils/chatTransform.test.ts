@@ -1441,4 +1441,41 @@ describe('transformChatHistory — fanout join-summary parsing (Critical 1 + 3)'
     const items = transformChatHistory(messages);
     expect(items.some((i) => i.type === 'fanout_summary')).toBe(false);
   });
+
+  it('fanout_summary uses _meta.display_content when present (guidance never rendered)', () => {
+    const full =
+      '[Fanout deadbee1] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee1-0): ok | transcript: /x/y.jsonl\n' +
+      '\n' +
+      'Synthesize these results into a single reply for the user — unlike a single ' +
+      "sub-agent's completion, fanout results are not auto-echoed as chat bubbles, " +
+      'so the user has not seen this content yet.';
+    const display =
+      '[Fanout deadbee1] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee1-0): ok | transcript: /x/y.jsonl';
+    const messages: ChatMessage[] = [
+      { ...sys(full, TS3), _meta: { display_content: display } },
+    ];
+    const items = transformChatHistory(messages);
+    const summary = items.find((i) => i.type === 'fanout_summary');
+    expect(summary).toBeTruthy();
+    if (summary && summary.type === 'fanout_summary') {
+      expect(summary.content).toBe(display);
+      expect(summary.content).not.toContain('Synthesize these results');
+    }
+  });
+
+  it('fanout_summary falls back to full content for legacy messages without _meta', () => {
+    const full =
+      '[Fanout deadbee2] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee2-0): ok | transcript: /x/y.jsonl\n\n' +
+      'Synthesize these results into a single reply for the user.';
+    const messages: ChatMessage[] = [sys(full, TS3)];
+    const items = transformChatHistory(messages);
+    const summary = items.find((i) => i.type === 'fanout_summary');
+    expect(summary).toBeTruthy();
+    if (summary && summary.type === 'fanout_summary') {
+      expect(summary.content).toBe(full);
+    }
+  });
 });

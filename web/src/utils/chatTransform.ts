@@ -663,10 +663,18 @@ export function transformChatHistory(
             break;
           }
         }
+        // Display split (backend _meta contract, spec 009 join summary):
+        // _meta.display_content is the user-facing header + per-task lines;
+        // the full content keeps the agent-facing guidance paragraph for the
+        // LLM. Legacy messages (pre-split) have no _meta and render in full.
+        const displayContent =
+          typeof msg._meta?.display_content === 'string'
+            ? (msg._meta.display_content as string)
+            : (msg.content ?? '');
         items.push({
           type: 'fanout_summary',
           fanout_id: fanoutSummary.fanoutId,
-          content: msg.content ?? '',
+          content: displayContent,
           timestamp: msg.timestamp,
         });
         i++;
