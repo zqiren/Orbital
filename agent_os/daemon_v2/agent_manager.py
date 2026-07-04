@@ -298,6 +298,17 @@ class AgentManager:
                     )
         return roots, labels
 
+    def _scope_projects_for_prompt(self, project_id: str,
+                                   session_id: str | None) -> list[dict]:
+        """[{name, path}] for the prompt's Cross-Project Read Access section —
+        secondary read roots only, in root order (Spec 12 §2a)."""
+        roots, labels = self._compute_scope_roots(project_id, session_id)
+        out: list[dict] = []
+        for ws in roots[1:]:
+            rp = os.path.realpath(ws)
+            out.append({"name": labels.get(rp, rp), "path": rp})
+        return out
+
     def _sync_scratch_read_portals(self, project_id: str, session_id: str | None,
                                    scratch_workspace: str) -> None:
         """Grant/revoke read-only sandbox portals to match the session's scope.
@@ -780,6 +791,10 @@ class AgentManager:
             workspace_files=workspace_files,
             sub_agent_provider=lambda: self._sub_agent_manager.list_active(
                 project_id, session_id=_sid_for_provider,
+            ),
+            scope_projects_provider=(
+                (lambda: self._scope_projects_for_prompt(project_id, _sid_for_provider))
+                if config.is_scratch else None
             ),
         )
 

@@ -49,10 +49,16 @@ class PromptContext:
     last_state_update_ts: str | None = None      # ISO timestamp of last checkpoint
     turns_since_last_update: int | None = None   # turns elapsed since last checkpoint
     cold_start: bool = False  # first-session import scan mode (Stage 1-3)
+    # Scratch cross-project READ scope (Spec 12 §2a): [{"name","path"}] for
+    # each in-scope project (secondary read roots). Empty/None for normal
+    # projects and scratch sessions scoped off.
+    scope_projects: list = None
 
     def __post_init__(self):
         if self.active_sub_agents is None:
             self.active_sub_agents = []
+        if self.scope_projects is None:
+            self.scope_projects = []
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +268,7 @@ class PromptBuilder:
         semi_stable = _SEP.join(filter(None, [
             self._trigger_context(context),
             self._global_preferences(context),
+            self._cross_project_scope(context),
             self._onboarding_or_directive(context),
             self._standing_rules(context),
             self._memory(context),
@@ -565,6 +572,35 @@ class PromptBuilder:
         if content is None:
             return None
         return f"## Global User Preferences\n\n{content}"
+
+    def _cross_project_scope(self, context: PromptContext) -> str | None:
+        """Scratch (Quick Tasks) only: tell the model about its cross-project
+        READ scope (Spec 12 §2a). The enforcement plane (multi-root file
+        tools, sandbox portals) predates this section; without it the agent
+        believes it is confined to its own workspace and declines
+        cross-project requests it can actually serve."""
+        if not context.is_scratch or not context.scope_projects:
+            return None
+        lines = [
+            "## Cross-Project Read Access",
+            "",
+            "This session can READ files in the user's other Orbital projects "
+            "(read-only — writes always stay in this workspace):",
+            "",
+        ]
+        for p in context.scope_projects:
+            lines.append(f"- {p['name']}: {p['path']}")
+        lines += [
+            "",
+            "- To read another project's file, pass its ABSOLUTE path to `read`.",
+            "- `glob`/`grep` already search every in-scope project automatically; "
+            "cross-project matches are prefixed with `[project: <name>]`.",
+            "- Relative paths always resolve inside YOUR OWN workspace.",
+            "- Other projects' `orbital/` and `.git/` internals are excluded.",
+            "- When the user says \"my projects\", they usually mean the projects "
+            "listed above — look there before asking which project they mean.",
+        ]
+        return "\n".join(lines)
 
     def _standing_rules(self, context: PromptContext) -> str | None:
         from agent_os.agent.project_paths import ProjectPaths
