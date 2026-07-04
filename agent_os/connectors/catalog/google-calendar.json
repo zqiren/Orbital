@@ -1,0 +1,23 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "icon": "📅",
+  "auth_provider": "google",
+  "auth_type": "oauth2",
+  "server_url": "https://mcp.googleapis.com/calendar",
+  "oauth_scopes": [
+    "https://www.googleapis.com/auth/calendar"
+  ],
+  "tool_overrides": {
+    "list_calendars": "read",
+    "list_events": "read",
+    "get_event": "read",
+    "suggest_time": "read",
+    "create_event": "write",
+    "update_event": "write",
+    "delete_event": "write",
+    "respond_to_event": "write"
+  },
+  "featured": true,
+  "status": "available"
+}

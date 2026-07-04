@@ -39,6 +39,11 @@ class GlobalSettings(BaseModel):
     # Budget Piece 1, Task 4 — static FX rates for cross-currency cost totals.
     # User-editable; no live lookups anywhere. Codes/numbers only.
     fx_rates: dict[str, float] = DEFAULT_FX_RATES.copy()
+    # Spec 011 — BYO Google OAuth client for connectors. Until first-party app
+    # registration lands, users supply their own client id/secret here; the
+    # ConnectorManager's oauth_client_provider reads these at connect time.
+    connector_google_client_id: str | None = None
+    connector_google_client_secret: str | None = None
 
 
 class SettingsStore:

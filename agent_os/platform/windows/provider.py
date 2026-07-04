@@ -5,6 +5,7 @@
 """WindowsPlatformProvider — assembles all isolation components into a single provider."""
 
 import logging
+import os
 from typing import Literal
 
 from agent_os.platform.base import PlatformProvider
@@ -50,6 +51,13 @@ class WindowsPlatformProvider(PlatformProvider):
 
         # Pending network rules for projects whose proxy hasn't started yet
         self._pending_rules: dict[str, NetworkRules] = {}
+
+        # Per-scope portal bookkeeping ({scope_realpath: {path: mode}}). The
+        # Windows isolation model uses ONE sandbox user account, so the actual
+        # icacls grant is per-user, not per-scope — this dict mirrors the macOS
+        # provider's scope keying for API parity and testability. See Spec 12
+        # §2b (leak fix) and §7-Q2 (Windows read-only ACL follow-up).
+        self._portal_paths: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Setup / teardown
@@ -249,16 +257,31 @@ class WindowsPlatformProvider(PlatformProvider):
     # ------------------------------------------------------------------
 
     def grant_folder_access(
-        self, path: str, mode: Literal["read_only", "read_write"]
+        self,
+        path: str,
+        mode: Literal["read", "read_only", "read_write"],
+        *,
+        scope: str,
     ) -> PermissionResult:
+        # The sandbox account's ACL is global; ``scope`` is recorded for parity
+        # with the macOS per-scope model but does not partition the ACL grant.
+        # ``"read"`` is a synonym for ``"read_only"`` at the ACL layer.
+        acl_mode = "read_only" if mode in ("read", "read_only") else "read_write"
+        self._portal_paths.setdefault(os.path.realpath(scope), {})[path] = mode
         try:
             username = self._account_manager.get_username()
-            return self._permission_manager.grant_access(username, path, mode)
+            return self._permission_manager.grant_access(username, path, acl_mode)
         except Exception as exc:
             logger.error("grant_folder_access() failed: %s", exc)
             return PermissionResult(success=False, path=path, error=str(exc))
 
-    def revoke_folder_access(self, path: str) -> PermissionResult:
+    def revoke_folder_access(self, path: str, *, scope: str) -> PermissionResult:
+        scope_key = os.path.realpath(scope)
+        bucket = self._portal_paths.get(scope_key)
+        if bucket is not None:
+            bucket.pop(path, None)
+            if not bucket:
+                self._portal_paths.pop(scope_key, None)
         try:
             username = self._account_manager.get_username()
             return self._permission_manager.revoke_access(username, path)

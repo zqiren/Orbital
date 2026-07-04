@@ -167,13 +167,17 @@ class NullProvider(PlatformProvider):
         return True
 
     def grant_folder_access(
-        self, path: str, mode: Literal["read_only", "read_write"]
+        self,
+        path: str,
+        mode: Literal["read", "read_only", "read_write"],
+        *,
+        scope: str,
     ) -> PermissionResult:
         return PermissionResult(
             success=False, path=path, error="No platform provider available"
         )
 
-    def revoke_folder_access(self, path: str) -> PermissionResult:
+    def revoke_folder_access(self, path: str, *, scope: str) -> PermissionResult:
         return PermissionResult(
             success=False, path=path, error="No platform provider available"
         )

@@ -1,0 +1,23 @@
+{
+  "id": "google-drive",
+  "name": "Google Drive",
+  "icon": "📁",
+  "auth_provider": "google",
+  "auth_type": "oauth2",
+  "server_url": "https://mcp.googleapis.com/drive",
+  "oauth_scopes": [
+    "https://www.googleapis.com/auth/drive"
+  ],
+  "tool_overrides": {
+    "search_files": "read",
+    "list_recent_files": "read",
+    "get_file_metadata": "read",
+    "get_file_permissions": "read",
+    "read_file_content": "read",
+    "download_file_content": "read",
+    "create_file": "write",
+    "copy_file": "write"
+  },
+  "featured": true,
+  "status": "available"
+}

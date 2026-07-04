@@ -58,11 +58,25 @@ class PlatformProvider(ABC):
 
     @abstractmethod
     def grant_folder_access(
-        self, path: str, mode: Literal["read_only", "read_write"]
-    ) -> PermissionResult: ...
+        self,
+        path: str,
+        mode: Literal["read", "read_only", "read_write"],
+        *,
+        scope: str,
+    ) -> PermissionResult:
+        """Grant ``path`` at ``mode`` within the portal set keyed by ``scope``.
+
+        ``scope`` is the owning workspace realpath. Portals are per-scope: a
+        process's sandbox profile is built from its own working-directory scope
+        ONLY, so a grant made under one project's scope never leaks into
+        another's profile. ``mode`` ``"read"``/``"read_only"`` are synonyms for
+        read-only. ``scope`` is keyword-only to force every call site to be
+        explicit about which project the grant belongs to.
+        """
+        ...
 
     @abstractmethod
-    def revoke_folder_access(self, path: str) -> PermissionResult: ...
+    def revoke_folder_access(self, path: str, *, scope: str) -> PermissionResult: ...
 
     @abstractmethod
     def get_available_folders(self) -> list[FolderInfo]: ...

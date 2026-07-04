@@ -97,7 +97,7 @@ class AgentManager:
                  activity_translator, process_manager, platform_provider=None,
                  registry=None, setup_engine=None, settings_store=None,
                  credential_store=None, browser_manager=None, user_credential_store=None,
-                 trigger_manager=None, provider_registry=None):
+                 trigger_manager=None, provider_registry=None, connector_manager=None):
         self._project_store = project_store
         self._ws = ws_manager
         self._sub_agent_manager = sub_agent_manager
@@ -112,6 +112,7 @@ class AgentManager:
         self._user_credential_store = user_credential_store
         self._trigger_manager = None  # set after TriggerManager is created
         self._provider_registry = provider_registry or ProviderRegistry()
+        self._connector_manager = connector_manager
         # ``_handles`` is keyed by ``SessionKey == (project_id, session_id)``
         # so multiple chat sessions within the same project can each own a
         # distinct loop / session / context-manager bundle. Single-loop
@@ -153,6 +154,19 @@ class AgentManager:
         # set can't be matched that way. Cleared per-entry in ``_fire``'s
         # finally.
         self._pending_inflight: dict[str, list[PendingInject]] = {}
+        # ── Cross-project read scope (Spec 12 §2a/§2c) ─────────────────────
+        # Per-session scope record, keyed by SessionKey:
+        #   {"mode": "all"|"selected"|"off", "selected_project_ids": [str]}.
+        # Absent → default (scratch: "all"; normal project: "off"). In-memory:
+        # scope resets to default on daemon restart, matching "new sessions
+        # default to all-projects ON". Only settable on the scratch project.
+        self._session_scopes: dict[SessionKey, dict] = {}
+        # Which cross-project read-portal PATHS we've granted for each scratch
+        # session's scope (keyed by SessionKey). Lets a scope narrowing revoke
+        # exactly the portals that dropped out, without touching the workspace's
+        # own read_write portal.
+        self._scratch_read_portals: dict[SessionKey, set[str]] = {}
+
         # Ids currently being delivered inside ``_fire``.
         self._pending_dispatching: set[str] = set()
         # Ids cancelled mid-flight — ``_fire`` skips them; a lost slot-race
@@ -212,6 +226,105 @@ class AgentManager:
             if holder is not None:
                 return holder
         return self._ensure_chat_session(project_id)
+
+    # ── Cross-project read scope (Spec 12 §2a/§2c) ─────────────────────────
+
+    def get_session_scope(self, project_id: str, session_id: str | None) -> dict:
+        """Return the session's cross-project read-scope record.
+
+        Falls back to the project-level default when the session has no explicit
+        record: the scratch project defaults to ``"all"`` (Quick Tasks reads
+        every project by default), a normal project to ``"off"`` (single-root).
+        """
+        stored = self._session_scopes.get(make_session_key(project_id, session_id))
+        if stored is not None:
+            return {
+                "mode": stored.get("mode", "off"),
+                "selected_project_ids": list(stored.get("selected_project_ids", [])),
+            }
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        is_scratch = bool(project and project.get("is_scratch"))
+        return {"mode": "all" if is_scratch else "off", "selected_project_ids": []}
+
+    def set_session_scope(self, project_id: str, session_id: str | None,
+                          mode: str, selected_project_ids: list[str]) -> dict:
+        """Persist (in-memory) a session's scope and re-sync its sandbox portals.
+
+        Caller (the API route) is responsible for the 409 (non-scratch) and 422
+        (unknown project id) validation; this method assumes a valid request.
+        The read-root callable handed to the file tools reads ``_session_scopes``
+        live, so the change takes effect on the next tool call — no restart.
+        """
+        record = {"mode": mode, "selected_project_ids": list(selected_project_ids)}
+        self._session_scopes[make_session_key(project_id, session_id)] = record
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        if project and project.get("is_scratch"):
+            self._sync_scratch_read_portals(
+                project_id, session_id, project.get("workspace") or ""
+            )
+        return dict(record)
+
+    def _compute_scope_roots(self, project_id: str,
+                             session_id: str | None) -> tuple[list[str], dict[str, str]]:
+        """Read roots + labels for a session's file tools.
+
+        Returns ``([primary_workspace, *in_scope_project_workspaces], labels)``
+        where ``labels`` maps each SECONDARY root's realpath to its project name
+        (for the ``[project: <name>]`` prefix). For a normal project — or a
+        scratch session scoped ``off`` — the list is just ``[workspace]`` and
+        labels are empty (byte-identical single-root behavior).
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace") or ""
+        roots: list[str] = [workspace]
+        labels: dict[str, str] = {}
+        if not (project and project.get("is_scratch")):
+            return roots, labels
+        scope = self.get_session_scope(project_id, session_id)
+        mode = scope.get("mode", "all")
+        if mode == "off":
+            return roots, labels
+        selected = set(scope.get("selected_project_ids", []))
+        for p in (self._project_store.list_projects() if self._project_store else []):
+            pid = p.get("project_id")
+            if pid == project_id or p.get("is_scratch"):
+                continue
+            if mode == "all" or pid in selected:
+                ws = p.get("workspace")
+                if ws:
+                    roots.append(ws)
+                    labels[os.path.realpath(ws)] = (
+                        p.get("name") or p.get("agent_name") or pid
+                    )
+        return roots, labels
+
+    def _sync_scratch_read_portals(self, project_id: str, session_id: str | None,
+                                   scratch_workspace: str) -> None:
+        """Grant/revoke read-only sandbox portals to match the session's scope.
+
+        Portals are keyed by the scratch workspace realpath (the scope), so the
+        scratch session's SHELL can cross-project read exactly what its file
+        tools can. Narrowing scope revokes only the dropped portals; the
+        workspace's own read_write portal (granted at start) is untouched.
+        """
+        if self._platform_provider is None or not scratch_workspace:
+            return
+        scope_key = os.path.realpath(scratch_workspace)
+        roots, _ = self._compute_scope_roots(project_id, session_id)
+        desired = {os.path.realpath(r) for r in roots[1:]}
+        sk = make_session_key(project_id, session_id)
+        previous = self._scratch_read_portals.get(sk, set())
+        for path in previous - desired:
+            try:
+                self._platform_provider.revoke_folder_access(path, scope=scope_key)
+            except Exception:
+                logger.warning("failed to revoke scratch read portal %s", path, exc_info=True)
+        for path in desired:
+            try:
+                self._platform_provider.grant_folder_access(path, "read", scope=scope_key)
+            except Exception:
+                logger.warning("failed to grant scratch read portal %s", path, exc_info=True)
+        self._scratch_read_portals[sk] = desired
 
     def _ensure_chat_session(self, project_id: str) -> str:
         """THE single chat-session funnel (seam 3 / D1).
@@ -511,7 +624,20 @@ class AgentManager:
             if caps.isolation_method != "none" and not caps.setup_complete:
                 logger.warning("Sandbox not configured — agent will run without isolation")
             if caps.isolation_method != "none":
-                self._platform_provider.grant_folder_access(config.workspace, "read_write")
+                # Portals are per-scope (Spec 12 §2b): a project's own workspace
+                # grant is keyed by its own workspace realpath, so it never
+                # leaks into another project's Seatbelt profile.
+                self._platform_provider.grant_folder_access(
+                    config.workspace, "read_write",
+                    scope=os.path.realpath(config.workspace),
+                )
+                # Quick Tasks (scratch) also gets read-only portals for every
+                # in-scope project workspace so its SHELL can cross-project read
+                # exactly what its file tools can (Spec 12 §2a).
+                if config.is_scratch:
+                    self._sync_scratch_read_portals(
+                        project_id, session_id, config.workspace
+                    )
 
         # 1. Providers (centralized API key resolution) — shared with the
         # hot-resume live-resolve in _start_loop.
@@ -524,6 +650,20 @@ class AgentManager:
         self._register_tools(registry, config, project_id,
                              vision_enabled=model_info.capabilities.vision,
                              session_id=session_id)
+
+        # Reflect enabled connectors' remote tools into the registry (spec 011
+        # §0.9 — per-project enablement gates reflection; unknown tools fail
+        # closed to write/approval inside the shims). A dead or unreachable
+        # connector must not brick agent start — the agent just runs without
+        # those tools this session.
+        if getattr(config, "enabled_connectors", None) and self._connector_manager is not None:
+            from agent_os.connectors import register_connector_tools
+            try:
+                await register_connector_tools(
+                    registry, self._connector_manager, config.enabled_connectors)
+            except Exception as exc:
+                logger.warning("connector tool reflection failed for %s: %s",
+                               project_id, exc)
 
         # 3. Prompt builder
         prompt_builder = PromptBuilder(workspace=config.workspace)
@@ -889,9 +1029,18 @@ class AgentManager:
             registry.register(MarkTaskBlockedTool())
         except ImportError:
             logger.warning("queue signal tools failed to register", exc_info=True)
+        # Cross-project read scope (Spec 12 §2a): scratch (Quick Tasks) sessions
+        # read across in-scope project workspaces; Write/Edit stay single-root.
+        # Callables so a mid-session scope change applies on the next tool call.
+        # None for normal projects → byte-identical single-root behavior.
+        read_roots_cb = None
+        root_labels_cb = None
+        if config.is_scratch:
+            read_roots_cb = lambda: self._compute_scope_roots(project_id, session_id)[0]
+            root_labels_cb = lambda: self._compute_scope_roots(project_id, session_id)[1]
         try:
             from agent_os.agent.tools.read import ReadTool
-            registry.register(ReadTool(workspace=config.workspace))
+            registry.register(ReadTool(workspace=config.workspace, read_roots=read_roots_cb))
         except ImportError:
             pass
         try:
@@ -906,12 +1055,14 @@ class AgentManager:
             pass
         try:
             from agent_os.agent.tools.glob_tool import GlobTool
-            registry.register(GlobTool(workspace=config.workspace))
+            registry.register(GlobTool(workspace=config.workspace,
+                                       read_roots=read_roots_cb, root_labels=root_labels_cb))
         except ImportError:
             pass
         try:
             from agent_os.agent.tools.grep_tool import GrepTool
-            registry.register(GrepTool(workspace=config.workspace))
+            registry.register(GrepTool(workspace=config.workspace,
+                                       read_roots=read_roots_cb, root_labels=root_labels_cb))
         except ImportError:
             pass
         try:
@@ -2165,7 +2316,13 @@ class AgentManager:
             path = tool_args.get("path", "")
             access_type = tool_args.get("access_type", "read")
             mode = "read_only" if access_type == "read" else "read_write"
-            result = self._platform_provider.grant_folder_access(path, mode)
+            # Scope the grant to the requesting project's own workspace so the
+            # newly-granted portal appears only in this project's profile
+            # (Spec 12 §2b) — never in a sibling project's sandbox.
+            workspace = handle.config_snapshot.get("workspace", "")
+            result = self._platform_provider.grant_folder_access(
+                path, mode, scope=os.path.realpath(workspace),
+            )
             if result.success:
                 handle.session.append_tool_result(
                     tool_call_id,
@@ -2770,6 +2927,10 @@ class AgentManager:
                     (pid, sid),
                 ),
                 "last_activity_at": last_activity_at,
+                # Cross-project read scope (Spec 12 §2c) — the scope chip's
+                # canonical source is the dedicated GET endpoint, but the list
+                # entry carries it too so the sidebar can render it inline.
+                "scope": self.get_session_scope(pid, sid),
             })
         # Merge in disk-only sessions not currently hydrated in memory, so the
         # sidebar shows every persisted session log. In-memory entries above
@@ -2866,6 +3027,7 @@ class AgentManager:
                 "name": name,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,
+                "scope": self.get_session_scope(project_id, uuid),
             })
         return entries
 

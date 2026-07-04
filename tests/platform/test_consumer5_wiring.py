@@ -280,7 +280,13 @@ class TestPlatformFolderGrant:
             "path": "C:\\Test",
             "mode": "read_only",
         })
-        provider.grant_folder_access.assert_called_once_with("C:\\Test", "read_only")
+        # Portals are per-scope now (Spec 12 §2b): the route resolves a scope
+        # (the Quick Tasks workspace when no project_id is given) and passes it
+        # as a keyword arg. Assert the positional contract + a scope kwarg.
+        provider.grant_folder_access.assert_called_once()
+        args, kwargs = provider.grant_folder_access.call_args
+        assert args == ("C:\\Test", "read_only")
+        assert isinstance(kwargs.get("scope"), str) and kwargs["scope"]
 
     def test_grant_returns_result(self, app_client_with_provider):
         client, provider = app_client_with_provider
@@ -334,7 +340,10 @@ class TestPlatformFolderRevoke:
         client.post("/api/v2/platform/folders/revoke", json={
             "path": "C:\\Test",
         })
-        provider.revoke_folder_access.assert_called_once_with("C:\\Test")
+        provider.revoke_folder_access.assert_called_once()
+        args, kwargs = provider.revoke_folder_access.call_args
+        assert args == ("C:\\Test",)
+        assert isinstance(kwargs.get("scope"), str) and kwargs["scope"]
 
     def test_revoke_failure_returns_error(self, tmp_path):
         """When revoke fails, return error."""

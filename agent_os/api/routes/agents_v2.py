@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -1200,6 +1200,55 @@ async def inject_message(project_id: str, req: InjectRequest):
         if isinstance(result, dict):
             return result
         return {"status": result}
+
+
+class SessionScopeBody(BaseModel):
+    """Cross-project read scope for a Quick Tasks (scratch) session (Spec 12)."""
+    mode: Literal["all", "selected", "off"]
+    selected_project_ids: list[str] = Field(default_factory=list)
+
+
+@router.get("/agents/{project_id}/sessions/{session_id}/scope")
+async def get_session_scope(project_id: str, session_id: str):
+    """Return the session's cross-project read-scope record.
+
+    Defaults when unset: scratch → ``all`` (reads every project), normal
+    project → ``off`` (single-root).
+    """
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return _agent_manager.get_session_scope(project_id, session_id)
+
+
+@router.put("/agents/{project_id}/sessions/{session_id}/scope")
+async def put_session_scope(project_id: str, session_id: str, body: SessionScopeBody):
+    """Set a session's cross-project read scope.
+
+    Only the Quick Tasks (scratch) project may carry cross-project scope
+    (409 otherwise); unknown project ids in ``selected_project_ids`` are 422.
+    Reads become ambient across the listed projects; writes stay in the Quick
+    Tasks workspace. Takes effect on the next turn (read roots + sandbox
+    portals recompute without an agent restart).
+    """
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not project.get("is_scratch"):
+        raise HTTPException(
+            status_code=409,
+            detail="Cross-project scope is only settable on the Quick Tasks project",
+        )
+    if body.selected_project_ids:
+        known = {p.get("project_id") for p in _project_store.list_projects()}
+        unknown = [pid for pid in body.selected_project_ids if pid not in known]
+        if unknown:
+            raise HTTPException(
+                status_code=422, detail=f"Unknown project ids: {unknown}"
+            )
+    return _agent_manager.set_session_scope(
+        project_id, session_id, body.mode, body.selected_project_ids
+    )
 
 
 @router.get("/agents/{project_id}/run-status")

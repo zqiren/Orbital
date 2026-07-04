@@ -126,6 +126,10 @@ class AgentConfig:
     # source of truth as of the sub-agent settings rework. ``enabled_sub_agents``
     # remains for backward compatibility but is treated as informational only.
     disabled_sub_agents: list[str] = field(default_factory=list)
+    # Per-project connector enablement (Spec 011 §2): ids of catalog/custom
+    # connectors whose remote MCP tools reflect into this project's registry.
+    # Authenticate globally (Global Settings), enable per project.
+    enabled_connectors: list[str] = field(default_factory=list)
     agent_credentials: dict = field(default_factory=dict)
     # network_extra_domains REMOVED (TASK-network-config-cleanup): persisted but
     # never plumbed into NetworkRules — the allowlist is internal/hardcoded

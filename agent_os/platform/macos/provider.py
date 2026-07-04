@@ -39,7 +39,11 @@ class MacOSPlatformProvider(PlatformProvider):
         self._processes: dict[str, tuple[ProcessHandle, subprocess.Popen]] = {}
         self._proxies: dict[str, NetworkProxy] = {}
         self._pending_rules: dict[str, NetworkRules] = {}
-        self._portal_paths: dict[str, str] = {}
+        # Portals are keyed by the OWNING WORKSPACE REALPATH (the "scope"), not a
+        # single flat dict. ``run_process`` builds a profile from the working
+        # directory's own scope ONLY, so a grant made under project A never
+        # appears in project B's Seatbelt profile. See Spec 12 §2b (leak fix).
+        self._portal_paths: dict[str, dict[str, str]] = {}
         self._on_network_blocked = on_network_blocked
         self._caffeinate_proc: subprocess.Popen | None = None
         self._app_nap_activity = None
@@ -190,10 +194,10 @@ class MacOSPlatformProvider(PlatformProvider):
         # Ensure proxy is running for this project
         proxy = await self._ensure_proxy(project_id)
 
-        # Generate Seatbelt profile
+        # Generate Seatbelt profile — portals for THIS working dir's scope only.
         profile = generate_profile(
             workspace_path=working_dir,
-            portal_paths=self._portal_paths if self._portal_paths else None,
+            portal_paths=self._portals_for_working_dir(working_dir),
             network_proxy_port=proxy.port if proxy else None,
         )
 
@@ -269,10 +273,10 @@ class MacOSPlatformProvider(PlatformProvider):
         # Ensure proxy is running for this project
         proxy = await self._ensure_proxy(project_id)
 
-        # Generate Seatbelt profile
+        # Generate Seatbelt profile — portals for THIS working dir's scope only.
         profile = generate_profile(
             workspace_path=working_dir,
-            portal_paths=self._portal_paths if self._portal_paths else None,
+            portal_paths=self._portals_for_working_dir(working_dir),
             network_proxy_port=proxy.port if proxy else None,
         )
 
@@ -341,24 +345,48 @@ class MacOSPlatformProvider(PlatformProvider):
     # Folder access
     # ------------------------------------------------------------------
 
-    def grant_folder_access(
-        self, path: str, mode: Literal["read_only", "read_write"]
-    ) -> PermissionResult:
-        """Grant folder access by adding to portal paths.
+    def _portals_for_working_dir(self, working_dir: str) -> dict[str, str]:
+        """Portal set baked into the Seatbelt profile for ``working_dir``.
 
-        Changes take effect on next process launch — Seatbelt profiles are
-        compiled at process creation time.
+        The working directory itself is always read_write; on top of that we
+        add ONLY the portals granted under this scope (keyed by the working
+        dir's realpath). No other scope's portals ever enter the profile.
         """
-        self._portal_paths[path] = mode
+        scope_key = os.path.realpath(working_dir)
+        own = self._portal_paths.get(scope_key, {})
+        return {working_dir: "read_write", **own}
+
+    def grant_folder_access(
+        self,
+        path: str,
+        mode: Literal["read", "read_only", "read_write"],
+        *,
+        scope: str,
+    ) -> PermissionResult:
+        """Grant folder access by adding to the portal set for ``scope``.
+
+        ``scope`` is the owning workspace realpath; the grant only appears in a
+        profile whose working directory resolves to the same realpath. Changes
+        take effect on next process launch — Seatbelt profiles are compiled at
+        process creation time.
+        """
+        scope_key = os.path.realpath(scope)
+        self._portal_paths.setdefault(scope_key, {})[path] = mode
         return PermissionResult(success=True, path=path)
 
-    def revoke_folder_access(self, path: str) -> PermissionResult:
-        """Revoke folder access by removing from portal paths.
+    def revoke_folder_access(self, path: str, *, scope: str) -> PermissionResult:
+        """Revoke folder access by removing ``path`` from ``scope``'s portal set.
 
         Changes take effect on next process launch — Seatbelt profiles are
-        immutable after launch.
+        immutable after launch. Revoking under one scope leaves the same path
+        granted under any other scope untouched.
         """
-        self._portal_paths.pop(path, None)
+        scope_key = os.path.realpath(scope)
+        bucket = self._portal_paths.get(scope_key)
+        if bucket is not None:
+            bucket.pop(path, None)
+            if not bucket:
+                self._portal_paths.pop(scope_key, None)
         return PermissionResult(success=True, path=path)
 
     def get_available_folders(self) -> list[FolderInfo]:

@@ -7,8 +7,9 @@
 import base64
 import os
 import struct
+from typing import Callable
 
-from ._path_utils import resolve_safe
+from ._path_utils import resolve_safe_read
 from .base import Tool, ToolResult
 
 _MAX_CHARS = 100_000
@@ -35,8 +36,13 @@ _MIME_MAP = {
 class ReadTool(Tool):
     """Read a file or list a directory within the workspace."""
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str,
+                 read_roots: Callable[[], list[str]] | None = None):
         self._workspace = os.path.realpath(workspace)
+        # ``read_roots`` is a CALLABLE (not a snapshot) so a per-session scope
+        # change applies on the next tool call without rebuilding the tool.
+        # ``None`` → single-root [workspace], byte-identical to the old path.
+        self._read_roots = read_roots
         self.name = "read"
         self.description = "Read a file or list a directory within the workspace."
         self.parameters = {
@@ -50,7 +56,10 @@ class ReadTool(Tool):
     def execute(self, **arguments) -> ToolResult:
         try:
             path = arguments.get("path", ".")
-            resolved = resolve_safe(self._workspace, path)
+            roots = self._read_roots() if self._read_roots else [self._workspace]
+            if not roots:
+                roots = [self._workspace]
+            resolved = resolve_safe_read(roots, path)
             if resolved is None:
                 return ToolResult(content=f"Error: path outside workspace: {path}")
 

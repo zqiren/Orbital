@@ -55,6 +55,20 @@ Help the user immediately without requiring setup or clarification unless truly 
 - Write small scripts or snippets directly into the workspace (not under orbital/)
 - Any task that doesn't require sustained multi-session effort
 
+## Cross-project reference lens
+You may have read access to the user's other project workspaces (the scope chip
+in the chat header shows which — All projects, specific projects, or just this
+workspace). When in scope:
+- Read, search (grep), and glob freely across those projects to answer
+  "how did I do this before?" style questions — they are reference material.
+- You can only WRITE inside this Quick Tasks workspace. Never attempt to modify
+  another project; if work belongs there, hand it off (create a project or
+  @mention its agent).
+- When a finding comes from another project, CITE the source project (the search
+  results are labeled `[project: <name>]`) so the user knows where it came from.
+- Another project's `orbital/` internals and `.git/` are intentionally invisible
+  — you see work product, not agent machinery.
+
 ## Rules
 - Don't ask unnecessary clarifying questions for simple tasks. Just do it.
 - If a task is growing complex (multi-file project, ongoing work, needs persistence),
@@ -255,8 +269,34 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         ws_manager=ws_manager,
     )
 
+    # 5e. Connector manager (spec 011) — MCP-client connector core. Google
+    # OAuth client config comes from settings (BYO-client until first-party
+    # registration lands); connect() cleanly 400s while unconfigured.
+    from agent_os.connectors import ConnectorManager, load_catalog
+    from agent_os.connectors.mcp_client import streamable_http_opener
+    from agent_os.connectors.oauth import GOOGLE_ENDPOINTS, OAuthClientConfig
+
+    def _google_oauth_provider(auth_provider: str) -> OAuthClientConfig | None:
+        if auth_provider != "google":
+            return None
+        s = settings_store.get()
+        cid = s.connector_google_client_id
+        secret = s.connector_google_client_secret
+        if cid and secret:
+            return OAuthClientConfig(cid, secret, GOOGLE_ENDPOINTS)
+        return None
+
+    connector_manager = ConnectorManager(
+        catalog=load_catalog(),
+        credential_store=user_credential_store,
+        data_dir=store_dir,
+        oauth_client_provider=_google_oauth_provider,
+        session_opener=streamable_http_opener,
+    )
+
     # 6. Agent manager
     agent_manager = AgentManager(
+        connector_manager=connector_manager,
         project_store=project_store,
         ws_manager=ws_manager,
         sub_agent_manager=sub_agent_manager,
@@ -330,6 +370,10 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _stop_project_store_flush():
         await project_store.stop_flush_task()
 
+    @app.on_event("shutdown")
+    async def _stop_connectors():
+        await connector_manager.aclose()
+
     # 7. Configure routes
     agents_v2.configure(project_store, agent_manager, ws_manager, sub_agent_manager,
                         setup_engine=setup_engine, settings_store=settings_store,
@@ -361,6 +405,11 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # 7c. Platform routes
     platform_routes.configure(platform_provider, agent_manager=agent_manager, browser_manager=browser_manager)
     app.include_router(platform_routes.router)
+
+    # 7c2. Connector routes (spec 011)
+    from agent_os.api.routes import connectors as connector_routes
+    connector_routes.configure(connector_manager)
+    app.include_router(connector_routes.router)
 
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
     # validated override PUT). Stateless — reads providers.json defaults and

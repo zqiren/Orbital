@@ -161,8 +161,8 @@ class TestProviderIntegration:
         with open(os.path.join(portal_dir, "data.txt"), "w") as f:
             f.write("secret_data")
 
-        # Grant read-only
-        result = provider.grant_folder_access(portal_dir, "read_only")
+        # Grant read-only (scoped to the workspace whose profile must carry it)
+        result = provider.grant_folder_access(portal_dir, "read_only", scope=sandbox_workspace)
         assert result.success is True
 
         # Agent reads -> should succeed
@@ -189,7 +189,7 @@ class TestProviderIntegration:
         assert not os.path.exists(write_target)
 
         # Revoke
-        result = provider.revoke_folder_access(portal_dir)
+        result = provider.revoke_folder_access(portal_dir, scope=sandbox_workspace)
         assert result.success is True
 
         # Agent reads after revoke -> should fail
@@ -415,7 +415,7 @@ class TestProviderIntegration:
             assert p.is_setup_complete() is True
 
             # Grant workspace access
-            result = p.grant_folder_access(sandbox_workspace, "read_write")
+            result = p.grant_folder_access(sandbox_workspace, "read_write", scope=sandbox_workspace)
             assert result.success is True
 
             # Configure network
@@ -440,7 +440,7 @@ class TestProviderIntegration:
             await p.stop_process("lifecycle_test")
 
             # Revoke portal
-            result = p.revoke_folder_access(sandbox_workspace)
+            result = p.revoke_folder_access(sandbox_workspace, scope=sandbox_workspace)
             assert result.success is True
 
             # Teardown
