@@ -49,10 +49,17 @@ def make_worker_handle(fanout_id: str, index: int) -> str:
 # destroyed by pre-fix JSONL rewrites (see Session._collect_meta_lines).
 WORKER_SESSION_STEM_PREFIX = "worker_worker_"
 
+_WORKER_SESSION_STEM_RE = re.compile(r"worker_worker_[0-9a-f]{8}_\d+_[0-9a-f]{8}\Z")
+
 
 def is_worker_session_stem(stem: str) -> bool:
-    """True when a session JSONL filename stem belongs to a fanout worker."""
-    return stem.startswith(WORKER_SESSION_STEM_PREFIX)
+    """True when a session JSONL filename stem belongs to a fanout worker.
+
+    Full-shape match, not a prefix test: a project the user named
+    "Worker Worker" mints chat stems like ``worker_worker_<hex8>`` which a
+    prefix check would silently hide from the sidebar and merged chat.
+    """
+    return _WORKER_SESSION_STEM_RE.fullmatch(stem) is not None
 
 
 class ToolRegistryLike(Protocol):

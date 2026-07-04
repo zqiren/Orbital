@@ -13,6 +13,9 @@ def test_worker_stem_detection():
     # A project the user named "worker tracker" must NOT be filtered.
     assert not is_worker_session_stem("worker_tracker_ab12cd34")
     assert not is_worker_session_stem("quick_tasks_92dbcbff")
+    # A chat session of a project named "worker worker" (stem = sanitized name + one hex8 suffix)
+    # must NOT be filtered. Only the rigid fanout shape is filtered.
+    assert not is_worker_session_stem("worker_worker_ab12cd34")
 
 
 def test_read_chat_messages_skips_worker_files(tmp_path):
