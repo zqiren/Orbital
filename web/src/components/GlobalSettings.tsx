@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
 import FallbackModelsEditor from './FallbackModelsEditor';
@@ -10,6 +10,7 @@ import CredentialStore from './CredentialStore';
 import BrowserSignInCard from './BrowserSignInCard';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
+import SettingsRail, { type SettingsRailSection } from './SettingsRail';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
 import { useT } from '../i18n/useT';
@@ -20,6 +21,24 @@ interface GlobalSettingsProps {
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
+/**
+ * Index-rail entries for the global settings document (spec 011 §0.8).
+ * 'connectors' is reserved — its section lands in a later wave; the rail
+ * renders an entry only once a matching data-settings-section element exists.
+ */
+export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
+  { id: 'language', labelKey: 'global.language' },
+  { id: 'llm', labelKey: 'llm.global.heading' },
+  { id: 'fallback-models', labelKey: 'fallback.heading' },
+  { id: 'about-you', labelKey: 'global.aboutYou.label' },
+  { id: 'quick-tasks-workspace', labelKey: 'global.scratch.label' },
+  { id: 'credentials', labelKey: 'global.credentials.label' },
+  { id: 'browser-sign-in', labelKey: 'global.browserSignIn.title' },
+  { id: 'connectors', labelKey: 'settingsRail.connectors' },
+  { id: 'sub-agents', labelKey: 'global.subAgents.heading' },
+  { id: 'phone-pairing', labelKey: 'settingsRail.phone' },
+];
+
 export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [userPreferences, setUserPreferences] = useState('');
   const [scratchWorkspace, setScratchWorkspace] = useState('');
@@ -29,6 +48,9 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [loading, setLoading] = useState(true);
   const { locale, setLocale } = useLocale();
   const t = useT();
+  // Scroll container ref — the SettingsRail scopes section discovery,
+  // scrollspy, and jump-scrolls to this element.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v2/settings`)
@@ -64,8 +86,16 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto">
-      <div className="max-w-[720px] mx-auto py-10 px-6 max-md:px-4">
+    <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
+      {/* Index rail beside the single scrolling document (desktop) / jump
+          menu above it (mobile). The forms themselves are untouched — one
+          document, one Save. */}
+      <div className="flex justify-center max-md:block">
+        <SettingsRail
+          sections={GLOBAL_SETTINGS_SECTIONS}
+          containerRef={scrollContainerRef}
+        />
+      <div className="max-w-[720px] w-full min-w-0 py-10 px-6 max-md:px-4">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-xl font-semibold text-primary">{t('global.title')}</h1>
           <button
@@ -77,7 +107,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         </div>
 
         {/* Language */}
-        <div className="mb-6">
+        <div data-settings-section="language" className="mb-6 scroll-mt-4">
           <label className="block text-sm font-medium text-primary mb-1.5">
             {t('global.language')}
           </label>
@@ -96,10 +126,12 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
           {t('global.intro')}
         </p>
 
-        <LLMProviderSettings mode="global" />
+        <div data-settings-section="llm" className="scroll-mt-4">
+          <LLMProviderSettings mode="global" />
+        </div>
 
         {/* Fallback Models */}
-        <div className="mt-6">
+        <div data-settings-section="fallback-models" className="mt-6 scroll-mt-4">
           <FallbackModelsEditor
             models={fallbackModels}
             onChange={setFallbackModels}
@@ -109,7 +141,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
 
         {/* About You */}
         <div className="mt-8 pt-6 border-t border-border space-y-4">
-          <div>
+          <div data-settings-section="about-you" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('global.aboutYou.label')}
             </label>
@@ -127,7 +159,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
           </div>
 
           {/* Quick Tasks Workspace */}
-          <div>
+          <div data-settings-section="quick-tasks-workspace" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('global.scratch.label')}
             </label>
@@ -160,7 +192,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         </div>
 
         {/* Credentials */}
-        <div className="mt-8 pt-6 border-t border-border space-y-3">
+        <div data-settings-section="credentials" className="mt-8 pt-6 border-t border-border space-y-3 scroll-mt-4">
           <div>
             <label className="block text-sm font-medium text-primary mb-1">
               {t('global.credentials.label')}
@@ -173,20 +205,21 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         </div>
 
         {/* Browser Sign-In */}
-        <div className="mt-8 pt-6 border-t border-border">
+        <div data-settings-section="browser-sign-in" className="mt-8 pt-6 border-t border-border scroll-mt-4">
           <BrowserSignInCard />
         </div>
 
         {/* Sub-agents */}
-        <div className="mt-10 pt-8 border-t border-border">
+        <div data-settings-section="sub-agents" className="mt-10 pt-8 border-t border-border scroll-mt-4">
           <h2 className="text-base font-semibold text-primary mb-3">{t('global.subAgents.heading')}</h2>
           <SubAgentSettings />
         </div>
 
         {/* Phone Pairing section */}
-        <div className="mt-10 pt-8 border-t border-border">
+        <div data-settings-section="phone-pairing" className="mt-10 pt-8 border-t border-border scroll-mt-4">
           <PairPhone />
         </div>
+      </div>
       </div>
     </div>
   );

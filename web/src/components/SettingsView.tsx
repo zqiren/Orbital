@@ -18,6 +18,10 @@ import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
 import BudgetSection from './BudgetSection';
+import SettingsRail, {
+  scrollToSettingsSection,
+  type SettingsRailSection,
+} from './SettingsRail';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -40,11 +44,33 @@ interface SettingsViewProps {
    */
   costRefreshKey?: number;
   /**
-   * Optional section to scroll into view on mount (P3-G: the header budget
-   * corner deep-links here with 'budget'). Consumed once via a ref scroll.
+   * Optional section to scroll into view on mount — any `data-settings-section`
+   * id (P3-G: the header budget corner deep-links here with 'budget').
+   * Consumed once via the shared section-scroll mechanism.
    */
-  scrollToSection?: 'budget';
+  scrollToSection?: string;
 }
+
+/**
+ * Index-rail entries for the project settings document (spec 011 §0.8).
+ * Conditional groups (scratch/relay-gated) and the reserved 'connectors' id
+ * (section lands in a later wave) only get a rail entry once a matching
+ * data-settings-section element actually exists in the DOM.
+ */
+export const PROJECT_SETTINGS_SECTIONS: SettingsRailSection[] = [
+  { id: 'agent-name', labelKey: 'createProject.agentName.label' },
+  { id: 'project-goals', labelKey: 'settings.projectGoals.label' },
+  { id: 'project-instructions', labelKey: 'settings.projectInstructions.label' },
+  { id: 'sub-agents', labelKey: 'settings.subAgents.label' },
+  { id: 'skills', labelKey: 'settings.skills.label' },
+  { id: 'notifications', labelKey: 'settings.notifications.label' },
+  { id: 'llm', labelKey: 'llm.provider.heading' },
+  { id: 'fallback-models', labelKey: 'fallback.heading' },
+  { id: 'autonomy', labelKey: 'autonomy.level.label' },
+  { id: 'budget', labelKey: 'settings.budget.label' },
+  { id: 'connectors', labelKey: 'settingsRail.connectors' },
+  { id: 'danger', labelKey: 'settings.danger.title' },
+];
 
 const AUTONOMY_OPTIONS: {
   value: Autonomy;
@@ -77,13 +103,16 @@ export default function SettingsView({
   scrollToSection,
 }: SettingsViewProps) {
   const t = useT();
-  const budgetSectionRef = useRef<HTMLDivElement>(null);
+  // Scroll container ref — SettingsRail scopes section discovery, scrollspy,
+  // and jump-scrolls to this element; the anchor deep-link shares it.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Deep-link: when opened with the 'budget' anchor (header corner click),
-  // scroll the Budget section into view once. Best-effort — no-op in jsdom.
+  // Deep-link: when opened with a section anchor (e.g. 'budget' from the
+  // header corner click), scroll it into view once via the shared section
+  // scroll mechanism. Best-effort — no-op in jsdom or for unknown ids.
   useEffect(() => {
-    if (scrollToSection === 'budget' && budgetSectionRef.current) {
-      budgetSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (scrollToSection && scrollContainerRef.current) {
+      scrollToSettingsSection(scrollContainerRef.current, scrollToSection);
     }
   }, [scrollToSection]);
   const [agentName, setAgentName] = useState(project.agent_name || project.name);
@@ -335,11 +364,18 @@ export default function SettingsView({
   );
 
   return (
-    <div className="h-full overflow-y-auto">
-    <div className="max-w-[720px] mx-auto py-8 px-6 max-md:px-4">
+    <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+    {/* Index rail beside the single scrolling document (desktop) / jump menu
+        above it (mobile). One document, one Save — no pagination. */}
+    <div className="flex justify-center max-md:block">
+    <SettingsRail
+      sections={PROJECT_SETTINGS_SECTIONS}
+      containerRef={scrollContainerRef}
+    />
+    <div className="max-w-[720px] w-full min-w-0 py-8 px-6 max-md:px-4">
       <form onSubmit={handleSave} className="space-y-6">
         {/* Agent Name */}
-        <div>
+        <div data-settings-section="agent-name" className="scroll-mt-4">
           <label className="block text-sm font-medium text-primary mb-1.5">
             {t('createProject.agentName.label')}
           </label>
@@ -354,7 +390,7 @@ export default function SettingsView({
 
         {/* Project Goals */}
         {!project.is_scratch && (
-          <div>
+          <div data-settings-section="project-goals" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('settings.projectGoals.label')}
             </label>
@@ -370,7 +406,7 @@ export default function SettingsView({
         )}
 
         {/* Project Instructions */}
-        <div>
+        <div data-settings-section="project-instructions" className="scroll-mt-4">
           <label className="block text-sm font-medium text-primary mb-1.5">
             {t('settings.projectInstructions.label')}
           </label>
@@ -392,7 +428,7 @@ export default function SettingsView({
             body. One card per installed sub-agent (a disabled one is dimmed
             but still expandable). */}
         {!project.is_scratch && (
-          <div>
+          <div data-settings-section="sub-agents" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('settings.subAgents.label')}
               <span className="text-secondary font-normal"> — delegation targets &amp; their memory for this project</span>
@@ -442,7 +478,7 @@ export default function SettingsView({
 
         {/* Skills */}
         {!project.is_scratch && (
-          <div>
+          <div data-settings-section="skills" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('settings.skills.label')}
             </label>
@@ -513,7 +549,7 @@ export default function SettingsView({
 
         {/* Notification Preferences (remote mode only) */}
         {!project.is_scratch && isRelayMode && (
-          <div>
+          <div data-settings-section="notifications" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('settings.notifications.label')}
             </label>
@@ -550,27 +586,31 @@ export default function SettingsView({
         )}
 
         {/* LLM Provider (collapsible, from shared component) */}
-        <LLMProviderSettings
-          mode="project"
-          projectValues={{
-            provider: project.provider,
-            model: project.model,
-            api_key: project.api_key,
-            base_url: project.base_url,
-            sdk: project.sdk,
-          }}
-          onChange={handleLLMChange}
-        />
+        <div data-settings-section="llm" className="scroll-mt-4">
+          <LLMProviderSettings
+            mode="project"
+            projectValues={{
+              provider: project.provider,
+              model: project.model,
+              api_key: project.api_key,
+              base_url: project.base_url,
+              sdk: project.sdk,
+            }}
+            onChange={handleLLMChange}
+          />
+        </div>
 
         {/* Fallback Models */}
-        <FallbackModelsEditor
-          models={fallbackModels}
-          onChange={handleFallbackChange}
-          providers={providers}
-        />
+        <div data-settings-section="fallback-models" className="scroll-mt-4">
+          <FallbackModelsEditor
+            models={fallbackModels}
+            onChange={handleFallbackChange}
+            providers={providers}
+          />
+        </div>
 
         {/* Autonomy Level */}
-        <div>
+        <div data-settings-section="autonomy" className="scroll-mt-4">
           <label className="block text-sm font-medium text-primary mb-2">
             {t('autonomy.level.label')}
           </label>
@@ -599,9 +639,10 @@ export default function SettingsView({
 
         {/* Budget — limit-as-sentence, behavior cards, spend meter, breakdown.
             Spend is read EXCLUSIVELY from GET /cost (useCost), refreshed on the
-            budget.spend_updated WS event. The ref anchors the header corner's
-            deep-link (scrollToSection === 'budget'). */}
-        <div ref={budgetSectionRef} data-settings-section="budget" className="scroll-mt-4">
+            budget.spend_updated WS event. The data-settings-section tag anchors
+            the header corner's deep-link (scrollToSection === 'budget') and
+            the index rail. */}
+        <div data-settings-section="budget" className="scroll-mt-4">
           <BudgetSection
             project={project}
             limit={budgetLimit}
@@ -633,7 +674,7 @@ export default function SettingsView({
 
       {/* Danger zone */}
       {!project.is_scratch && (
-        <div className="mt-12 border border-error/30 rounded-lg p-6">
+        <div data-settings-section="danger" className="mt-12 border border-error/30 rounded-lg p-6 scroll-mt-4">
           <h3 className="text-sm font-semibold text-error mb-2">{t('settings.danger.title')}</h3>
           <p className="text-sm text-secondary mb-4">
             {t('settings.danger.body')}
@@ -663,6 +704,7 @@ export default function SettingsView({
           )}
         </div>
       )}
+    </div>
     </div>
     </div>
   );

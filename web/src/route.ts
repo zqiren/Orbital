@@ -22,10 +22,12 @@ export type Route =
       settings?: boolean;
       /**
        * Optional intent to scroll the settings overlay to a specific section on
-       * open (P3-G: the budget corner deep-links here). Only meaningful when
-       * `settings` is true; consumed (scrolled-to) once by SettingsView.
+       * open (P3-G: the budget corner deep-links here with 'budget'). Any
+       * `data-settings-section` id is valid (D1 generalized the one-off budget
+       * anchor into the named-section system). Only meaningful when `settings`
+       * is true; consumed (scrolled-to) once by SettingsView.
        */
-      settingsAnchor?: 'budget';
+      settingsAnchor?: string;
       /**
        * Open the pricing-table editor overlay (P3-I). Reached from the Budget
        * section's "Edit pricing table" link; takes precedence over the settings
