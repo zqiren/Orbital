@@ -1,12 +1,13 @@
 {
   "id": "gmail",
   "name": "Gmail",
-  "icon": "✉️",
+  "icon": "\u2709\ufe0f",
   "auth_provider": "google",
   "auth_type": "oauth2",
-  "server_url": "https://mcp.googleapis.com/gmail",
+  "server_url": "https://gmailmcp.googleapis.com/mcp/v1",
   "oauth_scopes": [
-    "https://www.googleapis.com/auth/gmail.modify"
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose"
   ],
   "tool_overrides": {
     "search_threads": "read",

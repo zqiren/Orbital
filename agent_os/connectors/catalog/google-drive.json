@@ -1,12 +1,13 @@
 {
   "id": "google-drive",
   "name": "Google Drive",
-  "icon": "📁",
+  "icon": "\ud83d\udcc1",
   "auth_provider": "google",
   "auth_type": "oauth2",
-  "server_url": "https://mcp.googleapis.com/drive",
+  "server_url": "https://drivemcp.googleapis.com/mcp/v1",
   "oauth_scopes": [
-    "https://www.googleapis.com/auth/drive"
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file"
   ],
   "tool_overrides": {
     "search_files": "read",
