@@ -12,7 +12,7 @@ We use varying tool call results to avoid repetition-detection kicks.
 """
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -93,7 +93,14 @@ def _make_tool_registry():
 
 @pytest.mark.asyncio
 async def test_turn_count_fires_after_cooldown_turns():
-    """After COOLDOWN_TURNS iterations the turn-count trigger fires."""
+    """After COOLDOWN_TURNS iterations the turn-count trigger fires.
+
+    Spec 013: the trigger now schedules a BACKGROUND pass instead of
+    blocking the loop. Previously this test passed only incidentally via the
+    asyncio.to_thread yield in the tool-execution path (loop.py) giving the
+    inline-awaited refresh a chance to run; it is now made deterministic by
+    patching REFRESH_DEBOUNCE_S to 0 and explicitly draining after run().
+    """
     session = _make_session()
     context_manager = _make_context_manager()
     tool_registry = _make_tool_registry()
@@ -124,7 +131,9 @@ async def test_turn_count_fires_after_cooldown_turns():
 
     loop._stream_response = mock_stream
 
-    await loop.run("Start task")
+    with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+        await loop.run("Start task")
+    await loop.drain_refresh()
 
     # Refresh must have fired at least once (turn-count trigger at turn 15)
     assert refresh_call_count["n"] >= 1, (

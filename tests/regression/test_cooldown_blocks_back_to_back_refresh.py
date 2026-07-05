@@ -11,7 +11,7 @@ Over 2 * COOLDOWN_TURNS iterations we expect exactly 2 refreshes.
 """
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -83,7 +83,13 @@ def _make_tool_registry():
 
 @pytest.mark.asyncio
 async def test_cooldown_resets_after_each_refresh():
-    """turns_since_last_update resets to 0 after every refresh regardless of trigger."""
+    """turns_since_last_update resets to 0 after every refresh regardless of trigger.
+
+    Spec 013: refreshes now run in the background. Counts hold because the
+    mocked callback completes within the yielding turn loop and
+    REFRESH_DEBOUNCE_S is patched to 0; the production default (300s)
+    intentionally coalesces same-window fires like these into a single pass.
+    """
     session = _make_session()
     context_manager = _make_context_manager()
     tool_registry = _make_tool_registry()
@@ -113,7 +119,9 @@ async def test_cooldown_resets_after_each_refresh():
         return _unique_tool_response(call_n["n"])
 
     loop._stream_response = mock_stream
-    await loop.run("go")
+    with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+        await loop.run("go")
+    await loop.drain_refresh()
 
     # Two full COOLDOWN_TURNS windows should have produced exactly 2 refreshes
     assert refresh_count["n"] == 2, (

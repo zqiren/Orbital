@@ -54,6 +54,12 @@ _cache_logger = logging.getLogger("orbital.cache_audit")
 # Also used as the global cooldown between ANY two refreshes (except token-pressure).
 COOLDOWN_TURNS = 50
 
+# Spec 013: minimum seconds between STARTED background consolidation passes.
+# Applies to every scheduler-routed trigger (agent_decided, turn_count,
+# agent_decided_coalesced) — NOT to token_pressure or the session boundary,
+# which stay synchronous and drain the gate instead.
+REFRESH_DEBOUNCE_S = 300
+
 
 def normalize_tool_call(tc_raw: dict) -> dict:
     """Normalize tool call from nested/flat/string-args formats."""
@@ -158,6 +164,13 @@ class AgentLoop:
 
         # In-flight refresh task (registered with cancel pathway)
         self._refresh_task: asyncio.Task | None = None
+
+        # Spec 013 async checkpoint scheduler state. _refresh_task doubles as
+        # the single-flight gate for background passes (the spec's
+        # `_refresh_inflight`). Dirty = a trigger arrived while a pass was in
+        # flight or debounced; consumed at the turn boundary or session end.
+        self._refresh_dirty: bool = False
+        self._last_merge_at: float = float("-inf")   # monotonic; -inf → first schedule always passes debounce
 
         # State refresh tracking
         self._turns_since_last_update: int = 0  # resets after each refresh
@@ -693,29 +706,28 @@ class AgentLoop:
                 if hasattr(self._context_manager, "_turns_since_last_update"):
                     self._context_manager._turns_since_last_update = self._turns_since_last_update
 
-                # Fire turn-count trigger when cooldown has elapsed.
+                # Fire turn-count trigger when cooldown has elapsed — via the
+                # spec-013 scheduler (background, single-flight, debounced).
                 # Token-pressure trigger is handled separately (before compaction).
                 if (
                     self._turns_since_last_update >= COOLDOWN_TURNS
                     and self._on_session_end_refresh is not None
                 ):
-                    logger.info(
-                        "State refresh: turn-count trigger at iteration %d "
-                        "(%d turns since last update)",
-                        iteration, self._turns_since_last_update,
-                    )
-                    self._refresh_task = asyncio.create_task(
-                        self._run_refresh("turn_count", iteration),
-                        name=f"refresh-{self._session.session_uuid}-{iteration}",
-                    )
-                    try:
-                        await self._refresh_task
-                    except asyncio.CancelledError:
-                        logger.info("State refresh cancelled at iteration %d", iteration)
-                        if self._session.is_stopped():
-                            raise
-                    finally:
-                        self._refresh_task = None
+                    # While debounced/in-flight the counter stays >= COOLDOWN_TURNS
+                    # and this re-enters EVERY turn — log only on an actual spawn
+                    # (reviewer finding D: avoids per-turn log spam for up to
+                    # REFRESH_DEBOUNCE_S). Capture the count before spawn resets it.
+                    _turns = self._turns_since_last_update
+                    if self.schedule_checkpoint("turn_count").startswith(
+                        "Consolidation scheduled"
+                    ):
+                        logger.info(
+                            "State refresh: turn-count trigger at iteration %d "
+                            "(%d turns since last update)",
+                            iteration, _turns,
+                        )
+                else:
+                    self._maybe_consume_dirty()
 
                 # Reset per-iteration cancellation flags. The
                 # cancellation-marker flag is sticky across cancelled
@@ -1272,6 +1284,9 @@ class AgentLoop:
                     # Token-pressure trigger: fire refresh BEFORE compaction.
                     # Exempt from cooldown — data preservation trumps redundancy.
                     if self._on_session_end_refresh is not None:
+                        # Spec 013: never two consolidations at once — finish
+                        # any background pass before the blocking pre-compaction one.
+                        await self.drain_refresh()
                         logger.info(
                             "State refresh: token-pressure trigger at iteration %d "
                             "(context at %.0f%%)",
@@ -1492,14 +1507,86 @@ class AgentLoop:
                 self._context_manager._last_checkpoint_ts = ts
                 self._context_manager._turns_since_last_update = 0
 
-    async def trigger_checkpoint(self) -> None:
+    def _spawn_refresh(self, trigger: str) -> None:
+        """Start a background consolidation pass. SYNCHRONOUS — no awaits
+        between the caller's in-flight check and create_task (cooperative
+        event loop ⇒ the single-flight gate is TOCTOU-free; spec 013 race #3).
+        """
+        iteration = self._current_iteration
+        self._last_merge_at = time.monotonic()
+        self._refresh_dirty = False           # fresh pass reads files fresh — covers all prior triggers
+        # Reset at SPAWN (and again in _run_refresh's finally): turns counted
+        # while a slow pass runs are deliberately discarded — benign, and it
+        # prevents turn_count refire churn while the pass is in flight.
+        self._turns_since_last_update = 0
+        task = asyncio.create_task(
+            self._run_refresh(trigger, iteration),
+            name=f"refresh-{trigger}-{self._session.session_uuid}-{iteration}",
+        )
+        self._refresh_task = task
+
+        def _on_refresh_done(t: asyncio.Task) -> None:
+            if self._refresh_task is t:
+                self._refresh_task = None
+            if not t.cancelled() and t.exception() is not None:
+                # _run_refresh swallows callback exceptions; this catches
+                # crashes in _run_refresh itself.
+                logger.error(
+                    "Background state refresh crashed (trigger=%s)",
+                    trigger, exc_info=t.exception(),
+                )
+
+        task.add_done_callback(_on_refresh_done)
+
+    def schedule_checkpoint(self, trigger: str = "agent_decided") -> str:
+        """Single-flight, debounced, coalescing scheduler (spec 013).
+
+        Synchronous by design: no await between the in-flight check and the
+        spawn, so two callers can never both observe 'no pass in flight'.
+        """
+        if self._on_session_end_refresh is None:
+            return "State refresh unavailable in this session."
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_dirty = True
+            return ("Consolidation already in flight — your request was "
+                    "coalesced into it.")
+        if time.monotonic() - self._last_merge_at < REFRESH_DEBOUNCE_S:
+            self._refresh_dirty = True
+            return ("Consolidation ran recently — deferred until the debounce "
+                    "window elapses. Your edits are already persisted.")
+        self._spawn_refresh(trigger)
+        return "Consolidation scheduled in background."
+
+    def _maybe_consume_dirty(self) -> None:
+        """Turn-boundary pickup of a coalesced/deferred trigger (spec 013)."""
+        if (
+            self._refresh_dirty
+            and self._on_session_end_refresh is not None
+            and (self._refresh_task is None or self._refresh_task.done())
+            and time.monotonic() - self._last_merge_at >= REFRESH_DEBOUNCE_S
+        ):
+            self._spawn_refresh("agent_decided_coalesced")
+
+    async def drain_refresh(self) -> None:
+        """Await any in-flight background pass. Called before the two passes
+        that stay synchronous (token_pressure, session boundary) so two
+        consolidations never overlap (spec 013 race #3)."""
+        task = self._refresh_task
+        if task is not None and not task.done():
+            try:
+                await task
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass  # _run_refresh already logged it
+
+    async def trigger_checkpoint(self) -> str:
         """Public entry point for the agent-decided refresh trigger.
 
-        Used by the checkpoint_state tool registered in agent_manager.
-        Encapsulates the iteration capture so callers do not need to
-        touch loop internals.
+        Spec 013: schedules a BACKGROUND pass and returns the scheduler's
+        status string immediately — never blocks the loop.
         """
-        await self._run_refresh("agent_decided", self._current_iteration)
+        return self.schedule_checkpoint("agent_decided")
 
     # ------------------------------------------------------------------
     # Cancellation API (cancel_turn / terminate)

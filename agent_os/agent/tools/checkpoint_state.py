@@ -14,7 +14,8 @@ other write.
 
 The actual refresh is performed asynchronously by the AgentLoop trigger
 infrastructure; this tool is only a signal. The tool stores a callback
-(set at registration time) that fires the refresh on the loop.
+(set at registration time) that fires the refresh on the loop; the callback
+returns a status string immediately, the pass runs in the background (spec 013).
 """
 
 import asyncio
@@ -31,8 +32,9 @@ class CheckpointStateTool(Tool):
         """Create the tool.
 
         Args:
-            on_checkpoint: async callable() that fires the refresh.
-                           Called by execute(); the loop awaits the result.
+            on_checkpoint: async callable() that fires the refresh. Called by
+                           execute(); the callback returns a status string
+                           immediately, the pass runs in the background (spec 013).
         """
         self._on_checkpoint = on_checkpoint
         self.name = "checkpoint_state"
@@ -42,6 +44,7 @@ class CheckpointStateTool(Tool):
             "supersede stale entries to relieve content inflation. "
             "Your incremental write/edit calls already SAVED the content — this "
             "tool does NOT persist anything new; it only cleans up. "
+            "The pass runs in the background; this tool returns immediately. "
             "Call it ONLY when a [MEMORY HYGIENE] flag reports a file is over its "
             "soft budget (i.e. consolidation is actually needed) — not on "
             "task completion or progress milestones."
@@ -60,11 +63,7 @@ class CheckpointStateTool(Tool):
     async def execute(self, **arguments) -> ToolResult:
         reason = arguments.get("reason", "")
         try:
-            await self._on_checkpoint()
-            return ToolResult(
-                content=f"State checkpoint triggered successfully. Reason: {reason}"
-            )
+            status = await self._on_checkpoint()
+            return ToolResult(content=f"{status} Reason noted: {reason}")
         except Exception as e:
-            return ToolResult(
-                content=f"State checkpoint failed: {e}"
-            )
+            return ToolResult(content=f"State checkpoint failed: {e}")
