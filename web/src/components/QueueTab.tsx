@@ -115,7 +115,7 @@ export default function QueueTab({ projectId, project }: QueueTabProps) {
   const isPaused = snapshot?.state === 'paused';
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col h-full min-h-0">
       <QueueHeader
         snapshot={snapshot}
         onStop={stopQueue}
