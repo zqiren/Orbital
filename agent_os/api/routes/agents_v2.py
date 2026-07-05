@@ -2829,12 +2829,47 @@ async def sub_agent_transcript(project_id: str, handle: str,
                 display_name = a["display_name"]
                 break
 
+    # ADDITIVE field (D1, issues 2+3): the worker's real chat session id, so
+    # the frontend drill-in can fetch /chat?session_id=<session_uuid> and
+    # render chat-shaped instead of the flat entries view. Null for CLI
+    # handles (they have no such session at all).
+    #
+    # Live path first: mid-batch, the fanout registry still owns the routing
+    # entry. This is NOT sufficient alone — FanoutRegistry.resolve_group pops
+    # every handle's routing entry once the group resolves (fanout.py), so a
+    # completed fanout's handle is unknown to the registry within moments of
+    # finishing. The disk fallback below is therefore MANDATORY, not
+    # belt-and-braces: scan the project's sessions dir for the newest file
+    # whose stem starts with the mint prefix native_worker.py uses
+    # (``worker_{_sanitize_for_filename(handle)}_``) — the trailing
+    # underscore makes the prefix collision-safe (handle "...-1" cannot match
+    # a file minted for "...-10").
+    session_uuid: str | None = None
+    if kind == "worker":
+        session_uuid = _sub_agent_manager.fanout_session_uuid_for_handle(
+            project_id, handle, sid)
+        if session_uuid is None:
+            import glob as _glob
+
+            from agent_os.daemon_v2.native_worker import _sanitize_for_filename
+
+            project = _project_store.get_project(project_id) if _project_store else None
+            workspace = (project or {}).get("workspace", "")
+            if workspace:
+                sessions_dir = ProjectPaths(workspace).sessions_dir
+                prefix = f"worker_{_sanitize_for_filename(handle)}_"
+                candidates = _glob.glob(os.path.join(sessions_dir, prefix + "*.jsonl"))
+                if candidates:
+                    newest = max(candidates, key=os.path.getmtime)
+                    session_uuid = os.path.splitext(os.path.basename(newest))[0]
+
     return {
         "handle": handle,
         "display_name": display_name,
         "kind": kind,
         "resumable": kind == "cli",
         "entries": entries,
+        "session_uuid": session_uuid,
     }
 
 

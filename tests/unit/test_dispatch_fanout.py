@@ -319,6 +319,16 @@ async def test_successful_dispatch_registers_and_broadcasts(tmp_path):
     assert set(started[0]["fanout_id"]) <= set("0123456789abcdef")
     assert len(started[0]["fanout_id"]) == 8
 
+    # D1 (issues 2+3, round 2): each fanout.started task entry carries the
+    # worker's real session_uuid so the frontend can chat-shape drill-in
+    # while the batch is still mid-flight (before the registry entry is
+    # popped at resolution).
+    by_handle = {t["handle"]: t for t in started[0]["tasks"]}
+    for handle, adapter in adapters.items():
+        assert adapter.session_uuid is not None
+        assert adapter.session_uuid.startswith("worker_")
+        assert by_handle[handle]["session_uuid"] == adapter.session_uuid
+
     # Let the background sends drain so the test doesn't leak pending tasks.
     await _wait_until(lambda: all(
         not a.is_running() for a in adapters.values()
@@ -432,6 +442,15 @@ async def test_full_lifecycle_all_succeed_joins_once(tmp_path):
     task_updates = [p for (_, p) in rec.broadcasts if p["type"] == "fanout.task_update"]
     assert len(task_updates) == 2
     assert all(t["status"] == "completed" for t in task_updates)
+    # B1 (issue 1, round 2): terminal task_update broadcasts must carry
+    # completed_at_ms so the frontend can freeze each row's countdown
+    # independently instead of sharing one never-freezing timer.
+    assert all(isinstance(t.get("completed_at_ms"), int) for t in task_updates)
+
+    # fanout.completed's per-task entries carry the same field.
+    assert all(
+        isinstance(t.get("completed_at_ms"), int) for t in completed[0]["tasks"]
+    )
 
 
 @pytest.mark.asyncio

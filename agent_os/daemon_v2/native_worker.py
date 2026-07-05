@@ -266,6 +266,11 @@ class NativeWorkerAdapter:
         session_uuid = (
             f"worker_{_sanitize_for_filename(handle)}_{uuid.uuid4().hex[:8]}"
         )
+        # Exposed (not just internal) so SubAgentManager.dispatch_fanout can
+        # thread the real worker session id onto FanoutTask/fanout.started —
+        # issues 2+3 (chat-shaped drill-in) need it to resolve the worker's
+        # chat transcript via the /chat endpoint while the batch is mid-flight.
+        self.session_uuid = session_uuid
         self._session_path = ProjectPaths(deps.workspace).session_file(session_uuid)
         self._session = Session.new(
             session_uuid, deps.workspace, project_id=deps.project_id,

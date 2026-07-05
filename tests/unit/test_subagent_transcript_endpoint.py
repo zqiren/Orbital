@@ -195,3 +195,131 @@ class TestSubAgentTranscriptEndpoint:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["entries"] == []
+
+
+class TestSubAgentTranscriptSessionUuid:
+    """D1 (issues 2+3, round 2): additive ``session_uuid`` field so the
+    frontend drill-in can chat-shape a worker's rendering by fetching its
+    real ``/chat`` transcript. No live fanout registry entry survives past
+    resolution (fanout.py pops routing on resolve_group), so the endpoint's
+    disk fallback — newest sessions-dir file whose stem starts with
+    ``worker_{_sanitize_for_filename(handle)}_`` — is MANDATORY, not
+    belt-and-braces. CLI handles have no worker session at all -> null.
+    """
+
+    def test_cli_handle_session_uuid_is_null(self, app_state, tmp_path):
+        app, _ = app_state
+        client = TestClient(app)
+        ws = str(tmp_path / "ws_cli_uuid")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws)
+
+        _seed_transcript(ws, "claude-code", [
+            {"source": "claude-code", "content": "on it",
+             "timestamp": "2026-07-03T00:00:00+00:00", "chunk_type": "response"},
+        ])
+
+        resp = client.get(
+            f"/api/v2/agents/{pid}/sub-agents/claude-code/transcript",
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_uuid"] is None
+
+    def test_worker_handle_session_uuid_via_disk_fallback(self, app_state, tmp_path):
+        """No live fanout registry entry (this handle was never dispatched
+        through a real SubAgentManager in this test) — the endpoint must
+        still resolve session_uuid from the on-disk session file the real
+        NativeWorkerAdapter would have minted at
+        ``worker_{sanitized_handle}_{uuid8}.jsonl``."""
+        app, _ = app_state
+        client = TestClient(app)
+        ws = str(tmp_path / "ws_worker_uuid")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws)
+
+        handle = "worker:abc123-0"
+        _seed_transcript(ws, handle, [
+            {"source": handle, "content": "task result",
+             "timestamp": "2026-07-03T00:00:00+00:00", "chunk_type": "response"},
+        ])
+
+        sessions_dir = ProjectPaths(ws).sessions_dir
+        os.makedirs(sessions_dir, exist_ok=True)
+        expected_uuid = "worker_worker_abc123_0_deadbeef"
+        session_path = os.path.join(sessions_dir, expected_uuid + ".jsonl")
+        with open(session_path, "w", encoding="utf-8") as f:
+            f.write("")
+
+        resp = client.get(
+            f"/api/v2/agents/{pid}/sub-agents/{handle}/transcript",
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_uuid"] == expected_uuid
+
+    def test_worker_handle_session_uuid_disk_fallback_prefers_newest_mtime(
+        self, app_state, tmp_path,
+    ):
+        """Two candidate session files for the same handle prefix (e.g. a
+        stale leftover from an earlier daemon run) — the newest by mtime
+        wins. The trailing underscore in the match prefix also guards the
+        collision case a bare prefix would miss (``…-1`` must not match
+        ``…-10``'s files)."""
+        app, _ = app_state
+        client = TestClient(app)
+        ws = str(tmp_path / "ws_worker_uuid_newest")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws)
+
+        handle = "worker:xyz-1"
+        _seed_transcript(ws, handle, [
+            {"source": handle, "content": "task result",
+             "timestamp": "2026-07-03T00:00:00+00:00", "chunk_type": "response"},
+        ])
+
+        sessions_dir = ProjectPaths(ws).sessions_dir
+        os.makedirs(sessions_dir, exist_ok=True)
+
+        # A decoy for the DIFFERENT (but prefix-colliding-if-naive) handle
+        # "worker:xyz-10" must never be picked for "worker:xyz-1".
+        decoy_path = os.path.join(sessions_dir, "worker_worker_xyz_10_ffffffff.jsonl")
+        with open(decoy_path, "w", encoding="utf-8") as f:
+            f.write("")
+
+        older_path = os.path.join(sessions_dir, "worker_worker_xyz_1_aaaaaaaa.jsonl")
+        with open(older_path, "w", encoding="utf-8") as f:
+            f.write("")
+        older_time = os.path.getmtime(older_path) - 100
+        os.utime(older_path, (older_time, older_time))
+
+        newer_path = os.path.join(sessions_dir, "worker_worker_xyz_1_bbbbbbbb.jsonl")
+        with open(newer_path, "w", encoding="utf-8") as f:
+            f.write("")
+
+        resp = client.get(
+            f"/api/v2/agents/{pid}/sub-agents/{handle}/transcript",
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_uuid"] == "worker_worker_xyz_1_bbbbbbbb"
+
+    def test_worker_handle_no_matching_session_file_session_uuid_null(
+        self, app_state, tmp_path,
+    ):
+        """No live registry entry AND no matching session file on disk
+        (e.g. a very old fanout predating this field) -> null, not a 500."""
+        app, _ = app_state
+        client = TestClient(app)
+        ws = str(tmp_path / "ws_worker_no_uuid")
+        os.makedirs(ws, exist_ok=True)
+        pid = _make_project(client, ws)
+
+        handle = "worker:noneleft-0"
+        _seed_transcript(ws, handle, [
+            {"source": handle, "content": "task result",
+             "timestamp": "2026-07-03T00:00:00+00:00", "chunk_type": "response"},
+        ])
+
+        resp = client.get(
+            f"/api/v2/agents/{pid}/sub-agents/{handle}/transcript",
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_uuid"] is None

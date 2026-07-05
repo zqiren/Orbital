@@ -1075,6 +1075,7 @@ class SubAgentManager:
                         status="running",
                         transcript_path=transcript.filepath,
                         last_activity=time.monotonic(),
+                        session_uuid=adapter.session_uuid,
                     ))
 
                 group = self._fanout_registry.create_group(
@@ -1109,7 +1110,11 @@ class SubAgentManager:
                     "session_id": session_id,
                     "fanout_id": fanout_id,
                     "tasks": [
-                        {"handle": t.handle, "label": t.label}
+                        {
+                            "handle": t.handle,
+                            "label": t.label,
+                            "session_uuid": t.session_uuid,
+                        }
                         for t in fanout_tasks
                     ],
                 })
@@ -1835,6 +1840,33 @@ class SubAgentManager:
             if pid == project_id and h == handle:
                 return transcript
         return None
+
+    def fanout_session_uuid_for_handle(self, project_id: str, handle: str,
+                                       session_id: str | None = None) -> str | None:
+        """Return the live worker session_uuid for a fanout task ``handle``,
+        or None.
+
+        Read-only accessor onto the (otherwise-private) ``_fanout_registry``:
+        the transcript endpoint (agents_v2.py) needs the worker's real chat
+        session id to resolve its ``/chat`` transcript for drill-in, but must
+        not reach into registry internals directly.
+
+        This ONLY works mid-batch: ``FanoutRegistry.resolve_group`` pops a
+        group's routing entries once it resolves (fanout.py), so a completed
+        fanout's handle is unknown to the registry moments after the batch
+        finishes. Callers MUST also have a disk fallback (the transcript
+        endpoint's session-file-stem scan) — this accessor is not sufficient
+        alone.
+        """
+        if self._fanout_registry is None:
+            return None
+        group = self._fanout_registry.owner_group(project_id, handle, session_id)
+        if group is None:
+            return None
+        task = group.tasks.get(handle)
+        if task is None:
+            return None
+        return task.session_uuid
 
     def get_all_transcript_entries(self, project_id: str) -> list[dict]:
         """Read all sub-agent transcript entries for a project.

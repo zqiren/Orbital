@@ -1348,6 +1348,8 @@ class AgentManager:
             project_instructions=project.get("instructions", ""),
             enabled_sub_agents=enabled_sub_agents or [],
             disabled_sub_agents=list(disabled),
+            is_scratch=project.get("is_scratch", False),
+            agent_name=project.get("agent_name", project.get("name", "")),
             budget_limit_usd=project.get("budget_limit_usd"),
             budget_action=project.get("budget_action", "pause"),
         )

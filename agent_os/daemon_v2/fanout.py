@@ -55,6 +55,18 @@ class FanoutTask:
     summary: str = ""
     transcript_path: str = ""
     last_activity: float = 0.0     # event-loop time.monotonic()
+    # The worker's real chat session id (issues 2+3, round 2) — lets the
+    # frontend drill-in fetch the worker's own /chat transcript and render it
+    # chat-shaped instead of the flat entries view. None only for a task
+    # whose adapter somehow lacks a session_uuid (defensive; every
+    # NativeWorkerAdapter sets one at construction).
+    session_uuid: str | None = None
+    # Wall-clock ms timestamp of the terminal transition (issue 1, round 2):
+    # lets the frontend freeze each row's own duration instead of sharing one
+    # never-freezing batch countdown. Stamped in BOTH terminal-transition
+    # sites — absorb_terminal's terminal flip and resolve_group's reap flip
+    # (running -> stalled) — since a task can go terminal via either path.
+    completed_at_ms: int | None = None
 
 
 @dataclass
@@ -177,6 +189,7 @@ class FanoutRegistry:
             task.status = status
             task.summary = summary
             task.transcript_path = transcript_path or task.transcript_path
+            task.completed_at_ms = int(time.time() * 1000)
 
         self._broadcast(project_id, {
             "type": "fanout.task_update",
@@ -185,6 +198,7 @@ class FanoutRegistry:
             "fanout_id": group.fanout_id,
             "handle": handle,
             "status": task.status,
+            "completed_at_ms": task.completed_at_ms,
         })
 
         if not already_terminal and not group.resolved:
@@ -333,6 +347,7 @@ class FanoutRegistry:
         for task in group.tasks.values():
             if task.status in _NON_TERMINAL_STATUSES:
                 task.status = "stalled"
+                task.completed_at_ms = int(time.time() * 1000)
             try:
                 await self._stop_worker(
                     group.project_id, task.handle,
@@ -408,6 +423,8 @@ class FanoutRegistry:
                     "label": t.label,
                     "status": t.status,
                     "transcript_path": t.transcript_path,
+                    "completed_at_ms": t.completed_at_ms,
+                    "session_uuid": t.session_uuid,
                 }
                 for t in ordered
             ],
