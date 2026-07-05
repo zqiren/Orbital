@@ -6,16 +6,32 @@
 // a live status pill. Status comes from a separate live-overlay prop (Map in
 // ChatView, plain Record here) rather than being baked into the task list, so
 // re-rendering with an updated `statuses` prop must update the pill in place.
+//
+// Round 2 (2026-07-05): `statuses` upgraded from a plain
+// Record<handle, FanoutTaskStatus> to a rich Record<handle, {status,
+// completedAtMs?}> so each row can freeze its OWN duration independently
+// (issue 1 — previously every row shared one never-freezing batch countdown).
+// All fixtures below were rewritten to the rich record as part of this task.
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import FanoutCard from './FanoutCard';
+import { act, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import FanoutCard, { isTerminal } from './FanoutCard';
 
 const tasks = [
   { handle: 'worker:a1b2c3d4-0', label: 'Research A' },
   { handle: 'worker:a1b2c3d4-1', label: 'Research B' },
   { handle: 'worker:a1b2c3d4-2', label: 'Research C' },
 ];
+
+describe('isTerminal', () => {
+  it('is false only for running', () => {
+    expect(isTerminal('running')).toBe(false);
+    expect(isTerminal('completed')).toBe(true);
+    expect(isTerminal('error')).toBe(true);
+    expect(isTerminal('stalled')).toBe(true);
+    expect(isTerminal('interrupted')).toBe(true);
+  });
+});
 
 describe('FanoutCard', () => {
   it('renders one row per task from args', () => {
@@ -68,7 +84,7 @@ describe('FanoutCard', () => {
       <FanoutCard
         fanoutId="a1b2c3d4"
         tasks={tasks}
-        statuses={{ 'worker:a1b2c3d4-0': 'completed' }}
+        statuses={{ 'worker:a1b2c3d4-0': { status: 'completed' } }}
         startedAtMs={Date.now()}
         onSelectTask={() => {}}
       />,
@@ -102,9 +118,9 @@ describe('FanoutCard', () => {
         fanoutId="a1b2c3d4"
         tasks={tasks}
         statuses={{
-          'worker:a1b2c3d4-0': 'error',
-          'worker:a1b2c3d4-1': 'stalled',
-          'worker:a1b2c3d4-2': 'interrupted',
+          'worker:a1b2c3d4-0': { status: 'error' },
+          'worker:a1b2c3d4-1': { status: 'stalled' },
+          'worker:a1b2c3d4-2': { status: 'interrupted' },
         }}
         startedAtMs={Date.now()}
         onSelectTask={() => {}}
@@ -113,5 +129,112 @@ describe('FanoutCard', () => {
     expect(screen.getByTestId('fanout-status-worker:a1b2c3d4-0')).toHaveTextContent('Error');
     expect(screen.getByTestId('fanout-status-worker:a1b2c3d4-1')).toHaveTextContent('Stalled');
     expect(screen.getByTestId('fanout-status-worker:a1b2c3d4-2')).toHaveTextContent('Interrupted');
+  });
+
+  // C1: the redesign drops the standalone-card box (rounded-lg/border/bg)
+  // in favor of the same visual family as the agent_run capsule / tool rows.
+  // data-testids stay stable across the restyle — that's the contract the
+  // rest of ChatView (and this test file) depends on.
+  it('keeps the fanout-card/fanout-row/fanout-status testids stable after the capsule restyle', () => {
+    render(
+      <FanoutCard
+        fanoutId="a1b2c3d4"
+        tasks={tasks}
+        statuses={{}}
+        startedAtMs={Date.now()}
+        onSelectTask={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('fanout-card')).toBeInTheDocument();
+    expect(screen.getByTestId('fanout-card').dataset.fanoutId).toBe('a1b2c3d4');
+  });
+
+  describe('per-row duration freeze (round 2, issue 1)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('freezes a completed row at its own completedAtMs while a running row keeps ticking', () => {
+      const startedAtMs = Date.now();
+      const { rerender } = render(
+        <FanoutCard
+          fanoutId="a1b2c3d4"
+          tasks={[tasks[0], tasks[1]]}
+          statuses={{ 'worker:a1b2c3d4-0': { status: 'running' }, 'worker:a1b2c3d4-1': { status: 'running' } }}
+          startedAtMs={startedAtMs}
+          onSelectTask={() => {}}
+        />,
+      );
+
+      // Advance 5s, then freeze row 0 at exactly this moment.
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      const frozenAtMs = startedAtMs + 5000;
+      rerender(
+        <FanoutCard
+          fanoutId="a1b2c3d4"
+          tasks={[tasks[0], tasks[1]]}
+          statuses={{
+            'worker:a1b2c3d4-0': { status: 'completed', completedAtMs: frozenAtMs },
+            'worker:a1b2c3d4-1': { status: 'running' },
+          }}
+          startedAtMs={startedAtMs}
+          onSelectTask={() => {}}
+        />,
+      );
+
+      const row0DurationBefore = screen.getByTestId('fanout-row-worker:a1b2c3d4-0').textContent;
+      const row1DurationBefore = screen.getByTestId('fanout-row-worker:a1b2c3d4-1').textContent;
+
+      // Advance another 10s — row 0 (completed) must stay frozen at 5s,
+      // row 1 (still running) must keep ticking against the shared clock.
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(screen.getByTestId('fanout-row-worker:a1b2c3d4-0').textContent).toBe(row0DurationBefore);
+      expect(screen.getByTestId('fanout-row-worker:a1b2c3d4-0')).toHaveTextContent('5s');
+      expect(screen.getByTestId('fanout-row-worker:a1b2c3d4-1').textContent).not.toBe(row1DurationBefore);
+      expect(screen.getByTestId('fanout-row-worker:a1b2c3d4-1')).toHaveTextContent('15s');
+    });
+
+    it('stops the shared tick entirely once every row is terminal, even without a batch completedAtMs', () => {
+      const startedAtMs = Date.now();
+      const { rerender } = render(
+        <FanoutCard
+          fanoutId="a1b2c3d4"
+          tasks={[tasks[0], tasks[1]]}
+          statuses={{ 'worker:a1b2c3d4-0': { status: 'running' }, 'worker:a1b2c3d4-1': { status: 'running' } }}
+          startedAtMs={startedAtMs}
+          onSelectTask={() => {}}
+        />,
+      );
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      // Both rows go terminal without the batch-level completedAtMs ever
+      // arriving (edge case: joins can lag the last per-task update).
+      rerender(
+        <FanoutCard
+          fanoutId="a1b2c3d4"
+          tasks={[tasks[0], tasks[1]]}
+          statuses={{
+            'worker:a1b2c3d4-0': { status: 'completed', completedAtMs: startedAtMs + 3000 },
+            'worker:a1b2c3d4-1': { status: 'error', completedAtMs: startedAtMs + 3000 },
+          }}
+          startedAtMs={startedAtMs}
+          onSelectTask={() => {}}
+        />,
+      );
+      const before = screen.getByTestId('fanout-card').textContent;
+      act(() => {
+        vi.advanceTimersByTime(20000);
+      });
+      expect(screen.getByTestId('fanout-card').textContent).toBe(before);
+    });
   });
 });

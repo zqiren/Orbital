@@ -350,7 +350,6 @@ import type {
   FanoutStartedEvent,
   FanoutTaskUpdateEvent,
   FanoutCompletedEvent,
-  FanoutTaskStatus,
   WebSocketEvent,
   Project,
 } from '../types';
@@ -366,7 +365,7 @@ import SlotHeldNotice from './SlotHeldNotice';
 import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
-import FanoutCard from './FanoutCard';
+import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
 import SubAgentDrillIn from './SubAgentDrillIn';
 
 interface ChatViewProps {
@@ -530,7 +529,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // `approvals` Map overlaying `approval_card` items. Fed by
   // fanout.task_update; fanoutCompletedAt records when fanout.completed
   // fired so FanoutCard can freeze its (batch-level) duration display.
-  const [fanoutStatuses, setFanoutStatuses] = useState<Map<string, Record<string, FanoutTaskStatus>>>(new Map());
+  //
+  // Round 2 (issue 1, per-task countdown): each handle's entry is now
+  // {status, completedAtMs} rather than a bare status string, so FanoutCard
+  // can freeze each row's OWN duration independently instead of sharing one
+  // never-freezing batch countdown.
+  const [fanoutStatuses, setFanoutStatuses] = useState<Map<string, Record<string, FanoutTaskState>>>(new Map());
   const [fanoutCompletedAt, setFanoutCompletedAt] = useState<Map<string, number>>(new Map());
   // Row-click drill-in target (spec 009 §0.5): replaces the chat message area
   // (NOT a modal) with SubAgentDrillIn. null = showing the normal chat.
@@ -1792,9 +1796,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       if (e.project_id !== projectId) return;
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
+      // Round 2 (issue 1): the backend stamps completed_at_ms on terminal
+      // transitions; older daemons that predate the field send none, so a
+      // terminal status with no timestamp still needs to freeze — arrival
+      // time is the best available stand-in for "whenever it actually
+      // finished" (unknowable precisely, but far closer than never-freezing).
+      const completedAtMs = e.completed_at_ms ?? (isTerminal(e.status) ? Date.now() : undefined);
       setFanoutStatuses((prev) => {
         const next = new Map(prev);
-        next.set(e.fanout_id, { ...(next.get(e.fanout_id) ?? {}), [e.handle]: e.status });
+        next.set(e.fanout_id, {
+          ...(next.get(e.fanout_id) ?? {}),
+          [e.handle]: { status: e.status, completedAtMs },
+        });
         return next;
       });
     }
@@ -1810,6 +1823,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         next.set(e.fanout_id, Date.now());
         return next;
       });
+
+      // Round 2: fanout.completed now carries each task's terminal snapshot
+      // too (previously it carried none) — merge it into the same overlay
+      // handleFanoutTaskUpdate feeds, in case any task's own task_update was
+      // missed (e.g. a client that (re)connected mid-batch).
+      if (e.tasks && e.tasks.length > 0) {
+        setFanoutStatuses((prev) => {
+          const next = new Map(prev);
+          const merged = { ...(next.get(e.fanout_id) ?? {}) };
+          for (const task of e.tasks) {
+            const completedAtMs = task.completed_at_ms ?? (isTerminal(task.status) ? Date.now() : undefined);
+            merged[task.handle] = { status: task.status, completedAtMs };
+          }
+          next.set(e.fanout_id, merged);
+          return next;
+        });
+      }
     }
 
     on('chat.stream_delta', handleStreamDelta);
@@ -2768,8 +2798,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               // a card rebuilt from a COMPLETED fanout's history would show
               // every row defaulting to "running" forever (no live events
               // ever arrive for a session that's already done).
+              //
+              // Round 2 (issue 1): item.statuses is still plain
+              // Record<handle, FanoutTaskStatus> (chatTransform's
+              // parseFanoutSummary carries no per-task times — the join
+              // summary only records the batch's terminal moment), so the
+              // historical side of the merge maps each into the rich
+              // {status, completedAtMs} shape using the batch-level
+              // item.completedAtMs (every historical row freezes together —
+              // a summary backfill has no finer-grained timing to offer).
               const liveStatuses = fanoutStatuses.get(item.fanout_id);
-              const mergedStatuses = { ...(item.statuses ?? {}), ...(liveStatuses ?? {}) };
+              const historicalStatuses: Record<string, FanoutTaskState> = {};
+              for (const [handle, status] of Object.entries(item.statuses ?? {})) {
+                historicalStatuses[handle] = { status, completedAtMs: item.completedAtMs };
+              }
+              const mergedStatuses = { ...historicalStatuses, ...(liveStatuses ?? {}) };
               const mergedCompletedAtMs =
                 fanoutCompletedAt.get(item.fanout_id) ?? item.completedAtMs ?? null;
               rendered = (

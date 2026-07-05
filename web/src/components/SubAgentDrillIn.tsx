@@ -10,16 +10,32 @@
 // /sub-agents/status endpoint SubAgentStatusBar already polls (matches its
 // pattern rather than inventing a second status source).
 //
+// Round 2 (2026-07-05, Task D, issues 2+3): a worker transcript whose
+// `session_uuid` is discoverable (live via the fanout registry mid-batch,
+// disk fallback afterward — see agents_v2.py's transcript endpoint) is its
+// OWN recorded chat session. Rendering it through the flat `entries` list
+// looked nothing like the main chat and showed "(no transcript yet)" for a
+// still-running worker (issue 2) whose entries hadn't landed yet even though
+// its session file already had content (issue 3). D2 fetches that session's
+// chat history and renders it via the same `transformChatHistory` +
+// `ChatMessage` the main conversation uses. Falls back to the original flat
+// entries rendering when `session_uuid` is absent (old fanouts predating the
+// field) or `kind !== 'worker'` (cli handles keep their existing behavior
+// unconditionally, even if a session_uuid were ever present on one).
+//
 // WKWebView note (CLAUDE.md): no transform-based reveal animation for the
 // swap — ChatView renders this as a plain conditional, and this component
 // itself is a static layout with no enter/exit transition.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Send } from 'lucide-react';
 import { api } from '../config';
 import { useAgent } from '../hooks/useAgent';
 import { useT } from '../i18n/useT';
-import type { SubAgentTranscriptResult } from '../types';
+import type { ChatMessage as ChatMessageType, SubAgentTranscriptResult } from '../types';
+import type { StringKey } from '../i18n/strings';
+import { transformChatHistory, type DisplayItem } from '../utils/chatTransform';
+import ChatMessage from './ChatMessage';
 
 interface SubAgentDrillInProps {
   projectId: string;
@@ -31,6 +47,61 @@ interface SubAgentDrillInProps {
 
 const POLL_MS = 3000;
 
+type WorkerCapsuleItem = Extract<DisplayItem, { type: 'agent_run' }>;
+type WorkerMessageItem = Extract<
+  DisplayItem,
+  { type: 'user_message' | 'agent_message' | 'sub_agent_message' }
+>;
+type Translator = (key: StringKey, vars?: Record<string, string | number>) => string;
+
+function formatToolBreakdown(counts: Record<string, number>): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return '';
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
+}
+
+function formatCapsuleDuration(startedAt: number, endedAt: number | null, lessThan1s: string): string {
+  if (!endedAt || endedAt <= startedAt) return lessThan1s;
+  const ms = endedAt - startedAt;
+  if (ms < 1000) return lessThan1s;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
+
+/**
+ * Compact, read-only rendering of an `agent_run` capsule inside the
+ * chat-shaped worker view. Duplicates ChatView's capsule class strings and
+ * `capsuleSummaryText` format verbatim (ChatView.tsx ~2643-2731 /
+ * capsuleSummaryText ~83-92) rather than importing — ChatView exports
+ * neither as a reusable component, and this read-only view has no
+ * expand/collapse or live-status-overlay concerns a worker's own transcript
+ * is always a finished turn once it appears here. Flagged for a later
+ * shared-renderer refactor (same note the plan calls out).
+ */
+function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translator }) {
+  const breakdown = formatToolBreakdown(capsule.tool_call_count_by_name);
+  const duration = formatCapsuleDuration(capsule.started_at, capsule.ended_at, t('duration.lessThan1s'));
+  const head = breakdown || (capsule.has_thinking ? t('chat.capsule.thinking') : t('chat.capsule.agentStep'));
+  let summary = `${head} · ${duration}`;
+  if (capsule.status === 'error' || capsule.status === 'stopped') {
+    summary += ` ${t('chat.capsule.stoppedAtError')}`;
+  }
+  return (
+    <div data-testid="drillin-capsule" className="ml-9 flex gap-[10px]">
+      <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary">
+          <span className="truncate text-primary font-medium">{summary}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SubAgentDrillIn({ projectId, sessionId, handle, displayName, onBack }: SubAgentDrillInProps) {
   const t = useT();
   const { getSubAgentTranscript, injectMessage } = useAgent();
@@ -39,6 +110,12 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   const [notFound, setNotFound] = useState(false);
   const [composerText, setComposerText] = useState('');
   const [sending, setSending] = useState(false);
+  // Round 2 (Task D2): the worker's own chat history, fetched when the
+  // transcript names a `session_uuid` for a `kind === 'worker'` handle. null
+  // means "not applicable" (no session_uuid, or a cli handle, or the fetch
+  // hasn't resolved yet) — the render falls back to `transcript.entries` in
+  // all of those cases.
+  const [workerMessages, setWorkerMessages] = useState<ChatMessageType[] | null>(null);
   const aliveRef = useRef(true);
   // Guards the 3s status poll: null when not currently polling. Cleared
   // (and the timer stopped) the moment a tick observes the handle is idle,
@@ -50,9 +127,26 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   const fetchTranscript = useCallback(async () => {
     try {
       const result = await getSubAgentTranscript(projectId, handle, sessionId);
-      if (aliveRef.current) {
-        setTranscript(result);
-        setNotFound(false);
+      if (!aliveRef.current) return;
+      setTranscript(result);
+      setNotFound(false);
+      if (result.kind === 'worker' && result.session_uuid) {
+        // The worker's own recorded chat session — same endpoint ChatView
+        // uses for the main conversation, scoped via ?session_id to the
+        // worker's F2 stem (agents_v2.py's direct-file-match path resolves
+        // it). Refetched on every poll tick (see startStatusPoll below) so a
+        // still-running worker's transcript fills in live, fixing issue 3
+        // ("(no transcript yet)" for a worker that's actively producing one).
+        try {
+          const messages = await api<ChatMessageType[]>(
+            `/api/v2/agents/${encodeURIComponent(projectId)}/chat?session_id=${encodeURIComponent(result.session_uuid)}`,
+          );
+          if (aliveRef.current) setWorkerMessages(messages);
+        } catch {
+          if (aliveRef.current) setWorkerMessages(null);
+        }
+      } else {
+        setWorkerMessages(null);
       }
     } catch {
       if (aliveRef.current) setNotFound(true);
@@ -129,6 +223,17 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   const headerName = transcript?.display_name || displayName;
   const resumable = transcript?.resumable ?? false;
 
+  // `transformChatHistory`'s translator param defaults to English
+  // (ship-English-first, per CLAUDE.md's i18n rules) — acceptable here since
+  // the worker's own chat history is read-only debug-adjacent content, not
+  // core chat chrome. null (rather than []) distinguishes "no worker chat to
+  // show" from "worker chat is empty", so the flat-entries fallback below can
+  // tell the two apart.
+  const workerItems = useMemo<DisplayItem[] | null>(() => {
+    if (!workerMessages) return null;
+    return transformChatHistory(workerMessages, undefined);
+  }, [workerMessages]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border">
@@ -151,10 +256,29 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
         {!loading && notFound && (
           <div className="text-sm text-secondary">{t('fanout.drillin.error')}</div>
         )}
-        {!loading && !notFound && transcript && transcript.entries.length === 0 && (
+        {!loading && !notFound && workerItems && workerItems.length === 0 && (
           <div className="text-sm text-secondary">{t('fanout.drillin.empty')}</div>
         )}
-        {!loading && !notFound && transcript?.entries.map((entry, idx) => (
+        {!loading && !notFound && workerItems && workerItems.map((item, idx) => {
+          if (
+            item.type === 'user_message' ||
+            item.type === 'agent_message' ||
+            item.type === 'sub_agent_message'
+          ) {
+            return <ChatMessage key={`wi-${idx}`} message={item as WorkerMessageItem} />;
+          }
+          if (item.type === 'agent_run') {
+            return <WorkerCapsule key={`wi-${idx}`} capsule={item} t={t} />;
+          }
+          // Other item types (fanout_card, approval_card, budget_event, …)
+          // are not expected inside a worker's own transcript in v1 — skip
+          // rather than render a mismatched component (D2).
+          return null;
+        })}
+        {!loading && !notFound && !workerItems && transcript && transcript.entries.length === 0 && (
+          <div className="text-sm text-secondary">{t('fanout.drillin.empty')}</div>
+        )}
+        {!loading && !notFound && !workerItems && transcript?.entries.map((entry, idx) => (
           <div key={`${entry.timestamp}-${idx}`} data-testid="drillin-entry" className="text-sm">
             <div className="text-xs text-secondary font-mono mb-0.5">{entry.source}</div>
             <div className="whitespace-pre-wrap break-words text-primary">{entry.content}</div>

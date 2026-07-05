@@ -399,16 +399,27 @@ export interface SubAgentTranscriptResult {
   kind: 'worker' | 'cli';
   resumable: boolean;
   entries: SubAgentTranscriptEntry[];
+  /**
+   * The worker's own F2 session stem (spec 009 §0.5 Task D, issues 2+3):
+   * lets the drill-in render the worker's chat history chat-shaped instead
+   * of the flat transcript entries. Live via the fanout registry mid-batch,
+   * disk fallback afterward; null for CLI handles and older fanouts that
+   * predate the field.
+   */
+  session_uuid?: string | null;
 }
 
 /** Fanout task status vocabulary (spec 009 §0.5), reported per worker handle
  *  via `fanout.task_update`. */
 export type FanoutTaskStatus = 'running' | 'completed' | 'error' | 'stalled' | 'interrupted';
 
-/** One dispatched task, as carried by `fanout.started`. */
+/** One dispatched task, as carried by `fanout.started`. `session_uuid` is the
+ *  worker's own F2 session stem (spec 009 §0.5 Task D) — null for CLI handles
+ *  or older daemons that predate the field. */
 export interface FanoutTaskDescriptor {
   handle: string;
   label: string;
+  session_uuid?: string | null;
 }
 
 export interface FanoutStartedEvent {
@@ -426,6 +437,26 @@ export interface FanoutTaskUpdateEvent {
   fanout_id: string;
   handle: string;
   status: FanoutTaskStatus;
+  /**
+   * Wall-clock ms the task hit a terminal status, stamped server-side
+   * (round 2, issue 1: per-task countdown). Absent on older daemons — the
+   * frontend falls back to its own arrival-time stamp when the status is
+   * terminal and this is missing.
+   */
+  completed_at_ms?: number;
+}
+
+/** One task's terminal snapshot as carried by `fanout.completed` (round 2:
+ *  the event previously carried no per-task detail at all — every field here
+ *  is additive on top of the pre-round-2 `{type, project_id, session_id,
+ *  fanout_id}` shape). */
+export interface FanoutCompletedTaskEntry {
+  handle: string;
+  label: string;
+  status: FanoutTaskStatus;
+  transcript_path?: string | null;
+  completed_at_ms?: number;
+  session_uuid?: string | null;
 }
 
 export interface FanoutCompletedEvent {
@@ -433,6 +464,7 @@ export interface FanoutCompletedEvent {
   project_id: string;
   session_id?: string;
   fanout_id: string;
+  tasks: FanoutCompletedTaskEntry[];
 }
 
 export interface UserMessageEvent {
