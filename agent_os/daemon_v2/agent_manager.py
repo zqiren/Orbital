@@ -1250,6 +1250,10 @@ class AgentManager:
             project_id=project_id,
             parent_session_id=session_id,
             make_tool_registry=make_tool_registry,
+            # Live drill-in streaming (see WorkerDeps.broadcast): worker
+            # deltas are addressed to each worker's own session_uuid, so the
+            # main chat pane (strict viewed-session filter) never sees them.
+            broadcast=(self._ws.broadcast if self._ws is not None else None),
         )
 
     def has_handle(self, project_id: str) -> bool:

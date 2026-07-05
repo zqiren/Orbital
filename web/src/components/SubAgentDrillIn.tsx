@@ -36,6 +36,8 @@ import type { ChatMessage as ChatMessageType, SubAgentTranscriptResult } from '.
 import type { StringKey } from '../i18n/strings';
 import { transformChatHistory, type DisplayItem } from '../utils/chatTransform';
 import ChatMessage from './ChatMessage';
+import { useWebSocket } from '../hooks/useWebSocket';
+import type { FanoutTaskUpdateEvent, StreamDeltaEvent, WebSocketEvent } from '../types';
 
 interface SubAgentDrillInProps {
   projectId: string;
@@ -116,6 +118,17 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
   // hasn't resolved yet) — the render falls back to `transcript.entries` in
   // all of those cases.
   const [workerMessages, setWorkerMessages] = useState<ChatMessageType[] | null>(null);
+  // Live streaming buffer: worker chat.stream_delta text accumulates here
+  // while the worker's turn is in flight (the session JSONL only receives
+  // COMPLETE messages, so without this the view sits still through a long
+  // generation). Cleared when the final delta lands and the persisted
+  // message supersedes it (refetch), or on a terminal fanout.task_update.
+  const [liveStream, setLiveStream] = useState('');
+  const { on, off } = useWebSocket();
+  // The worker session id deltas are addressed to — set by fetchTranscript,
+  // read synchronously inside WS handlers (which close over the ref).
+  const sessionUuidRef = useRef<string | null>(null);
+  const liveStreamStartedAtRef = useRef<string>('');
   const aliveRef = useRef(true);
   // Guards the 3s status poll: null when not currently polling. Cleared
   // (and the timer stopped) the moment a tick observes the handle is idle,
@@ -130,6 +143,8 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
       if (!aliveRef.current) return;
       setTranscript(result);
       setNotFound(false);
+      sessionUuidRef.current =
+        result.kind === 'worker' && result.session_uuid ? result.session_uuid : null;
       if (result.kind === 'worker' && result.session_uuid) {
         // The worker's own recorded chat session — same endpoint ChatView
         // uses for the main conversation, scoped via ?session_id to the
@@ -204,6 +219,47 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
     };
   }, [startStatusPoll]);
 
+  // Live streaming: the backend addresses worker deltas to the WORKER's own
+  // session_uuid (never the viewed chat session), so filtering on
+  // sessionUuidRef makes this subscription see exactly this worker's stream.
+  // On the final delta (or a terminal fanout.task_update for this handle,
+  // which covers a missed final), the persisted message is about to appear in
+  // the session JSONL — drop the buffer and refetch so the durable rendering
+  // takes over without a duplicate.
+  useEffect(() => {
+    function handleDelta(event: WebSocketEvent) {
+      const e = event as StreamDeltaEvent;
+      if (!e.session_id || e.session_id !== sessionUuidRef.current) return;
+      if (e.is_final) {
+        setLiveStream('');
+        liveStreamStartedAtRef.current = '';
+        fetchTranscript();
+        return;
+      }
+      if (e.text) {
+        if (!liveStreamStartedAtRef.current) {
+          liveStreamStartedAtRef.current = new Date().toISOString();
+        }
+        setLiveStream((prev) => prev + e.text);
+      }
+    }
+    function handleTaskUpdate(event: WebSocketEvent) {
+      const e = event as FanoutTaskUpdateEvent;
+      if (e.handle !== handle) return;
+      if (e.status !== 'running') {
+        setLiveStream('');
+        liveStreamStartedAtRef.current = '';
+        fetchTranscript();
+      }
+    }
+    on('chat.stream_delta', handleDelta);
+    on('fanout.task_update', handleTaskUpdate);
+    return () => {
+      off('chat.stream_delta', handleDelta);
+      off('fanout.task_update', handleTaskUpdate);
+    };
+  }, [on, off, handle, fetchTranscript]);
+
   async function handleSend() {
     const text = composerText.trim();
     if (!text || sending) return;
@@ -275,6 +331,18 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
           // rather than render a mismatched component (D2).
           return null;
         })}
+        {!loading && !notFound && liveStream && (
+          <div data-testid="drillin-live-stream">
+            <ChatMessage
+              message={{
+                type: 'agent_message',
+                content: liveStream,
+                source: handle,
+                timestamp: liveStreamStartedAtRef.current,
+              } as WorkerMessageItem}
+            />
+          </div>
+        )}
         {!loading && !notFound && !workerItems && transcript && transcript.entries.length === 0 && (
           <div className="text-sm text-secondary">{t('fanout.drillin.empty')}</div>
         )}

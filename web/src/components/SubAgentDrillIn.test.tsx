@@ -9,7 +9,7 @@
 // handles come back resumable (enabled composer wired to the @mention inject
 // funnel).
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,6 +24,27 @@ vi.mock('../hooks/useAgent', () => ({
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock('../config', () => ({ api: apiMock }));
+
+// Live streaming (round 3): the drill-in subscribes to chat.stream_delta /
+// fanout.task_update via useWebSocket. Handler registry + emitWs mirror
+// ChatView.test.tsx's mocking pattern in miniature.
+const wsHandlers = vi.hoisted(() => new Map<string, Set<(e: unknown) => void>>());
+vi.mock('../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({
+    on: (type: string, fn: (e: unknown) => void) => {
+      if (!wsHandlers.has(type)) wsHandlers.set(type, new Set());
+      wsHandlers.get(type)!.add(fn);
+    },
+    off: (type: string, fn: (e: unknown) => void) => {
+      wsHandlers.get(type)?.delete(fn);
+    },
+    connectionState: 'connected',
+  }),
+}));
+
+function emitWs(type: string, event: unknown) {
+  wsHandlers.get(type)?.forEach((fn) => fn(event));
+}
 
 import SubAgentDrillIn from './SubAgentDrillIn';
 
@@ -95,6 +116,7 @@ beforeEach(() => {
   injectMessageMock.mockReset();
   apiMock.mockReset();
   apiMock.mockResolvedValue({ agents: [] });
+  wsHandlers.clear();
 });
 
 describe('SubAgentDrillIn', () => {
@@ -309,6 +331,105 @@ describe('SubAgentDrillIn', () => {
 
       expect(await screen.findByText('Ready.')).toBeInTheDocument();
       expect(apiMock).not.toHaveBeenCalledWith(expect.stringContaining('/chat?'));
+    });
+  });
+  // Round 3: live streaming. Worker chat.stream_delta events addressed to the
+  // worker's session_uuid accumulate into a live bubble; the final delta (or a
+  // terminal fanout.task_update for this handle) drops the buffer and refetches
+  // so the persisted message supersedes it without duplication.
+  describe('live worker streaming (round 3)', () => {
+    async function renderStreamingWorker() {
+      getSubAgentTranscriptMock.mockResolvedValue(workerTranscriptWithSession());
+      apiMock.mockImplementation((url: string) => {
+        if (url.includes('/chat?')) return Promise.resolve(workerChatMessages());
+        return Promise.resolve({ agents: [] });
+      });
+      render(
+        <SubAgentDrillIn
+          projectId="p1"
+          sessionId="s1"
+          handle="worker:a1b2c3d4-0"
+          displayName="research task A"
+          onBack={() => {}}
+        />,
+      );
+      await screen.findByText('Research topic X');
+    }
+
+    it('accumulates deltas for the worker session into a live bubble', async () => {
+      await renderStreamingWorker();
+      act(() => {
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'sess-worker-uuid-1', text: 'Live toke', is_final: false, seq: 1,
+        });
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'sess-worker-uuid-1', text: 'ns', is_final: false, seq: 2,
+        });
+      });
+      expect(await screen.findByTestId('drillin-live-stream')).toBeInTheDocument();
+      expect(screen.getByText(/Live tokens/)).toBeInTheDocument();
+    });
+
+    it('ignores deltas addressed to a different session', async () => {
+      await renderStreamingWorker();
+      act(() => {
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'some-other-session', text: 'LEAKED', is_final: false, seq: 1,
+        });
+      });
+      expect(screen.queryByText(/LEAKED/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('drillin-live-stream')).not.toBeInTheDocument();
+    });
+
+    it('clears the live bubble on the final delta and refetches the persisted history', async () => {
+      await renderStreamingWorker();
+      act(() => {
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'sess-worker-uuid-1', text: 'Almost done', is_final: false, seq: 1,
+        });
+      });
+      expect(await screen.findByTestId('drillin-live-stream')).toBeInTheDocument();
+      const fetchesBefore = getSubAgentTranscriptMock.mock.calls.length;
+      act(() => {
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'sess-worker-uuid-1', text: '', is_final: true, seq: 2,
+        });
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId('drillin-live-stream')).not.toBeInTheDocument(),
+      );
+      await waitFor(() =>
+        expect(getSubAgentTranscriptMock.mock.calls.length).toBeGreaterThan(fetchesBefore),
+      );
+    });
+
+    it('a terminal fanout.task_update for this handle clears the bubble and refetches', async () => {
+      await renderStreamingWorker();
+      act(() => {
+        emitWs('chat.stream_delta', {
+          type: 'chat.stream_delta', project_id: 'p1',
+          session_id: 'sess-worker-uuid-1', text: 'partial', is_final: false, seq: 1,
+        });
+      });
+      expect(await screen.findByTestId('drillin-live-stream')).toBeInTheDocument();
+      const fetchesBefore = getSubAgentTranscriptMock.mock.calls.length;
+      act(() => {
+        emitWs('fanout.task_update', {
+          type: 'fanout.task_update', project_id: 'p1', session_id: 's1',
+          fanout_id: 'a1b2c3d4', handle: 'worker:a1b2c3d4-0', status: 'completed',
+        });
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId('drillin-live-stream')).not.toBeInTheDocument(),
+      );
+      await waitFor(() =>
+        expect(getSubAgentTranscriptMock.mock.calls.length).toBeGreaterThan(fetchesBefore),
+      );
     });
   });
 });

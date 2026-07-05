@@ -120,6 +120,13 @@ class WorkerDeps:
         [list[str] | None, list[str] | None], ToolRegistryLike
     ]
     on_activity: Callable[[], None] | None = None
+    # WS fan-out for live drill-in streaming: ``broadcast(project_id, payload)``
+    # (WebSocketManager.broadcast's shape). When set, each adapter wires its
+    # session's ``on_stream`` to emit ``chat.stream_delta`` events addressed to
+    # the WORKER's own session_uuid — ChatView filters strictly by viewed
+    # session id, so these reach only a drill-in subscribed to that worker.
+    # ``None`` → no streaming observer, byte-identical to the pre-streaming path.
+    broadcast: Callable[[str, dict], None] | None = None
 
 
 _HANDLE_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -289,6 +296,39 @@ class NativeWorkerAdapter:
             fanout_id=_fanout_id_from_handle(handle),
             task_label=display_name,
         )
+
+        # Live drill-in streaming: mirror ActivityTranslator.on_stream_chunk's
+        # chat.stream_delta payload, but addressed to the WORKER's session_uuid
+        # and with a PER-WORKER seq counter — sharing the translator's
+        # per-project counter would interleave with (and reset under) the
+        # management stream. The loop drives this via Session.notify_stream on
+        # every provider chunk. Broadcast failures must never break the turn.
+        if deps.broadcast is not None:
+            self._stream_seq = 0
+
+            def _on_stream(chunk, _broadcast=deps.broadcast,
+                           _pid=deps.project_id, _sid=session_uuid,
+                           _handle=handle):
+                try:
+                    is_final = getattr(chunk, "is_final", False)
+                    self._stream_seq += 1
+                    _broadcast(_pid, {
+                        "type": "chat.stream_delta",
+                        "project_id": _pid,
+                        "session_id": _sid,
+                        "text": getattr(chunk, "text", ""),
+                        "reasoning_content": getattr(chunk, "reasoning_content", ""),
+                        "source": _handle,
+                        "is_final": is_final,
+                        "seq": self._stream_seq,
+                    })
+                    if is_final:
+                        self._stream_seq = 0
+                except Exception:
+                    logger.debug("worker stream broadcast failed for %s",
+                                 _handle, exc_info=True)
+
+            self._session.on_stream = _on_stream
 
         # Requirement 2: mirror the AgentLoop construction path
         # agent_manager.start_agent uses (~agent_manager.py:775-851), through

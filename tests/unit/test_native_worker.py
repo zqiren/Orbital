@@ -411,3 +411,71 @@ async def test_on_activity_exception_does_not_break_turn(tmp_path, stub_worker_d
                             forbidden_paths=None)
     await a.send("compute the answer")
     assert a._last_response == "done: 42"
+
+
+# ---------------------------------------------------------------------------
+# Streaming (drill-in live view): worker deltas broadcast as chat.stream_delta
+# addressed to the WORKER's own session_uuid. ChatView filters strictly by
+# viewed session id, so these never leak into the main chat pane; the drill-in
+# subscribes for exactly this id.
+# ---------------------------------------------------------------------------
+
+class _Chunk:
+    def __init__(self, text="", reasoning_content="", is_final=False):
+        self.text = text
+        self.reasoning_content = reasoning_content
+        self.is_final = is_final
+
+
+def test_worker_streams_deltas_over_broadcast(tmp_path):
+    events = []
+    deps = WorkerDeps(
+        provider=_StubProvider("done"),
+        workspace=str(tmp_path),
+        project_id="proj-1",
+        parent_session_id="parent-sess-1",
+        make_tool_registry=_make_registry_factory(_StubToolRegistry()),
+        broadcast=lambda pid, payload: events.append((pid, payload)),
+    )
+    a = NativeWorkerAdapter(deps=deps, handle="worker:x-0", display_name="t0",
+                            allowed_paths=None, forbidden_paths=None)
+    a._session.notify_stream(_Chunk(text="Hel"))
+    a._session.notify_stream(_Chunk(text="lo", is_final=True))
+    a._session.notify_stream(_Chunk(text="next turn"))
+    assert len(events) == 3
+    pid, first = events[0]
+    assert pid == "proj-1"
+    assert first["type"] == "chat.stream_delta"
+    assert first["session_id"] == a.session_uuid
+    assert first["source"] == "worker:x-0"
+    assert first["text"] == "Hel"
+    assert first["seq"] == 1
+    assert events[1][1]["is_final"] is True
+    assert events[1][1]["seq"] == 2
+    # Per-worker seq counter resets after a final delta (mirrors the
+    # ActivityTranslator convention without sharing its per-project counter,
+    # which the management stream owns).
+    assert events[2][1]["seq"] == 1
+
+
+def test_worker_without_broadcast_has_no_stream_observer(tmp_path, stub_worker_deps):
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-0",
+                            display_name="t0", allowed_paths=None,
+                            forbidden_paths=None)
+    assert a._session.on_stream is None
+
+
+def test_worker_stream_broadcast_errors_are_swallowed(tmp_path):
+    def _boom(pid, payload):
+        raise RuntimeError("ws down")
+    deps = WorkerDeps(
+        provider=_StubProvider("done"),
+        workspace=str(tmp_path),
+        project_id="proj-1",
+        parent_session_id="parent-sess-1",
+        make_tool_registry=_make_registry_factory(_StubToolRegistry()),
+        broadcast=_boom,
+    )
+    a = NativeWorkerAdapter(deps=deps, handle="worker:x-0", display_name="t0",
+                            allowed_paths=None, forbidden_paths=None)
+    a._session.notify_stream(_Chunk(text="x"))  # must not raise
