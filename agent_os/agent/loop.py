@@ -1512,6 +1512,17 @@ class AgentLoop:
         between the caller's in-flight check and create_task (cooperative
         event loop ⇒ the single-flight gate is TOCTOU-free; spec 013 race #3).
         """
+        if self._session.is_stopped():
+            # Belt for the _maybe_consume_dirty path, which bypasses
+            # schedule_checkpoint's own is_stopped() gate below. Without
+            # this, a pass can spawn during the terminate() window between
+            # cancel_turn() waking the loop's turn boundary and
+            # session.stop() actually landing (spec 013 race #7).
+            logger.debug(
+                "State refresh: refusing to spawn (trigger=%s) — session stopped",
+                trigger,
+            )
+            return
         iteration = self._current_iteration
         self._last_merge_at = time.monotonic()
         self._refresh_dirty = False           # fresh pass reads files fresh — covers all prior triggers
@@ -1545,6 +1556,11 @@ class AgentLoop:
         spawn, so two callers can never both observe 'no pass in flight'.
         """
         if self._on_session_end_refresh is None:
+            return "State refresh unavailable in this session."
+        if self._session.is_stopped():
+            # Checked before the in-flight/debounce checks so a terminating
+            # session never reports "scheduled" for a pass that _spawn_refresh
+            # will then refuse (spec 013 race #7) — keeps the ack truthful.
             return "State refresh unavailable in this session."
         if self._refresh_task is not None and not self._refresh_task.done():
             self._refresh_dirty = True
@@ -1678,6 +1694,14 @@ class AgentLoop:
         await self.cancel_turn()
         # Cooperative flag: loop's between-iterations check picks this up.
         self._session.stop()
+        # Re-cancel: the await in cancel_turn() above can let the loop's own
+        # task wake into the turn-boundary block (schedule_checkpoint /
+        # _maybe_consume_dirty) BEFORE session.stop() lands above, spawning a
+        # new pass that the first cancel (before cancel_turn) never saw.
+        # Closes that window (spec 013 race #7 — "terminate() cancels the
+        # in-flight pass").
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_task.cancel()
         if self._task is not None and not self._task.done():
             # If we're called from a different task (typical for /stop),
             # cancel the loop task so it exits the inflight stream wait

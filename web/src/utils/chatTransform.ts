@@ -113,7 +113,7 @@ export type DisplayItem =
   | {
       type: 'refresh_status';
       status: 'in_progress' | 'done' | 'failed' | 'skipped';
-      trigger: 'turn_count' | 'agent_decided' | 'token_pressure';
+      trigger: 'turn_count' | 'agent_decided' | 'agent_decided_coalesced' | 'token_pressure';
       timestamp: string;
     }
   | {
