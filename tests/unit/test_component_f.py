@@ -987,7 +987,7 @@ class TestAgentManager:
         # Calling with the matching session_id reaches the queued-path
         # for that exact handle (storage is now SessionKey-keyed).
         result = await mgr.inject_message("proj_1", "hi", session_id="sess_a")
-        assert result == "queued"
+        assert result == "queued_same_session"
         mock_session.queue_message.assert_called_once_with("hi", nonce=None)
 
     def test_synchronous_entry_points_accept_session_id_kwarg(self):
@@ -1175,7 +1175,7 @@ class TestAgentManager:
         result_a = await mgr.inject_message(
             "proj_iso", "msg-for-a", session_id="sess_a",
         )
-        assert result_a == "queued"
+        assert result_a == "queued_same_session"
         session_a.queue_message.assert_called_once_with("msg-for-a", nonce=None)
         session_b.queue_message.assert_not_called()
 

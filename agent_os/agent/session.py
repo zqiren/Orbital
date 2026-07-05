@@ -659,11 +659,35 @@ class Session:
         self._queue.clear()
         return queued
 
+    def remove_queued_message(self, nonce: str) -> str | None:
+        """Remove the queued ``(content, nonce)`` tuple matching ``nonce``.
+
+        Returns the removed content, or ``None`` if no entry matched. Supports
+        the ↑-dequeue / recall of a same-session queued message (spec 006
+        §11d): the FE recalls a still-queued message into the composer and the
+        server authoritatively reports whether it removed one.
+        """
+        for idx, (content, q_nonce) in enumerate(self._queue):
+            if q_nonce == nonce:
+                del self._queue[idx]
+                return content
+        return None
+
+    def list_queued(self) -> list[tuple[str, str | None]]:
+        """Non-destructive copy of the queue (GET /pending recovery, §12 R3).
+
+        Unlike ``pop_queued_messages`` this does not clear the queue — it is a
+        read-only snapshot so a reconnecting client can rebuild the
+        same-session waiting line without consuming the pending messages.
+        """
+        return list(self._queue)
+
     # ------------------------------------------------------------------
     # Deferred messages (lifecycle notifications during tool execution)
     # ------------------------------------------------------------------
 
-    def defer_message(self, content: str, role: str = "system", source: str = "daemon") -> None:
+    def defer_message(self, content: str, role: str = "system",
+                      source: str = "daemon", meta: dict | None = None) -> None:
         """Queue a message for insertion after the current tool batch completes.
 
         Used for lifecycle notifications that must not interrupt tool execution."""
@@ -672,6 +696,7 @@ class Session:
             "content": content,
             "source": source,
             "timestamp": _now(),
+            **({"_meta": meta} if meta else {}),
         })
 
     def pop_deferred_messages(self) -> list[dict]:
@@ -817,6 +842,40 @@ class Session:
             self.on_stream(chunk)
 
     # ------------------------------------------------------------------
+    # Meta record preservation (JSONL rewrite helper)
+    # ------------------------------------------------------------------
+
+    def _collect_meta_lines(self) -> list[str]:
+        """Raw ``role: meta`` JSONL lines currently on disk (file order),
+        prefixed by a still-pending session_start if one exists.
+
+        Rewrite paths (stub truncation, compaction) regenerate the file from
+        ``self._messages``, which deliberately excludes meta records — without
+        this carry-over the first rewrite erases session identity
+        (``session_start``) and the worker tag (``session_kind``), which is
+        what leaked fanout worker sessions into the sidebar. Caller must hold
+        ``self._lock`` + ``self._file_lock``.
+        """
+        lines: list[str] = []
+        if self._pending_meta is not None:
+            lines.append(json.dumps(self._pending_meta, ensure_ascii=False) + "\n")
+        try:
+            with open(self._filepath, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw_s = raw.strip()
+                    if not raw_s:
+                        continue
+                    try:
+                        rec = json.loads(raw_s)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("role") == "meta":
+                        lines.append(raw_s + "\n")
+        except OSError:
+            pass
+        return lines
+
+    # ------------------------------------------------------------------
     # Tool result lifecycle
     # ------------------------------------------------------------------
 
@@ -844,12 +903,16 @@ class Session:
         tmp_path = self._filepath + ".tmp"
         with self._lock:
             with self._file_lock:
+                meta_lines = self._collect_meta_lines()
                 with open(tmp_path, "w", encoding="utf-8") as f:
+                    for line in meta_lines:
+                        f.write(line)
                     for msg in self._messages:
                         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
+                self._pending_meta = None
 
     # ------------------------------------------------------------------
     # Compaction support (PRIVATE)
@@ -864,10 +927,14 @@ class Session:
         tmp_path = self._filepath + ".tmp"
         with self._lock:
             with self._file_lock:
+                meta_lines = self._collect_meta_lines()
                 with open(tmp_path, "w", encoding="utf-8") as f:
+                    for line in meta_lines:
+                        f.write(line)
                     for msg in new_messages:
                         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
+                self._pending_meta = None
         self._messages = new_messages

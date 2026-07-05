@@ -174,10 +174,60 @@ class SubAgentTranscript:
         os.makedirs(self._dir, exist_ok=True)
         self._filename = f"{transcript_id}.jsonl"
         self._filepath = os.path.join(self._dir, self._filename)
-        # Create the file
+        # Open in append mode: a reused id (BACKLOG 005 §4b) keeps prior turns;
+        # a fresh id starts empty.
         open(self._filepath, "a", encoding="utf-8").close()
         # Update latest pointer (use .latest text file on Windows)
         self._update_latest()
+
+    @classmethod
+    def open_for_handle(cls, workspace: str, handle: str,
+                        *, fresh: bool = False) -> "SubAgentTranscript":
+        """Resume the per-(workspace, handle) transcript, or mint a new one.
+
+        BACKLOG 005 §4b: a respawn must keep the UI's ``.latest`` transcript
+        CONTINUOUS instead of pointing at a fresh empty file every time. When a
+        valid ``.latest`` pointer already exists for the handle, reuse that
+        filename (append mode) rather than minting a new ``str(uuid4())[:8]``
+        id. A new id is minted only when ``.latest`` is missing/corrupt or its
+        target file no longer exists.
+
+        ``fresh=True`` (§4d reset) ALWAYS mints a new id, bypassing reuse — the
+        prior transcript stays on disk (archived), and ``.latest`` re-points at
+        the new file.
+        """
+        from agent_os.agent.project_paths import ProjectPaths
+        from uuid import uuid4
+
+        if not fresh:
+            sub_dir = ProjectPaths(workspace).sub_agent_dir(handle)
+            existing = cls._read_latest_id(sub_dir)
+            if existing is not None:
+                return cls(workspace, handle, existing)
+        return cls(workspace, handle, str(uuid4())[:8])
+
+    @staticmethod
+    def _read_latest_id(sub_dir: str) -> "str | None":
+        """Return the transcript id (filename stem) ``.latest`` points at, when
+        the pointed-at file still exists; else None (mint a new one).
+        """
+        latest_path = os.path.join(sub_dir, ".latest")
+        try:
+            with open(latest_path, "r", encoding="utf-8") as f:
+                filename = f.read().strip()
+        except OSError:
+            return None
+        if not filename:
+            return None
+        # The pointer must reference a real file — a dangling pointer (the file
+        # was deleted/pruned) means start fresh, not append to a ghost path.
+        if not os.path.isfile(os.path.join(sub_dir, filename)):
+            return None
+        # __init__ rebuilds the filename as f"{transcript_id}.jsonl", so recover
+        # the stem here to round-trip cleanly.
+        if filename.endswith(".jsonl"):
+            return filename[: -len(".jsonl")]
+        return filename
 
     def _update_latest(self) -> None:
         """Point latest to current transcript."""

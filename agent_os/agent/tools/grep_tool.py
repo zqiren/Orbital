@@ -26,8 +26,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
-from ._path_utils import resolve_safe
+from ._path_utils import _excluded_in_secondary, resolve_safe_read
 from .base import Tool, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -104,14 +105,28 @@ def find_ripgrep() -> str | None:
 class GrepTool(Tool):
     """Search for text content across workspace files using ripgrep."""
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str,
+                 read_roots: Callable[[], list[str]] | None = None,
+                 root_labels: Callable[[], dict[str, str]] | None = None):
         self._workspace = os.path.realpath(workspace)
+        # Callables (evaluated per call) so per-session scope changes apply on
+        # the next call. None → single-root, byte-identical to normal projects.
+        self._read_roots = read_roots
+        self._root_labels = root_labels
         self.name = "grep"
         self.description = (
             "Search for text within workspace files using ripgrep. "
             "Supports regex by default, or literal matches via fixed_strings. "
             "Returns matches in 'path:line:content' format, capped at 100 matches."
         )
+        if read_roots is None:
+            path_desc = "Directory or file within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes.md'). Defaults to workspace root. Do NOT start with '/'."
+        else:
+            path_desc = (
+                "Directory or file to search. Relative paths stay in YOUR workspace; "
+                "by default ALL in-scope project workspaces are searched and "
+                "cross-project matches are prefixed with [project: <name>]."
+            )
         self.parameters = {
             "type": "object",
             "properties": {
@@ -121,7 +136,7 @@ class GrepTool(Tool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file within your workspace, relative to workspace root (e.g. 'src' or 'docs/notes.md'). Defaults to workspace root. Do NOT start with '/'.",
+                    "description": path_desc,
                 },
                 "glob_filter": {
                     "type": "string",
@@ -141,12 +156,23 @@ class GrepTool(Tool):
             if not pattern or not isinstance(pattern, str):
                 return ToolResult(content="Error: 'pattern' argument is required")
 
+            roots = self._read_roots() if self._read_roots else [self._workspace]
+            if not roots:
+                roots = [self._workspace]
+            primary_real = os.path.realpath(roots[0])
+            secondary_reals = [os.path.realpath(r) for r in roots[1:]]
+            labels = self._root_labels() if self._root_labels else {}
+
             path_arg = arguments.get("path", ".")
-            resolved = resolve_safe(self._workspace, path_arg)
-            if resolved is None:
-                return ToolResult(content=f"Error: path outside workspace: {path_arg}")
-            if not os.path.exists(resolved):
-                return ToolResult(content=f"Error: path not found: {path_arg}")
+            if path_arg not in (".", "", None):
+                resolved = resolve_safe_read(roots, path_arg)
+                if resolved is None:
+                    return ToolResult(content=f"Error: path outside workspace: {path_arg}")
+                if not os.path.exists(resolved):
+                    return ToolResult(content=f"Error: path not found: {path_arg}")
+                search_dirs = [resolved]
+            else:
+                search_dirs = [primary_real] + secondary_reals
 
             rg = _find_ripgrep()
             if rg is None:
@@ -155,96 +181,132 @@ class GrepTool(Tool):
                     "bundled binary exists at agent_os/vendor/rg/."
                 )
 
-            cmd = [
-                rg,
-                "--line-number",
-                "--no-heading",
-                "--color", "never",
-                "--max-count", str(_MAX_COUNT_PER_FILE),
-                "--max-columns", str(_MAX_COLUMNS),
-            ]
-            if arguments.get("fixed_strings"):
-                cmd.append("-F")
+            fixed = bool(arguments.get("fixed_strings"))
             glob_filter = arguments.get("glob_filter")
-            if glob_filter and isinstance(glob_filter, str):
-                cmd.extend(["-g", glob_filter])
+            glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
 
-            cmd.extend(["--", pattern, resolved])
-
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=_TIMEOUT_SECONDS,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            except subprocess.TimeoutExpired:
-                return ToolResult(content=f"Error: grep timed out after {_TIMEOUT_SECONDS}s")
-            except FileNotFoundError:
-                return ToolResult(content="Error: ripgrep binary could not be executed")
-            except Exception as e:
-                return ToolResult(content=f"Error: failed to run grep: {str(e)}")
-
-            if result.returncode == 1:
-                return ToolResult(content="No matches found")
-            if result.returncode >= 2:
-                stderr = (result.stderr or "").strip() or "unknown error"
-                # Trim obscenely long stderr
-                if len(stderr) > 500:
-                    stderr = stderr[:500] + "..."
-                return ToolResult(content=f"Error: grep failed (exit {result.returncode}): {stderr}")
-
-            # returncode == 0: matches
-            lines = (result.stdout or "").splitlines()
-            parsed: list[str] = []
+            primary_lines: list[str] = []
+            secondary_lines: dict[str, list[str]] = {r: [] for r in secondary_reals}
             total = 0
             truncated = False
-            workspace_root = self._workspace
+            hard_error: tuple[int, str] | None = None
 
-            for line in lines:
-                # ripgrep format with --line-number --no-heading: path:line:content
-                # On Windows, path contains a drive letter colon — split on last 2 colons
-                # by splitting only 2 times from the right; we need exactly
-                # path:line:content, so split from the left with maxsplit on the
-                # first two colons AFTER any drive-letter colon.
-                parts = _split_rg_line(line)
-                if parts is None:
-                    # Keep unparseable lines as-is (defensive)
-                    parsed.append(line[:_MAX_COLUMNS])
-                    total += 1
-                else:
-                    abs_path, lineno, content = parts
-                    try:
-                        rel_path = os.path.relpath(abs_path, workspace_root)
-                    except ValueError:
-                        rel_path = abs_path
-                    rel_path = rel_path.replace(os.sep, "/")
-                    parsed.append(f"{rel_path}:{lineno}:{content}")
-                    total += 1
+            for search_dir in search_dirs:
+                owner = self._owning_root(search_dir, primary_real, secondary_reals)
+                is_secondary = owner is not None and owner != primary_real
+                rc, stdout, stderr = self._run_rg(
+                    rg, search_dir, pattern, fixed=fixed, glob_filter=glob_filter,
+                    exclude_internal=is_secondary,
+                )
+                if rc is None:  # timeout / exec failure
+                    return ToolResult(content=stderr)
+                if rc == 1:
+                    continue  # no matches in this root
+                if rc >= 2:
+                    hard_error = (rc, stderr)
+                    continue
 
-                if total >= _MAX_MATCHES:
-                    truncated = True
-                    # Count remaining lines for the truncation marker
-                    remaining = len(lines) - len(parsed)
-                    if remaining > 0:
-                        body = "\n".join(parsed)
-                        return ToolResult(
-                            content=f"{body}\n[... truncated, {len(lines)} total matches, refine your pattern]"
+                for line in stdout.splitlines():
+                    parts = _split_rg_line(line)
+                    if parts is None:
+                        (secondary_lines[owner] if is_secondary else primary_lines).append(
+                            line[:_MAX_COLUMNS]
                         )
+                    else:
+                        abs_path, lineno, content = parts
+                        if is_secondary:
+                            # Defence in depth: rg already excludes these globs,
+                            # but never surface another project's internals.
+                            if _excluded_in_secondary(abs_path, owner):
+                                continue
+                            secondary_lines[owner].append(f"{abs_path}:{lineno}:{content}")
+                        else:
+                            try:
+                                rel_path = os.path.relpath(abs_path, primary_real)
+                            except ValueError:
+                                rel_path = abs_path
+                            primary_lines.append(
+                                f"{rel_path.replace(os.sep, '/')}:{lineno}:{content}"
+                            )
+                    total += 1
+                    if total >= _MAX_MATCHES:
+                        truncated = True
+                        break
+                if truncated:
                     break
 
-            if not parsed:
+            if total == 0:
+                if hard_error is not None:
+                    rc, stderr = hard_error
+                    stderr = (stderr or "").strip() or "unknown error"
+                    if len(stderr) > 500:
+                        stderr = stderr[:500] + "..."
+                    return ToolResult(content=f"Error: grep failed (exit {rc}): {stderr}")
                 return ToolResult(content="No matches found")
 
-            body = "\n".join(parsed)
+            sections: list[str] = []
+            if primary_lines:
+                sections.append("\n".join(primary_lines))
+            for root in secondary_reals:
+                hits = secondary_lines.get(root)
+                if hits:
+                    label = labels.get(root, os.path.basename(root))
+                    sections.append(f"[project: {label}]\n" + "\n".join(hits))
+
+            body = "\n".join(sections)
             if truncated:
                 body += f"\n[... truncated at {_MAX_MATCHES} matches, refine your pattern]"
             return ToolResult(content=body)
 
         except Exception as e:
             return ToolResult(content=f"Error: {str(e)}")
+
+    @staticmethod
+    def _owning_root(candidate: str, primary_real: str,
+                     secondary_reals: list[str]) -> str | None:
+        if candidate == primary_real or candidate.startswith(primary_real + os.sep):
+            return primary_real
+        for root in secondary_reals:
+            if candidate == root or candidate.startswith(root + os.sep):
+                return root
+        return None
+
+    @staticmethod
+    def _run_rg(rg: str, search_dir: str, pattern: str, *, fixed: bool,
+                glob_filter: str | None, exclude_internal: bool):
+        """Run ripgrep in one directory. Returns (returncode, stdout, stderr).
+
+        ``returncode`` is None on timeout / exec failure (stderr carries the
+        user-facing error). ``exclude_internal`` adds globs that keep a
+        secondary project's ``orbital/`` and ``.git/`` out of the results.
+        """
+        cmd = [
+            rg,
+            "--line-number",
+            "--no-heading",
+            "--color", "never",
+            "--max-count", str(_MAX_COUNT_PER_FILE),
+            "--max-columns", str(_MAX_COLUMNS),
+        ]
+        if fixed:
+            cmd.append("-F")
+        if glob_filter:
+            cmd.extend(["-g", glob_filter])
+        if exclude_internal:
+            cmd.extend(["-g", "!orbital", "-g", "!.git"])
+        cmd.extend(["--", pattern, search_dir])
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS,
+                encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired:
+            return None, "", f"Error: grep timed out after {_TIMEOUT_SECONDS}s"
+        except FileNotFoundError:
+            return None, "", "Error: ripgrep binary could not be executed"
+        except Exception as e:
+            return None, "", f"Error: failed to run grep: {str(e)}"
+        return result.returncode, result.stdout or "", result.stderr or ""
 
 
 def _split_rg_line(line: str) -> tuple[str, str, str] | None:

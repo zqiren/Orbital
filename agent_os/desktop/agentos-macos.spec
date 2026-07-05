@@ -41,6 +41,9 @@ a = Analysis(
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'macos-x86_64', 'rg'), 'agent_os/vendor/rg/macos-x86_64'),
     ] + _patchright_datas + _httptools_datas,
     hiddenimports=[
+        # macOS EventKit calendar source (spec 011) — pyobjc framework is
+        # imported lazily at runtime, so PyInstaller needs the explicit hint.
+        'EventKit',
         'uvicorn.logging',
         'uvicorn.loops',
         'uvicorn.loops.auto',
@@ -102,8 +105,8 @@ app = BUNDLE(
     icon=os.path.join(project_root, 'assets', 'icon.icns'),
     bundle_identifier='com.orbital.desktop',
     info_plist={
-        'CFBundleShortVersionString': '0.6.8',
-        'CFBundleVersion': '0.6.8',
+        'CFBundleShortVersionString': '0.7.0',
+        'CFBundleVersion': '0.7.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '13.0',
         'CFBundleDisplayName': 'Orbital',

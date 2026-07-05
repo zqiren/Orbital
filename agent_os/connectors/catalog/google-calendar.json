@@ -1,0 +1,25 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "icon": "\ud83d\udcc5",
+  "auth_provider": "google",
+  "auth_type": "oauth2",
+  "server_url": "https://calendarmcp.googleapis.com/mcp/v1",
+  "oauth_scopes": [
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+    "https://www.googleapis.com/auth/calendar.events.readonly"
+  ],
+  "tool_overrides": {
+    "list_calendars": "read",
+    "list_events": "read",
+    "get_event": "read",
+    "suggest_time": "read",
+    "create_event": "write",
+    "update_event": "write",
+    "delete_event": "write",
+    "respond_to_event": "write"
+  },
+  "featured": true,
+  "status": "available"
+}

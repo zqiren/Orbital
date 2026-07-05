@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -78,6 +78,8 @@ class ProjectUpdate(BaseModel):
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
+    # Spec 011 — per-project connector enablement (gates tool reflection).
+    enabled_connectors: list[str] | None = None
     agent_credentials: dict | None = None
     agent_name: str | None = None
     project_goals_content: str | None = None
@@ -870,6 +872,9 @@ async def bulk_delete_projects(body: BulkDeleteRequest):
     for p in to_delete:
         pid = p["project_id"]
         try:
+            # Drop the pending-input queue before teardown (spec 006 §3g).
+            if hasattr(_agent_manager, "purge_pending"):
+                _agent_manager.purge_pending(pid)
             if _agent_manager.is_running(pid):
                 # Seam 3 / D1 (Root C): is_running is holder-aware but
                 # stop_agent is passthrough-None — forward the holder session so
@@ -894,6 +899,11 @@ async def delete_project(project_id: str):
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Drop the pending-input queue BEFORE stopping the holder: stop_agent frees
+    # the slot and would otherwise dispatch a queued message into a project that
+    # is being deleted (spec 006 §3g).
+    if hasattr(_agent_manager, "purge_pending"):
+        _agent_manager.purge_pending(project_id)
     # Stop agent if running. is_running is holder-aware but stop_agent is
     # passthrough-None (seam 3 / D1, Root C): forward the holder session so the
     # running loop is stopped rather than orphaned (a bare stop_agent(project_id)
@@ -1132,11 +1142,51 @@ async def inject_message(project_id: str, req: InjectRequest):
         except ValueError:
             # The manager rejected the inject — most commonly because another
             # session holds the project's active-loop slot (start_agent raised).
-            # Translate that into the same 202 `slot_held` payload the frontend
-            # expects, instead of a 500. Re-check the holder to confirm it is a
-            # genuine slot conflict; re-raise anything else.
+            # Re-check the holder to confirm it is a genuine slot conflict;
+            # re-raise anything else.
             holder = _agent_manager.current_holder_session_id(project_id)
             if holder is not None and holder != req.session_id:
+                # Path A (spec 006): enqueue the message for delivery when the
+                # slot frees, instead of rejecting. The single-slot invariant is
+                # preserved — B runs *next*, not concurrently. ``slot_held`` is
+                # retained ONLY as the defensive fallback (no session_id to
+                # target, or enqueue itself raised).
+                enq = None
+                if req.session_id is not None:
+                    try:
+                        enq = _agent_manager.enqueue_pending_inject(
+                            project_id, req.session_id, effective_content,
+                            nonce=req.nonce, attachments=attachment_dicts,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "enqueue_pending_inject failed for %s/%s",
+                            project_id, req.session_id, exc_info=True,
+                        )
+                        enq = None
+                if enq is not None:
+                    # Broadcast the optimistic bubble (text + nonce) so OTHER
+                    # clients render it; the origin tab dedups by nonce.
+                    _ws_manager.broadcast(project_id, {
+                        "type": "chat.pending_enqueued",
+                        "project_id": project_id,
+                        "session_id": req.session_id,
+                        "holder": holder,
+                        "nonce": req.nonce,
+                        "content": effective_content,
+                        "position": enq["position"],
+                    })
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "queued_pending_slot",
+                            "holding_session_id": holder,
+                            "queued_session_id": req.session_id,
+                            "nonce": req.nonce,
+                            "position": enq["position"],
+                        },
+                    )
+                # Fallback: legacy slot_held contract.
                 return JSONResponse(
                     status_code=202,
                     content={
@@ -1154,6 +1204,55 @@ async def inject_message(project_id: str, req: InjectRequest):
         return {"status": result}
 
 
+class SessionScopeBody(BaseModel):
+    """Cross-project read scope for a Quick Tasks (scratch) session (Spec 12)."""
+    mode: Literal["all", "selected", "off"]
+    selected_project_ids: list[str] = Field(default_factory=list)
+
+
+@router.get("/agents/{project_id}/sessions/{session_id}/scope")
+async def get_session_scope(project_id: str, session_id: str):
+    """Return the session's cross-project read-scope record.
+
+    Defaults when unset: scratch → ``all`` (reads every project), normal
+    project → ``off`` (single-root).
+    """
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return _agent_manager.get_session_scope(project_id, session_id)
+
+
+@router.put("/agents/{project_id}/sessions/{session_id}/scope")
+async def put_session_scope(project_id: str, session_id: str, body: SessionScopeBody):
+    """Set a session's cross-project read scope.
+
+    Only the Quick Tasks (scratch) project may carry cross-project scope
+    (409 otherwise); unknown project ids in ``selected_project_ids`` are 422.
+    Reads become ambient across the listed projects; writes stay in the Quick
+    Tasks workspace. Takes effect on the next turn (read roots + sandbox
+    portals recompute without an agent restart).
+    """
+    project = _project_store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not project.get("is_scratch"):
+        raise HTTPException(
+            status_code=409,
+            detail="Cross-project scope is only settable on the Quick Tasks project",
+        )
+    if body.selected_project_ids:
+        known = {p.get("project_id") for p in _project_store.list_projects()}
+        unknown = [pid for pid in body.selected_project_ids if pid not in known]
+        if unknown:
+            raise HTTPException(
+                status_code=422, detail=f"Unknown project ids: {unknown}"
+            )
+    return _agent_manager.set_session_scope(
+        project_id, session_id, body.mode, body.selected_project_ids
+    )
+
+
 @router.get("/agents/{project_id}/run-status")
 async def agent_run_status(project_id: str):
     """Return the current runtime status for a project agent.
@@ -1163,7 +1262,56 @@ async def agent_run_status(project_id: str):
     """
     status = _agent_manager.get_run_status(project_id)
     holder = _agent_manager.current_holder_session_id(project_id)
-    return {"project_id": project_id, "status": status, "current_holder_session_id": holder}
+    return {
+        "project_id": project_id,
+        "status": status,
+        "current_holder_session_id": holder,
+        # Number of interactive messages queued behind the slot holder
+        # (spec 006, pending-input queue).
+        "pending_count": len(_agent_manager.list_pending(project_id)),
+    }
+
+
+class PendingCancelRequest(BaseModel):
+    """Body for cancelling a queued pending inject (spec 006).
+
+    ``session_id`` identifies the chat session whose pending message(s) to
+    drop; ``nonce`` optionally narrows it to a single queued message.
+    """
+    session_id: str
+    nonce: str | None = None
+
+
+@router.post("/agents/{project_id}/pending/cancel")
+async def cancel_pending(project_id: str, req: PendingCancelRequest) -> dict:
+    """Cancel / recall a queued message (cross-session OR same-session).
+
+    Drops the still-queued entry (or tombstones it if a dispatch is already in
+    flight) and broadcasts ``chat.pending_cancelled``. Returns
+    ``{"status": "cancelled", "removed": bool}`` where ``removed`` is True only
+    when an actually-still-queued entry was dequeued — the FE relies on this to
+    avoid a recall-vs-dispatch double-send (spec 006 §12 R2).
+    """
+    return _agent_manager.cancel_pending_inject(
+        project_id, req.session_id, nonce=req.nonce,
+    )
+
+
+@router.get("/agents/{project_id}/pending")
+async def get_pending(project_id: str):
+    """Return the project's pending-input queue (spec 006).
+
+    Mobile/relay reconnect recovery, mirroring ``/pending-approval``: lets a
+    client rebuild the waiting affordances after a WS drop. Entries carry FULL
+    ``content`` (for recall) and a ``kind`` of ``"cross"`` (slot held by
+    another session) or ``"same"`` (this session's turn mid-flight). ``{holder,
+    pending:[{session_id, nonce, content, position, kind}]}`` (spec 006 §12).
+    """
+    holder = _agent_manager.current_holder_session_id(project_id)
+    return {
+        "holder": holder,
+        "pending": _agent_manager.list_pending(project_id),
+    }
 
 
 @router.get("/agents/{project_id}/pending-approval")
@@ -1787,10 +1935,13 @@ def _read_chat_messages(sessions_dir: str, limit: int, offset: int) -> tuple[lis
     if not os.path.isdir(sessions_dir):
         return [], 0
 
+    from agent_os.daemon_v2.native_worker import is_worker_session_stem
     # List and sort session files by mtime (oldest first)
     session_files = []
     for fname in os.listdir(sessions_dir):
         if fname.endswith(".jsonl"):
+            if is_worker_session_stem(fname[:-6]):
+                continue  # fanout worker transcript — not management chat
             fpath = os.path.join(sessions_dir, fname)
             session_files.append((os.path.getmtime(fpath), fpath))
     session_files.sort(key=lambda x: x[0])
@@ -2618,6 +2769,108 @@ async def stop_sub_agent(project_id: str, handle: str,
         project_id, handle, session_id=sid)
     result["session_id"] = sid
     return result
+
+
+# Handles include both plain CLI slugs ("claude-code") and native fanout
+# worker handles ("worker:<fanout_id>-<index>", native_worker.make_worker_handle)
+# — colon is allowed for the latter. No dots/slashes: the handle is joined
+# directly into a filesystem path (ProjectPaths.sub_agent_dir), so this also
+# doubles as the path-traversal guard.
+_TRANSCRIPT_HANDLE_RE = re.compile(r"^[A-Za-z0-9_:-]+$")
+
+
+@router.get("/agents/{project_id}/sub-agents/{handle}/transcript")
+async def sub_agent_transcript(project_id: str, handle: str,
+                               session_id: str | None = None):
+    """Read-only transcript playback for one sub-agent handle (spec 009
+    Section 0.5, Task 4) — the SOLE data source for the frontend drill-in
+    view (Task 5, already committed). Response shape is FROZEN; see
+    web/src/types.ts's ``SubAgentTranscriptResult`` — do not change field
+    names/types here without updating that contract in lockstep.
+
+    ``kind`` is derived purely from the handle prefix: native fanout workers
+    are minted as ``worker:<fanout_id>-<index>``; everything else is a CLI
+    adapter slug. ``resumable`` mirrors ``kind == "cli"`` — workers are
+    one-shot, anonymous sessions with no composer.
+
+    ``session_id`` defaults to the project's active-loop holder (same
+    no-sentinel resolution ``/sub-agents/status`` and the stop route use
+    above). It only affects which live adapter's ``display_name`` is
+    preferred — the on-disk transcript itself is keyed by (workspace,
+    handle), not by session (BACKLOG 005 §4b), so omitting it still finds
+    the transcript; it just falls back to the handle for ``display_name``.
+    """
+    if _sub_agent_manager is None:
+        raise HTTPException(status_code=503, detail="Sub-agent manager not available")
+    if not _TRANSCRIPT_HANDLE_RE.match(handle):
+        raise HTTPException(status_code=400, detail="Invalid agent handle")
+
+    sid = session_id or _agent_manager.current_holder_session_id(project_id)
+
+    raw_entries = _sub_agent_manager.read_transcript_entries(project_id, handle, sid)
+    if raw_entries is None:
+        raise HTTPException(status_code=404, detail="No transcript found for this handle")
+
+    # turn_complete rows are empty-content turn-boundary instrumentation
+    # (ProcessManager._append_turn_boundary) — never rendered anywhere else
+    # in the codebase (the /chat unfiltered merge drops them too); must not
+    # leak into the drill-in playback.
+    entries = [e for e in raw_entries if e.get("chunk_type") != "turn_complete"]
+
+    kind = "worker" if handle.startswith("worker:") else "cli"
+
+    # display_name: prefer the live adapter's name for this session; a
+    # worker's label only exists in-memory (native_worker task label), so a
+    # non-live handle gracefully falls back to the raw handle.
+    display_name = handle
+    if sid is not None:
+        for a in _sub_agent_manager.list_active(project_id, session_id=sid):
+            if a["handle"] == handle:
+                display_name = a["display_name"]
+                break
+
+    # ADDITIVE field (D1, issues 2+3): the worker's real chat session id, so
+    # the frontend drill-in can fetch /chat?session_id=<session_uuid> and
+    # render chat-shaped instead of the flat entries view. Null for CLI
+    # handles (they have no such session at all).
+    #
+    # Live path first: mid-batch, the fanout registry still owns the routing
+    # entry. This is NOT sufficient alone — FanoutRegistry.resolve_group pops
+    # every handle's routing entry once the group resolves (fanout.py), so a
+    # completed fanout's handle is unknown to the registry within moments of
+    # finishing. The disk fallback below is therefore MANDATORY, not
+    # belt-and-braces: scan the project's sessions dir for the newest file
+    # whose stem starts with the mint prefix native_worker.py uses
+    # (``worker_{_sanitize_for_filename(handle)}_``) — the trailing
+    # underscore makes the prefix collision-safe (handle "...-1" cannot match
+    # a file minted for "...-10").
+    session_uuid: str | None = None
+    if kind == "worker":
+        session_uuid = _sub_agent_manager.fanout_session_uuid_for_handle(
+            project_id, handle, sid)
+        if session_uuid is None:
+            import glob as _glob
+
+            from agent_os.daemon_v2.native_worker import _sanitize_for_filename
+
+            project = _project_store.get_project(project_id) if _project_store else None
+            workspace = (project or {}).get("workspace", "")
+            if workspace:
+                sessions_dir = ProjectPaths(workspace).sessions_dir
+                prefix = f"worker_{_sanitize_for_filename(handle)}_"
+                candidates = _glob.glob(os.path.join(sessions_dir, prefix + "*.jsonl"))
+                if candidates:
+                    newest = max(candidates, key=os.path.getmtime)
+                    session_uuid = os.path.splitext(os.path.basename(newest))[0]
+
+    return {
+        "handle": handle,
+        "display_name": display_name,
+        "kind": kind,
+        "resumable": kind == "cli",
+        "entries": entries,
+        "session_uuid": session_uuid,
+    }
 
 
 def _installed_sub_agents() -> list[dict]:

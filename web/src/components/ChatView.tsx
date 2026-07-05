@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -14,10 +14,11 @@ import {
   mergeRecoveredAssistantMessage,
 } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
+import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { ChatMessage as ChatMessageRow } from '../types';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
-import { buildAttachmentsBlock } from '../lib/attachment-parsing';
+import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
@@ -60,6 +61,13 @@ function formatToolBreakdown(counts: Record<string, number>): string {
 // caller that omits it (and any non-localized path) gets identical output.
 type CapsuleTr = (key: StringKey, vars?: Record<string, string | number>) => string;
 const EN_CAPSULE: CapsuleTr = (k, v) => translate('en', k, v);
+
+/** Parse an ISO timestamp to epoch ms, falling back to "now" for anything
+ *  unparseable — used for the fanout_card's batch-duration start point. */
+function tsToMsSafe(ts: string): number {
+  const n = Date.parse(ts);
+  return Number.isFinite(n) ? n : Date.now();
+}
 
 function formatDuration(startedAt: number, endedAt: number | null, tr: CapsuleTr = EN_CAPSULE): string {
   if (!endedAt || endedAt <= startedAt) return tr('duration.lessThan1s');
@@ -336,10 +344,17 @@ import type {
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
   WorkspaceClaudemdWarningEvent,
+  PendingEnqueuedEvent,
+  PendingDispatchedEvent,
+  PendingCancelledEvent,
+  FanoutStartedEvent,
+  FanoutTaskUpdateEvent,
+  FanoutCompletedEvent,
   WebSocketEvent,
   Project,
 } from '../types';
 import ChatMessage from './ChatMessage';
+import { OpenPathContext } from './FilePreviewDrawer';
 import StreamingMessage from './StreamingMessage';
 import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';
@@ -347,8 +362,11 @@ import CredentialCard from './CredentialCard';
 import RefreshTurnStatus from './RefreshTurnStatus';
 import ClaudemdWarningBanner, { type ClaudemdWarning } from './ClaudemdWarningBanner';
 import SlotHeldNotice from './SlotHeldNotice';
+import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
+import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
+import SubAgentDrillIn from './SubAgentDrillIn';
 
 interface ChatViewProps {
   projectId: string;
@@ -392,6 +410,26 @@ interface StreamState {
   isComplete: boolean;
 }
 
+// Pending-input queue (spec 006 · v3). One queued message awaiting its turn,
+// keyed by nonce in `pendingInputs`. Two kinds (§11c):
+//   - `'cross'` — slot held by ANOTHER session (`_pending_inject`); `holder` is
+//     that session. Offers [Run now].
+//   - `'same'`  — THIS session's own turn is mid-flight (`session._queue`);
+//     `holder` is unused. No Run-now (it drains automatically).
+// `content`/`timestamp` mirror the kept optimistic bubble so cancel/dispatch can
+// locate and remove it. `rawText` is the user's RAW typed text (BEFORE
+// buildAttachmentsBlock) — what ↑/tap-recall loads back into the composer (§12
+// R4). `hasAttachments` gates recall off (don't half-restore chips).
+interface PendingInputEntry {
+  kind: 'cross' | 'same';
+  sessionId: string;
+  holder: string;
+  content: string;
+  rawText: string;
+  hasAttachments: boolean;
+  timestamp: string;
+}
+
 interface PendingApproval {
   what: string;
   tool_name: string;
@@ -405,6 +443,9 @@ interface PendingApproval {
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
+  // Spec 002: open a clicked workspace path in the FilePreviewDrawer. Provided
+  // by ProjectDetail (which owns setRoute); null when no provider is present.
+  const onOpenPath = useContext(OpenPathContext) ?? undefined;
   // FE-1 (transform-once): loaded chat history is stored as RAW messages
   // across all paginated pages (initial page + each "Load earlier" prepend),
   // then transformed in a SINGLE pass via the useMemo below. This eliminates
@@ -459,6 +500,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       }
     | null
   >(null);
+  // Pending-input queue (spec 006, Path A). A NONCE-KEYED OVERLAY — NOT a flag
+  // in `items` (the historyItems memo reseed would stomp that). Each entry is a
+  // message the user sent to a session while another session held the project's
+  // single active-loop slot; the backend accepted + queued it (202
+  // `queued_pending_slot`) and auto-dispatches it when the slot frees. The map
+  // is PROJECT-scoped; the waiting affordance renders only for entries whose
+  // `sessionId` is the viewed session. `content`/`timestamp` identify the kept
+  // optimistic bubble so cancel/dispatch can locate it. Cleared per-nonce on
+  // `chat.pending_dispatched` (sole clear trigger) / `chat.pending_cancelled`,
+  // and rebuilt from GET /pending on session load + WS reconnect.
+  const [pendingInputs, setPendingInputs] = useState<Map<string, PendingInputEntry>>(new Map());
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
@@ -472,6 +524,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // in-flight gap between click and the WS event arriving.
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelTimeoutNotice, setCancelTimeoutNotice] = useState<string | null>(null);
+  // Fanout live overlay (spec 009 §0.5): per-fanout, per-handle status —
+  // NOT baked into the fanout_card DisplayItem itself, same pattern as the
+  // `approvals` Map overlaying `approval_card` items. Fed by
+  // fanout.task_update; fanoutCompletedAt records when fanout.completed
+  // fired so FanoutCard can freeze its (batch-level) duration display.
+  //
+  // Round 2 (issue 1, per-task countdown): each handle's entry is now
+  // {status, completedAtMs} rather than a bare status string, so FanoutCard
+  // can freeze each row's OWN duration independently instead of sharing one
+  // never-freezing batch countdown.
+  const [fanoutStatuses, setFanoutStatuses] = useState<Map<string, Record<string, FanoutTaskState>>>(new Map());
+  const [fanoutCompletedAt, setFanoutCompletedAt] = useState<Map<string, number>>(new Map());
+  // Row-click drill-in target (spec 009 §0.5): replaces the chat message area
+  // (NOT a modal) with SubAgentDrillIn. null = showing the normal chat.
+  const [drillIn, setDrillIn] = useState<{ handle: string; label: string } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -479,7 +546,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const localNoncesRef = useRef<Map<string, number>>(new Map());
   const wasRunningRef = useRef(false);
   const { on, off, connectionState } = useWebSocket();
-  const { injectMessage, cancelMessage, newSession, coldStartScan } = useAgent();
+  const { injectMessage, cancelMessage, newSession, coldStartScan, cancelPendingInput, getPending } = useAgent();
   // Queue-active gating: when the queue is running (actively dispatching a
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
@@ -500,6 +567,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Latest holder, readable synchronously inside WS handlers.
   const holderSessionIdRef = useRef<string | null>(holderSessionId);
   holderSessionIdRef.current = holderSessionId;
+  // Latest pending-input map, readable synchronously inside WS handlers and the
+  // nonce-eviction sweep (which must EXEMPT pending nonces — spec §3h F4 — so a
+  // long wait can't evict the nonce before the dispatch echo dedups against the
+  // kept optimistic bubble). Never read a value mutated inside a setState
+  // updater (React 19 batching) — read this committed ref instead.
+  const pendingInputsRef = useRef<Map<string, PendingInputEntry>>(pendingInputs);
+  pendingInputsRef.current = pendingInputs;
   // Seam 3 / Phase 3: live WS events are routed STRICTLY by session_id. Every
   // live event now carries the canonical session_id (Phases 1+2), so a handler
   // renders an event into the viewed conversation iff
@@ -769,6 +843,155 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId]);
 
+  // Pending-input queue (spec 006). Remove a kept optimistic bubble (identified
+  // by its content + timestamp) from BOTH the live `items` and `rawMessages`
+  // (so the transform-once reseed doesn't re-emit it). Walks from the end so
+  // concurrent appends of unrelated bubbles are left intact.
+  const removeOptimisticBubble = useCallback((content: string, timestamp: string) => {
+    setItems((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const it = prev[i];
+        if (it.type === 'user_message' && it.content === content && it.timestamp === timestamp) {
+          return [...prev.slice(0, i), ...prev.slice(i + 1)];
+        }
+      }
+      return prev;
+    });
+    setRawMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.role === 'user' && m.content === content && m.timestamp === timestamp) {
+          return [...prev.slice(0, i), ...prev.slice(i + 1)];
+        }
+      }
+      return prev;
+    });
+  }, []);
+
+  // Pending-input queue (spec 006 v3 §11c + §12 R2). Recall a queued message
+  // (cross- OR same-session) into the composer for editing — shared by the
+  // desktop ↑ accelerator and the mobile tap-to-edit affordance. This is
+  // SERVER-AUTHORITATIVE: we await the cancel/dequeue and only load the text
+  // when the backend confirms it removed a STILL-QUEUED entry (`removed===true`).
+  // If `removed===false` the message already dispatched (its turn is running) —
+  // we DO NOT load the text (that would double-send); we just drop the stale
+  // overlay entry and the kept bubble becomes a normal sent message. If the
+  // entry carries attachments we no-op entirely (recall can't restore chips;
+  // §12 R4).
+  const recallQueuedMessage = useCallback(
+    async (nonce: string) => {
+      const entry = pendingInputsRef.current.get(nonce);
+      if (!entry) return;
+      if (entry.hasAttachments) return;
+      let res: { removed?: boolean } | undefined;
+      // Surface a network failure to the caller (Finding 3): the tap path shows
+      // pending.cancelError; the ↑ accelerator swallows it. Leaves the overlay
+      // in place so the user can retry.
+      res = await cancelPendingInput(projectId, entry.sessionId, nonce);
+      if (res?.removed === true) {
+        // Still queued — safe to pull it back into the composer for editing.
+        setInputText(entry.rawText);
+        removeOptimisticBubble(entry.content, entry.timestamp);
+        localNoncesRef.current.delete(nonce);
+        setPendingInputs((prev) => {
+          if (!prev.has(nonce)) return prev;
+          const next = new Map(prev);
+          next.delete(nonce);
+          return next;
+        });
+        textareaRef.current?.focus();
+      } else if (res?.removed === false) {
+        // Already dispatched/drained — DO NOT load the text (no double-send).
+        // Drop the stale overlay; the kept bubble is now a normal sent message.
+        setPendingInputs((prev) => {
+          if (!prev.has(nonce)) return prev;
+          const next = new Map(prev);
+          next.delete(nonce);
+          return next;
+        });
+      }
+    },
+    [projectId, cancelPendingInput, removeOptimisticBubble],
+  );
+
+  // Pending-input queue (spec 006 §3h). Reconcile the pending overlay from the
+  // server (GET /pending) on session load + WS reconnect. Rebuilds the
+  // project-scoped `pendingInputs` map from server truth (preserving an existing
+  // entry's bubble identity so the kept optimistic bubble isn't duplicated), and
+  // re-appends optimistic bubbles for the VIEWED session into `rawMessages` (the
+  // transform-once memo + seed then render them — surviving the reseed). Fixes
+  // switch-away-and-back stale/lost-affordance (F3).
+  const reconcilePending = useCallback(() => {
+    getPending(projectId)
+      .then((res) => {
+        if (!res) return;
+        const list = res.pending ?? [];
+        const holder = res.holder ?? '';
+        const viewed = sessionIdRef.current;
+        // Build the next map from server truth, preserving any existing entry's
+        // content/timestamp (its bubble identity) via the committed ref.
+        const rebuilt: Array<[string, PendingInputEntry]> = [];
+        for (const p of list) {
+          if (!p.nonce) continue;
+          const existing = pendingInputsRef.current.get(p.nonce);
+          if (existing) {
+            rebuilt.push([p.nonce, existing]);
+          } else {
+            // Persist-at-dispatch means we recover only the wire `content`, not
+            // the raw typed text. Detect an attachments-block prefix: if present
+            // we can't reconstruct the chips, so flag hasAttachments and let
+            // recall no-op (§12 R4); otherwise the content IS the raw text.
+            const hasAttachments =
+              parseAttachmentsBlock(p.content).attachments.length > 0;
+            rebuilt.push([
+              p.nonce,
+              {
+                kind: p.kind,
+                sessionId: p.session_id,
+                holder,
+                content: p.content,
+                rawText: hasAttachments ? '' : p.content,
+                hasAttachments,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          }
+          // Keep the nonce alive so the eventual dispatch echo dedups against
+          // the rebuilt bubble (don't clobber an existing received-timestamp).
+          if (!localNoncesRef.current.has(p.nonce)) {
+            localNoncesRef.current.set(p.nonce, 0);
+          }
+        }
+        setPendingInputs(() => new Map(rebuilt));
+        // Ensure a bubble exists in rawMessages for each viewed-session entry.
+        if (viewed === undefined) return;
+        setRawMessages((prev) => {
+          let next = prev;
+          for (const [, entry] of rebuilt) {
+            if (entry.sessionId !== viewed) continue;
+            const has = next.some(
+              (m) => m.role === 'user' && m.content === entry.content,
+            );
+            if (!has) {
+              next = [
+                ...next,
+                {
+                  role: 'user',
+                  content: entry.content,
+                  source: 'user',
+                  timestamp: entry.timestamp,
+                },
+              ];
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // best effort — leave the prior overlay in place
+      });
+  }, [projectId, getPending]);
+
   // Keep the holder fresh: on mount/project change, on every agentStatus
   // transition (a status change always implies the slot may have been
   // acquired/released), and whenever the viewed session changes (so the
@@ -833,6 +1056,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           setRawMessages([]);
           setItems([]);
         }
+        // Pending-input queue (spec 006 §3h): after the session's history is
+        // loaded, rebuild the pending overlay + re-append the kept optimistic
+        // bubble(s) for this session from GET /pending. Runs after the history
+        // setState above so the bubble append lands on top (switch-away-and-back
+        // restores the affordance; the queued message is NOT in JSONL yet).
+        if (!cancelled) reconcilePending();
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -842,7 +1071,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     return () => {
       cancelled = true;
     };
-  }, [projectId, sessionId, project.workspace]);
+  }, [projectId, sessionId, project.workspace, reconcilePending]);
 
   const hasMore = totalMessages > loadedOffset;
 
@@ -1031,8 +1260,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // case where the mount fetch raced ahead of the server becoming
       // ready. Let it run — the dedup Map guarantees no duplicates.
       fetchPendingApproval();
+      // Pending-input queue (spec 006 §3h): a relay tunnel drop / mobile
+      // foreground may have missed pending_enqueued/dispatched/cancelled events.
+      // Rebuild the overlay from GET /pending so waiting affordances survive.
+      reconcilePending();
     }
-  }, [connectionState, fetchPendingApproval]);
+  }, [connectionState, fetchPendingApproval, reconcilePending]);
 
   // Fix 2B: Status poll fallback — if agent appears stuck as "running"
   // with no stream activity for 15 seconds, poll REST for actual status.
@@ -1191,6 +1424,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
 
+      // The fanout tool call never renders as a capsule row — the
+      // fanout.started card IS its representation (spec 009 §0.5), and the
+      // persisted-history transform skips it the same way, so live and
+      // reloaded views agree. Its ack (a tool_result event) is harmless:
+      // markLatestLiveCallResultReceived no-ops when nothing is pending.
+      if (e.tool_name === 'fanout') {
+        return;
+      }
+
       // Tool-use family: route into the live capsule. The live
       // ActivityEvent does not carry tool_call_id for tool_use; the
       // event id is used as a synthetic key — pairing with tool_result
@@ -1273,6 +1515,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // parent session_id; render only those for the viewed session.
       if (!e.session_id || e.session_id !== sessionIdRef.current) return;
 
+      // Fanout workers are ephemeral task executors, not persistent
+      // collaborators (spec 009 §0.5-8) — their live turn output must not
+      // leak into the main chat as bubbles. The progress card (fanout tool
+      // call render) and the join summary are the only sanctioned surfaces;
+      // mirrors SubAgentStatusBar.tsx's own `worker:` filter.
+      if (isWorkerHandle(e.source)) return;
+
       // Strip ANSI codes and filter empty / "(no response)" content
       const cleaned = (e.content ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
       if (!cleaned || cleaned === '(no response)') return;
@@ -1293,9 +1542,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       const e = event as UserMessageEvent;
       if (e.project_id !== projectId) return;
 
-      // Evict nonces older than 30s on each incoming message
+      // Evict nonces older than 30s on each incoming message. EXEMPT pending
+      // nonces (spec 006 §3h F4): a queued message may wait far longer than 30s,
+      // and the nonce must survive so the dispatch-time persisted echo dedups
+      // against the kept optimistic bubble (no duplicate on long waits).
       const now = Date.now();
       for (const [n, ts] of localNoncesRef.current) {
+        if (pendingInputsRef.current.has(n)) continue;
         if (ts > 0 && now - ts > 30_000) localNoncesRef.current.delete(n);
       }
 
@@ -1421,6 +1674,174 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
     }
 
+    // Pending-input queue (spec 006 §3h). A message was accepted + queued behind
+    // the slot holder. Dedup by nonce (mirroring handleUserMessage): the origin
+    // tab already rendered the optimistic bubble + map entry in handleSend, so it
+    // ignores its own echo; OTHER tabs render the optimistic bubble + add the
+    // map entry. The bubble renders only for the viewed session, but the map
+    // entry is project-scoped (the affordance gates on the viewed session).
+    function handlePendingEnqueued(event: WebSocketEvent) {
+      const e = event as PendingEnqueuedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      // Our own send (origin) or a relay retry already handled — ignore.
+      if (localNoncesRef.current.has(e.nonce)) return;
+      // Register so the eventual dispatch echo dedups against the bubble we
+      // render here (and exempt from eviction while it sits in pendingInputs).
+      localNoncesRef.current.set(e.nonce, 0);
+      const ts = new Date().toISOString();
+      // pending_enqueued is always cross-session (it carries a holder). We only
+      // have the wire `content` from another tab — detect an attachments-block
+      // prefix to gate recall (§12 R4); otherwise content IS the raw text.
+      const hasAttachments =
+        parseAttachmentsBlock(e.content).attachments.length > 0;
+      setPendingInputs((prev) => {
+        const next = new Map(prev);
+        next.set(e.nonce, {
+          kind: 'cross',
+          sessionId: e.session_id,
+          holder: e.holder,
+          content: e.content,
+          rawText: hasAttachments ? '' : e.content,
+          hasAttachments,
+          timestamp: ts,
+        });
+        return next;
+      });
+      // Optimistic bubble only for the viewed session — pushed to BOTH items
+      // and rawMessages so the transform-once reseed reproduces it.
+      if (e.session_id !== sessionIdRef.current) return;
+      setItems((prev) => {
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          { type: 'user_message', content: e.content, timestamp: ts },
+        ];
+      });
+      setRawMessages((prev) => [
+        ...prev,
+        { role: 'user', content: e.content, source: 'user', timestamp: ts },
+      ]);
+      scrollToBottom();
+    }
+
+    // Pending-input queue (spec 006 §3h). The queued message started dispatching
+    // — clear ITS waiting affordance by removing the nonce from pendingInputs.
+    // This is the SOLE clear trigger (agent.status carries no session_id). The
+    // kept optimistic bubble stays; the real turn streams via the per-session
+    // path and the persisted echo dedups against the bubble by nonce.
+    function handlePendingDispatched(event: WebSocketEvent) {
+      const e = event as PendingDispatchedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      const nonce = e.nonce;
+      setPendingInputs((prev) => {
+        if (!prev.has(nonce)) return prev;
+        const next = new Map(prev);
+        next.delete(nonce);
+        return next;
+      });
+    }
+
+    // Pending-input queue (spec 006 §3h). The queued message was cancelled
+    // ("Stop waiting" / orphan cleanup). Remove the optimistic bubble + map
+    // entry, and drop the nonce from the dedup map.
+    function handlePendingCancelled(event: WebSocketEvent) {
+      const e = event as PendingCancelledEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.nonce) return;
+      const nonce = e.nonce;
+      const entry = pendingInputsRef.current.get(nonce);
+      localNoncesRef.current.delete(nonce);
+      if (entry) removeOptimisticBubble(entry.content, entry.timestamp);
+      setPendingInputs((prev) => {
+        if (!prev.has(nonce)) return prev;
+        const next = new Map(prev);
+        next.delete(nonce);
+        return next;
+      });
+    }
+
+    // Spec 009 §0.5: fanout.started arrives with the real, backend-assigned
+    // tasks (handle + label) — append the card directly, no need to wait for
+    // the tool-result ack text the way the persisted-history transform does.
+    function handleFanoutStarted(event: WebSocketEvent) {
+      const e = event as FanoutStartedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      setItems((prev) => {
+        // Duplicate guard (mirrors the approval_card dedup precedent below):
+        // a relay retry or a reconnect replaying the same event must not
+        // append a second card for the same fanout_id.
+        if (prev.some((it) => it.type === 'fanout_card' && it.fanout_id === e.fanout_id)) {
+          return prev;
+        }
+        const afterCapsule = finalizeLiveCapsule(prev, 'completed');
+        return [
+          ...afterCapsule,
+          {
+            type: 'fanout_card' as const,
+            fanout_id: e.fanout_id,
+            tasks: e.tasks,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+      });
+      scrollToBottom();
+    }
+
+    function handleFanoutTaskUpdate(event: WebSocketEvent) {
+      const e = event as FanoutTaskUpdateEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      // Round 2 (issue 1): the backend stamps completed_at_ms on terminal
+      // transitions; older daemons that predate the field send none, so a
+      // terminal status with no timestamp still needs to freeze — arrival
+      // time is the best available stand-in for "whenever it actually
+      // finished" (unknowable precisely, but far closer than never-freezing).
+      const completedAtMs = e.completed_at_ms ?? (isTerminal(e.status) ? Date.now() : undefined);
+      setFanoutStatuses((prev) => {
+        const next = new Map(prev);
+        next.set(e.fanout_id, {
+          ...(next.get(e.fanout_id) ?? {}),
+          [e.handle]: { status: e.status, completedAtMs },
+        });
+        return next;
+      });
+    }
+
+    function handleFanoutCompleted(event: WebSocketEvent) {
+      const e = event as FanoutCompletedEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+
+      setFanoutCompletedAt((prev) => {
+        if (prev.has(e.fanout_id)) return prev;
+        const next = new Map(prev);
+        next.set(e.fanout_id, Date.now());
+        return next;
+      });
+
+      // Round 2: fanout.completed now carries each task's terminal snapshot
+      // too (previously it carried none) — merge it into the same overlay
+      // handleFanoutTaskUpdate feeds, in case any task's own task_update was
+      // missed (e.g. a client that (re)connected mid-batch).
+      if (e.tasks && e.tasks.length > 0) {
+        setFanoutStatuses((prev) => {
+          const next = new Map(prev);
+          const merged = { ...(next.get(e.fanout_id) ?? {}) };
+          for (const task of e.tasks) {
+            const completedAtMs = task.completed_at_ms ?? (isTerminal(task.status) ? Date.now() : undefined);
+            merged[task.handle] = { status: task.status, completedAtMs };
+          }
+          next.set(e.fanout_id, merged);
+          return next;
+        });
+      }
+    }
+
     on('chat.stream_delta', handleStreamDelta);
     on('agent.activity', handleActivity);
     on('approval.request', handleApprovalRequest);
@@ -1430,6 +1851,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
     on('workspace_claudemd_warning', handleClaudemdWarning);
+    on('chat.pending_enqueued', handlePendingEnqueued);
+    on('chat.pending_dispatched', handlePendingDispatched);
+    on('chat.pending_cancelled', handlePendingCancelled);
+    on('fanout.started', handleFanoutStarted);
+    on('fanout.task_update', handleFanoutTaskUpdate);
+    on('fanout.completed', handleFanoutCompleted);
 
     return () => {
       off('chat.stream_delta', handleStreamDelta);
@@ -1441,8 +1868,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
       off('workspace_claudemd_warning', handleClaudemdWarning);
+      off('chat.pending_enqueued', handlePendingEnqueued);
+      off('chat.pending_dispatched', handlePendingDispatched);
+      off('chat.pending_cancelled', handlePendingCancelled);
+      off('fanout.started', handleFanoutStarted);
+      off('fanout.task_update', handleFanoutTaskUpdate);
+      off('fanout.completed', handleFanoutCompleted);
     };
-  }, [projectId, project.name, on, off, scrollToBottom]);
+  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
 
   // Fingerprint for the last item. DisplayItem has no stable id; use a
   // composite of type + a discriminating field per variant.
@@ -1475,6 +1908,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // No content field — key off timestamp + action BEFORE the content
       // fallthrough below (which would crash on undefined.slice).
       return `budget_event:${item.timestamp}:${item.action}`;
+    }
+    if (item.type === 'fanout_card') {
+      // Identity-only, like approval_card — live status ticks flow through
+      // the separate fanoutStatuses overlay, not the item itself.
+      return `fanout_card:${item.fanout_id}`;
+    }
+    if (item.type === 'fanout_summary') {
+      return `fanout_summary:${item.fanout_id}`;
     }
     // user_message, agent_message, sub_agent_message — use timestamp +
     // first 32 chars of content as a stable-enough fingerprint.
@@ -1878,11 +2319,72 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
         sessionId,
       );
-      // Track J Phase 1: backend returned 202 with `slot_held` because
-      // another session in this project holds the active-loop slot.
-      // Strip the optimistic user_message we just appended (it didn't
-      // land), restore the typed text to the composer, and surface the
-      // intermediate notice with [Wait] / [Cancel-and-send] affordances.
+      // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
+      // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
+      // when the slot frees. KEEP the optimistic bubble (unlike slot_held below,
+      // which removes it) and add a nonce→entry to `pendingInputs` so the bubble
+      // shows a "Waiting for {holder}…" affordance. The kept bubble's nonce is
+      // exempt from the 30s eviction so the dispatch echo dedups against it.
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'queued_pending_slot' &&
+        result.holding_session_id
+      ) {
+        const holder = result.holding_session_id;
+        const queuedSession = result.queued_session_id ?? sessionId;
+        if (queuedSession !== undefined) {
+          setPendingInputs((prev) => {
+            const next = new Map(prev);
+            next.set(nonce, {
+              kind: 'cross',
+              sessionId: queuedSession,
+              holder,
+              content: wireContent,
+              rawText: text,
+              hasAttachments: attachmentsPayload.length > 0,
+              timestamp: optimisticTimestamp,
+            });
+            return next;
+          });
+        }
+        scrollToBottom();
+        return;
+      }
+      // Pending-input queue (spec 006 v3 §11d.4): the same-session 200. The
+      // backend ACCEPTED + queued this message behind the VIEWED session's own
+      // in-flight turn (`session._queue`); it drains automatically when that
+      // turn ends. KEEP the optimistic bubble and add a same-session
+      // `pendingInputs` entry so the bubble shows the "Waiting for the current
+      // response to finish." line and is ↑/tap-recallable. No holder, no
+      // Run-now (there is no other session to cancel).
+      if (
+        result &&
+        typeof result === 'object' &&
+        result.status === 'queued_same_session' &&
+        sessionId !== undefined
+      ) {
+        setPendingInputs((prev) => {
+          const next = new Map(prev);
+          next.set(nonce, {
+            kind: 'same',
+            sessionId,
+            holder: '',
+            content: wireContent,
+            rawText: text,
+            hasAttachments: attachmentsPayload.length > 0,
+            timestamp: optimisticTimestamp,
+          });
+          return next;
+        });
+        scrollToBottom();
+        return;
+      }
+      // Track J Phase 1 (now the ENQUEUE-FAILURE fallback only): backend
+      // returned 202 with `slot_held` because enqueue itself raised. Strip the
+      // optimistic user_message we just appended (it didn't land), restore the
+      // typed text to the composer, and surface the intermediate notice with
+      // [Wait] / [Cancel-and-send] affordances.
       if (
         result &&
         typeof result === 'object' &&
@@ -2005,6 +2507,36 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
     }
+    // Pending-input queue (spec 006 v3 §11c + §12). ↑ in an EMPTY composer (no
+    // command/mention dropdown open — those guards above already handled ↑ and
+    // returned) recalls the NEWEST queued message for the VIEWED session into
+    // the composer and dequeues it. No cycling, no input history (§12 R5). When
+    // the composer is non-empty, or no queued message exists for this session,
+    // do NOT preventDefault so ↑ still moves the caret normally.
+    if (e.key === 'ArrowUp' && inputText.trim() === '' && sessionId !== undefined) {
+      let newestNonce: string | null = null;
+      let newestTs = '';
+      for (const [nonce, entry] of pendingInputsRef.current) {
+        if (entry.sessionId !== sessionId) continue;
+        if (newestNonce === null || entry.timestamp > newestTs) {
+          newestNonce = nonce;
+          newestTs = entry.timestamp;
+        }
+      }
+      if (newestNonce !== null) {
+        const entry = pendingInputsRef.current.get(newestNonce);
+        // Finding 4: a newest entry with attachments can't be recalled (chips
+        // can't be restored), so recall would no-op — let ↑ move the caret
+        // instead of swallowing the key.
+        if (entry && !entry.hasAttachments) {
+          e.preventDefault();
+          // ↑ accelerator: swallow recall errors (the tap affordance surfaces
+          // them via pending.cancelError). Finding 3.
+          recallQueuedMessage(newestNonce).catch(() => {});
+          return;
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -2038,6 +2570,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       )}
       {/* Piece 3 Part D: honest sub-agent status badge + user stop control */}
       <SubAgentStatusBar projectId={projectId} sessionId={sessionId} />
+      {drillIn ? (
+        <SubAgentDrillIn
+          projectId={projectId}
+          sessionId={sessionId}
+          handle={drillIn.handle}
+          displayName={drillIn.label}
+          onBack={() => setDrillIn(null)}
+        />
+      ) : (
+      <>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">
@@ -2091,9 +2633,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             let rendered: React.ReactNode = null;
 
             if (item.type === 'user_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} workspace={project.workspace} onOpenPath={onOpenPath} />;
             } else if (item.type === 'agent_message' || item.type === 'sub_agent_message') {
-              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} />;
+              rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} workspace={project.workspace} onOpenPath={onOpenPath} />;
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
               const label =
@@ -2246,6 +2788,56 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   className="rounded-lg border border-error/30 bg-error/5 px-4 py-2.5"
                 >
                   <p className="text-xs font-medium text-error">{text}</p>
+                </div>
+              );
+            } else if (item.type === 'fanout_card') {
+              // Merge the persisted-history backfill (item.statuses /
+              // item.completedAtMs — set by chatTransform when a join-summary
+              // system message was found later in history) with the live WS
+              // overlay, which wins per-key when present. Without this merge
+              // a card rebuilt from a COMPLETED fanout's history would show
+              // every row defaulting to "running" forever (no live events
+              // ever arrive for a session that's already done).
+              //
+              // Round 2 (issue 1): item.statuses is still plain
+              // Record<handle, FanoutTaskStatus> (chatTransform's
+              // parseFanoutSummary carries no per-task times — the join
+              // summary only records the batch's terminal moment), so the
+              // historical side of the merge maps each into the rich
+              // {status, completedAtMs} shape using the batch-level
+              // item.completedAtMs (every historical row freezes together —
+              // a summary backfill has no finer-grained timing to offer).
+              const liveStatuses = fanoutStatuses.get(item.fanout_id);
+              const historicalStatuses: Record<string, FanoutTaskState> = {};
+              for (const [handle, status] of Object.entries(item.statuses ?? {})) {
+                historicalStatuses[handle] = { status, completedAtMs: item.completedAtMs };
+              }
+              const mergedStatuses = { ...historicalStatuses, ...(liveStatuses ?? {}) };
+              const mergedCompletedAtMs =
+                fanoutCompletedAt.get(item.fanout_id) ?? item.completedAtMs ?? null;
+              rendered = (
+                <FanoutCard
+                  key={`fanout-${item.fanout_id}`}
+                  fanoutId={item.fanout_id}
+                  tasks={item.tasks}
+                  statuses={mergedStatuses}
+                  startedAtMs={tsToMsSafe(item.timestamp)}
+                  completedAtMs={mergedCompletedAtMs}
+                  onSelectTask={(handle, label) => setDrillIn({ handle, label })}
+                />
+              );
+            } else if (item.type === 'fanout_summary') {
+              // Join-summary system message (spec 009 §0.5 item 4): a plain
+              // system row, no dedicated component — v1 just shows the
+              // persisted text verbatim (mirrors sub_agent_activity's inline
+              // rendering, which also has no separate component file).
+              rendered = (
+                <div
+                  key={`fanout-summary-${item.fanout_id}-${index}`}
+                  data-testid="fanout-summary"
+                  className="px-2 py-1 text-[11.5px] font-mono text-secondary whitespace-pre-wrap"
+                >
+                  {item.content}
                 </div>
               );
             } else if (item.type === 'approval_card') {
@@ -2442,6 +3034,33 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
+      {/* Pending-input queue (spec 006 v3 §11b/§11c/§12): a muted waiting line
+          under each queued message bubble for the VIEWED session. Cross-session
+          entries also get a single [Run now] (cancel the holder ONLY — the
+          queued message self-dispatches, no re-inject). The line is tappable to
+          recall/edit (mobile equivalent of ↑; §12 R1) — no [Stop waiting]. */}
+      {Array.from(pendingInputs.entries())
+        .filter(([, entry]) => sessionId !== undefined && entry.sessionId === sessionId)
+        .map(([nonce, entry]) => (
+          <div key={`pending-${nonce}`} className="shrink-0 px-4">
+            <PendingInputNotice
+              kind={entry.kind}
+              canEdit={!entry.hasAttachments}
+              onRunNow={
+                entry.kind === 'cross'
+                  ? async () => {
+                      // Run now = cancel the HOLDER only (spec §3h F5). NO
+                      // re-inject: the queued message dispatches itself when the
+                      // slot frees.
+                      await cancelMessage(projectId, entry.holder);
+                    }
+                  : undefined
+              }
+              onEdit={() => recallQueuedMessage(nonce)}
+            />
+          </div>
+        ))}
+
       {cancelTimeoutNotice && (
         <div className="shrink-0 px-4 py-1">
           <p className="text-xs text-secondary" role="status">{cancelTimeoutNotice}</p>
@@ -2616,6 +3235,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

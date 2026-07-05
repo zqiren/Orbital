@@ -34,6 +34,9 @@ from agent_os.platform.types import PermissionResult
 # (a bare project_id key breaks the holder scan). Pass session_id explicitly.
 SID = "proj_1_sess0001"
 
+# Workspace the fixture handle reports; request_access grants scope to its realpath.
+_PROJ_WS = "/tmp/orbital_consumer3_proj_ws"
+
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
     reason="macOS/Linux sandbox folder-grant flow; Windows sandbox user not configured",
@@ -93,6 +96,9 @@ def _setup_handle_with_pending_approval(mgr, project_id, tool_call_id,
         task=mock_task,
         interceptor=mock_interceptor,
         loop=MagicMock(),
+        # request_access grants are scoped to the requesting project's
+        # workspace realpath (Spec 12 §2b); approve() reads it from here.
+        config_snapshot={"workspace": _PROJ_WS},
     )
     # Non-request_access approvals execute the tool through the registry; give it
     # a sync execute returning a result object so that branch doesn't await a
@@ -135,7 +141,8 @@ class TestApproveCallsGrantFolderAccess:
             await mgr.approve("proj_1", "tc_1", session_id=SID)
 
         provider.grant_folder_access.assert_called_once_with(
-            "C:\\Users\\Test\\Documents", "read_only"
+            "C:\\Users\\Test\\Documents", "read_only",
+            scope=os.path.realpath(_PROJ_WS),
         )
 
     @pytest.mark.asyncio
@@ -162,7 +169,8 @@ class TestApproveCallsGrantFolderAccess:
             await mgr.approve("proj_1", "tc_2", session_id=SID)
 
         provider.grant_folder_access.assert_called_once_with(
-            "C:\\Users\\Test\\Code", "read_write"
+            "C:\\Users\\Test\\Code", "read_write",
+            scope=os.path.realpath(_PROJ_WS),
         )
 
     @pytest.mark.asyncio

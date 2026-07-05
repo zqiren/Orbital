@@ -32,6 +32,7 @@ import ChatTab from './components/ChatTab';
 import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
+import CalendarPage from './components/CalendarPage';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 
@@ -85,6 +86,22 @@ export default function App() {
     api<{ llm?: { model?: string } }>('/api/v2/settings')
       .then((d) => setDefaultModel(d?.llm?.model || ''))
       .catch(() => {});
+  }, []);
+
+  // Calendar availability (EventKit hub / connected calendar source). Fetched
+  // once on mount; any error (incl. the endpoint not existing until the backend
+  // lands this wave) is treated as unavailable. Gates the per-project calendar
+  // lens tab in ProjectDetail.
+  const [calendarAvailable, setCalendarAvailable] = useState(false);
+  // Sandbox-repair affordance: the wizard's old sandbox step carried the only
+  // Retry Setup button; with that step removed (spec 011 §0.7) the warning
+  // banner hosts it instead. triggerSetup re-fetches status on success, which
+  // hides the banner when setup completes.
+  const [sandboxRetrying, setSandboxRetrying] = useState(false);
+  useEffect(() => {
+    api<{ available?: boolean }>('/api/v2/calendar/availability')
+      .then((d) => setCalendarAvailable(d?.available === true))
+      .catch(() => setCalendarAvailable(false));
   }, []);
 
   // Derive selected project ID from route for convenience
@@ -371,6 +388,13 @@ export default function App() {
     setMobileView('content');
   }
 
+  // Workspace-zone Calendar item — a top-level surface. Mobile behavior mirrors
+  // a project tap (swap to the content pane).
+  function handleSelectCalendar() {
+    setRoute({ name: 'calendar' });
+    setMobileView('content');
+  }
+
   function handleNewProject() {
     setRoute({ name: 'create' });
     setMobileView('content');
@@ -448,6 +472,7 @@ export default function App() {
           route={route}
           connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
           onSelectProject={handleSelectProject}
+          onSelectCalendar={handleSelectCalendar}
           onNewProject={handleNewProject}
           onSettings={() => {
             setRoute({ name: 'settings' });
@@ -473,7 +498,20 @@ export default function App() {
             <span className="text-warning font-medium">{t('app.sandboxWarning.title')}</span>{' '}
             <span className="text-secondary">
               {t('app.sandboxWarning.body')}
-            </span>
+            </span>{' '}
+            <button
+              type="button"
+              disabled={sandboxRetrying}
+              onClick={() => {
+                setSandboxRetrying(true);
+                platform.triggerSetup()
+                  .catch(() => {})
+                  .finally(() => setSandboxRetrying(false));
+              }}
+              className="underline text-warning hover:opacity-80 disabled:opacity-50"
+            >
+              {sandboxRetrying ? t('app.sandboxWarning.retrying') : t('app.sandboxWarning.retry')}
+            </button>
           </div>
         )}
 
@@ -482,6 +520,10 @@ export default function App() {
             onBack={() => { setRoute({ name: 'list' }); setMobileView('sidebar'); }}
           />
         )}
+
+        {/* Global calendar surface (spec 011 §0.4). Placeholder body until
+            Wave 3; the component is kept so that swap is body-only. */}
+        {route.name === 'calendar' && <CalendarPage />}
 
         {route.name === 'create' && (
           <CreateProject
@@ -533,6 +575,7 @@ export default function App() {
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
                 globalDefaultModel={defaultModel}
+                calendarAvailable={calendarAvailable}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
@@ -545,6 +588,7 @@ export default function App() {
                   <ChatTab
                     key={selectedProject.project_id}
                     project={selectedProject}
+                    projects={projects}
                     agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
                     statusTick={statusTicks[selectedProject.project_id] ?? 0}
                     mentionAgents={agentsAvailable ?? []}
@@ -555,6 +599,12 @@ export default function App() {
                 )}
                 {route.tab === 'files' && (
                   <FileExplorer projectId={selectedProject.project_id} />
+                )}
+                {route.tab === 'calendar' && (
+                  <CalendarPage
+                    key={`calendar-${selectedProject.project_id}`}
+                    projectId={selectedProject.project_id}
+                  />
                 )}
               </ProjectDetail>
             )}

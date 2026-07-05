@@ -2,14 +2,17 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { AgentRunStatus, Project, Trigger } from '../types';
+import type { AgentRunStatus, FileContent, Project, Trigger } from '../types';
 import type { Route } from '../route';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
 import BudgetCorner from './BudgetCorner';
+import FilePreviewDrawer, { OpenPathContext } from './FilePreviewDrawer';
 import { useQueue } from '../hooks/useQueue';
+import { useFiles } from '../hooks/useFiles';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -28,10 +31,19 @@ interface ProjectDetailProps {
    * substitute for `agent_name` — a model id, not an identity.
    */
   globalDefaultModel?: string;
+  /**
+   * Gate for the per-project calendar lens tab (spec 011 §0.4). True when the
+   * EventKit hub reports an available source (`GET /api/v2/calendar/availability`);
+   * the tab is ALSO shown when the project has a calendar connector enabled
+   * (checked here off the project record). Either condition reveals the tab.
+   */
+  calendarAvailable?: boolean;
   children?: React.ReactNode;
 }
 
-const TABS: { key: 'queue' | 'chat' | 'files'; labelKey: StringKey }[] = [
+type TabKey = 'queue' | 'chat' | 'files' | 'calendar';
+
+const BASE_TABS: { key: TabKey; labelKey: StringKey }[] = [
   { key: 'chat', labelKey: 'projectDetail.tab.chat' },
   { key: 'queue', labelKey: 'projectDetail.tab.queue' },
   { key: 'files', labelKey: 'projectDetail.tab.files' },
@@ -47,6 +59,7 @@ export default function ProjectDetail({
   onTriggerToggle,
   onTriggerDelete,
   globalDefaultModel,
+  calendarAvailable,
   children,
 }: ProjectDetailProps) {
   const t = useT();
@@ -54,23 +67,97 @@ export default function ProjectDetail({
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
 
+  // Calendar lens tab visibility: EventKit availability (from App) OR the
+  // project having a calendar connector enabled. `enabled_connectors` is read
+  // off the project record via a narrow cast — the Connector types on Project
+  // are owned by another surface; this stays correct once they land.
+  const enabledConnectors = (project as { enabled_connectors?: string[] }).enabled_connectors;
+  const showCalendarTab =
+    calendarAvailable === true || Boolean(enabledConnectors?.includes('google-calendar'));
+  const tabs = showCalendarTab ? [...BASE_TABS, { key: 'calendar' as const, labelKey: 'workspace.calendar.nav' as StringKey }] : BASE_TABS;
+
   // Tab count badges (queue only — Chat's session count lives in the sidebar).
   const { snapshot } = useQueue(project.project_id);
   const queueCount = snapshot?.items.filter(
     (item) => item.state === 'queued' || item.state === 'running',
   ).length ?? 0;
 
-  function handleTabChange(tab: 'queue' | 'chat' | 'files') {
-    setRoute({ ...route, tab, settings: false });
+  // File preview drawer (spec 002). The open/close state lives on the route
+  // (`previewPath`); the fetched content + lazy 404 probe live here. Opening is
+  // PROBE-FIRST: fetch the content, then open the drawer only once it's in hand
+  // (404/error just toasts, never opening) — so the panel never flashes blank
+  // and a missing file never opens-then-closes.
+  const { getFileContent, saveFileContent } = useFiles();
+  const [previewContent, setPreviewContent] = useState<FileContent | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewToast, setPreviewToast] = useState<string | null>(null);
+  // Latest requested path — guards against a slow fetch for an earlier click
+  // resolving after a newer one (replace-on-click).
+  const latestPreviewReqRef = useRef<string | null>(null);
+  const previewPath = route.previewPath ?? null;
+
+  const handleOpenPath = useCallback(
+    async (path: string) => {
+      latestPreviewReqRef.current = path;
+      setPreviewLoading(true);
+      // Probe-first: fetch BEFORE opening so the drawer never slides in blank.
+      // On replace-on-click the already-open drawer keeps showing the prior
+      // content until the new content is ready — no flash there either.
+      const data = await getFileContent(project.project_id, path);
+      // Drop the result if a newer open superseded this one.
+      if (latestPreviewReqRef.current !== path) return;
+      setPreviewLoading(false);
+      if (!data) {
+        setPreviewToast(t('chat.path.notFound'));
+        return;
+      }
+      setPreviewContent(data);
+      // Two-frame open (WKWebView "blink" fix). Render the content into the
+      // drawer's OFF-SCREEN compositing layer first, then trigger the slide-in
+      // one paint later — so WebKit can't composite the layer's stale/empty
+      // backing store for the first animation frame (the blink you see in
+      // pywebview but not Chromium). The double rAF guarantees a paint landed
+      // between "content in" and "start sliding".
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (latestPreviewReqRef.current !== path) return;
+          setRoute((prev) =>
+            prev.name === 'project' ? { ...prev, previewPath: path } : prev,
+          );
+        }),
+      );
+    },
+    [getFileContent, project.project_id, setRoute, t],
+  );
+
+  const handleClosePreview = useCallback(() => {
+    latestPreviewReqRef.current = null;
+    setRoute((prev) =>
+      prev.name === 'project' ? { ...prev, previewPath: undefined } : prev,
+    );
+  }, [setRoute]);
+
+  // Auto-dismiss the "file not found" toast.
+  useEffect(() => {
+    if (!previewToast) return;
+    const id = setTimeout(() => setPreviewToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [previewToast]);
+
+  // Navigating to another tab/surface closes the preview drawer — it is a
+  // chat overlay, not a persistent panel (clearing `previewPath` so it can't
+  // linger over the Files tab or strand open after a settings round-trip).
+  function handleTabChange(tab: TabKey) {
+    setRoute({ ...route, tab, settings: false, previewPath: undefined });
   }
 
   function handleSettingsClick() {
-    setRoute({ ...route, settings: true });
+    setRoute({ ...route, settings: true, previewPath: undefined });
   }
 
   // Budget corner → open settings scrolled to the Budget section.
   function handleOpenBudgetSettings() {
-    setRoute({ ...route, settings: true, settingsAnchor: 'budget' });
+    setRoute({ ...route, settings: true, settingsAnchor: 'budget', previewPath: undefined });
   }
 
   return (
@@ -120,7 +207,7 @@ export default function ProjectDetail({
 
       {/* Tab bar */}
       <div className="flex gap-1 px-6 border-b border-border max-md:px-4">
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           // Chat shows no count badge — the session count lives in the
           // sidebar header. Only the queue badge (pending/running items) shows.
           const count = tab.key === 'queue' ? queueCount : 0;
@@ -145,8 +232,31 @@ export default function ProjectDetail({
         })}
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden min-h-0">{children}</div>
+      {/* Tab content. `relative` so the file-preview drawer (absolute) overlays
+          only this content area, not the header/tab bar. The OpenPathContext
+          hands the drawer-open handler down to the chat's MarkdownContent. */}
+      <div className="flex-1 overflow-hidden min-h-0 relative">
+        <OpenPathContext.Provider value={handleOpenPath}>
+          {children}
+        </OpenPathContext.Provider>
+        <FilePreviewDrawer
+          open={previewPath !== null}
+          // Content-driven (NOT previewPath): the drawer renders its content
+          // while still off-screen so the slide-in reveals an already-painted
+          // layer. Also keeps content during the close slide-out (no empty
+          // "select a file" flash on close either).
+          selectedPath={previewContent?.path ?? null}
+          fileContent={previewContent}
+          loading={previewLoading}
+          onClose={handleClosePreview}
+          onSave={(path, content) => saveFileContent(project.project_id, path, content)}
+        />
+        {previewToast && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-primary text-background text-[13px] shadow-lg max-w-[90%] text-center pointer-events-none">
+            {previewToast}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

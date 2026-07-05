@@ -100,14 +100,14 @@ class TestProviderContract:
 
     def test_grant_folder_access_returns_permission_result(self, provider):
         """grant_folder_access() returns PermissionResult."""
-        result = provider.grant_folder_access("/tmp/contract_test", "read_only")
+        result = provider.grant_folder_access("/tmp/contract_test", "read_only", scope="/tmp/contract_test")
         assert isinstance(result, PermissionResult)
         assert isinstance(result.success, bool)
         assert isinstance(result.path, str)
 
     def test_revoke_folder_access_returns_permission_result(self, provider):
         """revoke_folder_access() returns PermissionResult."""
-        result = provider.revoke_folder_access("/tmp/contract_test")
+        result = provider.revoke_folder_access("/tmp/contract_test", scope="/tmp/contract_test")
         assert isinstance(result, PermissionResult)
         assert isinstance(result.success, bool)
         assert isinstance(result.path, str)

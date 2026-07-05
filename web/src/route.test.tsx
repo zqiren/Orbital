@@ -84,6 +84,7 @@ describe('Sidebar routing', () => {
         route={{ name: 'list' }}
         connectionState="connected"
         onSelectProject={onSelectProject}
+        onSelectCalendar={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -108,6 +109,7 @@ describe('Sidebar routing', () => {
         route={{ name: 'project', projectId: 'alpha', tab: 'chat' }}
         connectionState="connected"
         onSelectProject={onSelectProject}
+        onSelectCalendar={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -130,6 +132,7 @@ describe('Sidebar routing', () => {
         route={{ name: 'project', projectId: 'active', tab: 'chat' }}
         connectionState="connected"
         onSelectProject={vi.fn()}
+        onSelectCalendar={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -172,6 +175,7 @@ describe('Sidebar mobile select-project regression', () => {
         route={route}
         connectionState="connected"
         onSelectProject={handleSelectProject}
+        onSelectCalendar={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />
@@ -365,6 +369,7 @@ describe('Global settings nav (settings in Route union)', () => {
           route={route}
           connectionState="connected"
           onSelectProject={handleSelectProject}
+          onSelectCalendar={vi.fn()}
           onNewProject={handleNewProject}
           onSettings={() => setRoute({ name: 'settings' })}
         />

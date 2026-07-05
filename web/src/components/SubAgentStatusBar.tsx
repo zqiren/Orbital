@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useT } from '../i18n/useT';
+import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { SubAgentRunStatus, WebSocketEvent } from '../types';
 
 interface SubAgentInfo {
@@ -69,7 +70,9 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
         `/api/v2/agents/${projectId}/sub-agents/status${qs}`,
       );
       if (alive.current) {
-        const next = data?.agents ?? [];
+        // Fanout workers (spec 009 §0.5) get their own live surface —
+        // FanoutCard — and must NOT also show up as chips here.
+        const next = (data?.agents ?? []).filter((a) => !isWorkerHandle(a.handle));
         // Identity-stable update: unchanged payloads keep the previous array
         // reference so effects keyed on state don't re-fire (and unstable
         // hook identities — e.g. test mocks recreating on/off per render —

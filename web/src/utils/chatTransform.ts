@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { ChatMessage, ToolCall, ActivityCategory } from '../types';
+import type { ChatMessage, ToolCall, ActivityCategory, FanoutTaskStatus } from '../types';
 import { translate } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -130,6 +130,46 @@ export type DisplayItem =
       limit: number | null;
       currency: string;
       timestamp: string;
+    }
+  | {
+      /**
+       * Spec 009 §0.5: the management agent's `fanout` tool dispatches N
+       * parallel worker sessions. Rendered as a standalone card (never a
+       * regular tool_call_row inside an agent_run capsule) so the rows stay
+       * clickable and independently status-able. See the fanout parsing
+       * block in transformChatHistory for how fanout_id/handles are derived.
+       */
+      type: 'fanout_card';
+      fanout_id: string;
+      tasks: Array<{ handle: string; label: string }>;
+      timestamp: string;
+      isHistorical?: boolean;
+      /**
+       * Backfilled when a later join-summary system message (see
+       * `parseFanoutSummary`) names this fanout_id: terminal per-task status
+       * + the join's epoch ms. Without this, a fanout that already finished
+       * before this history was (re)loaded would show every row defaulting
+       * to "running" forever — there are no live WS events to correct it,
+       * since those only fire for a fanout that's still in flight in THIS
+       * tab. ChatView merges this with the live overlay at render time (live
+       * wins per-key when present).
+       */
+      statuses?: Record<string, FanoutTaskStatus>;
+      completedAtMs?: number;
+    }
+  | {
+      /**
+       * Spec 009 §0.5 item 4: the join-summary system message the daemon
+       * writes when a fanout batch completes. Rendered as a plain system row
+       * — no dedicated component in v1, the persisted text is shown verbatim
+       * (mirrors how sub_agent_activity has no separate component file).
+       * Also drives the `fanout_card.statuses`/`completedAtMs` backfill above.
+       */
+      type: 'fanout_summary';
+      fanout_id: string;
+      content: string;
+      timestamp: string;
+      isHistorical?: boolean;
     };
 
 const WINDOWS_PATH_RE = /[A-Za-z]:\\(?:Users|Windows|Program)[^\s"';&|>]*/gi;
@@ -294,6 +334,59 @@ const SUB_AGENT_SENT_RE = /^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):\s*(.*)$
 const SUB_AGENT_COMPLETED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+completed\.\s*Summary:\s*([\s\S]*)$/;
 const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
 
+// Fanout tool call (spec 009 §0.5). The tool call's OWN arguments only carry
+// the requested task labels — handles don't exist yet, the backend assigns
+// them at dispatch time. The fanout_id instead comes from the tool RESULT's
+// ack text, so a fanout call can't be turned into a fanout_card until BOTH
+// halves have been seen (handled via `pendingFanoutCalls` in
+// transformChatHistory). Once we have the fanout_id, per-task handles are
+// synthesized as `worker:<fanout_id>-<index>` — this mirrors the wire format
+// Task 2's `fanout.started` WS event uses for real, backend-assigned handles,
+// so a card built from persisted history keys identically to one built live.
+const FANOUT_ACK_RE = /Fanout ([a-z0-9]{8}) dispatched/;
+
+function parseFanoutTaskLabels(argsJson: string): string[] {
+  let args: unknown;
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return [];
+  }
+  const raw = (args as Record<string, unknown> | null)?.tasks;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((t, i) => {
+    if (typeof t === 'string') return t;
+    if (t && typeof t === 'object' && typeof (t as Record<string, unknown>).label === 'string') {
+      return (t as Record<string, unknown>).label as string;
+    }
+    return `Task ${i + 1}`;
+  });
+}
+
+// Fanout join-summary system message (spec 009 §0.5 item 4). Format is
+// FROZEN by the backend:
+//   Line 1: `[Fanout <id8>] <k>/<N> succeeded.`
+//   Per task, in order: `- [<status>] <label> (<handle>): <text> | transcript: <path>`
+//   Optionally a trailing guidance paragraph — ignored (it won't match the
+//   per-task line pattern, so it's naturally skipped rather than parsed).
+const FANOUT_SUMMARY_HEADER_RE = /^\[Fanout ([a-z0-9]{8})\]\s+\d+\/\d+\s+succeeded\.$/;
+const FANOUT_SUMMARY_TASK_LINE_RE = /^-\s*\[(completed|error|stalled|interrupted)\]\s+.+?\s+\(([^)]+)\):/;
+
+function parseFanoutSummary(
+  content: string,
+): { fanoutId: string; statuses: Record<string, FanoutTaskStatus> } | null {
+  const lines = content.split('\n');
+  const header = lines[0]?.match(FANOUT_SUMMARY_HEADER_RE);
+  if (!header) return null;
+  const statuses: Record<string, FanoutTaskStatus> = {};
+  for (const line of lines.slice(1)) {
+    const m = line.match(FANOUT_SUMMARY_TASK_LINE_RE);
+    if (!m) continue;
+    statuses[m[2]] = m[1] as FanoutTaskStatus;
+  }
+  return { fanoutId: header[1], statuses };
+}
+
 type SubAgentActivity = Extract<DisplayItem, { type: 'sub_agent_activity' }>;
 
 function parseSubAgentSystemMessage(
@@ -382,6 +475,20 @@ export function transformChatHistory(
   let currentSessionId: string | undefined;
   let capsuleCounter = 0;
   let currentCapsule: OpenCapsule | null = null;
+  // Fanout calls awaiting their tool result (which carries the fanout_id —
+  // see the FANOUT_ACK_RE comment above). Keyed by tool_call_id.
+  const pendingFanoutCalls = new Map<string, { labels: string[]; timestamp: string }>();
+  // fanout_card(s) whose ack arrived while ANOTHER tool call in the SAME
+  // capsule still had a 'pending' result (e.g. tool_calls: [fanout, read] with
+  // the fanout ack processed before read's result). Finalizing the capsule
+  // right then would flush `read` still pending and permanently orphan its
+  // result once it does arrive (the pairing loop only searches the OPEN
+  // capsule). So the card waits here instead, and is drained by
+  // finalizeCapsule() the moment the capsule actually finalizes — whether
+  // that's because every row settled (see the `role === 'tool'` pairing
+  // branch below) or an unrelated later boundary (next assistant/user
+  // message, session boundary, end of stream) finalizes it first.
+  let deferredFanoutCards: Extract<DisplayItem, { type: 'fanout_card' }>[] = [];
 
   function tsToMs(ts: string): number {
     const n = Date.parse(ts);
@@ -394,31 +501,36 @@ export function transformChatHistory(
   }
 
   function finalizeCapsule(status: 'running' | 'completed' | 'error' | 'stopped' = 'completed'): void {
-    if (!currentCapsule || currentCapsule.items.length === 0) {
-      currentCapsule = null;
-      return;
-    }
-    const counts: Record<string, number> = {};
-    let hasThinking = false;
-    for (const it of currentCapsule.items) {
-      if (it.type === 'tool_call_row') {
-        counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
-      } else if (it.type === 'reasoning_block') {
-        hasThinking = true;
+    if (currentCapsule && currentCapsule.items.length > 0) {
+      const counts: Record<string, number> = {};
+      let hasThinking = false;
+      for (const it of currentCapsule.items) {
+        if (it.type === 'tool_call_row') {
+          counts[it.tool_name] = (counts[it.tool_name] ?? 0) + 1;
+        } else if (it.type === 'reasoning_block') {
+          hasThinking = true;
+        }
       }
+      items.push({
+        type: 'agent_run',
+        capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
+        status,
+        items: currentCapsule.items,
+        tool_call_count_by_name: counts,
+        has_thinking: hasThinking,
+        started_at: currentCapsule.startedAtMs,
+        ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
+        ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
+      });
     }
-    items.push({
-      type: 'agent_run',
-      capsule_id: `cap:${currentCapsule.startedAtMs}:${capsuleCounter++}`,
-      status,
-      items: currentCapsule.items,
-      tool_call_count_by_name: counts,
-      has_thinking: hasThinking,
-      started_at: currentCapsule.startedAtMs,
-      ended_at: status === 'running' ? null : currentCapsule.endedAtMs,
-      ...(currentCapsule.defaultExpanded ? { defaultExpanded: true } : {}),
-    });
     currentCapsule = null;
+    // Every finalizeCapsule() call site is a safe point to drain: whatever
+    // capsule content existed just got flushed above (or there was none), so
+    // a deferred card can never land ahead of the capsule it was waiting on.
+    if (deferredFanoutCards.length > 0) {
+      for (const card of deferredFanoutCards) items.push(card);
+      deferredFanoutCards = [];
+    }
   }
 
   while (i < messages.length) {
@@ -527,6 +639,43 @@ export function transformChatHistory(
           recent_activity: [],
           reasoning: msg._meta.reasoning as string | undefined,
           resolved: msg._meta.resolution as 'approved' | 'denied' | undefined,
+        });
+        i++;
+        continue;
+      }
+      // Fanout join-summary (spec 009 §0.5 item 4): renders as a plain system
+      // row AND backfills the matching fanout_card's terminal statuses so a
+      // reload of a COMPLETED fanout doesn't show every row stuck "running"
+      // forever (see the `statuses`/`completedAtMs` doc comment on
+      // fanout_card). Checked before the [Sub-agent] markers below since the
+      // two prefixes are disjoint (`[Fanout ` vs `[Sub-agent] `).
+      const fanoutSummary = parseFanoutSummary(msg.content ?? '');
+      if (fanoutSummary) {
+        finalizeCapsule();
+        for (let k = items.length - 1; k >= 0; k--) {
+          const it = items[k];
+          if (it.type === 'fanout_card' && it.fanout_id === fanoutSummary.fanoutId) {
+            items[k] = {
+              ...it,
+              statuses: fanoutSummary.statuses,
+              completedAtMs: tsToMs(msg.timestamp),
+            };
+            break;
+          }
+        }
+        // Display split (backend _meta contract, spec 009 join summary):
+        // _meta.display_content is the user-facing header + per-task lines;
+        // the full content keeps the agent-facing guidance paragraph for the
+        // LLM. Legacy messages (pre-split) have no _meta and render in full.
+        const displayContent =
+          typeof msg._meta?.display_content === 'string'
+            ? (msg._meta.display_content as string)
+            : (msg.content ?? '');
+        items.push({
+          type: 'fanout_summary',
+          fanout_id: fanoutSummary.fanoutId,
+          content: displayContent,
+          timestamp: msg.timestamp,
         });
         i++;
         continue;
@@ -677,6 +826,23 @@ export function transformChatHistory(
         }
         if (hasTools) {
           for (const tc of msg.tool_calls!) {
+            if (tc.function.name === 'fanout') {
+              // Standalone card, never a capsule row — but do NOT finalize
+              // the capsule here. An earlier tool call in this SAME turn
+              // (e.g. `read`) may still be sitting in it awaiting its own
+              // result; the result-pairing branch below only searches the
+              // OPEN capsule, so finalizing early would flush it before that
+              // result arrives and the pairing would silently miss (a fixed
+              // bug — the capsule is left open on purpose). It gets
+              // finalized instead at ack-resolution time (the `role ===
+              // 'tool'` branch below), right before the fanout_card is
+              // pushed, which flushes it in the correct chronological spot.
+              pendingFanoutCalls.set(tc.id, {
+                labels: parseFanoutTaskLabels(tc.function.arguments),
+                timestamp: msg.timestamp,
+              });
+              continue;
+            }
             const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
             currentCapsule.items.push({
               type: 'tool_call_row',
@@ -698,6 +864,48 @@ export function transformChatHistory(
     }
 
     if (msg.role === 'tool') {
+      const pendingFanout = pendingFanoutCalls.get(msg.tool_call_id ?? '');
+      if (pendingFanout) {
+        pendingFanoutCalls.delete(msg.tool_call_id ?? '');
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        const match = content.match(FANOUT_ACK_RE);
+        if (match) {
+          const fanoutId = match[1];
+          const card: Extract<DisplayItem, { type: 'fanout_card' }> = {
+            type: 'fanout_card',
+            fanout_id: fanoutId,
+            tasks: pendingFanout.labels.map((label, idx) => ({
+              handle: `worker:${fanoutId}-${idx}`,
+              label,
+            })),
+            timestamp: pendingFanout.timestamp,
+          };
+          const hasOtherPending = !!currentCapsule?.items.some(
+            (it) => it.type === 'tool_call_row' && it.result_status === 'pending',
+          );
+          if (hasOtherPending) {
+            // Another tool call in this SAME turn (e.g. `read`) is still
+            // awaiting its own result — finalizing now would flush it
+            // pending and permanently orphan that result once it arrives
+            // (residual of Critical 2: this is the [fanout, read] ordering,
+            // ack processed before read's result). Defer instead of
+            // emitting; finalizeCapsule() drains it once the capsule is
+            // actually safe to flush (see the pairing branch below and the
+            // drain step in finalizeCapsule itself).
+            deferredFanoutCards.push(card);
+          } else {
+            // No other call is pending — safe to flush whatever capsule is
+            // open right now, so the card lands in `items` in the correct
+            // chronological position relative to it.
+            finalizeCapsule();
+            items.push(card);
+          }
+        }
+        // No match (malformed/missing ack) — drop silently, mirroring the
+        // orphan-tool-result precedent below.
+        i++;
+        continue;
+      }
       if (currentCapsule) {
         const tcId = msg.tool_call_id ?? '';
         const content = typeof msg.content === 'string' ? msg.content : '';
@@ -716,6 +924,18 @@ export function transformChatHistory(
           }
         }
         currentCapsule.endedAtMs = tsToMs(msg.timestamp);
+        // A deferred fanout_card may have been waiting on THIS row (the
+        // last still-pending one) to settle before the capsule is safe to
+        // flush. Once nothing is pending anymore, finalize right away
+        // instead of waiting for an unrelated later boundary — this is what
+        // actually emits the card in the [fanout, read] ordering (ack
+        // processed before read's result).
+        if (
+          deferredFanoutCards.length > 0 &&
+          !currentCapsule.items.some((it) => it.type === 'tool_call_row' && it.result_status === 'pending')
+        ) {
+          finalizeCapsule();
+        }
       }
       // Orphan tool results (no open capsule, or no matching call) are
       // dropped — the LLM never associated them with a visible call.

@@ -336,6 +336,12 @@ class TestIdleStatus:
         mgr._handles = {}
         mgr._sleep_handle = None
         mgr._platform_provider = None
+        # Pending-input queue state (spec 006): _on_loop_done now calls
+        # _release_slot at every slot-free transition, which reads these.
+        mgr._pending_inject = {}
+        mgr._pending_inflight = {}
+        mgr._pending_dispatching = set()
+        mgr._pending_tombstoned = set()
         return mgr, ws, sub_mgr
 
     def _install_handle(self, mgr, project_id, session_stopped=False, task_done=True):

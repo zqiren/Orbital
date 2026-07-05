@@ -23,6 +23,13 @@ interface ChatMessageProps {
    * Falls back to "agent" when empty/undefined.
    */
   agentName?: string;
+  /**
+   * Spec 002: absolute project workspace + a handler to open a workspace path
+   * in the FilePreviewDrawer. Threaded into MarkdownContent so agent-written
+   * paths become clickable. Omitted/undefined → no linkification.
+   */
+  workspace?: string;
+  onOpenPath?: (path: string) => void;
 }
 
 function basename(path: string): string {
@@ -70,7 +77,7 @@ function userInitials(source?: string): string {
  * bubble background, border, or rounding. User and agent rows share the same
  * left-aligned layout.
  */
-export default function ChatMessage({ message, agentName }: ChatMessageProps) {
+export default function ChatMessage({ message, agentName, workspace, onOpenPath }: ChatMessageProps) {
   const t = useT();
   const time = formatTime(message.timestamp);
 
@@ -139,7 +146,7 @@ export default function ChatMessage({ message, agentName }: ChatMessageProps) {
         </div>
         {!isHeaderOnly && (
           <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
-            <MarkdownContent content={message.content} />
+            <MarkdownContent content={message.content} workspace={workspace} onOpenPath={onOpenPath} />
           </div>
         )}
       </div>

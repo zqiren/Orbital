@@ -46,6 +46,7 @@ class ContextManager:
         response_reserve: int = 20_000,
         workspace_files=None,
         sub_agent_provider=None,
+        scope_projects_provider=None,
     ):
         self._session = session
         self._prompt_builder = prompt_builder
@@ -64,6 +65,7 @@ class ContextManager:
         self._last_checkpoint_ts: str | None = None
         self._turns_since_last_update: int | None = None
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
+        self._scope_projects_provider = scope_projects_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
         self._window_factor: float = 1.0
@@ -195,6 +197,10 @@ class ContextManager:
             datetime_now=datetime.now().isoformat(),
             context_usage_pct=self._last_usage_pct,
             active_sub_agents=active_subs,
+            scope_projects=(
+                self._scope_projects_provider()
+                if self._scope_projects_provider else self._base_ctx.scope_projects
+            ),
             last_state_update_turn=self._last_checkpoint_turn,
             last_state_update_ts=self._last_checkpoint_ts,
             turns_since_last_update=(

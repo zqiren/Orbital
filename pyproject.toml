@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os"
-version = "0.6.8"
+version = "0.7.0"
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.0",
@@ -22,11 +22,18 @@ dependencies = [
     "watchdog>=3.0",
     "pyyaml>=6.0",
     "claude-agent-sdk>=0.1.48",
+    "mcp>=1.2",
 ]
 
 [project.optional-dependencies]
 browser = [
     "patchright>=1.40",
+]
+macos = [
+    # EventKit calendar source (Spec 011 §0.5). macOS-only; the calendar hub
+    # degrades gracefully when it is absent, so this stays optional and is
+    # never installed in CI / on non-macOS.
+    "pyobjc-framework-EventKit>=10.0",
 ]
 desktop = [
     "pywebview>=5.0",

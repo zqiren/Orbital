@@ -319,7 +319,7 @@ class TestShellToolE2E:
 
         workspace = os.environ.get("TEMP", "C:\\Temp")
         # Mirror production: grant sandbox user access before launching
-        provider.grant_folder_access(workspace, "read_write")
+        provider.grant_folder_access(workspace, "read_write", scope=workspace)
 
         tool = _make_shell_tool(
             workspace=workspace,
@@ -350,7 +350,7 @@ class TestShellToolE2E:
 
         workspace = os.environ.get("TEMP", "C:\\Temp")
         # Mirror production: grant sandbox user access to workspace (not Desktop)
-        provider.grant_folder_access(workspace, "read_write")
+        provider.grant_folder_access(workspace, "read_write", scope=workspace)
 
         tool = _make_shell_tool(
             workspace=workspace,

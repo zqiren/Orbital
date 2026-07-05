@@ -1180,3 +1180,302 @@ describe('transformChatHistory — budget_blocked timeline row', () => {
     expect(out.some((i) => i.type === 'budget_event')).toBe(false);
   });
 });
+
+// --------------------------------------------------------------------------
+// Task 5 (spec 009 §0.5): the `fanout` tool call becomes a standalone
+// `fanout_card` DisplayItem — never a regular tool_call_row inside a capsule.
+// The tool call's own arguments only carry the requested task labels (the
+// backend hasn't assigned handles yet); the fanout_id is recovered from the
+// tool RESULT's ack text ("Fanout <8hex> dispatched..."), and per-task handles
+// are synthesized as `worker:<fanout_id>-<index>` to match the wire format
+// Task 2's WS events use (`fanout.started` tasks carry that exact shape).
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — fanout tool call -> fanout_card', () => {
+  it('a fanout tool call + ack result produces a fanout_card with synthesized handles', () => {
+    const messages: ChatMessage[] = [
+      user('research these in parallel', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["Research A","Research B"]}')],
+        timestamp: TS2,
+      }),
+      tool('c1', 'Fanout a1b2c3d4 dispatched: 2 tasks', TS3),
+    ];
+
+    const items = transformChatHistory(messages);
+    const itemTypes = items.map((i) => i.type);
+    // Anchor header (agent turn had no visible text, no reasoning, only the
+    // fanout tool call) then the standalone card — no agent_run capsule.
+    expect(itemTypes).toEqual(['user_message', 'agent_message', 'fanout_card']);
+
+    const card = items[2];
+    expect(card.type).toBe('fanout_card');
+    if (card.type === 'fanout_card') {
+      expect(card.fanout_id).toBe('a1b2c3d4');
+      expect(card.tasks).toEqual([
+        { handle: 'worker:a1b2c3d4-0', label: 'Research A' },
+        { handle: 'worker:a1b2c3d4-1', label: 'Research B' },
+      ]);
+      expect(card.timestamp).toBe(TS2);
+    }
+  });
+
+  it('supports object-shaped task args ({label: ...}) in addition to bare strings', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":[{"label":"Audit the schema"},{"label":"Write the migration"}]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'Fanout deadbeef dispatched: 2 tasks', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.tasks.map((t) => t.label)).toEqual(['Audit the schema', 'Write the migration']);
+      expect(card.tasks.map((t) => t.handle)).toEqual(['worker:deadbeef-0', 'worker:deadbeef-1']);
+    }
+  });
+
+  it('drops the fanout call silently when the result has no recognizable ack (orphan, mirrors tool-result-drop precedent)', () => {
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'some unrelated error text', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.some((i) => i.type === 'fanout_card')).toBe(false);
+  });
+
+  // Review round 2 found Critical 2 (tool_calls: [read, fanout], results in
+  // that same order) then a residual of the SAME bug class (tool_calls:
+  // [fanout, read], results in that same order — the fanout ack processed
+  // BEFORE read's result). Both the tool_calls declaration order AND the
+  // order results actually arrive in matter independently, so all four
+  // combinations are covered explicitly. Every case asserts BOTH: (a) `read`
+  // ends up resolved with its real content, never orphaned, and (b) exactly
+  // one fanout_card is emitted.
+  describe('fanout mixed with a regular tool call in the same turn — all four call/result orderings', () => {
+    function assertReadResolvedAndCardEmitted(items: ReturnType<typeof transformChatHistory>, fanoutId: string) {
+      const capsule = items.find((i) => i.type === 'agent_run');
+      expect(capsule).toBeDefined();
+      if (capsule && capsule.type === 'agent_run') {
+        const readRow = capsule.items.find((it) => it.type === 'tool_call_row' && it.tool_name === 'read');
+        expect(readRow).toMatchObject({
+          type: 'tool_call_row',
+          tool_name: 'read',
+          result_status: 'received',
+          result_content: 'contents of a.txt',
+        });
+      }
+      const cards = items.filter((i) => i.type === 'fanout_card');
+      expect(cards.length).toBe(1);
+      if (cards[0].type === 'fanout_card') {
+        expect(cards[0].fanout_id).toBe(fanoutId);
+      }
+    }
+
+    it('tool_calls [read, fanout], results [read, fanout] (declaration order, the original Critical 2 case)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
+          timestamp: TS,
+        }),
+        tool('c1', 'contents of a.txt', TS2),
+        tool('c2', 'Fanout cafeba01 dispatched: 1 tasks', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba01');
+    });
+
+    it('tool_calls [read, fanout], results [fanout, read] (ack-first, out-of-order)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'read', '{"path":"a.txt"}'), tc('c2', 'fanout', '{"tasks":["A"]}')],
+          timestamp: TS,
+        }),
+        tool('c2', 'Fanout cafeba02 dispatched: 1 tasks', TS2),
+        tool('c1', 'contents of a.txt', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba02');
+    });
+
+    it('tool_calls [fanout, read], results [fanout, read] (declaration order — the residual bug case)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}'), tc('c2', 'read', '{"path":"a.txt"}')],
+          timestamp: TS,
+        }),
+        tool('c1', 'Fanout cafeba03 dispatched: 1 tasks', TS2),
+        tool('c2', 'contents of a.txt', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba03');
+    });
+
+    it('tool_calls [fanout, read], results [read, fanout] (ack-second, out-of-order)', () => {
+      const messages: ChatMessage[] = [
+        asst({
+          content: null,
+          tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}'), tc('c2', 'read', '{"path":"a.txt"}')],
+          timestamp: TS,
+        }),
+        tool('c2', 'contents of a.txt', TS2),
+        tool('c1', 'Fanout cafeba04 dispatched: 1 tasks', TS3),
+      ];
+      assertReadResolvedAndCardEmitted(transformChatHistory(messages), 'cafeba04');
+    });
+  });
+
+  it('marks the fanout_card isHistorical when it precedes the last session_separator, like other items', () => {
+    const messages: ChatMessage[] = [
+      { ...asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')], timestamp: TS }), session_id: 's1' },
+      { ...tool('c1', 'Fanout 12345678 dispatched: 1 tasks', TS2), session_id: 's1' },
+      { ...asst({ content: 'moving on', timestamp: TS3 }), session_id: 's2' },
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card) {
+      expect((card as { isHistorical?: boolean }).isHistorical).toBe(true);
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Review round 2, Critical 1 + Critical 3: the join-summary system message
+// the daemon writes when a fanout batch completes. It must (a) render as a
+// visible system row (`fanout_summary`) and (b) backfill the matching
+// fanout_card's per-task terminal statuses + a join epoch ms — otherwise a
+// reload of an already-COMPLETED fanout shows every row stuck "running"
+// forever (no live WS event will ever arrive to correct a done session).
+// --------------------------------------------------------------------------
+
+describe('transformChatHistory — fanout join-summary parsing (Critical 1 + 3)', () => {
+  it('parses the join summary into a fanout_summary row AND backfills the fanout_card statuses + completedAtMs', () => {
+    const summary = [
+      '[Fanout a1b2c3d4] 3/4 succeeded.',
+      '- [completed] Research A (worker:a1b2c3d4-0): Found 3 sources | transcript: /tmp/a.jsonl',
+      '- [completed] Research B (worker:a1b2c3d4-1): Found 5 sources | transcript: /tmp/b.jsonl',
+      '- [error] Research C (worker:a1b2c3d4-2): timed out | transcript: /tmp/c.jsonl',
+      '- [stalled] Research D (worker:a1b2c3d4-3): no output | transcript: /tmp/d.jsonl',
+    ].join('\n');
+
+    const messages: ChatMessage[] = [
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'fanout', '{"tasks":["Research A","Research B","Research C","Research D"]}')],
+        timestamp: TS,
+      }),
+      tool('c1', 'Fanout a1b2c3d4 dispatched: 4 tasks', TS2),
+      sys(summary, TS3),
+    ];
+
+    const items = transformChatHistory(messages);
+    expect(items.map((i) => i.type)).toEqual(['agent_message', 'fanout_card', 'fanout_summary']);
+
+    const card = items[1];
+    expect(card.type).toBe('fanout_card');
+    if (card.type === 'fanout_card') {
+      expect(card.statuses).toEqual({
+        'worker:a1b2c3d4-0': 'completed',
+        'worker:a1b2c3d4-1': 'completed',
+        'worker:a1b2c3d4-2': 'error',
+        'worker:a1b2c3d4-3': 'stalled',
+      });
+      expect(card.completedAtMs).toBe(Date.parse(TS3));
+    }
+
+    const summaryItem = items[2];
+    expect(summaryItem.type).toBe('fanout_summary');
+    if (summaryItem.type === 'fanout_summary') {
+      expect(summaryItem.fanout_id).toBe('a1b2c3d4');
+      expect(summaryItem.content).toBe(summary);
+    }
+  });
+
+  it('ignores a trailing guidance paragraph after the task lines', () => {
+    const summary = [
+      '[Fanout deadbeef] 1/1 succeeded.',
+      '- [completed] Only task (worker:deadbeef-0): done | transcript: /tmp/x.jsonl',
+      '',
+      'All tasks finished — consider reviewing the transcripts before continuing.',
+    ].join('\n');
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["Only task"]}')], timestamp: TS }),
+      tool('c1', 'Fanout deadbeef dispatched: 1 tasks', TS2),
+      sys(summary, TS3),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.statuses).toEqual({ 'worker:deadbeef-0': 'completed' });
+    }
+  });
+
+  it('a fanout with NO join summary in history stays with no baked statuses (legitimate "still running" residual)', () => {
+    const messages: ChatMessage[] = [
+      asst({ content: null, tool_calls: [tc('c1', 'fanout', '{"tasks":["A"]}')], timestamp: TS }),
+      tool('c1', 'Fanout 87654321 dispatched: 1 tasks', TS2),
+    ];
+    const items = transformChatHistory(messages);
+    const card = items.find((i) => i.type === 'fanout_card');
+    expect(card).toBeDefined();
+    if (card && card.type === 'fanout_card') {
+      expect(card.statuses).toBeUndefined();
+      expect(card.completedAtMs).toBeUndefined();
+    }
+  });
+
+  it('a non-fanout system message is not mistaken for a join summary', () => {
+    const messages: ChatMessage[] = [
+      sys('[Fanout not-a-valid-header] something else entirely', TS),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.some((i) => i.type === 'fanout_summary')).toBe(false);
+  });
+
+  it('fanout_summary uses _meta.display_content when present (guidance never rendered)', () => {
+    const full =
+      '[Fanout deadbee1] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee1-0): ok | transcript: /x/y.jsonl\n' +
+      '\n' +
+      'Synthesize these results into a single reply for the user — unlike a single ' +
+      "sub-agent's completion, fanout results are not auto-echoed as chat bubbles, " +
+      'so the user has not seen this content yet.';
+    const display =
+      '[Fanout deadbee1] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee1-0): ok | transcript: /x/y.jsonl';
+    const messages: ChatMessage[] = [
+      { ...sys(full, TS3), _meta: { display_content: display } },
+    ];
+    const items = transformChatHistory(messages);
+    const summary = items.find((i) => i.type === 'fanout_summary');
+    expect(summary).toBeTruthy();
+    if (summary && summary.type === 'fanout_summary') {
+      expect(summary.content).toBe(display);
+      expect(summary.content).not.toContain('Synthesize these results');
+    }
+  });
+
+  it('fanout_summary falls back to full content for legacy messages without _meta', () => {
+    const full =
+      '[Fanout deadbee2] 1/1 succeeded.\n' +
+      '- [completed] T (worker:deadbee2-0): ok | transcript: /x/y.jsonl\n\n' +
+      'Synthesize these results into a single reply for the user.';
+    const messages: ChatMessage[] = [sys(full, TS3)];
+    const items = transformChatHistory(messages);
+    const summary = items.find((i) => i.type === 'fanout_summary');
+    expect(summary).toBeTruthy();
+    if (summary && summary.type === 'fanout_summary') {
+      expect(summary.content).toBe(full);
+    }
+  });
+});

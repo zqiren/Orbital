@@ -9,6 +9,7 @@ Exposes sandbox setup, status, and folder access control to the desktop app (Ele
 
 import asyncio
 import inspect
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
@@ -26,10 +27,16 @@ router = APIRouter(prefix="/api/v2/platform")
 class FolderGrantRequest(BaseModel):
     path: str
     mode: Literal["read_only", "read_write"]
+    # Which project's portal scope this desktop grant attaches to. Portals are
+    # per-scope (Spec 12 §2b) so a folder granted here lands in exactly one
+    # project's sandbox profile. Omitted → the Quick Tasks (scratch) project,
+    # the natural home for a user-initiated "let my assistant see this folder".
+    project_id: str | None = None
 
 
 class FolderRevokeRequest(BaseModel):
     path: str
+    project_id: str | None = None
 
 
 class BrowserWarmupRequest(BaseModel):
@@ -99,10 +106,34 @@ async def platform_folders():
     return {"status": "ok", "folders": [asdict(f) for f in folders]}
 
 
+def _resolve_grant_scope(project_id: str | None) -> str:
+    """Resolve the portal scope (owning workspace realpath) for a desktop grant.
+
+    A named project uses its own workspace; otherwise the grant attaches to the
+    Quick Tasks (scratch) workspace. Raises 400 if no target can be resolved.
+    """
+    store = getattr(_agent_manager, "_project_store", None) if _agent_manager else None
+    project = None
+    if store is not None:
+        if project_id:
+            project = store.get_project(project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+        else:
+            project = store.find_scratch_project()
+    workspace = (project or {}).get("workspace")
+    if not workspace:
+        raise HTTPException(
+            status_code=400, detail="No target project workspace for folder grant"
+        )
+    return os.path.realpath(workspace)
+
+
 @router.post("/folders/grant")
 async def platform_folders_grant(req: FolderGrantRequest):
-    """Grant sandbox user access to a folder."""
-    result = _platform_provider.grant_folder_access(req.path, req.mode)
+    """Grant sandbox access to a folder within a project's portal scope."""
+    scope = _resolve_grant_scope(req.project_id)
+    result = _platform_provider.grant_folder_access(req.path, req.mode, scope=scope)
     if not result.success:
         raise HTTPException(status_code=400, detail=result.error or "Grant failed")
     return {"status": "ok", **asdict(result)}
@@ -110,8 +141,9 @@ async def platform_folders_grant(req: FolderGrantRequest):
 
 @router.post("/folders/revoke")
 async def platform_folders_revoke(req: FolderRevokeRequest):
-    """Revoke sandbox user access to a folder."""
-    result = _platform_provider.revoke_folder_access(req.path)
+    """Revoke sandbox access to a folder within a project's portal scope."""
+    scope = _resolve_grant_scope(req.project_id)
+    result = _platform_provider.revoke_folder_access(req.path, scope=scope)
     if not result.success:
         raise HTTPException(status_code=400, detail=result.error or "Revoke failed")
     return {"status": "ok", **asdict(result)}

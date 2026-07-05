@@ -35,7 +35,7 @@ _MANDATORY_DENY_WRITE_PATTERNS = (
 
 def generate_profile(
     workspace_path: str,
-    portal_paths: dict[str, str] | None = None,  # {path: "read_only" | "read_write"}
+    portal_paths: dict[str, str] | None = None,  # {path: "read" | "read_only" | "read_write"}
     network_proxy_port: int | None = None,
 ) -> str:
     """Generate a Seatbelt (SBPL) profile string for sandboxing a child process.
@@ -44,8 +44,8 @@ def generate_profile(
         workspace_path: Absolute path to the agent workspace directory.
             The process will have full read/write access here.
         portal_paths: Optional mapping of absolute paths to access levels.
-            ``"read_only"`` portals allow reads (already broadly permitted)
-            but explicitly deny writes.  ``"read_write"`` portals additionally
+            ``"read"`` / ``"read_only"`` portals (synonyms) allow reads but
+            explicitly deny writes.  ``"read_write"`` portals additionally
             allow writes to the given path.
         network_proxy_port: If provided, all outbound network access is denied
             except to ``localhost:<proxy_port>`` and local Unix sockets.  When
@@ -108,13 +108,16 @@ def generate_profile(
             # Always grant read — base profile only covers system paths,
             # not user directories like /Users.
             lines.append(f'(allow file-read* (subpath "{real_path}"))')
-            if access == "read_only":
+            if access == "read_write":
+                lines.append(f'(allow file-write* (subpath "{real_path}"))')
+            else:
+                # "read" and "read_only" are synonyms: read-only. Emit an
+                # explicit deny (defense-in-depth + a legible violation
+                # message) — a "read" cross-project portal must never write.
                 lines.append(
                     f'(deny file-write* (subpath "{real_path}")'
                     ' (with message "orbital:portal-read-only"))'
                 )
-            elif access == "read_write":
-                lines.append(f'(allow file-write* (subpath "{real_path}"))')
 
     # ------------------------------------------------------------------
     # 7. Sensitive path denies (deny read even though base allows it)

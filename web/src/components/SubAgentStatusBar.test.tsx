@@ -61,6 +61,19 @@ describe('SubAgentStatusBar — three-state badge', () => {
     expect(screen.queryByTestId('sub-agent-stop-claude-code')).toBeNull();
   });
 
+  it('filters out fanout worker handles (they render in FanoutCard instead)', async () => {
+    apiMock.mockResolvedValue({
+      session_id: 's1',
+      agents: [
+        { handle: 'claude-code', display_name: 'Claude Code', status: 'running', background_commands: [] },
+        { handle: 'worker:a1b2c3d4-0', display_name: 'research task A', status: 'running', background_commands: [] },
+      ],
+    });
+    render(<SubAgentStatusBar projectId="p1" sessionId="s1" />);
+    await screen.findByTestId('sub-agent-chip-claude-code');
+    expect(screen.queryByTestId('sub-agent-chip-worker:a1b2c3d4-0')).toBeNull();
+  });
+
   it('renders nothing when no sub-agents are active', async () => {
     apiMock.mockResolvedValue({ session_id: 's1', agents: [] });
     const { container } = render(

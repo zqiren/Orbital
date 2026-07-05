@@ -109,7 +109,7 @@ class TestE2EAgentIsolation:
         from agent_os.platform.windows.provider import WindowsPlatformProvider
 
         provider = WindowsPlatformProvider()
-        provider.grant_folder_access(sandbox_workspace, "read_write")
+        provider.grant_folder_access(sandbox_workspace, "read_write", scope=sandbox_workspace)
 
         try:
             # Run whoami to verify sandbox user
@@ -158,7 +158,7 @@ class TestE2EAgentIsolation:
             blocked_domains.append((project_id, domain))
 
         provider = WindowsPlatformProvider(on_network_blocked=on_blocked)
-        provider.grant_folder_access(sandbox_workspace, "read_write")
+        provider.grant_folder_access(sandbox_workspace, "read_write", scope=sandbox_workspace)
 
         # Configure allowlist
         provider.configure_network(
@@ -187,11 +187,11 @@ class TestE2EAgentIsolation:
         from agent_os.platform.windows.provider import WindowsPlatformProvider
 
         provider = WindowsPlatformProvider()
-        provider.grant_folder_access(sandbox_workspace, "read_write")
+        provider.grant_folder_access(sandbox_workspace, "read_write", scope=sandbox_workspace)
 
         try:
             # Grant read-only to temp_file directory
-            result = provider.grant_folder_access(temp_file, "read_only")
+            result = provider.grant_folder_access(temp_file, "read_only", scope=sandbox_workspace)
             assert result.success is True
 
             # Shell reads portaled dir - should succeed
@@ -220,7 +220,7 @@ class TestE2EAgentIsolation:
             assert not os.path.exists(write_target), "Read-only portal should prevent writes"
 
             # Revoke access
-            result = provider.revoke_folder_access(temp_file)
+            result = provider.revoke_folder_access(temp_file, scope=sandbox_workspace)
             assert result.success is True
 
             # Shell reads after revoke - should fail
@@ -256,7 +256,7 @@ class TestE2EAgentIsolation:
         from agent_os.platform.windows.provider import WindowsPlatformProvider
 
         provider = WindowsPlatformProvider()
-        provider.grant_folder_access(sandbox_workspace, "read_write")
+        provider.grant_folder_access(sandbox_workspace, "read_write", scope=sandbox_workspace)
 
         try:
             # Simulate shell tool: run command via provider

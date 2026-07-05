@@ -4,6 +4,7 @@
 
 import { useCallback } from 'react';
 import { api } from '../config';
+import type { SubAgentTranscriptResult } from '../types';
 
 interface ActionResult {
   status: string;
@@ -30,10 +31,55 @@ export interface InjectResult extends ActionResult {
    * 202 with `status: "slot_held"` because the requested session_id does
    * not currently hold the project's active-loop slot. The frontend should
    * render SlotHeldNotice and offer cancel-and-resend.
+   *
+   * Pending-input queue (spec 006): also present on the new happy-path 202
+   * `status: "queued_pending_slot"` — the holder (A) of the slot, shown in
+   * the "Waiting for {holder}…" affordance.
    */
   holding_session_id?: string;
   /** Human-readable description that accompanies `status: "slot_held"`. */
   message?: string;
+  /**
+   * Pending-input queue (spec 006) 202 `queued_pending_slot` fields: the
+   * message was accepted and queued (NOT rejected) and will auto-dispatch
+   * when the slot frees. The optimistic bubble is KEPT and a waiting
+   * affordance is shown (see ChatView `pendingInputs`).
+   */
+  queued_session_id?: string;
+  nonce?: string;
+  position?: number;
+}
+
+/**
+ * GET /agents/{id}/pending — mobile/relay reconnect recovery (spec 006 §3f,
+ * §11d). v3: entries carry the FULL `content` (not a preview) so recall can
+ * rebuild the composer text, and a `kind` discriminating cross-session
+ * (`_pending_inject`, slot held by another session) from same-session
+ * (`session._queue`, this session's turn mid-flight) queued messages.
+ */
+export interface PendingEntry {
+  session_id: string;
+  nonce: string | null;
+  content: string;
+  position: number;
+  kind: 'cross' | 'same';
+}
+
+export interface PendingListResult {
+  /** The session currently holding the slot, or null if free. */
+  holder: string | null;
+  pending: PendingEntry[];
+}
+
+/**
+ * POST /agents/{id}/pending/cancel response (spec 006 v3 §12 R2). `removed`
+ * is the SERVER-AUTHORITATIVE signal for recall: true when a still-queued
+ * entry was actually removed (safe to load its text into the composer), false
+ * when the message had already dispatched / drained (do NOT load — it is
+ * running; loading would double-send).
+ */
+export interface CancelPendingResult extends ActionResult {
+  removed: boolean;
 }
 
 export function useAgent() {
@@ -110,6 +156,49 @@ export function useAgent() {
     [],
   );
 
+  // Pending-input queue (spec 006). Cancel/dequeue a queued pending input for
+  // session B (cross- OR same-session). Omit `nonce` to cancel all of B's
+  // pending entries. v3: returns `{status, removed}` — `removed` tells the
+  // caller whether a still-queued entry was actually removed (server-
+  // authoritative recall, §12 R2).
+  const cancelPendingInput = useCallback(
+    async (projectId: string, sessionId: string, nonce?: string) => {
+      return api<CancelPendingResult>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/pending/cancel`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            session_id: sessionId,
+            ...(nonce !== undefined && { nonce }),
+          }),
+        },
+      );
+    },
+    [],
+  );
+
+  // Pending-input queue (spec 006). Recovery fetch for reconnect / switch-back:
+  // returns the slot holder plus all queued pending inputs for the project.
+  const getPending = useCallback(async (projectId: string) => {
+    return api<PendingListResult>(
+      `/api/v2/agents/${encodeURIComponent(projectId)}/pending`,
+    );
+  }, []);
+
+  // Sub-agent fanout drill-in (spec 009 §0.5, Task 4's contract): read-only
+  // transcript for one worker/cli handle. `session_id` scopes the lookup to
+  // the parent chat session that dispatched it (same query param convention
+  // as `/sub-agents/status`).
+  const getSubAgentTranscript = useCallback(
+    async (projectId: string, handle: string, sessionId?: string) => {
+      const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+      return api<SubAgentTranscriptResult>(
+        `/api/v2/agents/${encodeURIComponent(projectId)}/sub-agents/${encodeURIComponent(handle)}/transcript${qs}`,
+      );
+    },
+    [],
+  );
+
   const approveToolCall = useCallback(
     async (
       projectId: string,
@@ -152,5 +241,5 @@ export function useAgent() {
     [],
   );
 
-  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, approveToolCall, denyToolCall };
+  return { startAgent, cancelMessage, newSession, coldStartScan, injectMessage, cancelPendingInput, getPending, getSubAgentTranscript, approveToolCall, denyToolCall };
 }

@@ -100,6 +100,16 @@ class SubAgentManager:
         # 2026-05-20). Intercepting claude.exe's I/O is architectural rework,
         # explicitly out of F4's scope (§5.3).
         self._memory_write_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # Fanout wiring (spec 009, Task 2/6): both None until app startup sets
+        # them post-construction (mirrors ``_lifecycle_observer``'s own
+        # pattern above). ``_fanout_registry`` is the join/gather core
+        # (agent_os/daemon_v2/fanout.py); ``_worker_deps_factory`` is
+        # ``(project_id, session_id) -> WorkerDeps``, built by Task 6 from
+        # Task 3's ``make_tool_registry``. Either being None means
+        # ``dispatch_fanout`` cannot run yet — it fails closed with an
+        # "unavailable" error rather than raising.
+        self._fanout_registry = None
+        self._worker_deps_factory = None
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
@@ -185,7 +195,7 @@ class SubAgentManager:
 
     async def start(self, project_id: str, handle: str, depth: int = 0,
                     *, session_id: str | None = None,
-                    announce: bool = True) -> str:
+                    announce: bool = True, fresh: bool = False) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
@@ -195,6 +205,11 @@ class SubAgentManager:
         broadcast still fires) — used when the spawn is internal to a
         spawn-on-demand ``send`` so one action yields one session message
         (TASK-collapse-dispatch-to-send H2).
+
+        ``fresh=True`` (BACKLOG 005 §4d) forces a reset for this spawn: no
+        resume (a brand-new provider session) and a brand-new transcript file,
+        bypassing the §4b ``.latest`` reuse. The prior thread/transcript stay
+        archived on disk.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -214,6 +229,7 @@ class SubAgentManager:
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
                 project_id, handle, session_id=session_id, announce=announce,
+                fresh=fresh,
             )
 
         # Legacy path: use adapter_configs
@@ -221,8 +237,13 @@ class SubAgentManager:
         if config is None:
             return f"Error: no adapter config for handle '{handle}'"
 
-        # Configure network isolation for this project
-        if self._platform_provider is not None:
+        # Configure network isolation for this project. Native workers
+        # (handle == "worker:<fanout_id>-<i>") never reach this path today —
+        # dispatch_fanout constructs NativeWorkerAdapter directly and never
+        # calls start() — but guard anyway (belt-and-braces): a worker handle
+        # must never trigger the per-start allowlist rewrite this CLI path
+        # does.
+        if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
                 rules = NetworkRules(
                     mode="allowlist",
@@ -258,9 +279,11 @@ class SubAgentManager:
             project = self._project_store.get_project(project_id) if self._project_store else {}
             workspace = project.get("workspace", "") if project else ""
             if workspace:
-                from uuid import uuid4
                 from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
-                transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+                # §4b: reuse the handle's .latest transcript across respawns
+                # (continuous UI); §4d fresh=True mints a new one.
+                transcript = SubAgentTranscript.open_for_handle(
+                    workspace, handle, fresh=fresh)
                 self._transcripts[(project_id, session_id, handle)] = transcript
 
         await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
@@ -498,6 +521,11 @@ class SubAgentManager:
         if reason == "resume_failed":
             return ("fresh session — prior session could not be resumed; "
                     "re-brief any context it needs")
+        if reason == "explicit_reset":
+            # §4d: the caller passed fresh=True deliberately to drop prior
+            # context — say so, so the orchestrator knows the reset took.
+            return ("fresh session — reset requested (prior conversation "
+                    "intentionally dropped)")
         return "fresh session — first spawn"
 
     def _get_pipe_config(self, slug: str):
@@ -592,8 +620,13 @@ class SubAgentManager:
 
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
                                    *, session_id: str | None = None,
-                                   announce: bool = True) -> str:
-        """Start a sub-agent using the manifest registry and setup engine."""
+                                   announce: bool = True,
+                                   fresh: bool = False) -> str:
+        """Start a sub-agent using the manifest registry and setup engine.
+
+        ``fresh=True`` (BACKLOG 005 §4d) forces a reset: skip resume and mint a
+        new transcript (bypass §4b reuse). See ``start``.
+        """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
         if sk in self._stopping:
@@ -639,8 +672,9 @@ class SubAgentManager:
             args=config_dict.get("args"),
         )
 
-        # Configure network isolation
-        if self._platform_provider is not None:
+        # Configure network isolation. Same worker guard as the legacy start()
+        # path above — belt-and-braces, currently unreachable for workers.
+        if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
                 domains = config_dict.get("network_domains", []) + list(DEFAULT_ALLOWLIST_DOMAINS)
                 rules = NetworkRules(mode="allowlist", domains=domains)
@@ -740,9 +774,18 @@ class SubAgentManager:
         # (SessionKey, handle) record and pre-check its on-disk source
         # BEFORE building the transport, so a live record resumes and a
         # dead one starts fresh — and says so.
-        resume_record, resume_status, resume_reason = self._determine_resume(
-            workspace, project_id, handle, session_id,
-        )
+        #
+        # §4d reset: fresh=True force-skips resume entirely. No persisted record
+        # is consulted; the provider gets NO resume id, so a brand-new upstream
+        # session starts. The old record stays on disk until the new turn's
+        # on_thread_update overwrites it.
+        if fresh:
+            resume_record, resume_status, resume_reason = (
+                None, "fresh", "explicit_reset")
+        else:
+            resume_record, resume_status, resume_reason = self._determine_resume(
+                workspace, project_id, handle, session_id,
+            )
 
         # Resolve transport from manifest. May raise ValueError for invalid
         # manifest combinations (e.g. claude-code with transport: acp).
@@ -793,12 +836,14 @@ class SubAgentManager:
                 self._adapters[sk] = {}
             self._adapters[sk][handle] = adapter
 
-        # Create transcript for this sub-agent
+        # Create transcript for this sub-agent. §4b: reuse the handle's
+        # .latest transcript across respawns so the UI stays continuous; §4d
+        # fresh=True mints a new file (prior one archived on disk).
         transcript = None
         if workspace:
-            from uuid import uuid4
             from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
-            transcript = SubAgentTranscript(workspace, handle, str(uuid4())[:8])
+            transcript = SubAgentTranscript.open_for_handle(
+                workspace, handle, fresh=fresh)
             self._transcripts[(project_id, session_id, handle)] = transcript
 
         # ACP and Pipe handle responses via send() return value — no streaming consumer needed
@@ -823,7 +868,8 @@ class SubAgentManager:
         )
 
     async def send(self, project_id: str, handle: str, message: str,
-                   *, session_id: str | None = None, depth: int = 0) -> str:
+                   *, session_id: str | None = None, depth: int = 0,
+                   fresh: bool = False) -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -841,9 +887,23 @@ class SubAgentManager:
 
         ``session_id`` selects which session's adapter slate to dispatch
         through; defaults to ``DEFAULT_SESSION_ID``.
+
+        ``fresh=True`` (BACKLOG 005 §4d) resets this handle's thread before
+        dispatching: any live adapter is torn down so the spawn below starts a
+        brand-new provider session (no resume) with a new transcript, rather
+        than continuing the in-memory client. Without the teardown, a handle
+        that is already running would silently keep its old context and the
+        reset would be a no-op.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+
+        # §4d reset: drop any live adapter for this handle so the spawn-on-
+        # demand block below actually re-spawns fresh (the default branch only
+        # spawns when the handle is absent). Done OUTSIDE the dispatch lock —
+        # stop() takes the same per-session lock internally.
+        if fresh and handle in self._adapters.get(sk, {}):
+            await self.stop(project_id, handle, session_id=session_id)
 
         # Spawn-on-demand pre-step, OUTSIDE the dispatch lock: start() takes
         # the same per-session lifecycle lock internally (non-reentrant), so
@@ -854,7 +914,7 @@ class SubAgentManager:
         if handle not in self._adapters.get(sk, {}):
             start_result = await self.start(
                 project_id, handle, depth=depth,
-                session_id=session_id, announce=False,
+                session_id=session_id, announce=False, fresh=fresh,
             )
             if start_result.startswith("Error"):
                 return start_result
@@ -892,6 +952,194 @@ class SubAgentManager:
 
         return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
 
+    async def dispatch_fanout(self, project_id: str, tasks: list[dict], *,
+                              session_id: str, max_runtime_s: int = 3600,
+                              depth: int = 0) -> str:
+        """Spawn N native-worker sub-tasks in parallel and register them as
+        one join group (spec 009, W2/W3).
+
+        ``tasks``: ``[{"brief": str, "label": str, "files_scope": {"allowed":
+        [...], "forbidden": [...]} | None}, ...]``. Errors return
+        ``"Error: ..."`` strings — never raises to the calling tool (mirrors
+        every other public verb on this class). ``depth`` is accepted for
+        signature parity with ``send``/``start`` (nesting depth + 1 from the
+        caller); the MAX_DEPTH gate itself lives in the tool layer
+        (``FanoutTool`` mirrors ``AgentMessageTool``), not here — same
+        division of responsibility as the existing dispatch verbs.
+        """
+        if not (2 <= len(tasks) <= MAX_CONCURRENT_SUBAGENTS):
+            return (
+                f"Error: fanout requires 2-{MAX_CONCURRENT_SUBAGENTS} tasks "
+                f"(got {len(tasks)}). A single task should use agent_message "
+                f"or be done inline."
+            )
+        for i, task in enumerate(tasks):
+            if not isinstance(task, dict) or not task.get("brief") or not task.get("label"):
+                return (
+                    f"Error: task {i} is missing a required 'brief' and/or "
+                    f"'label'"
+                )
+        if self._worker_deps_factory is None:
+            return "Error: fanout is not available (worker factory unwired)"
+        if self._fanout_registry is None:
+            return "Error: fanout is not available (fanout registry unwired)"
+
+        session_id = self._resolve_session_id(session_id)
+        sk = make_session_key(project_id, session_id)
+
+        import time
+        import uuid as _uuid
+
+        from agent_os.daemon_v2.fanout import FanoutTask
+        from agent_os.daemon_v2.native_worker import (
+            NativeWorkerAdapter,
+            make_worker_handle,
+        )
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        fanout_id = _uuid.uuid4().hex[:8]
+        adapters: dict[str, object] = {}
+        fanout_tasks: list[FanoutTask] = []
+
+        # Atomic cap check + adapter construction/registration/dispatch, ALL
+        # under the per-session lock (closes the TOCTOU at :210-216/:621-627
+        # for the fanout path). Holding the lock across this whole block is
+        # deliberate, not just for the cap check: registering an adapter into
+        # ``_adapters[sk]`` and then releasing the lock BEFORE dispatching or
+        # creating the join group would open a window where a concurrent
+        # ``stop_all``/``stop`` (which also takes this lock) could tear a
+        # freshly-registered worker down before its brief was ever sent, or
+        # before ``create_group`` existed to absorb that teardown as a
+        # fanout event instead of a stray per-worker one. Every call made
+        # here is synchronous or a bare ``asyncio.create_task(...)`` (no
+        # blocking await) — mirrors ``send()``'s own pattern of dispatching
+        # while holding this same lock — and this method never calls
+        # ``start()``/``stop()`` (the only other lock acquirers), so holding
+        # it across the whole block cannot deadlock.
+        lock = self._get_lock(project_id, session_id=session_id)
+        async with lock:
+            current_count = len(self._adapters.get(sk, {}))
+            if current_count + len(tasks) > MAX_CONCURRENT_SUBAGENTS:
+                return (
+                    f"Error: fanout would exceed the concurrent sub-agent "
+                    f"limit (max {MAX_CONCURRENT_SUBAGENTS} per project; "
+                    f"{current_count} already running, {len(tasks)} "
+                    f"requested). Stop an existing sub-agent first."
+                )
+
+            deps = self._worker_deps_factory(project_id, session_id)
+            workspace = deps.workspace
+
+            # IMPORTANT (round-3 review): construction must never raise out
+            # of dispatch_fanout — every other public verb on this class
+            # returns "Error: ..." on failure (mirrors start()'s convention
+            # at :258-266). A mid-batch failure (e.g. task 2 of 4's adapter
+            # construction raises) must not leave earlier-registered
+            # transcripts as residue, so track them and unwind on failure.
+            # ``self._adapters`` itself is updated ONLY after the whole
+            # try block succeeds (last line before the except), so a
+            # failure here never needs to unwind that dict at all.
+            registered_handles: list[str] = []
+            try:
+                for i, task in enumerate(tasks):
+                    handle = make_worker_handle(fanout_id, i)
+                    files_scope = task.get("files_scope") or {}
+                    allowed = files_scope.get("allowed")
+                    forbidden = files_scope.get("forbidden")
+
+                    # WorkerDeps is one shared instance per batch (Task 1);
+                    # bind on_activity to THIS handle right before
+                    # constructing THIS adapter — the adapter reads it once
+                    # at __init__, so mutating the shared deps between
+                    # constructions is safe.
+                    deps.on_activity = self._make_activity_callback(
+                        project_id, handle, session_id)
+
+                    adapter = NativeWorkerAdapter(
+                        deps=deps, handle=handle, display_name=task["label"],
+                        allowed_paths=allowed, forbidden_paths=forbidden,
+                    )
+                    adapters[handle] = adapter
+
+                    transcript = SubAgentTranscript.open_for_handle(
+                        workspace, handle, fresh=True)
+                    self._transcripts[(project_id, session_id, handle)] = transcript
+                    registered_handles.append(handle)
+
+                    fanout_tasks.append(FanoutTask(
+                        handle=handle,
+                        label=task["label"],
+                        brief=task["brief"],
+                        allowed_paths=allowed,
+                        forbidden_paths=forbidden,
+                        status="running",
+                        transcript_path=transcript.filepath,
+                        last_activity=time.monotonic(),
+                        session_uuid=adapter.session_uuid,
+                    ))
+
+                group = self._fanout_registry.create_group(
+                    project_id, session_id, fanout_tasks,
+                    max_runtime_s=max_runtime_s,
+                )
+                self._adapters.setdefault(sk, {}).update(adapters)
+            except Exception as e:
+                logger.exception(
+                    "dispatch_fanout: worker construction failed for "
+                    "project=%s fanout=%s", project_id, fanout_id,
+                )
+                for handle in registered_handles:
+                    self._transcripts.pop(
+                        (project_id, session_id, handle), None)
+                return f"Error: fanout worker construction failed: {e}"
+
+            await self._fanout_registry.start_watchdog(group)
+
+            for task, fanout_task in zip(tasks, fanout_tasks):
+                await self._dispatch_async(
+                    adapters[fanout_task.handle], project_id,
+                    fanout_task.handle, task["brief"], session_id=session_id,
+                )
+
+        ws = self._ws()
+        if ws is not None:
+            try:
+                ws.broadcast(project_id, {
+                    "type": "fanout.started",
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "fanout_id": fanout_id,
+                    "tasks": [
+                        {
+                            "handle": t.handle,
+                            "label": t.label,
+                            "session_uuid": t.session_uuid,
+                        }
+                        for t in fanout_tasks
+                    ],
+                })
+            except Exception:
+                logger.exception(
+                    "failed to broadcast fanout.started for project=%s "
+                    "fanout=%s", project_id, fanout_id,
+                )
+
+        labels = ", ".join(t.label for t in fanout_tasks)
+        return (
+            f"Fanout {fanout_id} dispatched: {len(fanout_tasks)} tasks — "
+            f"{labels}. Results will arrive together when all tasks finish."
+        )
+
+    def _make_activity_callback(self, project_id: str, handle: str,
+                                session_id: str):
+        """Zero-arg closure bound to one worker handle, handed to that
+        worker's ``WorkerDeps.on_activity`` (see ``dispatch_fanout``)."""
+        def _on_activity() -> None:
+            if self._fanout_registry is not None:
+                self._fanout_registry.note_activity(
+                    project_id, handle, session_id)
+        return _on_activity
+
     async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
                               *, session_id: str | None = None) -> None:
         """Dispatch message to adapter without blocking on response.
@@ -912,6 +1160,22 @@ class SubAgentManager:
 
         async def _background_send():
             from datetime import datetime, timezone
+            # Fanout activity plumbing (Task 2, spec 009 §0.5-5): bump the
+            # watchdog's last-activity clock at dispatch time. A no-op for
+            # non-fanout handles (owner_group lookup misses) and when no
+            # registry is wired yet. This is turn-START coverage from the
+            # dispatch side; NativeWorkerAdapter's own on_activity callback
+            # (wired by the spawner) covers turn-start/end from inside the
+            # loop — belt-and-braces per the brief, not a duplicate bug.
+            if self._fanout_registry is not None:
+                try:
+                    self._fanout_registry.note_activity(
+                        project_id, handle, session_id)
+                except Exception:
+                    logger.exception(
+                        "fanout note_activity raised for %s/%s",
+                        project_id, handle,
+                    )
             try:
                 await adapter.send(message)
                 # Pipe/ACP transports store the response in _last_response
@@ -939,7 +1203,27 @@ class SubAgentManager:
                         # failures as "Error:"-prefixed response strings
                         # (pipe timeout / non-zero exit, SDK send errors).
                         # Those are failures, not completion summaries.
-                        if response.startswith("Error"):
+                        #
+                        # IMPORTANT (round-3 review): a NativeWorkerAdapter
+                        # stopped via stop_all/user-stop ALSO produces an
+                        # "Error: task was cancelled..." response (its
+                        # AgentLoop.run() returns normally after
+                        # cancel_turn(), and _read_final_response()'s
+                        # exit_reason=="cancelled" fallback is "Error:"-
+                        # prefixed) — that's a deliberate stop, not a
+                        # failure, and must not be reported to the fanout
+                        # join / management session as "broke". Route those
+                        # to on_turn_interrupted instead. getattr defaults
+                        # to False for adapters with no such flag (CLI
+                        # adapters), so this is additive-only for them.
+                        if response.startswith("Error") and getattr(
+                                adapter, "_stop_requested", False):
+                            await self._lifecycle_observer.on_turn_interrupted(
+                                project_id, handle,
+                                transcript.filepath,
+                                session_id=session_id,
+                            )
+                        elif response.startswith("Error"):
                             await self._lifecycle_observer.on_error(
                                 project_id, handle,
                                 response[:500],
@@ -1557,6 +1841,33 @@ class SubAgentManager:
                 return transcript
         return None
 
+    def fanout_session_uuid_for_handle(self, project_id: str, handle: str,
+                                       session_id: str | None = None) -> str | None:
+        """Return the live worker session_uuid for a fanout task ``handle``,
+        or None.
+
+        Read-only accessor onto the (otherwise-private) ``_fanout_registry``:
+        the transcript endpoint (agents_v2.py) needs the worker's real chat
+        session id to resolve its ``/chat`` transcript for drill-in, but must
+        not reach into registry internals directly.
+
+        This ONLY works mid-batch: ``FanoutRegistry.resolve_group`` pops a
+        group's routing entries once it resolves (fanout.py), so a completed
+        fanout's handle is unknown to the registry moments after the batch
+        finishes. Callers MUST also have a disk fallback (the transcript
+        endpoint's session-file-stem scan) — this accessor is not sufficient
+        alone.
+        """
+        if self._fanout_registry is None:
+            return None
+        group = self._fanout_registry.owner_group(project_id, handle, session_id)
+        if group is None:
+            return None
+        task = group.tasks.get(handle)
+        if task is None:
+            return None
+        return task.session_uuid
+
     def get_all_transcript_entries(self, project_id: str) -> list[dict]:
         """Read all sub-agent transcript entries for a project.
 
@@ -1598,3 +1909,51 @@ class SubAgentManager:
                         pass
 
         return entries
+
+    def read_transcript_entries(self, project_id: str, handle: str,
+                                session_id: str | None = None) -> "list[dict] | None":
+        """Read one sub-agent's transcript entries for the drill-in endpoint.
+
+        Returns ``None`` when no transcript exists for (project, handle) —
+        the caller's 404 signal. Returns ``[]`` (not None) for a transcript
+        file that exists but has produced zero chunks yet (started, nothing
+        streamed) — that is a legitimate empty transcript, not a 404.
+
+        Works for BOTH live and non-live handles:
+        - live / recently-reset: prefers the in-memory ``Transcript`` for
+          this exact (project_id, session_id, handle) via ``get_transcript``
+          — accurate even right after a §4d ``fresh=True`` reset, where the
+          on-disk ``.latest`` pointer and an in-memory handle from a
+          different session could otherwise disagree.
+        - non-live (daemon restarted, sub-agent already stopped, or no
+          in-memory entry at all): falls back to the on-disk ``.latest``
+          pointer for (workspace, handle) — the same continuity convention
+          ``SubAgentTranscript.open_for_handle`` uses to resume a handle's
+          transcript across respawns. Storage is keyed by (workspace,
+          handle) only, not by session (see BACKLOG 005 §4b) — this is why
+          the disk fallback needs no session_id.
+        """
+        from agent_os.daemon_v2.sub_agent_transcript import SubAgentTranscript
+
+        filepath: str | None = None
+        transcript = self.get_transcript(project_id, handle, session_id)
+        if transcript is not None:
+            filepath = transcript.filepath
+        else:
+            workspace = ""
+            if self._project_store is not None:
+                project = self._project_store.get_project(project_id)
+                workspace = (project.get("workspace", "") if project else "")
+            if workspace:
+                from agent_os.agent.project_paths import ProjectPaths
+                sub_dir = ProjectPaths(workspace).sub_agent_dir(handle)
+                latest_id = SubAgentTranscript._read_latest_id(sub_dir)
+                if latest_id is not None:
+                    filepath = os.path.join(sub_dir, f"{latest_id}.jsonl")
+
+        if filepath is None or not os.path.isfile(filepath):
+            return None
+        try:
+            return SubAgentTranscript.read(filepath)
+        except (OSError, json.JSONDecodeError):
+            return None

@@ -148,6 +148,11 @@ class ProjectStore:
             # an explicit migration step.
             for key, default_value in DEFAULT_PROJECT_FIELDS.items():
                 project.setdefault(key, default_value)
+            # Per-project connector enablement (Spec 011 §2). Kept out of the
+            # DEFAULT_PROJECT_FIELDS loop because that loop's setdefault would
+            # alias one shared list across every legacy project; the literal
+            # here creates a fresh list on first access instead.
+            project.setdefault("enabled_connectors", [])
         return project
 
     @staticmethod

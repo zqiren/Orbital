@@ -23,6 +23,7 @@ try:
     from claude_agent_sdk.types import (
         AssistantMessage,
         ResultMessage,
+        SystemMessage,
         TextBlock,
         ToolUseBlock,
     )
@@ -646,6 +647,34 @@ class SDKTransport(AgentTransport):
                     event_type="error",
                     data={"error": msg.result},
                     raw_text=f"Error: {msg.result}",
+                ))
+
+        elif isinstance(msg, SystemMessage):
+            # BACKLOG 005 §4a — eager resume identity. The CLI's ``init``
+            # system message carries the upstream session id and arrives BEFORE
+            # the first user-visible chunk of the turn (and well before the
+            # turn-closing ResultMessage). Capture it now and surface a
+            # ``thread_started`` event so the daemon persists the resume record
+            # from turn 1, not only after the turn completes. A concurrent
+            # @-mention/dispatch into the same chat session then finds the
+            # record even mid-turn. Emitted once per distinct session id (init
+            # is sent once; the guard also covers any later system frame that
+            # re-states the same id).
+            #
+            # Gate on subtype == "init" specifically: TaskStarted/TaskProgress/
+            # TaskNotification subclass SystemMessage and ALSO carry
+            # data["session_id"], so a bare isinstance match would let a
+            # mid-turn task frame masquerade as a thread start. Only the genuine
+            # init frame establishes the resume identity.
+            data = getattr(msg, "data", None) or {}
+            sid = data.get("session_id")
+            if (getattr(msg, "subtype", None) == "init"
+                    and sid and self._session_id != sid):
+                self._session_id = sid
+                events.append(TransportEvent(
+                    event_type="thread_started",
+                    data={"session_id": sid, "model": self._last_model},
+                    raw_text="",
                 ))
 
         return events

@@ -177,7 +177,7 @@ class TestMacOSProviderIntegration:
         with open(test_file, "w") as f:
             f.write("portal_data")
 
-        macos_provider.grant_folder_access(portal_dir, "read_only")
+        macos_provider.grant_folder_access(portal_dir, "read_only", scope=workspace)
 
         # Read should succeed — we need to re-launch with updated profile
         read_result = await macos_provider.run_command(
@@ -200,7 +200,7 @@ class TestMacOSProviderIntegration:
         )
         assert write_result.exit_code != 0 or not os.path.exists(write_target)
 
-        macos_provider.revoke_folder_access(portal_dir)
+        macos_provider.revoke_folder_access(portal_dir, scope=workspace)
 
     async def test_portal_readwrite(self, macos_provider, workspace, tmp_path):
         """Grant read-write -> can read AND write."""
@@ -210,7 +210,7 @@ class TestMacOSProviderIntegration:
         with open(test_file, "w") as f:
             f.write("portal_rw_data")
 
-        macos_provider.grant_folder_access(portal_dir, "read_write")
+        macos_provider.grant_folder_access(portal_dir, "read_write", scope=workspace)
 
         # Read should succeed
         read_result = await macos_provider.run_command(
@@ -234,7 +234,7 @@ class TestMacOSProviderIntegration:
         assert write_result.exit_code == 0
         assert os.path.exists(write_target)
 
-        macos_provider.revoke_folder_access(portal_dir)
+        macos_provider.revoke_folder_access(portal_dir, scope=workspace)
 
     async def test_child_inherits_sandbox(self, macos_provider, workspace):
         """Sandboxed process spawns child that tries to write outside workspace."""

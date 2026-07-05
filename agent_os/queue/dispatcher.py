@@ -702,6 +702,25 @@ class QueueDispatcher:
             await self._wait_idle()
             return
 
+        # Interactive pending-input wins the slot over the autonomous queue
+        # (spec 006 §3e). If a user message is queued behind the (now-free)
+        # slot, defer this item WITHOUT minting a session/attempt so the
+        # pending inject dispatches first. This bounds autonomous-queue
+        # starvation of interactive input to the current in-flight item and
+        # avoids burning an attempt (no spurious interrupted_count bump, B8).
+        # getattr-guarded for lightweight test doubles, like the holder accessor.
+        _pending_fn = getattr(
+            self._agent_manager, "has_pending_inject", lambda _pid: False,
+        )
+        if _pending_fn(self._project_id):
+            logger.info(
+                "dispatcher(%s): interactive pending input present; deferring "
+                "dispatch of item %s (no attempt minted)",
+                self._project_id, item.id,
+            )
+            await self._wait_idle()
+            return
+
         # Each queue item runs in its OWN fresh session — the same new_session
         # the user gets from "+ new session", then an inject. No rotation, no
         # reuse of a prior session, no action on whatever finished before.

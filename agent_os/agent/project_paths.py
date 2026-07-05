@@ -39,6 +39,17 @@ _BUDGET = "budget"
 _BUDGET_NOTIFY_STATE = "notify_state.json"
 
 
+def _sanitize_handle(handle: str) -> str:
+    """Make a sub-agent handle safe to join into a filesystem path.
+
+    ":" is reserved on NTFS as the Alternate Data Stream separator; native
+    worker handles (``worker:<fanout_id>-<i>``) contain one. The logical
+    handle format (used in APIs/WS payloads/frontend) is unaffected — this
+    only touches the on-disk directory name.
+    """
+    return handle.replace(":", "__")
+
+
 class ProjectPaths:
     """Pure path calculator for all Orbital on-disk locations.
 
@@ -135,7 +146,18 @@ class ProjectPaths:
         return os.path.join(self.orbital_dir, _SUB_AGENTS)
 
     def sub_agent_dir(self, handle: str) -> str:
-        return os.path.join(self.orbital_dir, _SUB_AGENTS, handle)
+        """Per-handle transcript directory.
+
+        ``handle`` is sanitized for filesystem use before joining: native
+        worker handles (``worker:<fanout_id>-<i>``) contain ":", which NTFS
+        reserves as the Alternate Data Stream separator — joined verbatim it
+        produces a broken path on Windows. No-op for CLI slugs (no colons),
+        so this is a pure hardening fix, not a behavior change for existing
+        handles. This is the SINGLE join point both the transcript write path
+        (``SubAgentTranscript``) and read path (``read_transcript_entries``
+        disk fallback) go through, so sanitizing here keeps both in parity.
+        """
+        return os.path.join(self.orbital_dir, _SUB_AGENTS, _sanitize_handle(handle))
 
     # ------------------------------------------------------------------
     # Tool results

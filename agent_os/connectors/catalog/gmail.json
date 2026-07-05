@@ -1,0 +1,26 @@
+{
+  "id": "gmail",
+  "name": "Gmail",
+  "icon": "\u2709\ufe0f",
+  "auth_provider": "google",
+  "auth_type": "oauth2",
+  "server_url": "https://gmailmcp.googleapis.com/mcp/v1",
+  "oauth_scopes": [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose"
+  ],
+  "tool_overrides": {
+    "search_threads": "read",
+    "get_thread": "read",
+    "list_labels": "read",
+    "list_drafts": "read",
+    "create_draft": "write",
+    "create_label": "write",
+    "label_message": "write",
+    "label_thread": "write",
+    "unlabel_message": "write",
+    "unlabel_thread": "write"
+  },
+  "featured": true,
+  "status": "pending_verification"
+}

@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import type { Project } from '../types';
 
 afterEach(() => cleanup());
@@ -41,6 +41,7 @@ const defaultProps = {
   route: { name: 'list' } as const,
   connectionState: 'connected' as const,
   onSelectProject: vi.fn(),
+  onSelectCalendar: vi.fn(),
   onNewProject: vi.fn(),
   onSettings: vi.fn(),
 };
@@ -98,5 +99,59 @@ describe('Sidebar — BlockedBadge integration (count > 0)', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByTestId('blocked-badge-pill')).toBeInTheDocument();
     expect(screen.getByText('Test Project')).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — Workspace zone (two-zone IA)', () => {
+  beforeEach(() => {
+    mockUseBlockedCount.mockReturnValue({ blockedCount: 0, blockedSessions: [], loading: false });
+  });
+
+  const scratchProject: Project = {
+    ...mockProject,
+    project_id: 'scratch-1',
+    name: 'Quick Tasks',
+    is_scratch: true,
+  };
+
+  it('renders the Workspace zone label and a Calendar item', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
+    expect(screen.getByText('Calendar')).toBeInTheDocument();
+  });
+
+  it('clicking Calendar calls onSelectCalendar', () => {
+    const onSelectCalendar = vi.fn();
+    render(<Sidebar {...defaultProps} onSelectCalendar={onSelectCalendar} />);
+    fireEvent.click(screen.getByText('Calendar'));
+    expect(onSelectCalendar).toHaveBeenCalledOnce();
+  });
+
+  it('marks the Calendar item active (aria-current) when route.name is calendar', () => {
+    render(<Sidebar {...defaultProps} route={{ name: 'calendar' }} />);
+    const calBtn = screen.getByText('Calendar').closest('button');
+    expect(calBtn).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('pins the is_scratch project in the Workspace zone and removes it from the Projects list', () => {
+    const { container } = render(
+      <Sidebar {...defaultProps} projects={[scratchProject, mockProject]} />,
+    );
+    // Quick Tasks renders exactly once (promoted, not duplicated).
+    expect(screen.getAllByText('Quick Tasks')).toHaveLength(1);
+    // The Projects zone (<nav>) contains the regular project but NOT Quick Tasks.
+    const nav = container.querySelector('nav') as HTMLElement;
+    expect(within(nav).getByText('Test Project')).toBeInTheDocument();
+    expect(within(nav).queryByText('Quick Tasks')).toBeNull();
+    // Quick Tasks keeps its clickable project behavior (routes via onSelectProject).
+    fireEvent.click(screen.getByText('Quick Tasks'));
+    expect(defaultProps.onSelectProject).toHaveBeenCalledWith('scratch-1');
+  });
+
+  it('the Projects count reflects non-scratch projects only', () => {
+    render(<Sidebar {...defaultProps} projects={[scratchProject, mockProject]} />);
+    // Two projects total, one scratch → Projects header count is 1.
+    const header = screen.getByText('Projects').parentElement as HTMLElement;
+    expect(within(header).getByText('1')).toBeInTheDocument();
   });
 });

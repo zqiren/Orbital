@@ -47,3 +47,56 @@ def resolve_safe(workspace: str, path: str) -> str | None:
     if candidate == workspace_real or candidate.startswith(workspace_real + os.sep):
         return candidate
     return None
+
+
+# Runtime/internal subtrees excluded from CROSS-PROJECT (secondary-root) reads.
+# A project's ``orbital/`` holds agent internals (memory, sessions,
+# credentials-adjacent material) and ``.git/`` its VCS internals — reference
+# means *work product*, not another project's machinery (Spec 12 §3, §7-Q2).
+# The primary root (the reader's own workspace) is NOT subject to these.
+_SECONDARY_EXCLUDED_COMPONENTS = frozenset({"orbital", ".git"})
+
+
+def _excluded_in_secondary(candidate_real: str, root_real: str) -> bool:
+    """True if ``candidate_real`` (inside ``root_real``) sits under an excluded subtree."""
+    rel = os.path.relpath(candidate_real, root_real)
+    return any(part in _SECONDARY_EXCLUDED_COMPONENTS for part in rel.split(os.sep))
+
+
+def resolve_safe_read(roots: list[str], path: str) -> str | None:
+    """Resolve ``path`` for READ against a list of roots, or None if it escapes.
+
+    ``roots[0]`` is the primary workspace; the rest are read-only reference
+    roots (other projects). Semantics:
+
+      * Relative ``path`` resolves against the PRIMARY root only (never a
+        secondary) — same containment as :func:`resolve_safe`.
+      * Absolute ``path`` passes if it lands inside ANY root (realpath + the
+        ``os.sep`` guard). Inside a SECONDARY root, paths under ``orbital/`` or
+        ``.git/`` are rejected (agent internals, not work product).
+
+    With a single-element ``roots`` list this is byte-identical to
+    ``resolve_safe(roots[0], path)`` — normal projects are unaffected.
+    """
+    if not roots:
+        return None
+    primary_real = os.path.realpath(roots[0])
+
+    if not os.path.isabs(path):
+        candidate = os.path.realpath(os.path.join(primary_real, path))
+        if candidate == primary_real or candidate.startswith(primary_real + os.sep):
+            return candidate
+        return None
+
+    candidate = os.path.realpath(path)
+    # Primary root first — no exclusions (it's the reader's own workspace).
+    if candidate == primary_real or candidate.startswith(primary_real + os.sep):
+        return candidate
+    # Secondary roots — allow if contained, minus excluded internal subtrees.
+    for root in roots[1:]:
+        root_real = os.path.realpath(root)
+        if candidate == root_real or candidate.startswith(root_real + os.sep):
+            if _excluded_in_secondary(candidate, root_real):
+                return None
+            return candidate
+    return None

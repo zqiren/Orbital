@@ -14,22 +14,33 @@ export type Route =
   | { name: 'create' }
   | { name: 'blocked' }
   | { name: 'settings' }
+  | { name: 'calendar' }
   | {
       name: 'project';
       projectId: string;
-      tab: 'queue' | 'chat' | 'files';
+      tab: 'queue' | 'chat' | 'files' | 'calendar';
       sessionId?: string;
       settings?: boolean;
       /**
        * Optional intent to scroll the settings overlay to a specific section on
-       * open (P3-G: the budget corner deep-links here). Only meaningful when
-       * `settings` is true; consumed (scrolled-to) once by SettingsView.
+       * open (P3-G: the budget corner deep-links here with 'budget'). Any
+       * `data-settings-section` id is valid (D1 generalized the one-off budget
+       * anchor into the named-section system). Only meaningful when `settings`
+       * is true; consumed (scrolled-to) once by SettingsView.
        */
-      settingsAnchor?: 'budget';
+      settingsAnchor?: string;
       /**
        * Open the pricing-table editor overlay (P3-I). Reached from the Budget
        * section's "Edit pricing table" link; takes precedence over the settings
        * surface in App's content switch. Back returns to settings.
        */
       pricing?: boolean;
+      /**
+       * Workspace-relative path of the file to preview in the slide-out
+       * FilePreviewDrawer (spec 002). Set when a user clicks a clickable path
+       * in chat; the drawer is open iff this is non-null. Does NOT change the
+       * active `tab` — the chat stays mounted underneath. In-memory only (not
+       * persisted across reload), like the rest of the route model.
+       */
+      previewPath?: string;
     };

@@ -15,6 +15,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from agent_os.queue.models import ItemState, QueueRunState
 
@@ -47,6 +48,17 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
+# HTML files are read as UTF-8 text but tagged ``type: "html"`` so the frontend
+# can render them in a sandboxed iframe (spec 003). ``.svg`` deliberately stays
+# on the image branch above — it renders via a ``data:`` image URL, not the
+# HTML document path.
+HTML_EXTENSIONS = {".html", ".htm"}
+
+
+class WriteFileRequest(BaseModel):
+    path: str
+    content: str
+
 
 def _resolve_path(project_id: str, path: str):
     """Resolve a relative path within the project workspace.
@@ -60,8 +72,18 @@ def _resolve_path(project_id: str, path: str):
     workspace = project["workspace"]
     target = os.path.normpath(os.path.join(workspace, path))
 
-    # Path traversal protection
-    if not target.startswith(os.path.normpath(workspace)):
+    # Path containment. Compare REALPATHS (symlinks fully resolved) so that
+    # neither (a) a symlink planted inside the workspace that points OUT of it
+    # (e.g. notes.md -> ~/.ssh/authorized_keys — a daemon-privileged read/write
+    # escape, since the daemon runs UNSANDBOXED while agents are confined by
+    # sandbox-exec), nor (b) a sibling directory that merely shares the
+    # workspace's name prefix (/a/proj vs /a/proj-evil), can slip past. The
+    # trailing os.sep enforces a real path boundary; realpath is applied to
+    # BOTH sides so a symlinked ancestor of the workspace itself
+    # (e.g. /tmp -> /private/tmp on macOS) stays consistent.
+    real_ws = os.path.realpath(workspace)
+    real_target = os.path.realpath(target)
+    if real_target != real_ws and not real_target.startswith(real_ws + os.sep):
         raise HTTPException(status_code=400, detail="Path outside workspace")
 
     return workspace, target
@@ -120,6 +142,23 @@ async def get_file_content(project_id: str, path: str):
             "size": size,
         }
 
+    # HTML files: same UTF-8 read + preview cap as text, but tagged "html" so
+    # the client renders them in a sandboxed iframe rather than as a <pre> blob.
+    if ext in HTML_EXTENSIONS:
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                content = f.read(MAX_PREVIEW_BYTES)
+        except (UnicodeDecodeError, ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
+        return {
+            "path": path,
+            "content": content,
+            "type": "html",
+            "mime": "text/html",
+            "size": size,
+            "truncated": size > MAX_PREVIEW_BYTES,
+        }
+
     # Try reading as text
     try:
         with open(target, "r", encoding="utf-8") as f:
@@ -154,6 +193,37 @@ async def get_file_content(project_id: str, path: str):
         raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
 
 
+@router.put("/projects/{project_id}/files/content")
+async def write_file_content(project_id: str, req: WriteFileRequest):
+    """Overwrite an EXISTING text file with new UTF-8 content (last-write-wins).
+
+    Edit-only — a missing target is a 404, never a create. Image extensions are
+    refused (415). Content is capped at ``MAX_UPLOAD_BYTES`` (413). Containment
+    (incl. symlink-out and sibling-prefix escapes) is enforced by
+    ``_resolve_path`` via realpath — no redundant lexical re-check here.
+
+    Note on the truncation guard: the read endpoint caps content at
+    ``MAX_PREVIEW_BYTES`` (500KB) and flags ``truncated`` when the file is
+    larger. The client refuses to enter edit mode for a truncated file so a
+    partial draft can never clobber the tail. This endpoint does NOT re-derive
+    that — it trusts the client not to send a truncated draft — but the
+    ``MAX_UPLOAD_BYTES`` (10MB) cap here is a separate, larger backstop against
+    an oversized body.
+    """
+    _workspace, target = _resolve_path(project_id, req.path)
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="File not found")
+    ext = os.path.splitext(target)[1].lower()
+    if ext in IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Not an editable text file")
+    data = req.content.encode("utf-8")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Content too large")
+    with open(target, "w", encoding="utf-8", newline="") as f:
+        f.write(req.content)
+    return {"path": req.path, "size": len(data)}
+
+
 @router.post("/projects/{project_id}/files/upload")
 async def upload_file(
     project_id: str,
@@ -178,8 +248,13 @@ async def upload_file(
 
     dest = os.path.join(target_dir, safe_name)
 
-    # Verify the destination is still within workspace
-    if not os.path.normpath(dest).startswith(os.path.normpath(workspace)):
+    # Verify the destination is still within workspace — realpath so a
+    # pre-planted symlink at ``dest`` pointing outside can't redirect the write
+    # (same escape class as the editable-file write endpoint). A not-yet-created
+    # dest resolves to a real path under the workspace and is allowed.
+    real_ws = os.path.realpath(workspace)
+    real_dest = os.path.realpath(dest)
+    if real_dest != real_ws and not real_dest.startswith(real_ws + os.sep):
         raise HTTPException(status_code=400, detail="Path outside workspace")
 
     with open(dest, "wb") as f:

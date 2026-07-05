@@ -33,6 +33,7 @@ import { useSession } from '../hooks/useSession';
 import { useAgent } from '../hooks/useAgent';
 import { SessionSidebar } from './SessionSidebar';
 import ChatView from './ChatView';
+import ScopeChip from './ScopeChip';
 
 interface ChatTabProps {
   project: Project;
@@ -43,6 +44,12 @@ interface ChatTabProps {
   setRoute: Dispatch<SetStateAction<Route>>;
   /** Re-fetch this project's runtime fields (e.g. budget) after a turn ends. */
   onRefreshProject?: (id: string) => void;
+  /**
+   * App-level projects list, consumed by the Quick Tasks ScopeChip (the
+   * cross-project read-scope multi-select — Spec 012 §2c). Only read when
+   * `project.is_scratch`; callers rendering normal projects may omit it.
+   */
+  projects?: Project[];
 }
 
 /**
@@ -81,6 +88,7 @@ export default function ChatTab({
   route,
   setRoute,
   onRefreshProject,
+  projects,
 }: ChatTabProps) {
   const projectId = project.project_id;
   const { sessions } = useSessions(projectId);
@@ -180,17 +188,30 @@ export default function ChatTab({
           onSessionDeleted={handleSessionDeleted}
         />
       </div>
-      <div className="flex-1 min-w-0 min-h-0">
-        <ChatView
-          key={projectId}
-          projectId={projectId}
-          project={project}
-          agentStatus={agentStatus}
-          statusTick={statusTick}
-          mentionAgents={mentionAgents}
-          sessionId={routeSessionId}
-          onRefreshProject={onRefreshProject}
-        />
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        {/* Quick Tasks scope chip (Spec 012 §2c) — chat-header area, scratch
+            project only. ScopeChip also self-gates on is_scratch. */}
+        {project.is_scratch && (
+          <div className="shrink-0 flex items-center px-4 pt-2">
+            <ScopeChip
+              project={project}
+              projects={projects ?? []}
+              sessionId={routeSessionId}
+            />
+          </div>
+        )}
+        <div className="flex-1 min-w-0 min-h-0">
+          <ChatView
+            key={projectId}
+            projectId={projectId}
+            project={project}
+            agentStatus={agentStatus}
+            statusTick={statusTick}
+            mentionAgents={mentionAgents}
+            sessionId={routeSessionId}
+            onRefreshProject={onRefreshProject}
+          />
+        </div>
       </div>
     </div>
   );

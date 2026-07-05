@@ -54,6 +54,10 @@ export interface Project {
   budget_anchor_ts?: string | null;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Connector ids enabled for this project (Spec 011 §0.2 — authenticate
+   *  globally, enable per project). Only enabled connectors' tools are
+   *  reflected into this project's registry. */
+  enabled_connectors?: string[];
 }
 
 export interface ProjectCreateRequest {
@@ -94,6 +98,9 @@ export interface ProjectUpdateRequest {
   reset_budget_anchor?: boolean;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Connector ids enabled for this project (rides the existing
+   *  project-update flow — per-project enablement is NOT a connector route). */
+  enabled_connectors?: string[];
 }
 
 /** PUT /projects response field carrying the reset outcome (codes only). */
@@ -101,6 +108,65 @@ export interface BudgetResetOutcome {
   applied: boolean;
   code: 'not_total_mode' | null;
   budget_anchor_ts: string | null;
+}
+
+/** Cross-project read-scope mode for a scratch (Quick Tasks) session. */
+export type SessionScopeMode = 'all' | 'selected' | 'off';
+
+/**
+ * Per-session cross-project READ scope record (Spec 012), carried by
+ * GET/PUT /api/v2/agents/{project_id}/sessions/{session_id}/scope.
+ *
+ * Reads resolve against the in-scope project workspaces; writes always stay
+ * in the scratch (Quick Tasks) workspace. Only the scratch project accepts
+ * PUT (409 otherwise); PUT returns the stored record. New scratch sessions
+ * default to mode 'all'.
+ */
+export interface SessionScope {
+  mode: SessionScopeMode;
+  selected_project_ids: string[];
+}
+
+/** Connector catalog status (Spec 011). ``pending_verification`` entries are
+ *  visible in the catalog but not connectable (e.g. Gmail while Google's
+ *  restricted-scope verification is in flight). */
+export type ConnectorStatus = 'available' | 'pending_verification';
+
+/** The locked auth-spec enum (Spec 011 §0.5). The launch catalog only uses
+ *  'oauth2'; 'none' covers unauthenticated custom Tier-0 servers. */
+export type ConnectorAuthType = 'oauth2' | 'app_password' | 'local_native' | 'none';
+
+/**
+ * A connector card from GET /api/v2/connectors: the catalog manifest fields
+ * flattened together with live connection status (Task B3 `_serialize`).
+ *
+ * NOTE: tokens are PROVIDER-scoped — connectors sharing an `auth_provider`
+ * (e.g. every Google service) share one account token, so disconnecting any
+ * of them disconnects the whole provider.
+ */
+export interface Connector {
+  id: string;
+  name: string;
+  icon: string;
+  auth_provider: string;
+  auth_type: ConnectorAuthType;
+  server_url: string | null;
+  oauth_scopes: string[];
+  tool_overrides: Record<string, 'read' | 'write'>;
+  /** Drives the onboarding "connect your accounts" card. */
+  featured: boolean;
+  status: ConnectorStatus;
+  connected: boolean;
+  /** Account identity the provider token is bound to (null when disconnected). */
+  account: string | null;
+  /** Non-null when the connector is enabled somewhere but unusable (e.g. its
+   *  MCP session failed) — dynamic backend text, rendered untranslated. */
+  enabled_error: string | null;
+}
+
+/** Response shape of GET /api/v2/connectors. */
+export interface ConnectorListResponse {
+  connectors: Connector[];
 }
 
 export interface ToolCallFunction {
@@ -315,6 +381,92 @@ export interface SubAgentLifecycleEvent {
  * (SDK claude-code only; other transports report two-state). */
 export type SubAgentRunStatus = 'running' | 'background-running' | 'idle';
 
+/**
+ * One entry in a sub-agent transcript, returned by
+ * GET /api/v2/agents/{project_id}/sub-agents/{handle}/transcript (spec 009
+ * §0.5, Task 4's contract). Read-only playback for the drill-in view.
+ */
+export interface SubAgentTranscriptEntry {
+  source: string;
+  content: string;
+  timestamp: string;
+  chunk_type: string;
+}
+
+export interface SubAgentTranscriptResult {
+  handle: string;
+  display_name: string;
+  kind: 'worker' | 'cli';
+  resumable: boolean;
+  entries: SubAgentTranscriptEntry[];
+  /**
+   * The worker's own F2 session stem (spec 009 §0.5 Task D, issues 2+3):
+   * lets the drill-in render the worker's chat history chat-shaped instead
+   * of the flat transcript entries. Live via the fanout registry mid-batch,
+   * disk fallback afterward; null for CLI handles and older fanouts that
+   * predate the field.
+   */
+  session_uuid?: string | null;
+}
+
+/** Fanout task status vocabulary (spec 009 §0.5), reported per worker handle
+ *  via `fanout.task_update`. */
+export type FanoutTaskStatus = 'running' | 'completed' | 'error' | 'stalled' | 'interrupted';
+
+/** One dispatched task, as carried by `fanout.started`. `session_uuid` is the
+ *  worker's own F2 session stem (spec 009 §0.5 Task D) — null for CLI handles
+ *  or older daemons that predate the field. */
+export interface FanoutTaskDescriptor {
+  handle: string;
+  label: string;
+  session_uuid?: string | null;
+}
+
+export interface FanoutStartedEvent {
+  type: 'fanout.started';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+  tasks: FanoutTaskDescriptor[];
+}
+
+export interface FanoutTaskUpdateEvent {
+  type: 'fanout.task_update';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+  handle: string;
+  status: FanoutTaskStatus;
+  /**
+   * Wall-clock ms the task hit a terminal status, stamped server-side
+   * (round 2, issue 1: per-task countdown). Absent on older daemons — the
+   * frontend falls back to its own arrival-time stamp when the status is
+   * terminal and this is missing.
+   */
+  completed_at_ms?: number;
+}
+
+/** One task's terminal snapshot as carried by `fanout.completed` (round 2:
+ *  the event previously carried no per-task detail at all — every field here
+ *  is additive on top of the pre-round-2 `{type, project_id, session_id,
+ *  fanout_id}` shape). */
+export interface FanoutCompletedTaskEntry {
+  handle: string;
+  label: string;
+  status: FanoutTaskStatus;
+  transcript_path?: string | null;
+  completed_at_ms?: number;
+  session_uuid?: string | null;
+}
+
+export interface FanoutCompletedEvent {
+  type: 'fanout.completed';
+  project_id: string;
+  session_id?: string;
+  fanout_id: string;
+  tasks: FanoutCompletedTaskEntry[];
+}
+
 export interface UserMessageEvent {
   type: 'chat.user_message';
   project_id: string;
@@ -332,6 +484,49 @@ export interface AgentNotifyEvent {
   body: string;
   urgency: 'high' | 'normal' | 'low';
   timestamp: string;
+}
+
+/**
+ * Pending-input queue (spec 006, Path A). A message the user sent to session B
+ * while session A holds the project's single active-loop slot was ACCEPTED and
+ * queued; it dispatches when the slot frees. These three events are additive
+ * (unknown types are ignored by old clients) and carry the canonical target
+ * `session_id` (the queued session B), never the holder's.
+ */
+export interface PendingEnqueuedEvent {
+  type: 'chat.pending_enqueued';
+  project_id: string;
+  /** The queued chat session (B) the message will dispatch into. */
+  session_id: string;
+  /** The session (A) currently holding the slot — shown in the wait notice. */
+  holder: string;
+  /** Origin's nonce, so other clients render the optimistic bubble and the
+   *  origin tab dedups its own echo. */
+  nonce: string;
+  /** Full message content, so other clients can render the optimistic bubble. */
+  content: string;
+  /** FIFO position in the project's pending queue at enqueue time. */
+  position: number;
+}
+
+export interface PendingDispatchedEvent {
+  type: 'chat.pending_dispatched';
+  project_id: string;
+  /** The queued session (B) whose pending message just started dispatching. */
+  session_id: string;
+  /** The dispatched batch's nonce (clears that nonce's waiting affordance).
+   *  Nullable to mirror the backend (a pending entry may carry no nonce). */
+  nonce: string | null;
+}
+
+export interface PendingCancelledEvent {
+  type: 'chat.pending_cancelled';
+  project_id: string;
+  /** The queued session (B) whose pending message was cancelled. */
+  session_id: string;
+  /** The cancelled entry's nonce (removes its optimistic bubble + map entry).
+   *  Nullable to mirror the backend cancel-by-session path. */
+  nonce: string | null;
 }
 
 export interface DeviceStatusEvent {
@@ -489,6 +684,9 @@ export type WebSocketEvent =
   | SubAgentLifecycleEvent
   | UserMessageEvent
   | AgentNotifyEvent
+  | PendingEnqueuedEvent
+  | PendingDispatchedEvent
+  | PendingCancelledEvent
   | DeviceStatusEvent
   | TriggerCreatedEvent
   | TriggerDeletedEvent
@@ -502,7 +700,10 @@ export type WebSocketEvent =
   | QueueItemAdvancedEvent
   | QueueStateChangedEvent
   | QueueReorderedEvent
-  | BlockedCountChangedEvent;
+  | BlockedCountChangedEvent
+  | FanoutStartedEvent
+  | FanoutTaskUpdateEvent
+  | FanoutCompletedEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';
@@ -586,7 +787,7 @@ export interface FileContent {
   content: string;
   size: number;
   truncated: boolean;
-  type?: 'text' | 'image' | 'binary';
+  type?: 'text' | 'image' | 'binary' | 'html';
   mime?: string;
   download_url?: string;
 }
