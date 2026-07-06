@@ -118,7 +118,9 @@ class TestProviderRouting:
         with patch("anthropic.AsyncAnthropic") as mock_anthropic:
             provider = LLMProvider(model="claude-opus-4-6", api_key="sk-test", sdk="anthropic")
             mock_openai_mod.AsyncOpenAI.assert_not_called()
-            mock_anthropic.assert_called_once_with(api_key="sk-test")
+            # base_url is always threaded through (None → SDK default endpoint);
+            # dropping it silently routed custom-router traffic to api.anthropic.com.
+            mock_anthropic.assert_called_once_with(api_key="sk-test", base_url=None)
             assert provider.sdk == "anthropic"
             assert provider._openai_client is None
 

@@ -43,13 +43,18 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
     "claude-code": {
         "model": _ParamSchema(
             name="model",
+            # Aliases (haiku/sonnet/opus) auto-track the claude-code CLI's
+            # current default mapping and never go stale — keep them. The
+            # explicit pins must be refreshed each model generation; these are
+            # the current flagship IDs (was: claude-sonnet-4-6 / claude-opus-4-7
+            # / claude-haiku-4-5-20251001).
             allowed=(
                 "haiku",
                 "sonnet",
                 "opus",
-                "claude-sonnet-4-6",
-                "claude-opus-4-7",
-                "claude-haiku-4-5-20251001",
+                "claude-opus-4-8",
+                "claude-sonnet-5",
+                "claude-haiku-4-5",
             ),
             flag_template="--model {value}",
         ),
