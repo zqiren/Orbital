@@ -48,3 +48,20 @@ class TestBrowserWarmupEndpoint:
         resp = test_client.post("/api/v2/platform/browser/warmup")
         assert resp.status_code == 500
         assert "failed to launch" in resp.json()["detail"].lower()
+
+    def test_warmup_background_failure_is_logged(self, caplog):
+        """A warmup task that dies must leave a trace in the logs — the
+        2026-07-07 incident orphaned a sign-in browser with zero log lines."""
+        import logging
+
+        test_client, mock_bm = _make_client([False, True])
+        mock_bm.launch_warmup = AsyncMock(side_effect=RuntimeError("landing page timeout"))
+
+        with caplog.at_level(logging.ERROR, logger="agent_os.api.routes.platform"):
+            resp = test_client.post("/api/v2/platform/browser/warmup")
+
+        assert resp.status_code == 200
+        assert any(
+            "warmup" in rec.getMessage().lower() and rec.levelno >= logging.ERROR
+            for rec in caplog.records
+        ), "warmup task failure was swallowed silently"
