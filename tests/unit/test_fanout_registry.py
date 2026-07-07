@@ -278,7 +278,12 @@ async def test_watchdog_stalls_silent_worker():
         max_runtime_s=3600)
     g.stall_after_s = 0.01                       # test override
     await r.start_watchdog(g)
-    await _wait_until(lambda: g.resolved)
+    # Wait on the TERMINAL observable, not g.resolved — resolved flips True at
+    # the START of resolve_group (idempotency), before stop/inject/broadcast.
+    # Waiting on it races the assertions below (Windows CI flake, spec 013
+    # item 0: both poll timers land in one ~15.6ms timer tick, the test task
+    # resumes between resolved=True and the first stop event).
+    await _wait_until(lambda: r._groups == {})
     assert [e for e in events if e[0] == "stop"]  # straggler stopped
     inj = [e for e in events if e[0] == "inject"]
     assert len(inj) == 1 and "stalled" in inj[0][2]
@@ -305,7 +310,8 @@ async def test_watchdog_max_runtime_ceiling_resolves_group():
                               # stall check (fresh last_activity) never fires
     g.max_runtime_s = 0.01    # ceiling fires on the very first poll
     await r.start_watchdog(g)
-    await _wait_until(lambda: g.resolved)
+    # terminal observable — see test_watchdog_stalls_silent_worker
+    await _wait_until(lambda: r._groups == {})
     assert [e for e in events if e[0] == "stop"]
     inj = [e for e in events if e[0] == "inject"]
     assert len(inj) == 1
@@ -333,7 +339,8 @@ async def test_watchdog_error_still_resolves_group():
     g.tasks["worker:f-0"].last_activity = None  # forces TypeError in the loop
     g.stall_after_s = 0.01
     await r.start_watchdog(g)
-    await _wait_until(lambda: g.resolved)
+    # terminal observable — see test_watchdog_stalls_silent_worker
+    await _wait_until(lambda: r._groups == {})
     inj = [e for e in events if e[0] == "inject"]
     assert len(inj) == 1
     completed = [e for e in events if e[0] == "ws"
@@ -370,7 +377,8 @@ async def test_stop_worker_called_keyword_only_session_id():
         max_runtime_s=3600)
     g.stall_after_s = 0.01
     await r.start_watchdog(g)
-    await _wait_until(lambda: g.resolved)
+    # terminal observable — see test_watchdog_stalls_silent_worker
+    await _wait_until(lambda: r._groups == {})
     stops = [e for e in events if e[0] == "stop"]
     assert len(stops) == 1
     assert stops[0][3] == "s1"  # session_id landed correctly via keyword

@@ -190,6 +190,16 @@ class TestSubAgentConfigStore:
         with pytest.raises(SubAgentConfigError):
             store.set("claude-code", {"model": "definitely-not-real"})
 
+    def test_current_flagship_models_selectable(self, tmp_path):
+        """The claude-code model whitelist must offer the current-generation
+        flagship IDs. It had gone stale (pinned claude-opus-4-7 /
+        claude-sonnet-4-6), so users couldn't select the current models even
+        though the claude-code CLI accepts them."""
+        store = SubAgentConfigStore(str(tmp_path / "config.json"))
+        for model in ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"):
+            store.set("claude-code", {"model": model})
+            assert store.get("claude-code") == {"model": model}
+
     def test_invalid_effort_rejected(self, tmp_path):
         store = SubAgentConfigStore(str(tmp_path / "config.json"))
         with pytest.raises(SubAgentConfigError):

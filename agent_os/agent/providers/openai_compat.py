@@ -409,7 +409,12 @@ class LLMProvider:
 
         if sdk == "anthropic":
             import anthropic
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
+            # base_url must be threaded through: a custom/self-hosted Anthropic-
+            # format router (e.g. co.yes.vg) is reached only when the SDK client
+            # points at it. Omitting it silently sends the router's key to the
+            # default api.anthropic.com → 401 "Invalid API key". None keeps the
+            # SDK default endpoint.
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
             self._openai_client = None
         else:
             self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
@@ -441,7 +446,7 @@ class LLMProvider:
         self.api_key = new_key
         if self.sdk == "anthropic":
             import anthropic
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=new_key)
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=new_key, base_url=self.base_url)
         else:
             self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key)
 
