@@ -694,3 +694,164 @@ class TestBrowserWarmup:
             await mgr.launch_warmup("https://example.com")
 
         assert channels_tried == ["chrome", "msedge"]
+
+
+# ---------------------------------------------------------------------------
+# Sign-in profile-lock regression tests (2026-07-07 incident)
+# ---------------------------------------------------------------------------
+
+class TestSignInProfileLock:
+    """The sign-in warmup browser and the daemon browser share one profile;
+    these lock in the behaviors that turned that hand-off into an outage:
+    orphaned warmup browsers, fatal landing navigation, minimized sign-in
+    windows, and 'install Chrome' errors for a merely-locked profile."""
+
+    @pytest.mark.asyncio
+    async def test_warmup_cleans_up_when_post_launch_step_raises(self, tmp_path):
+        """If a post-launch step fails, the warmup browser must not be orphaned:
+        context closed, playwright stopped, error propagated."""
+        ctx = _make_mock_context()
+        ctx.new_page = AsyncMock(side_effect=RuntimeError("boom after launch"))
+        pw = MagicMock()
+        pw.chromium.launch_persistent_context = AsyncMock(return_value=ctx)
+        pw.stop = AsyncMock()
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            with pytest.raises(RuntimeError, match="boom after launch"):
+                await mgr.launch_warmup("https://example.com")
+
+        ctx.close.assert_awaited()
+        pw.stop.assert_awaited()
+        assert mgr.warmup_active is False
+
+    @pytest.mark.asyncio
+    async def test_warmup_survives_landing_goto_failure(self, tmp_path):
+        """A failed landing navigation must NOT kill the warmup — the window
+        stays open for manual sign-in, and cleanup still runs at the end."""
+        page = _make_mock_page()
+        page.goto = AsyncMock(side_effect=TimeoutError("net::ERR_TIMED_OUT"))
+        ctx = _make_mock_context()
+        ctx.new_page = AsyncMock(return_value=page)
+        pw = MagicMock()
+        pw.chromium.launch_persistent_context = AsyncMock(return_value=ctx)
+        pw.stop = AsyncMock()
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            await mgr.launch_warmup("https://accounts.google.com")  # must not raise
+
+        page.goto.assert_awaited_once()
+        ctx.close.assert_awaited()
+        pw.stop.assert_awaited()
+        assert mgr.warmup_active is False
+
+    @pytest.mark.asyncio
+    async def test_warmup_window_not_minimized(self, tmp_path):
+        """The headed sign-in window must be visible: no --start-minimized.
+        The daemon's own (automation) launch keeps the flag."""
+        ctx = _make_mock_context()
+        pw = MagicMock()
+        pw.chromium.launch_persistent_context = AsyncMock(return_value=ctx)
+        pw.stop = AsyncMock()
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            await mgr.launch_warmup("https://example.com")
+
+        warmup_args = pw.chromium.launch_persistent_context.call_args[1]["args"]
+        assert "--start-minimized" not in warmup_args
+
+        ctx2 = _make_mock_context()
+        pw2 = _make_mock_playwright(ctx2)
+        mgr2 = BrowserManager(profile_dir=str(tmp_path / "profile2"), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw2)
+            await mgr2.ensure_browser()
+        daemon_args = pw2.chromium.launch_persistent_context.call_args[1]["args"]
+        assert "--start-minimized" in daemon_args
+
+    @pytest.mark.asyncio
+    async def test_locked_profile_error_mentions_sign_in_window(self, tmp_path, caplog):
+        """All launch tiers failing while a LIVE process holds SingletonLock
+        must produce a 'profile in use — quit the sign-in window' error, not
+        'install Chrome'. The per-tier launch failure reason must be logged."""
+        import logging
+        import os
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "SingletonLock").symlink_to(f"testhost-{os.getpid()}")
+
+        pw = MagicMock()
+        pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
+        pw.chromium.launch_persistent_context = AsyncMock(
+            side_effect=Exception(
+                "Failed to create a ProcessSingleton for your profile directory. "
+                "This usually means that the profile is already in use."
+            )
+        )
+
+        mgr = BrowserManager(profile_dir=str(profile), headless=True)
+        caplog.set_level(logging.INFO, logger="agent_os.daemon_v2.browser_manager")
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            with pytest.raises(RuntimeError) as ei:
+                await mgr.ensure_browser()
+
+        msg = str(ei.value)
+        assert "in use" in msg
+        assert "sign-in" in msg
+        assert "quit" in msg.lower()
+        assert "Install Chrome" not in msg
+        # The swallowed per-tier reason must be visible in logs
+        assert any("ProcessSingleton" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stale_lock_keeps_install_message(self, tmp_path):
+        """A SingletonLock left by a DEAD process must not trigger the
+        sign-in message — the generic 'No browser available' error stands."""
+        import os
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "SingletonLock").symlink_to("testhost-4194000")
+
+        pw = MagicMock()
+        pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
+        pw.chromium.launch_persistent_context = AsyncMock(
+            side_effect=FileNotFoundError("not found")
+        )
+
+        mgr = BrowserManager(profile_dir=str(profile), headless=True)
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap, \
+             patch("agent_os.daemon_v2.browser_manager.os.kill", side_effect=ProcessLookupError):
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            with pytest.raises(RuntimeError, match="No browser.*available"):
+                await mgr.ensure_browser()
+
+    @pytest.mark.asyncio
+    async def test_ensure_browser_refuses_while_warmup_active(self, tmp_path):
+        """While a sign-in warmup is active, the daemon must not attempt a
+        doomed launch — it raises the sign-in message without launching."""
+        pw = MagicMock()
+        pw.stop = AsyncMock()
+        _add_ua_probe_mock(pw)
+        pw.chromium.launch_persistent_context = AsyncMock(
+            side_effect=FileNotFoundError("not found")
+        )
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        mgr._warmup_active = True
+        with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap:
+            mock_ap.return_value.start = AsyncMock(return_value=pw)
+            with pytest.raises(RuntimeError) as ei:
+                await mgr.ensure_browser()
+
+        assert "sign-in" in str(ei.value)
+        pw.chromium.launch_persistent_context.assert_not_awaited()

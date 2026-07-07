@@ -510,6 +510,21 @@ class BrowserTool(Tool):
 
     async def execute(self, **arguments) -> ToolResult:
         action = arguments.get("action", "")
+        # `is True`: warmup_active is a real bool on BrowserManager; the strict
+        # check keeps spec-less mock managers (truthy auto-attrs) inert.
+        if self._bm.warmup_active is True:
+            # The headed sign-in browser holds the shared profile — any launch
+            # attempt would fail and mislead the agent into "install Chrome".
+            return ToolResult(
+                content=(
+                    "Browser is temporarily unavailable: the user has a sign-in "
+                    "browser window open, and it holds the shared browser profile. "
+                    "It becomes available again once they finish and fully quit "
+                    "that window. Ask the user to close the sign-in browser, or "
+                    "continue without the browser."
+                ),
+                meta={"error": "signin_in_progress", "action": action},
+            )
         if action == "batch":
             return await self._execute_batch(arguments.get("actions", []))
         return await self._dispatch(action, arguments)
