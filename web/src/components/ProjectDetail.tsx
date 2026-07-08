@@ -13,6 +13,7 @@ import BudgetCorner from './BudgetCorner';
 import FilePreviewDrawer, { OpenPathContext } from './FilePreviewDrawer';
 import { useQueue } from '../hooks/useQueue';
 import { useFiles } from '../hooks/useFiles';
+import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -87,7 +88,7 @@ export default function ProjectDetail({
   // PROBE-FIRST: fetch the content, then open the drawer only once it's in hand
   // (404/error just toasts, never opening) — so the panel never flashes blank
   // and a missing file never opens-then-closes.
-  const { getFileContent, saveFileContent } = useFiles();
+  const { getFileContent, resolvePath, saveFileContent } = useFiles();
   const [previewContent, setPreviewContent] = useState<FileContent | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewToast, setPreviewToast] = useState<string | null>(null);
@@ -103,14 +104,26 @@ export default function ProjectDetail({
       // Probe-first: fetch BEFORE opening so the drawer never slides in blank.
       // On replace-on-click the already-open drawer keeps showing the prior
       // content until the new content is ready — no flash there either.
-      const data = await getFileContent(project.project_id, path);
+      // Agents abbreviate paths in chat ('drafts/x.md', bare 'DECISIONS.md'),
+      // so a miss falls back to the resolve endpoint and transparently opens
+      // a unique suffix match.
+      const outcome = await fetchPathWithFallback(
+        (p) => getFileContent(project.project_id, p),
+        (p) => resolvePath(project.project_id, p),
+        path,
+      );
       // Drop the result if a newer open superseded this one.
       if (latestPreviewReqRef.current !== path) return;
       setPreviewLoading(false);
-      if (!data) {
-        setPreviewToast(t('chat.path.notFound'));
+      if (outcome.status !== 'ok') {
+        setPreviewToast(
+          outcome.status === 'ambiguous'
+            ? t('chat.path.ambiguous', { name: path })
+            : t('chat.path.notFound'),
+        );
         return;
       }
+      const data = outcome.content;
       setPreviewContent(data);
       // Two-frame open (WKWebView "blink" fix). Render the content into the
       // drawer's OFF-SCREEN compositing layer first, then trigger the slide-in
@@ -121,13 +134,15 @@ export default function ProjectDetail({
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
           if (latestPreviewReqRef.current !== path) return;
+          // Route to the RESOLVED path (not the clicked one) so save/deep-link
+          // hit the real file when the fallback rewrote an abbreviated path.
           setRoute((prev) =>
-            prev.name === 'project' ? { ...prev, previewPath: path } : prev,
+            prev.name === 'project' ? { ...prev, previewPath: outcome.path } : prev,
           );
         }),
       );
     },
-    [getFileContent, project.project_id, setRoute, t],
+    [getFileContent, resolvePath, project.project_id, setRoute, t],
   );
 
   const handleClosePreview = useCallback(() => {

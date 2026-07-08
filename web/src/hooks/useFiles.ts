@@ -55,6 +55,20 @@ export function useFiles() {
     [],
   );
 
+  const resolvePath = useCallback(
+    async (projectId: string, path: string): Promise<string[] | null> => {
+      try {
+        const data = await api<{ matches: string[] }>(
+          `/api/v2/projects/${encodeURIComponent(projectId)}/files/resolve?path=${encodeURIComponent(path)}`,
+        );
+        return data.matches;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
   const saveFileContent = useCallback(
     async (projectId: string, path: string, content: string): Promise<boolean> => {
       try {
@@ -80,6 +94,7 @@ export function useFiles() {
     error,
     listDirectory,
     getFileContent,
+    resolvePath,
     saveFileContent,
   };
 }
