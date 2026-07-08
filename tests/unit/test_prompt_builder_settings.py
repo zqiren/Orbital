@@ -231,3 +231,18 @@ class TestScratchIdentityTweak:
         ctx = _make_context(tmp_path, is_scratch=False)
         cached, _, _ = builder.build(ctx)
         assert "methodical" in cached.lower()
+
+
+class TestChatReplyPathLinks:
+    """Spec 002: chat replies must reference workspace files as full
+    workspace-relative markdown links so the UI can render cards/chips."""
+
+    def test_chat_reply_link_convention_in_cached_prefix(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path)
+        cached, _, _ = builder.build(ctx)
+        assert "PATHS IN CHAT REPLIES" in cached
+        assert "[the file's title](path/from/workspace/root.md)" in cached
+        # The two observed failure modes must be called out explicitly.
+        assert "never abbreviate" in cached
+        assert "bare filename" in cached

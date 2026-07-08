@@ -143,6 +143,7 @@ export const STRINGS = {
   "chat.notify.noSession.body": { en: "Start the agent first, then use /new to reset the session.", zh: "请先启动Agent，然后使用 /new 重置会话。" },
   "chat.notify.noSession.title": { en: "No active session", zh: "没有活跃会话" },
   "chat.onlyNAllowed": { en: "Only {n} attachments allowed per message.", zh: "每条消息仅允许 {n} 个附件。" },
+  "chat.path.ambiguous": { en: "Multiple files match {name} — open it from the Files tab", zh: "多个文件与 {name} 匹配 — 请在文件标签页中打开" },
   "chat.path.notFound": { en: "File not found in this workspace", zh: "在此工作区中未找到该文件" },
   "chat.path.open": { en: "Open", zh: "打开" },
   "chat.path.openAria": { en: "Open {path} in the preview panel", zh: "在预览面板中打开 {path}" },

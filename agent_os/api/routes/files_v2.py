@@ -115,6 +115,68 @@ async def list_files(project_id: str, path: str = ""):
     return {"path": path, "entries": entries}
 
 
+# Directories resolve never descends into: VCS/dependency internals are huge
+# and never what a chat reply refers to. Dot-directories are skipped wholesale.
+_RESOLVE_SKIP_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build"}
+# Bounds: a resolve call is a click-time fallback, not a search engine. Cap the
+# result list and the total files scanned so a pathological workspace (huge
+# vendored tree outside the skip list) can't hang the request.
+MAX_RESOLVE_MATCHES = 20
+MAX_RESOLVE_SCAN = 50_000
+
+
+@router.get("/projects/{project_id}/files/resolve")
+async def resolve_file(project_id: str, path: str):
+    """Resolve an abbreviated workspace path to full workspace-relative paths.
+
+    Agents abbreviate paths in chat replies ('drafts/x.md' for
+    'content/drafts/x.md', bare 'DECISIONS.md' for 'orbital/DECISIONS.md'), so
+    a click on such a chip 404s. This endpoint returns every workspace file
+    whose relative path ends with the requested path on a whole-segment
+    boundary, letting the client open a unique match instead of toasting.
+    """
+    workspace, target = _resolve_path(project_id, path)
+
+    rel = path.replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+
+    # Exact hit — no walk needed; answer is the (normalized) path itself.
+    if os.path.isfile(target):
+        rel_exact = os.path.relpath(target, workspace).replace(os.sep, "/")
+        return {"path": path, "matches": [rel_exact]}
+
+    suffix_parts = [p for p in rel.split("/") if p]
+    if not suffix_parts:
+        return {"path": path, "matches": []}
+    basename = suffix_parts[-1]
+
+    matches: list[str] = []
+    scanned = 0
+    capped = False
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d not in _RESOLVE_SKIP_DIRS
+        ]
+        for name in filenames:
+            scanned += 1
+            if scanned > MAX_RESOLVE_SCAN or len(matches) >= MAX_RESOLVE_MATCHES:
+                capped = True
+                break
+            if name != basename:
+                continue
+            rel_file = os.path.relpath(
+                os.path.join(dirpath, name), workspace
+            ).replace(os.sep, "/")
+            if rel_file.split("/")[-len(suffix_parts):] == suffix_parts:
+                matches.append(rel_file)
+        if capped:
+            break
+
+    return {"path": path, "matches": sorted(matches)}
+
+
 @router.get("/projects/{project_id}/files/content")
 async def get_file_content(project_id: str, path: str):
     _workspace, target = _resolve_path(project_id, path)
