@@ -19,6 +19,8 @@ import warnings
 from collections import deque
 from pathlib import Path
 
+import psutil
+
 try:
     from patchright.async_api import async_playwright, Browser, BrowserContext, Page
     HAS_PLAYWRIGHT = True
@@ -171,6 +173,16 @@ def _exc_summary(exc: BaseException) -> str:
     return text.splitlines()[0][:200] if text else type(exc).__name__
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this pid exists (any user's).
+
+    Deliberately psutil, not the POSIX ``os.kill(pid, 0)`` idiom: on Windows
+    signal 0 is CTRL_C_EVENT, so os.kill(pid, 0) *sends Ctrl+C to every
+    process sharing the console* instead of probing.
+    """
+    return psutil.pid_exists(pid)
+
+
 class _PageState:
     """Per-page state tracking with ring buffer caps."""
 
@@ -296,13 +308,7 @@ class BrowserManager:
             pid = int(target.rsplit("-", 1)[-1])
         except (OSError, ValueError):
             return None
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return None
-        except OSError:
-            pass  # e.g. EPERM — process exists but belongs to another user
-        return pid
+        return pid if _pid_alive(pid) else None
 
     async def _launch(self):
         """Launch Chromium with persistent context and anti-detection flags."""

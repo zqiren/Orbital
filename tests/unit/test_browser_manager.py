@@ -830,10 +830,27 @@ class TestSignInProfileLock:
 
         mgr = BrowserManager(profile_dir=str(profile), headless=True)
         with patch("agent_os.daemon_v2.browser_manager.async_playwright") as mock_ap, \
-             patch("agent_os.daemon_v2.browser_manager.os.kill", side_effect=ProcessLookupError):
+             patch("agent_os.daemon_v2.browser_manager._pid_alive", return_value=False):
             mock_ap.return_value.start = AsyncMock(return_value=pw)
             with pytest.raises(RuntimeError, match="No browser.*available"):
                 await mgr.ensure_browser()
+
+    def test_lock_probe_never_calls_os_kill(self, tmp_path):
+        """The liveness probe must not use os.kill(pid, 0): on Windows signal
+        0 is CTRL_C_EVENT, so it Ctrl+C's every process on the console instead
+        of probing — it aborted the whole CI test run. readlink is patched so
+        this test needs no symlink privilege."""
+        import os
+
+        mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
+        with patch(
+            "agent_os.daemon_v2.browser_manager.os.readlink",
+            return_value=f"testhost-{os.getpid()}",
+        ), patch(
+            "agent_os.daemon_v2.browser_manager.os.kill",
+            side_effect=AssertionError("os.kill(pid, 0) sends Ctrl+C on Windows"),
+        ):
+            assert mgr._profile_lock_holder() == os.getpid()
 
     @pytest.mark.asyncio
     async def test_ensure_browser_refuses_while_warmup_active(self, tmp_path):
