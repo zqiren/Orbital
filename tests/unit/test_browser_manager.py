@@ -838,14 +838,19 @@ class TestSignInProfileLock:
     def test_lock_probe_never_calls_os_kill(self, tmp_path):
         """The liveness probe must not use os.kill(pid, 0): on Windows signal
         0 is CTRL_C_EVENT, so it Ctrl+C's every process on the console instead
-        of probing — it aborted the whole CI test run. readlink is patched so
-        this test needs no symlink privilege."""
+        of probing — it aborted the whole CI test run. psutil.pid_exists is
+        stubbed because on POSIX it legitimately uses os.kill(pid, 0)
+        internally — only a direct call from our code may trip the patched
+        os.kill. readlink is patched so this test needs no symlink privilege."""
         import os
 
         mgr = BrowserManager(profile_dir=str(tmp_path / "profile"), headless=True)
         with patch(
             "agent_os.daemon_v2.browser_manager.os.readlink",
             return_value=f"testhost-{os.getpid()}",
+        ), patch(
+            "agent_os.daemon_v2.browser_manager.psutil.pid_exists",
+            return_value=True,
         ), patch(
             "agent_os.daemon_v2.browser_manager.os.kill",
             side_effect=AssertionError("os.kill(pid, 0) sends Ctrl+C on Windows"),
