@@ -246,3 +246,21 @@ class TestChatReplyPathLinks:
         # The two observed failure modes must be called out explicitly.
         assert "never abbreviate" in cached
         assert "bare filename" in cached
+
+
+class TestMemoryFormatHeaderPointer:
+    """Layer-1 format contracts: the prompt points at the in-file headers
+    (which carry the detail) and adds the INDEX tripwire."""
+
+    def test_memory_section_references_format_headers(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path)
+        _, semi_stable, _ = builder.build(ctx)
+        assert "<!--format" in semi_stable
+        assert "restores it if removed" in semi_stable
+
+    def test_memory_section_has_index_tripwire(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path)
+        _, semi_stable, _ = builder.build(ctx)
+        assert "date, status, or decision into INDEX.md" in semi_stable

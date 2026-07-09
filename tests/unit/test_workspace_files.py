@@ -29,6 +29,14 @@ from agent_os.agent.workspace_files import (
 )
 
 
+
+from agent_os.agent import memory_entries as _mem
+
+
+def _hdr(key: str, content: str) -> str:
+    """Expected on-disk form: write() self-heals the <!--format--> header."""
+    return _mem.FORMAT_HEADERS[key] + "\n" + content
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -98,7 +106,7 @@ def test_write_and_read(ws):
     """Write state, read it back, content matches."""
     content = "# Project State\n\nAll good."
     ws.write("state", content)
-    assert ws.read("state") == content
+    assert ws.read("state") == _hdr("state", content)
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +138,8 @@ def test_read_all_mixed(ws):
 
     result = ws.read_all()
 
-    assert result["state"] == "state content"
-    assert result["lessons"] == "lessons content"
+    assert result["state"] == _hdr("state", "state content")
+    assert result["lessons"] == _hdr("lessons", "lessons content")
     assert result["decisions"] is None
     # index replaces the retired "context" key.
     assert result["index"] is None
@@ -298,7 +306,7 @@ async def test_session_end_routine_writes_files(tmp_path):
     await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state is written verbatim (overwrite scratchpad)
-    assert ws.read("state") == "# Project State\nEverything is great."
+    assert ws.read("state") == _hdr("state", "# Project State\nEverything is great.")
     # decisions written (stamped) — title/body survive the metadata stamp
     decisions = ws.read("decisions")
     assert "Chose A" in decisions
@@ -335,7 +343,7 @@ async def test_session_end_routine_bad_json(tmp_path, caplog):
         await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state should be unchanged (no LLM-derived overwrite happened)
-    assert ws.read("state") == "original state"
+    assert ws.read("state") == _hdr("state", "original state")
     # No durable files created from the garbage response.
     assert ws.read("decisions") is None
     assert ws.read("lessons") is None
@@ -370,7 +378,7 @@ async def test_session_end_routine_empty_optionals(tmp_path):
     await run_session_end_routine(session, provider, ws, session_uuid=session.session_uuid)
 
     # state written
-    assert ws.read("state") == "# State\nDoing well."
+    assert ws.read("state") == _hdr("state", "# State\nDoing well.")
     # Empty optionals should NOT create files
     assert ws.read("decisions") is None
     assert ws.read("lessons") is None
@@ -439,7 +447,7 @@ async def test_session_end_uses_utility_provider(tmp_path):
     utility_provider.complete.assert_called_once()
     main_provider.complete.assert_not_called()
 
-    assert ws.read("state") == "state"
+    assert ws.read("state") == _hdr("state", "state")
 
 
 # ---------------------------------------------------------------------------

@@ -89,6 +89,113 @@ ARCHIVE_OF: dict[str, str] = {
     "lessons": "lessons_archive",
 }
 
+# ---------------------------------------------------------------------------
+# In-file format contracts. One-line HTML comments: invisible in rendered
+# markdown, sit on line 1 so they survive the volatile head-trim, and count
+# inside the file's own budget (~40 tok each). Self-healing at BOTH write
+# chokepoints (WorkspaceFileManager.write for system writes, process_on_write
+# for the agent's write/edit tools) — the same pattern stamp() uses to
+# re-apply stripped <!--mem--> comments. The format detail deliberately lives
+# HERE rather than in the system prompt: adjacent to the content when the
+# agent reads/edits the file, and visible to humans opening the raw file.
+# ---------------------------------------------------------------------------
+
+FORMAT_HEADERS: dict[str, str] = {
+    "index": (
+        "<!--format INDEX is a navigation map ONLY: '- path — one sentence' "
+        "bullets under '## <area>' headings. No dates, status, decisions, or "
+        "lessons here — those live in PROJECT_STATE.md / DECISIONS.md / "
+        "LESSONS.md.-->"
+    ),
+    "state": (
+        "<!--format PROJECT_STATE is what is true NOW: current focus, "
+        "in-progress work, blockers, next steps. Overwrite stale lines; never "
+        "append a dated history.-->"
+    ),
+    "decisions": (
+        "<!--format DECISIONS entries: '## <slug>' then Chose / Reason / "
+        "Rejected. Supersede or replace old entries when a decision changes; "
+        "never leave contradictions.-->"
+    ),
+    "lessons": (
+        "<!--format LESSONS entries: numbered durable heuristics and "
+        "playbooks. Add on error recovery or non-obvious workaround; keep "
+        "real playbooks intact.-->"
+    ),
+}
+
+
+def ensure_format_header(content: str | None, key: str) -> str:
+    """Prepend the file's <!--format--> contract if missing (idempotent).
+
+    An existing header (even an agent-edited variant) is left alone — this is
+    self-healing, not normalization.
+    """
+    header = FORMAT_HEADERS.get(key)
+    text = content or ""
+    if header is None or text.lstrip().startswith("<!--format"):
+        return text
+    return header + "\n" + text
+
+
+# --- Report-only shape lint (v1: volatile files only) -----------------------
+# NEVER a hygiene-flag trigger: consumed exclusively by the session-end merge
+# prompt ("FORMATTING TO FIX") so formatting tidy-up rides along a pass that
+# runs anyway. Imposing format must not increase checkpoint frequency.
+
+# A date counts as drift only in PROSE — dates embedded in filename tokens
+# (agent_output/2026-07-08-competitor-watch.md, ACTIVE-reframe-2026-04.md) are
+# navigation, hence the negative lookahead for a continuing -word/path
+# character or a file extension (`.md`). A sentence-ending period (dot NOT
+# followed by a word char) still counts.
+_SHAPE_DATE_RE = re.compile(r"\b\d{4}-\d{2}(-\d{2})?\b(?![-\w]|\.\w)")
+_SHAPE_EMOJI_RE = re.compile(r"[🚨✅⚠]")
+_INDEX_MAP_SHAPE_RE = re.compile(r"^(#{1,3} |- \S.* — )")
+_STATE_CHANGELOG_RE = re.compile(r"^#{1,3} .*\b\d{4}-\d{2}\b")
+_INDEX_NON_MAP_MAX_RATIO = 0.4
+
+
+def shape_report(content: str | None, key: str) -> str | None:
+    """One-line lint summary for a drifted volatile file, or None when clean.
+
+    Conservative by design (few rules, counts not line-dumps) — a false
+    positive here nags every consolidation pass.
+    """
+    if key not in VOLATILE_KEYS or not content or not content.strip():
+        return None
+    lines = [
+        ln for ln in content.splitlines()
+        if ln.strip() and not ln.lstrip().startswith("<!--")
+    ]
+    if not lines:
+        return None
+
+    if key == "state":
+        dated = sum(1 for ln in lines if _STATE_CHANGELOG_RE.match(ln))
+        if dated:
+            return (
+                f"PROJECT_STATE: {dated} dated changelog-style header(s) — "
+                "state is overwrite-in-place, not a history."
+            )
+        return None
+
+    problems: list[str] = []
+    dated = sum(1 for ln in lines if _SHAPE_DATE_RE.search(ln))
+    emoji = sum(1 for ln in lines if _SHAPE_EMOJI_RE.search(ln))
+    non_map = sum(1 for ln in lines if not _INDEX_MAP_SHAPE_RE.match(ln))
+    if dated:
+        problems.append(f"{dated} dated line(s)")
+    if emoji:
+        problems.append(f"{emoji} status-emoji line(s)")
+    ratio = non_map / len(lines)
+    if ratio > _INDEX_NON_MAP_MAX_RATIO:
+        problems.append(
+            f"{round(ratio * 100)}% of lines not in 'path — sentence' map shape"
+        )
+    if not problems:
+        return None
+    return "INDEX: " + ", ".join(problems)
+
 
 def est_tokens(text: str | None) -> float:
     """len/4 token estimate — matches ``token_utils`` / ``context.py``."""
@@ -553,7 +660,11 @@ def process_on_write(workspace: str, resolved_path: str, content: str, *, today:
     cheap and never deletes/demotes mid-edit.
     """
     key = memory_key_for_path(resolved_path, workspace)
-    if key is None or key not in ENTRY_MARKERS:
+    if key is None:
+        return content, []
+    content = ensure_format_header(content, key)
+    if key not in ENTRY_MARKERS:
+        # Volatile files (state/index): header only, no entry stamping.
         return content, []
     old = None
     try:
