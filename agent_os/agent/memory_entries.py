@@ -143,9 +143,11 @@ def ensure_format_header(content: str | None, key: str) -> str:
 # runs anyway. Imposing format must not increase checkpoint frequency.
 
 # A date counts as drift only in PROSE — dates embedded in filename tokens
-# (agent_output/2026-07-08-competitor-watch.md) are navigation, hence the
-# negative lookahead for a continuing -word/path character.
-_SHAPE_DATE_RE = re.compile(r"\b\d{4}-\d{2}(-\d{2})?\b(?![-\w])")
+# (agent_output/2026-07-08-competitor-watch.md, ACTIVE-reframe-2026-04.md) are
+# navigation, hence the negative lookahead for a continuing -word/path
+# character or a file extension (`.md`). A sentence-ending period (dot NOT
+# followed by a word char) still counts.
+_SHAPE_DATE_RE = re.compile(r"\b\d{4}-\d{2}(-\d{2})?\b(?![-\w]|\.\w)")
 _SHAPE_EMOJI_RE = re.compile(r"[🚨✅⚠]")
 _INDEX_MAP_SHAPE_RE = re.compile(r"^(#{1,3} |- \S.* — )")
 _STATE_CHANGELOG_RE = re.compile(r"^#{1,3} .*\b\d{4}-\d{2}\b")

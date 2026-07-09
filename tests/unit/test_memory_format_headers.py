@@ -188,8 +188,20 @@ class TestShapeReportFilenameDates:
 ## agent_output
 - agent_output/2026-07-08-competitor-watch.md — daily watch report
 - agent_output/2026-06-25-pilotdeck-technical-audit.md — PilotDeck audit
+- ACTIVE-strategy-reframe-2026-04.md — date ends the stem, then extension
 """
         assert mem.shape_report(content, "index") is None
+
+    def test_sentence_ending_date_still_flagged(self):
+        content = """# INDEX
+
+## stuff
+- the thing shipped 2026-06-30.
+- another thing landed 2026-07-01.
+- and one more happened on 2026-07-02.
+"""
+        report = mem.shape_report(content, "index")
+        assert report is not None and "dated" in report
 
     def test_prose_dates_still_flagged(self):
         content = """# INDEX
