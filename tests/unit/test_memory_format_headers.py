@@ -176,3 +176,28 @@ class TestMergePromptRideAlong:
         wf = WorkspaceFileManager(str(tmp_path))
         prompt = wf.build_session_end_prompt(self._summary())
         assert "stale copies" in prompt
+
+
+class TestShapeReportFilenameDates:
+    """Dates embedded in artifact FILENAMES (agent_output/YYYY-MM-DD-*.md) are
+    navigation, not drift — they must not count as dated lines."""
+
+    def test_dated_filenames_are_clean(self):
+        content = """# INDEX
+
+## agent_output
+- agent_output/2026-07-08-competitor-watch.md — daily watch report
+- agent_output/2026-06-25-pilotdeck-technical-audit.md — PilotDeck audit
+"""
+        assert mem.shape_report(content, "index") is None
+
+    def test_prose_dates_still_flagged(self):
+        content = """# INDEX
+
+## stuff
+- **v1 SHIPPED (2026-06-30)** — all gates unblocked
+- plan launched 2026-06-30 and going well
+- another dated thing happened (2026-07-01)
+"""
+        report = mem.shape_report(content, "index")
+        assert report is not None and "dated" in report
