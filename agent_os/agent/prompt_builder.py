@@ -48,6 +48,12 @@ class PromptContext:
     last_state_update_turn: int | None = None    # turn# of last state checkpoint
     last_state_update_ts: str | None = None      # ISO timestamp of last checkpoint
     turns_since_last_update: int | None = None   # turns elapsed since last checkpoint
+    # Async consolidation visibility (2026-07-09 incident): outcome of the last
+    # background pass ("llm_merged" | "backstop_only" | "failed" | "no_delta" |
+    # "skipped_idempotent") and whether one is running right now.
+    last_state_update_outcome: str | None = None
+    refresh_in_flight: bool = False
+    refresh_in_flight_since_turn: int | None = None
     cold_start: bool = False  # first-session import scan mode (Stage 1-3)
     # Scratch cross-project READ scope (Spec 12 §2a): [{"name","path"}] for
     # each in-scope project (secondary read roots). Empty/None for normal
@@ -826,6 +832,17 @@ class PromptBuilder:
         Re-built every turn (lives in truly_dynamic) → survives compaction
         automatically via prompt re-injection.
         """
+        if context.refresh_in_flight:
+            since = (
+                f" (started turn {context.refresh_in_flight_since_turn})"
+                if context.refresh_in_flight_since_turn is not None else ""
+            )
+            return (
+                f"State checkpoint: consolidation pass in flight{since} — it "
+                "can take a few minutes. Do not re-trigger checkpoint_state "
+                "and do not hand-edit memory files; [MEMORY HYGIENE] flags "
+                "may persist until the pass lands."
+            )
         if context.last_state_update_turn is None:
             return (
                 "State checkpoint: no consolidation yet this session. "
@@ -837,6 +854,12 @@ class PromptBuilder:
             f"({context.last_state_update_ts}), "
             f"{context.turns_since_last_update} turns ago."
         ]
+        if context.last_state_update_outcome in ("backstop_only", "failed"):
+            lines.append(
+                "That pass could not run its LLM merge (deterministic backstop "
+                "only) — if a [MEMORY HYGIENE] flag persists, edit the file "
+                "directly instead of re-triggering checkpoint_state."
+            )
         return "\n".join(lines)
 
     def _os_instructions(self, context: PromptContext) -> str:

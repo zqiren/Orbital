@@ -553,8 +553,13 @@ async def run_session_end_routine(
     session_uuid: str,
     bypass_idempotency: bool = False,
     project_id: str = "",
-) -> None:
+) -> str:
     """Session-end cleanup: deterministic size backstop + best-effort LLM merge.
+
+    Returns an outcome string the loop surfaces to the agent (hygiene flag +
+    status line): "llm_merged" (merge applied), "backstop_only" (LLM failed or
+    timed out; only the deterministic hard cap ran), "no_delta" (nothing to do),
+    "skipped_idempotent" (this session already completed its boundary pass).
 
     Repositioned as the CLEANUP, not the state record — state is recorded
     incrementally during the session (overwrite STATE; stamped append for
@@ -576,7 +581,7 @@ async def run_session_end_routine(
     # Idempotency guard: short-circuit if this session already completed.
     if not bypass_idempotency and session_uuid in _completed_session_ends:
         logger.info("session_end skipped: already completed for %s", session_uuid)
-        return
+        return "skipped_idempotent"
 
     # No-delta gate: skip entirely (no LLM) when nothing changed since the last
     # successful cleanup. Persisted, so it survives daemon restarts.
@@ -585,7 +590,7 @@ async def run_session_end_routine(
             "session_end: no un-consolidated delta since last cleanup; "
             "skipping (no LLM call)"
         )
-        return
+        return "no_delta"
 
     today = date.today().isoformat()
 
@@ -602,7 +607,13 @@ async def run_session_end_routine(
         for key in ("state", "decisions", "lessons", "index")
     }
     result: dict | None = None
-    _per_attempt_timeouts = [30.0, 60.0, 90.0]
+    _per_attempt_timeouts = _dedup_timeouts(llm)
+    if len(_per_attempt_timeouts) == 1:
+        logger.info(
+            "session_end LLM dedup: reasoning locked-on for model %s — "
+            "single attempt with %.0fs timeout (no retry ladder)",
+            getattr(llm, "model", "?"), _per_attempt_timeouts[0],
+        )
     for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
         try:
             response = await asyncio.wait_for(
@@ -665,6 +676,8 @@ async def run_session_end_routine(
     if not bypass_idempotency:
         _completed_session_ends.add(session_uuid)
 
+    return "llm_merged" if result else "backstop_only"
+
 
 # ---------------------------------------------------------------------------
 # Session-end helpers: no-delta gate (persisted) + deterministic hard cap.
@@ -672,6 +685,27 @@ async def run_session_end_routine(
 
 # Layer-1 files whose changes count as an un-consolidated delta.
 _DELTA_KEYS = ("state", "decisions", "lessons", "index")
+
+# Per-attempt timeout ladders for the LLM dedup/merge call.
+_DEDUP_TIMEOUTS_DEFAULT = (30.0, 60.0, 90.0)
+_DEDUP_TIMEOUTS_LOCKED_ON = (240.0,)
+
+
+def _dedup_timeouts(llm) -> list[float]:
+    """Timeout ladder for the session-end LLM dedup call, per provider.
+
+    Locked-on reasoning models (e.g. MiniMax-M3, enable='model_only') cannot
+    skip their thinking phase — ``disable_reasoning`` is a no-op, and retrying
+    the identical prompt on a 30/60/90s ladder can never succeed; it only burns
+    tokens (observed: every consolidation for a MiniMax-M3 project timed out
+    3/3 for days, 2026-07-03..09). One attempt, one realistic timeout — the
+    pass runs in the background, so a long single attempt never blocks the
+    loop. The ``is True`` comparison guards against mocks, whose auto-created
+    attributes are truthy without being True.
+    """
+    if getattr(llm, "reasoning_locked_on", False) is True:
+        return list(_DEDUP_TIMEOUTS_LOCKED_ON)
+    return list(_DEDUP_TIMEOUTS_DEFAULT)
 
 
 def _cleanup_marker_path(workspace_files: "WorkspaceFileManager") -> str:

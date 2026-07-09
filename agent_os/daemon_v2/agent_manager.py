@@ -843,7 +843,7 @@ class AgentManager:
         # 11a. Periodic state-refresh callback (turn-count / agent-decided /
         # token-pressure triggers). Broadcasts state_refresh.lifecycle events
         # so the frontend can show an inline status indicator.
-        async def session_end_refresh_callback(trigger_name: str) -> None:
+        async def session_end_refresh_callback(trigger_name: str) -> str | None:
             from datetime import datetime, timezone
             ts = datetime.now(timezone.utc).isoformat()
             self._broadcast(project_id, {
@@ -855,7 +855,12 @@ class AgentManager:
             }, session_id=session_id)
             try:
                 live_provider, live_utility = _live_providers()
-                await run_session_end_routine(
+                # The outcome ("llm_merged" / "backstop_only" / "no_delta" /
+                # "skipped_idempotent") is returned to AgentLoop._run_refresh,
+                # which surfaces it to the agent via the hygiene flag and the
+                # State-checkpoint status line. The exception paths below
+                # re-raise; the loop records those as "failed".
+                outcome = await run_session_end_routine(
                     session=session,
                     provider=live_provider,
                     workspace_files=workspace_files,
@@ -869,12 +874,14 @@ class AgentManager:
                     "project_id": project_id,
                     "status": "done",
                     "trigger": trigger_name,
+                    "outcome": outcome,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }, session_id=session_id)
                 logger.info(
-                    "State refresh complete (project=%s trigger=%s)",
-                    project_id, trigger_name,
+                    "State refresh complete (project=%s trigger=%s outcome=%s)",
+                    project_id, trigger_name, outcome,
                 )
+                return outcome
             except asyncio.TimeoutError:
                 self._broadcast(project_id, {
                     "type": "state_refresh.lifecycle",

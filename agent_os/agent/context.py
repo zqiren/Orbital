@@ -64,6 +64,12 @@ class ContextManager:
         self._last_checkpoint_turn: int | None = None
         self._last_checkpoint_ts: str | None = None
         self._turns_since_last_update: int | None = None
+        # Async consolidation visibility — AgentLoop sets these at spawn /
+        # completion of each background pass so the hygiene flag and the
+        # "State checkpoint:" status line can render scheduler state.
+        self._last_checkpoint_outcome: str | None = None
+        self._refresh_in_flight: bool = False
+        self._refresh_in_flight_since_turn: int | None = None
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._scope_projects_provider = scope_projects_provider  # callable() -> list[dict]
         self._cold_resume_injected: bool = False
@@ -207,6 +213,9 @@ class ContextManager:
                 None if self._last_checkpoint_turn is None
                 else getattr(self, "_turns_since_last_update", None)
             ),
+            last_state_update_outcome=self._last_checkpoint_outcome,
+            refresh_in_flight=self._refresh_in_flight,
+            refresh_in_flight_since_turn=self._refresh_in_flight_since_turn,
         )
 
         # Build system prompt
@@ -232,6 +241,15 @@ class ContextManager:
         # points to (do not drop a durable entry from injection un-pointed).
         from agent_os.agent import memory_entries as _mem
         _budgets = _mem.budgets_for_window(self._model_context_limit)
+        # Scheduler-state snapshot so the hygiene flag renders as a state
+        # machine (in-flight / failed-merge / merged-but-large) instead of a
+        # repeating alarm the agent reads as "the tool failed".
+        _refresh_view = _mem.RefreshView(
+            in_flight=self._refresh_in_flight,
+            in_flight_since_turn=self._refresh_in_flight_since_turn,
+            last_outcome=self._last_checkpoint_outcome,
+            last_turn=self._last_checkpoint_turn,
+        )
         soft_flags: list[str] = []
         if self._workspace_files is not None:
             for key, filename in _LAYER1_FILES:
@@ -244,7 +262,7 @@ class ContextManager:
                         "role": "system",
                         "content": f"[{filename}]\n{view}",
                     })
-                flag = _mem.soft_flag(content, key)
+                flag = _mem.soft_flag(content, key, refresh=_refresh_view)
                 if flag:
                     soft_flags.append(flag)
 

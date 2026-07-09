@@ -50,10 +50,137 @@ async def test_schedule_spawns_background_pass_and_returns_instantly():
     calls = []
     loop = _make_loop(calls)
     msg = loop.schedule_checkpoint("agent_decided")
-    assert msg == "Consolidation scheduled in background."
+    assert msg.startswith("Consolidation scheduled in background")
     assert calls == []                       # returned before the pass ran
     await loop.drain_refresh()
     assert calls == ["agent_decided"]
+
+
+# ---------------------------------------------------------------------------
+# Ack strings must set async expectations (orbital-marketing incident,
+# 2026-07-09: the bare acks read as "done or failed" — the agent re-triggered,
+# then hand-edited the file while the pass was still in flight).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_scheduled_ack_sets_duration_and_persistence_expectations():
+    loop = _make_loop([])
+    msg = loop.schedule_checkpoint("agent_decided")
+    assert "minute" in msg                   # can take a few minutes
+    assert "may persist" in msg              # the hygiene flag will linger
+    assert "do not re-trigger" in msg.lower() or "no further calls" in msg.lower()
+    await loop.drain_refresh()
+
+
+@pytest.mark.asyncio
+async def test_coalesced_ack_says_no_further_calls_needed():
+    calls = []
+    gate = asyncio.Event()
+    loop = _make_loop(calls, gate=gate)
+    loop.schedule_checkpoint("agent_decided")
+    await asyncio.sleep(0)
+    msg = loop.schedule_checkpoint("agent_decided")
+    assert "coalesced" in msg
+    assert "no further calls" in msg.lower()
+    gate.set()
+    await loop.drain_refresh()
+
+
+@pytest.mark.asyncio
+async def test_deferred_ack_names_the_debounce_eta():
+    calls = []
+    loop = _make_loop(calls)
+    loop.schedule_checkpoint("agent_decided")
+    await loop.drain_refresh()
+    msg = loop.schedule_checkpoint("agent_decided")   # within debounce window
+    assert "deferred" in msg
+    assert "automatically" in msg            # fires on its own — no re-call needed
+    assert any(ch.isdigit() for ch in msg)   # a concrete ETA in seconds
+
+
+# ---------------------------------------------------------------------------
+# In-flight + outcome metadata pushed to the context manager, so the hygiene
+# flag and status line can render scheduler state.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_inflight_metadata_pushed_at_spawn_and_cleared_after():
+    calls = []
+    gate = asyncio.Event()
+    loop = _make_loop(calls, gate=gate)
+    ctx = loop._context_manager
+    loop._current_iteration = 14
+
+    loop.schedule_checkpoint("agent_decided")
+    await asyncio.sleep(0)                   # pass started, blocked on gate
+    assert ctx._refresh_in_flight is True
+    assert ctx._refresh_in_flight_since_turn == 14
+
+    gate.set()
+    await loop.drain_refresh()
+    assert ctx._refresh_in_flight is False
+    assert ctx._refresh_in_flight_since_turn is None
+
+
+@pytest.mark.asyncio
+async def test_run_refresh_records_callback_outcome():
+    outcomes = []
+
+    async def refresh_callback(trigger_name: str) -> str:
+        outcomes.append(trigger_name)
+        return "backstop_only"
+
+    session = MagicMock()
+    session.session_uuid = "sess-outcome"
+    session._stopped = False
+    session.is_stopped.side_effect = lambda: session._stopped
+    ctx = MagicMock()
+    loop = AgentLoop(
+        session=session,
+        provider=MagicMock(),
+        tool_registry=MagicMock(),
+        context_manager=ctx,
+        on_session_end_refresh=refresh_callback,
+    )
+    loop.schedule_checkpoint("agent_decided")
+    await loop.drain_refresh()
+    assert outcomes == ["agent_decided"]
+    assert loop._last_refresh_outcome == "backstop_only"
+    assert ctx._last_checkpoint_outcome == "backstop_only"
+
+
+@pytest.mark.asyncio
+async def test_run_refresh_outcome_failed_on_callback_exception():
+    async def refresh_callback(trigger_name: str) -> str:
+        raise RuntimeError("boom")
+
+    session = MagicMock()
+    session.session_uuid = "sess-outcome-fail"
+    session._stopped = False
+    session.is_stopped.side_effect = lambda: session._stopped
+    ctx = MagicMock()
+    loop = AgentLoop(
+        session=session,
+        provider=MagicMock(),
+        tool_registry=MagicMock(),
+        context_manager=ctx,
+        on_session_end_refresh=refresh_callback,
+    )
+    loop.schedule_checkpoint("agent_decided")
+    await loop.drain_refresh()
+    assert loop._last_refresh_outcome == "failed"
+    assert ctx._last_checkpoint_outcome == "failed"
+    assert ctx._refresh_in_flight is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_callback_returning_none_records_no_outcome():
+    """Old-style callbacks return None — must not crash or fake an outcome."""
+    calls = []
+    loop = _make_loop(calls)                 # _make_loop's callback returns None
+    loop.schedule_checkpoint("agent_decided")
+    await loop.drain_refresh()
+    assert loop._last_refresh_outcome is None
 
 
 @pytest.mark.asyncio

@@ -176,6 +176,12 @@ class AgentLoop:
         self._turns_since_last_update: int = 0  # resets after each refresh
         self._last_refresh_iteration: int = 0   # loop iteration# of last refresh
         self._current_iteration: int = 0        # current loop iteration (updated at top of loop)
+        # Outcome of the last background pass (run_session_end_routine's
+        # vocabulary: llm_merged / backstop_only / no_delta /
+        # skipped_idempotent, plus "failed" when the callback raised). Pushed
+        # to the context manager so the hygiene flag + status line can tell
+        # the agent whether the async consolidation actually worked.
+        self._last_refresh_outcome: str | None = None
 
         # Queue integration (Phase 2 — exit_reason; Phase 3 — queue_state)
         # Reset to defaults at the start of every run().
@@ -1492,20 +1498,32 @@ class AgentLoop:
         if self._on_session_end_refresh is None:
             return
 
+        outcome: str | None = None
         try:
-            await self._on_session_end_refresh(trigger_name)
+            result = await self._on_session_end_refresh(trigger_name)
+            if isinstance(result, str):
+                outcome = result
         except Exception:
+            outcome = "failed"
             logger.exception("State refresh failed (trigger=%s)", trigger_name)
         finally:
             # Always record the refresh so cooldown engages
             self._turns_since_last_update = 0
             self._last_refresh_iteration = iteration
+            self._last_refresh_outcome = outcome
             # Push metadata into context_manager so the agent sees it
             ts = datetime.now(timezone.utc).isoformat()
             if hasattr(self._context_manager, "_last_checkpoint_turn"):
                 self._context_manager._last_checkpoint_turn = iteration
                 self._context_manager._last_checkpoint_ts = ts
                 self._context_manager._turns_since_last_update = 0
+                self._context_manager._last_checkpoint_outcome = outcome
+            # The pass is over (success, failure, or cancellation) — clear the
+            # in-flight marker set by _spawn_refresh so the hygiene flag stops
+            # rendering "pass in flight".
+            if hasattr(self._context_manager, "_refresh_in_flight"):
+                self._context_manager._refresh_in_flight = False
+                self._context_manager._refresh_in_flight_since_turn = None
 
     def _spawn_refresh(self, trigger: str) -> None:
         """Start a background consolidation pass. SYNCHRONOUS — no awaits
@@ -1530,6 +1548,13 @@ class AgentLoop:
         # while a slow pass runs are deliberately discarded — benign, and it
         # prevents turn_count refire churn while the pass is in flight.
         self._turns_since_last_update = 0
+        # Mark the pass in flight for the context manager BEFORE create_task
+        # (synchronous, so the very next prompt build renders the hygiene flag
+        # in its "pass in flight — no action needed" state). Cleared in
+        # _run_refresh's finally.
+        if hasattr(self._context_manager, "_refresh_in_flight"):
+            self._context_manager._refresh_in_flight = True
+            self._context_manager._refresh_in_flight_since_turn = iteration
         task = asyncio.create_task(
             self._run_refresh(trigger, iteration),
             name=f"refresh-{trigger}-{self._session.session_uuid}-{iteration}",
@@ -1539,6 +1564,11 @@ class AgentLoop:
         def _on_refresh_done(t: asyncio.Task) -> None:
             if self._refresh_task is t:
                 self._refresh_task = None
+            # Idempotent with _run_refresh's finally; covers a task cancelled
+            # before its first tick (finally never ran → marker would leak).
+            if hasattr(self._context_manager, "_refresh_in_flight"):
+                self._context_manager._refresh_in_flight = False
+                self._context_manager._refresh_in_flight_since_turn = None
             if not t.cancelled() and t.exception() is not None:
                 # _run_refresh swallows callback exceptions; this catches
                 # crashes in _run_refresh itself.
@@ -1565,13 +1595,21 @@ class AgentLoop:
         if self._refresh_task is not None and not self._refresh_task.done():
             self._refresh_dirty = True
             return ("Consolidation already in flight — your request was "
-                    "coalesced into it.")
+                    "coalesced into it. No further calls needed; the "
+                    "[MEMORY HYGIENE] flag may persist until the pass lands.")
         if time.monotonic() - self._last_merge_at < REFRESH_DEBOUNCE_S:
             self._refresh_dirty = True
-            return ("Consolidation ran recently — deferred until the debounce "
-                    "window elapses. Your edits are already persisted.")
+            remaining = max(
+                1, int(REFRESH_DEBOUNCE_S - (time.monotonic() - self._last_merge_at)) + 1
+            )
+            return (f"Consolidation ran recently — deferred; it will fire "
+                    f"automatically in ~{remaining}s when the debounce window "
+                    "elapses. Your edits are already persisted.")
         self._spawn_refresh(trigger)
-        return "Consolidation scheduled in background."
+        return ("Consolidation scheduled in background. It can take a few "
+                "minutes — the [MEMORY HYGIENE] flag may persist for several "
+                "turns while it runs; do not re-trigger checkpoint_state or "
+                "hand-edit the file in the meantime.")
 
     def _maybe_consume_dirty(self) -> None:
         """Turn-boundary pickup of a coalesced/deferred trigger (spec 013)."""
