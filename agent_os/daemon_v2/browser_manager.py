@@ -19,6 +19,8 @@ import warnings
 from collections import deque
 from pathlib import Path
 
+import psutil
+
 try:
     from patchright.async_api import async_playwright, Browser, BrowserContext, Page
     HAS_PLAYWRIGHT = True
@@ -165,6 +167,22 @@ def _detect_timezone() -> str:
     return "America/New_York"
 
 
+def _exc_summary(exc: BaseException) -> str:
+    """First line of an exception message, for single-line diagnostics."""
+    text = str(exc).strip()
+    return text.splitlines()[0][:200] if text else type(exc).__name__
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this pid exists (any user's).
+
+    Deliberately psutil, not the POSIX ``os.kill(pid, 0)`` idiom: on Windows
+    signal 0 is CTRL_C_EVENT, so os.kill(pid, 0) *sends Ctrl+C to every
+    process sharing the console* instead of probing.
+    """
+    return psutil.pid_exists(pid)
+
+
 class _PageState:
     """Per-page state tracking with ring buffer caps."""
 
@@ -277,8 +295,31 @@ class BrowserManager:
         logger.warning("Could not obtain clean UA — no browser available for probe")
         return None
 
+    def _profile_lock_holder(self) -> int | None:
+        """PID of a live process holding the Chrome ProcessSingleton lock.
+
+        Chrome writes ``SingletonLock`` as a symlink to ``<host>-<pid>``.
+        Returns None when there is no lock, it is unparsable, or the pid is
+        dead (Chrome steals stale locks on launch, so only a live holder
+        actually blocks us).
+        """
+        try:
+            target = os.readlink(str(self._profile_dir / "SingletonLock"))
+            pid = int(target.rsplit("-", 1)[-1])
+        except (OSError, ValueError):
+            return None
+        return pid if _pid_alive(pid) else None
+
     async def _launch(self):
         """Launch Chromium with persistent context and anti-detection flags."""
+        if self._warmup_active:
+            # The headed sign-in browser holds the shared profile; launching
+            # now would fail on the ProcessSingleton lock anyway.
+            raise RuntimeError(
+                "Browser sign-in is in progress — the sign-in browser window is "
+                "using the shared browser profile. Ask the user to finish signing "
+                "in and fully quit that browser window, then retry."
+            )
         self._profile_dir.mkdir(parents=True, exist_ok=True)
         if not self._playwright:
             try:
@@ -331,8 +372,11 @@ class BrowserManager:
                 )
                 logger.info("Browser launched using %s", label)
                 break
-            except Exception:
-                logger.info("%s not available, trying next fallback", label)
+            except Exception as exc:
+                logger.info(
+                    "%s not available, trying next fallback (%s)",
+                    label, _exc_summary(exc),
+                )
         else:
             # macOS: try WebKit (Safari engine) before bundled Chromium
             if sys.platform == "darwin":
@@ -347,8 +391,11 @@ class BrowserManager:
                         **webkit_kwargs
                     )
                     logger.info("Browser launched using WebKit (Safari)")
-                except Exception:
-                    logger.info("WebKit not available, trying bundled Chromium")
+                except Exception as exc:
+                    logger.info(
+                        "WebKit not available, trying bundled Chromium (%s)",
+                        _exc_summary(exc),
+                    )
                     self._context = None
 
             if self._context is None:
@@ -358,6 +405,16 @@ class BrowserManager:
                     )
                     logger.info("Browser launched using bundled Chromium")
                 except Exception as exc:
+                    holder = self._profile_lock_holder()
+                    if holder is not None:
+                        # Every tier failed against a profile another live
+                        # browser holds — "install Chrome" would be a lie.
+                        raise RuntimeError(
+                            f"Browser profile is in use by another browser process "
+                            f"(pid {holder}) — most likely a sign-in browser window "
+                            f"is still open. Finish signing in, fully quit that "
+                            f"browser window, then retry."
+                        ) from exc
                     raise RuntimeError(
                         "No browser available. Install Chrome or Edge, or run "
                         "'python -m patchright install chromium' to download a "
@@ -726,7 +783,9 @@ class BrowserManager:
         launch_kwargs = dict(
             user_data_dir=str(self._profile_dir),
             headless=False,
-            args=self.CHROME_FLAGS + ["--force-color-profile=srgb"],
+            # The user must SEE this window to sign in and close it —
+            # --start-minimized (meant for the automation browser) hid it.
+            args=[f for f in self.CHROME_FLAGS if f != "--start-minimized"],
             ignore_default_args=["--enable-automation"],
             locale=_detect_locale(),
             timezone_id=_detect_timezone(),
@@ -745,8 +804,11 @@ class BrowserManager:
                 )
                 logger.info("Warmup browser launched using %s", label)
                 break
-            except Exception:
-                logger.info("Warmup: %s not available, trying next", label)
+            except Exception as exc:
+                logger.info(
+                    "Warmup: %s not available, trying next (%s)",
+                    label, _exc_summary(exc),
+                )
         else:
             # macOS: try WebKit (Safari engine) before bundled Chromium
             if sys.platform == "darwin":
@@ -773,22 +835,42 @@ class BrowserManager:
                         "On macOS, Safari (WebKit) is also supported."
                     ) from exc
 
-        # Navigate to the target URL in a new page
-        page = await ctx.new_page()
-        await self._apply_stealth(page)
-        await page.goto(url)
-
-        # Wait for user to close all browser windows
-        while ctx.pages:
-            try:
-                page = ctx.pages[-1]
-                await page.wait_for_event("close", timeout=0)
-            except Exception:
-                break
-
+        # From here on the headed browser holds the profile lock — if we exit
+        # without closing it, it stays open forever and the daemon browser can
+        # never launch again (2026-07-07 incident). Cleanup must be
+        # unconditional.
         try:
-            await ctx.close()
-        except Exception:
-            pass
-        await pw.stop()
+            page = await ctx.new_page()
+            await self._apply_stealth(page)
+            try:
+                await page.goto(url)
+            except Exception as exc:
+                # The landing page failing to load must not abort the warmup:
+                # the window is still fully usable for manual sign-in.
+                logger.warning(
+                    "Warmup: initial navigation to %s failed (%s) — "
+                    "window stays open for manual sign-in",
+                    url, _exc_summary(exc),
+                )
+
+            # Wait for user to close all browser windows
+            while ctx.pages:
+                try:
+                    page = ctx.pages[-1]
+                    await page.wait_for_event("close", timeout=0)
+                except Exception:
+                    break
+        finally:
+            try:
+                await ctx.close()
+            except Exception as exc:
+                logger.warning("Warmup: error closing browser context: %s", exc)
+            try:
+                await pw.stop()
+            except Exception as exc:
+                logger.warning("Warmup: error stopping playwright: %s", exc)
+            logger.info(
+                "Warmup browser closed — profile lock released (%s)",
+                self._profile_dir,
+            )
         logger.info("Warmup browser closed — cookies saved to %s", self._profile_dir)

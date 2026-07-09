@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import date
 
 logger = logging.getLogger(__name__)
@@ -372,26 +373,95 @@ def entry_count(content: str | None, key: str) -> int:
     return len(raws)
 
 
-def soft_flag(content: str | None, key: str) -> str | None:
+@dataclass(frozen=True)
+class RefreshView:
+    """Consolidation-scheduler state snapshot threaded into ``soft_flag``.
+
+    The flag renders as a state machine driven by this view, not a repeating
+    alarm. Incident (orbital-marketing, 2026-07-09): the flag re-fired
+    identically every turn while a background pass was in flight, so the agent
+    read "still over budget" as "checkpoint_state failed" and hand-trimmed the
+    file mid-pass. ``last_outcome`` uses run_session_end_routine's vocabulary:
+    "llm_merged" | "backstop_only" | "failed" | "no_delta" | None.
+    """
+    in_flight: bool = False
+    in_flight_since_turn: int | None = None
+    last_outcome: str | None = None
+    last_turn: int | None = None
+
+
+# Escalation band: within this fraction of the hard cap, the flag warns about
+# the deterministic demote-to-archive that fires at the cap.
+_HARD_CAP_WARN_FRACTION = 0.9
+
+
+def soft_flag(
+    content: str | None, key: str, refresh: RefreshView | None = None
+) -> str | None:
     """A persistent nudge while a file is over its soft threshold, or None.
 
     Token bound + entry count for legibility. The caller MUST place this in the
     dynamic/uncached slot (never the cached prefix) — a churning flag in the
     prefix busts the cache every turn.
+
+    The nudge is state-aware via ``refresh``: while a consolidation pass is in
+    flight it says "no action needed" (never re-suggests the tool or a manual
+    edit); after a pass that couldn't run its LLM merge, the manual edit is the
+    sanctioned path (OCC makes concurrent hand-edits safe); after a successful
+    merge that still leaves the file over budget, the remainder is genuinely
+    large and only a manual trim can help. Near the hard cap an escalation
+    warning is appended in every state.
     """
     budgets = FILE_BUDGETS.get(key)
     if not content or not budgets:
         return None
     toks = est_tokens(content)
     soft = budgets["soft"]
+    hard = budgets["hard"]
     if toks <= soft:
         return None
     suffix = f" ({entry_count(content, key)} entries)" if key in ENTRY_MARKERS else ""
-    return (
-        f"{DISPLAY_NAME[key]} memory {toks/1000:.1f}k/{soft//1000}k tok{suffix} "
-        f"— call the checkpoint_state tool to consolidate (merge duplicates, "
-        f"supersede stale entries), or edit the file directly."
-    )
+    head = f"{DISPLAY_NAME[key]} memory {toks/1000:.1f}k/{soft//1000}k tok{suffix}"
+
+    r = refresh or RefreshView()
+    if r.in_flight:
+        since = (
+            f" (started turn {r.in_flight_since_turn})"
+            if r.in_flight_since_turn is not None else ""
+        )
+        body = (
+            f"{head} — a consolidation pass is in flight{since}; no action "
+            "needed. Do NOT re-trigger checkpoint_state or hand-edit this file "
+            "— the flag may persist until the pass lands."
+        )
+    elif r.last_outcome in ("backstop_only", "failed"):
+        at = f" (turn {r.last_turn})" if r.last_turn is not None else ""
+        body = (
+            f"{head} — the last background consolidation{at} could not run its "
+            "LLM merge (deterministic backstop only), so re-triggering "
+            "checkpoint_state will not reduce this file; edit the file directly "
+            "to merge duplicates and trim stale entries."
+        )
+    elif r.last_outcome == "llm_merged":
+        at = f" at turn {r.last_turn}" if r.last_turn is not None else ""
+        body = (
+            f"{head} — consolidation already ran{at} and this is what remains; "
+            "the content is genuinely large. If entries are stale, edit the "
+            "file directly to trim them; otherwise no action is useful."
+        )
+    else:
+        body = (
+            f"{head} — call the checkpoint_state tool to consolidate (merge "
+            "duplicates, supersede stale entries), or edit the file directly."
+        )
+
+    if toks >= hard * _HARD_CAP_WARN_FRACTION:
+        body += (
+            f" ⚠ {max(0, int(hard - toks))} tok from the hard cap ({hard}): at "
+            "the cap, over-budget durable entries are demoted to the archive "
+            "automatically."
+        )
+    return body
 
 
 # ---------------------------------------------------------------------------

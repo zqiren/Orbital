@@ -202,6 +202,24 @@ def _build_reasoning_off_switch(model: str, reasoning) -> dict | None:
 
     spec = enable[len("param:"):]
 
+    payload = _reasoning_off_payload(spec)
+    if payload is not None:
+        return payload
+
+    logger.warning(
+        "disable_reasoning requested but model %s has unrecognized "
+        "enable=%r; request will be sent with reasoning still active",
+        model, enable,
+    )
+    return None
+
+
+def _reasoning_off_payload(spec: str) -> dict | None:
+    """Pure ``param:`` spec → reasoning-off ``extra_body`` mapping (no logging).
+
+    Shared by ``_build_reasoning_off_switch`` (which adds the WARNING logs) and
+    ``LLMProvider.reasoning_locked_on`` (which must probe silently).
+    """
     if spec.startswith("thinking.type=enabled"):
         return {"thinking": {"type": "disabled"}}
     if spec.startswith("enable_thinking=true"):
@@ -214,12 +232,6 @@ def _build_reasoning_off_switch(model: str, reasoning) -> dict | None:
         return {"reasoning": {"enabled": False}}
     if spec.startswith("reasoning.effort="):
         return {"reasoning": {"enabled": False}}
-
-    logger.warning(
-        "disable_reasoning requested but model %s has unrecognized "
-        "enable=%r; request will be sent with reasoning still active",
-        model, enable,
-    )
     return None
 
 
@@ -419,6 +431,24 @@ class LLMProvider:
         else:
             self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
             self._anthropic_client = None
+
+    @property
+    def reasoning_locked_on(self) -> bool:
+        """True when the model always reasons and no request param can turn it
+        off (``enable`` is auto/model_only, or an unrecognized ``param:`` spec).
+
+        ``disable_reasoning=True`` is a no-op for these models — callers doing
+        long utility calls (e.g. the session-end consolidation merge) use this
+        to budget timeouts realistically instead of retrying a ladder the model
+        can never beat (MiniMax-M3 incident, 2026-07-09).
+        """
+        r = self.reasoning
+        if r is None or not getattr(r, "supported", False):
+            return False
+        enable = getattr(r, "enable", "") or ""
+        if not enable.startswith("param:"):
+            return True
+        return _reasoning_off_payload(enable[len("param:"):]) is None
 
     def _inline_think_mode(self) -> bool:
         """True when this model emits reasoning inline as ``<think>…</think>``

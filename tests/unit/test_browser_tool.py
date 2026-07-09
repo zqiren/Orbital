@@ -73,6 +73,7 @@ def _make_mock_locator():
 def _make_browser_manager(page=None):
     """Create a mock BrowserManager."""
     bm = MagicMock()
+    bm.warmup_active = False  # real bool: MagicMock auto-attr would be truthy
     if page is None:
         page = _make_mock_page()
     bm.get_page = AsyncMock(return_value=page)
@@ -1156,3 +1157,23 @@ async def test_fill_non_dict_entry_errors_without_filling():
     assert "ref" in result.content
     assert "value" in result.content
     mock_locator.fill.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Sign-in warmup guard (2026-07-07 profile-lock incident)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_actions_refused_while_signin_browser_open():
+    """While the user's sign-in browser is open (warmup active), every browser
+    action must short-circuit with an accurate message instead of attempting a
+    doomed launch that surfaces as 'install Chrome'."""
+    bm = _make_browser_manager()
+    bm.warmup_active = True
+    tool = _make_tool(bm=bm)
+
+    result = await tool.execute(action="navigate", url="https://example.com")
+
+    assert "sign-in" in result.content.lower()
+    assert "install" not in result.content.lower()
+    bm.get_page.assert_not_awaited()

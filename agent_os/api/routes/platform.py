@@ -9,6 +9,7 @@ Exposes sandbox setup, status, and folder access control to the desktop app (Ele
 
 import asyncio
 import inspect
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -18,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import platform as platform_mod
 import string
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/platform")
 
@@ -247,7 +250,10 @@ async def browser_warmup(req: BrowserWarmupRequest = BrowserWarmupRequest()):
         try:
             await _browser_manager.launch_warmup(req.url)
         except Exception:
-            pass  # warmup_active is reset in launch_warmup's finally path
+            # warmup_active is reset in launch_warmup's finally path, but a
+            # dead warmup must never be silent — an orphaned sign-in browser
+            # blocks every agent browser launch until the user quits it.
+            logger.exception("Browser warmup task failed")
 
     asyncio.create_task(_run_warmup())
 
