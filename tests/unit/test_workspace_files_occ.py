@@ -45,6 +45,14 @@ from agent_os.agent.workspace_files import (
 )
 
 
+
+from agent_os.agent import memory_entries as _mem
+
+
+def _hdr(key: str, content: str) -> str:
+    """Expected on-disk form: write() self-heals the <!--format--> header."""
+    return _mem.FORMAT_HEADERS[key] + "\n" + content
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -131,8 +139,8 @@ async def test_clean_baseline_writes_all_layer1_files(tmp_path):
     )
 
     # STATE / INDEX are overwrite scratchpads, written verbatim.
-    assert ws.read("state") == "# State\nstate-clean"
-    assert ws.read("index") == "- Person clean"
+    assert ws.read("state") == _hdr("state", "# State\nstate-clean")
+    assert ws.read("index") == _hdr("index", "- Person clean")
     # DECISIONS / LESSONS go through the stamping persist path; just verify
     # the marker entry survives (stamp adds a trailing metadata comment).
     assert "Decision clean" in ws.read("decisions")
@@ -227,9 +235,9 @@ async def test_one_file_aborts_others_still_write(tmp_path, caplog):
     assert ws.read("lessons") == user_lessons
 
     # Other Layer-1 files write normally
-    assert ws.read("state") == "# State\nstate-multi"
+    assert ws.read("state") == _hdr("state", "# State\nstate-multi")
     assert "Decision multi" in ws.read("decisions")
-    assert ws.read("index") == "- Person multi"
+    assert ws.read("index") == _hdr("index", "- Person multi")
 
     # Exactly one OCC abort warning, for lessons
     aborts = [r for r in caplog.records if "OCC abort" in r.message]

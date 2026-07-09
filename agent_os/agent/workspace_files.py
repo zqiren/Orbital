@@ -409,6 +409,11 @@ class WorkspaceFileManager:
         """Write (overwrite) a workspace file atomically. Creates orbital/ if needed."""
         if file_key not in FILE_NAMES:
             raise ValueError(f"Unknown file_key: {file_key!r}. Must be one of {list(FILE_NAMES)}")
+        # Self-heal the in-file format contract on every system write (the
+        # agent-tool write path does the same in process_on_write). Archives
+        # keep their own header convention and are skipped.
+        if file_key in _mem.FORMAT_HEADERS:
+            content = _mem.ensure_format_header(content, file_key)
         self.ensure_dir()
         filepath = self._file_path(file_key)
         tmp_path = filepath + ".tmp"
@@ -501,6 +506,19 @@ class WorkspaceFileManager:
         message_count = session_summary.get("message_count", 0)
         tool_calls_count = session_summary.get("tool_calls_count", 0)
 
+        # Ride-along shape tidy: report-only lint on the volatile files. This
+        # is the ONLY consumer of shape_report — formatting is fixed inside a
+        # pass that runs anyway, never via a new hygiene flag or checkpoint.
+        reports = []
+        for fk in ("state", "index"):
+            r = _mem.shape_report(self.read(fk), fk)
+            if r:
+                reports.append(f"- {r}\n  Contract: {_mem.FORMAT_HEADERS[fk]}")
+        formatting_block = (
+            "\nFORMATTING TO FIX (restore each file to its contract in this same pass):\n"
+            + "\n".join(reports) + "\n"
+        ) if reports else ""
+
         prompt = f"""You maintain the Layer-1 memory of an AI agent project. Your job THIS PASS is to CLEAN UP: merge duplicates, supersede stale entries, and keep ONE clean, non-contradictory project identity. State is already recorded incrementally during the session — you are the editor, not the primary record.
 
 Produce a JSON object with these fields. Return "" for any field that needs no change (preserve the existing file unchanged).
@@ -521,8 +539,9 @@ Produce a JSON object with these fields. Return "" for any field that needs no c
 RULES:
 - A non-empty field MUST be the COMPLETE updated file. "" preserves the existing file.
 - MERGE AND SUPERSEDE — never append a contradicting entry.
+- If you correct a fact in one file, check the other three for stale copies of it and fix them in the same pass.
 - Respond with ONLY valid JSON. No markdown fences. No explanation.
-
+{formatting_block}
 --- EXISTING FILES (bounded view; full files are on disk) ---
 PROJECT_STATE.md:
 {existing_state}
