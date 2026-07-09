@@ -531,20 +531,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 Requires macOS 13 (Ventura) or later, **Apple Silicon (M1 or newer)**. Intel Macs are **not** supported by this build (the bundle is arm64-only).
 
-<details>
-<summary>macOS Gatekeeper Warning</summary>
-
-Orbital is not yet code-signed, so macOS will block it on first launch:
-
-> **"Orbital" can't be opened because Apple cannot check it for malicious software.**
-
-To proceed:
-1. Open **System Settings → Privacy & Security**
-2. Scroll down — you'll see "Orbital was blocked"
-3. Click **"Open Anyway"**
-
-This is only needed once. Code signing will be added in a future release.
-</details>
+Release builds are Developer-ID signed and notarized by Apple, so the app opens normally on first launch — no Gatekeeper warning or "Open Anyway" workaround needed. (If you built Orbital from source or grabbed a CI branch artifact, that build is ad-hoc signed and macOS will still ask you to approve it once via right-click → Open.)
 
 ### From Source
 
