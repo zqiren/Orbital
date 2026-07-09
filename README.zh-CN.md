@@ -9,9 +9,9 @@
 <p align="center">agent 每完成一件工作,都会成为下一条指令的上下文。<br>project 跑得越久,能力越强——而不是被清零重来。</p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.5/Orbital-Setup-0.6.5.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.6.5/Orbital-0.6.5-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://youtu.be/D9l0r4gP_RQ"><strong>演示视频</strong></a>
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.7.2/Orbital-Setup-0.7.2.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/download/v0.7.2/Orbital-0.7.2-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>演示视频</strong></a>
 </p>
 <p align="center">5 分钟装好。不需要 Python 或 Node 环境。</p>
 
@@ -27,23 +27,41 @@
 
 ## 为什么要有 Orbital
 
-现在跟 AI agent 打交道,基本就是在带一个你不太放心的实习生：
+现在的 agent 都会遗忘。每开一个会话,你都得把同样的背景重新粘贴一遍;每天早上,把项目重新解释一遍。上周已经敲定的决策,随着会话结束一起消失,于是这周只能再敲定一次。
 
-每开一个对话都得重新把项目背景输出一遍。每一步都得盯着。每一次 agent 之间的协调都靠你手工复制粘贴来衔接。每一次任务都需要重新声明之前的事项。每一次都只能跑一件事。
+Agent 会退场,会话会结束。但你的工作不该跟着消失。
 
-真正的 delegation 不是一段聊天 — 它更像是你出差前,把手头工作交接给一个信得过的同事:工作背景讲清楚,文件和权限给到位,什么事要找你拍板说明白。剩下的他自己处理,关键节点会找你确认。
-
-这就是 Orbital 在为 agent 做的事。
+Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的成果、做过的决策、学到的经验——都会写进 project,并在下一个会话开始时读回来。你的 agent 不再从零开始,而是从它已经做完的一切出发。工作会不断积累、产生复利。
 
 ---
 
 ## Orbital 的不同之处
 
-**一个 project,而不是一个 prompt。** 每个 project 都是你电脑上的一个文件夹,带着自己的工作空间、instructions、记忆、budget、sandbox 和审批规则。上下文和决策会跨会话沉淀和积累。今天打开的 project 知道昨天发生了什么。
+**成果会复利。** project 里的大部分工作,是 agent 在产出成果——代码、文档、调研、报告。每一份完成的成果,连同它持续维护的状态、决策和经验,都会成为下一个会话、下一份成果的参考材料。昨天打开过的 project 知道昨天发生了什么——并在这个基础上继续构建。
 
-**委派给你的 agent,不是手把手 micromanage。** 选一个 autonomy preset——hands-off / check-in / supervised。Agent 在你设的边界内运行。需要确认的关键工具调用会带着完整上下文推到你这里,剩下的交给它自己处理。你在桌前或手机上监督,不必时刻盯着。
+**扎根在你的真实工作里。** project 就是你硬盘上的一个文件夹,local-first。你的文件不只是存储——它们是 agent 在产出任何东西之前先读取的内容,所以它的成果针对的是你真实的代码库、真实的文档、真实的数据,而不是凭空生成、只是听起来合理的输出。
 
-**一个工作空间,多个 agent。** 你的 project 可以把任务派给 Claude Code、Codex、Gemini CLI 或任何 CLI agent——它们在同一份文件上工作,共享同样的决策、instructions 和历史。不用再在聊天窗口和终端之间来回复制粘贴。Agent 之间能看见彼此的工作,在同一个工作空间里合作。
+**换掉双手,保留记忆。** 你的 agent 把执行委派给 sub-agent——Claude Code、Codex、Gemini CLI 或任何 CLI agent。它们是可互换的:每一个都基于同一份积累的上下文工作——同样的文件、决策、instructions 和历史——完成的工作再流回 project。换掉 sub-agent,什么都不丢。
+
+**放心挂机。** 把任务排进队列然后走开:agent 逐项处理,每一项都必须声明结果——完成并附总结,或者受阻并说明原因、等你来解决。它在你设定的 sandbox 边界内、在每个 project 的 budget 之下、按你控制的审批规则工作。
+
+---
+
+## 一览
+
+- **持久上下文** —— PROJECT_STATE.md、DECISIONS.md、LESSONS.md 跨会话持续维护,每个会话都从上一个会话完成的一切出发
+- **以 project 为单位管理 agent** —— 每个 project 是一个文件夹,带自己的工作空间、instructions、budget 和 autonomy 等级
+- **Sub-agent 委派** —— 管理 agent 监控工作空间、对照目标评估进展,把工作派给 Claude Code、Codex、Gemini CLI 或任何 CLI agent——它们读取同一份积累的上下文
+- **自我改进的 skills** —— agent 从多步流程中沉淀可复用的 skill,遇到类似任务先查阅
+- **任务队列** —— 按 project 排队然后走开;agent 逐项处理,每项标记完成(附总结)或受阻(附原因);中途可暂停介入引导,再继续
+- **Triggers** —— 设置 cron 定时或文件监听,让管理 agent 定期检查并自动派发 sub-agent
+- **内置 13 家 LLM provider** —— Anthropic、OpenAI、DeepSeek、Moonshot (Kimi)、Groq、Google Gemini、xAI、Mistral、Together、OpenRouter、智谱、通义千问,以及任意自定义 endpoint
+- **浏览器自动化** —— 基于 Patchright 的 26 种浏览器动作,带反检测
+- **凭据管理** —— API key 和网站密码存放在操作系统钥匙串,绝不暴露给聊天
+- **Sandbox 执行** —— agent 只能访问你指定的文件夹(Windows sandbox user、macOS Seatbelt)
+- **审批流** —— 风险动作前暂停;在桌面或手机上批准
+- **Budget 控制** —— 按 project 设定花费上限和到达上限后的动作
+- **手机监督** —— 扫码配对,在手机上管理 agent
 
 ---
 
@@ -51,7 +69,7 @@
 
 1. **启动 Orbital** —— 设置向导引导你完成三步:
 
-   **Step 1 — LLM Provider:** 配置 API key。支持 Moonshot (Kimi)、DeepSeek、Anthropic、OpenAI 等 15+ 家服务商。
+   **Step 1 — LLM Provider:** 配置 API key。支持 Anthropic、OpenAI、Moonshot (Kimi)、DeepSeek 等十余家服务商。
 
    <p align="center">
      <img src="docs/screenshots/apikey-setup.png" alt="设置向导第一步——配置 LLM provider 和 API key" width="700">
@@ -74,29 +92,24 @@
    <p align="center">
      <img src="docs/screenshots/new-project-setting.png" alt="新建 project 对话框——选择工作空间目录和 autonomy 等级" width="700">
    </p>
-3. **开始对话** —— 在聊天框输入任务,agent 自己处理
-4. **审批或自动化** —— 在审批卡片里查看工具调用,同意后 agent 才会继续,或把 autonomy 设成 hands-off
+3. **开始对话** —— 在聊天框输入任务,管理 agent 自己处理
+4. **走开** —— 把后续任务排进队列;每个完成项都会成为下一项构建的上下文
 
 ---
 
-## 截图
+## 看工作如何积累
 
-<p align="center">
-  <img src="docs/screenshots/2A-dashboard-all-running.png" alt="Orbital dashboard——多个 project 并行运行" width="800">
-</p>
-<p align="center"><em>多个 project 并行运行——每个都有自己的工作空间、trigger 和会话历史</em></p>
-
-<p align="center"><img src="docs/screenshots/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md、SESSION_LOG.md" width="800"></p>
-<p align="center"><em>project 自己维护状态、决策与经验,每个会话开始时都会读回——所以每次都从"上次结束的地方"继续,而不是从零开始</em></p>
-
-<p align="center"><img src="docs/screenshots/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
-<p align="center"><em>在每个 project 的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
+<p align="center"><img src="docs/screenshots/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md 由 agent 维护,每个会话读回" width="800"></p>
+<p align="center"><em>project 自己维护状态、决策与经验——由 agent 书写,每个会话开始时读回,所以每次都从"上次结束的地方"继续</em></p>
 
 <p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="把任务派给 Claude Code sub-agent,它读取 project 上下文、完成工作并把成果写回工作空间" width="800"></p>
 <p align="center"><em>把任务派给 Claude Code、Codex 或 Gemini——它们读取同一份积累的上下文,完成后把成果写回工作空间</em></p>
 
+<p align="center"><img src="docs/screenshots/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
+<p align="center"><em>在每个 project 的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
+
 <p align="center"><img src="docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png" alt="任务队列——正在运行、排队中、自动化三个区块;队列可暂停以便介入引导" width="800"></p>
-<p align="center"><em>把任务排进队列然后走开——agent 逐个处理,每个完成项都会成为下一个的上下文;随时可暂停介入引导,再继续</em></p>
+<p align="center"><em>把任务排进队列然后走开——agent 逐项处理,每个完成项都会成为下一项的上下文;随时可暂停介入引导,再继续</em></p>
 
 <p align="center"><img src="docs/screenshots/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
 <p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式,下次遇到类似任务先查阅</em></p>
@@ -121,46 +134,44 @@
 
 ## 工作原理
 
-Orbital 把每个 agent 工作单元当成一个 **project**——而不是一个聊天会话。一个 project 把工作空间、持续积累沉淀的 instructions、autonomy preset、budget、审批规则和记忆绑成一个受监督的整体。Agent 在 project 内工作,你可以从任何地方监督。
+Orbital 是绑定在一个 **project** 上的 agent——而不是一个聊天会话。project 把工作空间目录、持续演进的 instructions、autonomy preset、budget、审批规则和持久状态绑成一个受监督的整体。你的 agent 在其中规划与委派,sub-agent 负责执行,它们完成的一切都写回 project,成为下一条指令的上下文。你可以从任何地方监督。
 
-```
-+------------------------------------------------------+
-|                    Frontend (React SPA)               |
-|  Chat UI . Approval Cards . Project Settings . Files  |
-+-------------------------+----------------------------+
-                          | REST + WebSocket
-+-------------------------v----------------------------+
-|                  Daemon (FastAPI + uvicorn)            |
-|                                                       |
-|  +--------------+  +--------------+  +--------------+ |
-|  | AgentManager |  | SubAgentMgr  |  | TriggerMgr   | |
-|  | (lifecycle)  |  | (delegation) |  | (cron/watch) | |
-|  +------+-------+  +------+-------+  +--------------+ |
-|         |                 |                            |
-|  +------v-------+  +------v-------+                    |
-|  | Agent Loop   |  | Transports   |                    |
-|  | (streaming)  |  | Pipe/PTY/SDK |                    |
-|  +------+-------+  +--------------+                    |
-|         |                                              |
-|  +------v-------+  +--------------+  +--------------+  |
-|  | LLM Provider |  | Tool Registry|  | Autonomy     |  |
-|  | (multi-SDK)  |  | (shell,file, |  | Interceptor  |  |
-|  |              |  |  browser...) |  | (approve/deny|  |
-|  +--------------+  +--------------+  +--------------+  |
-|                                                        |
-|  +--------------------------------------------------+  |
-|  | Platform Layer (Windows sandbox / macOS / Linux)  |  |
-|  +--------------------------------------------------+  |
-+-------------------------+----------------------------+
-                          | WebSocket tunnel
-+-------------------------v----------------------------+
-|              Cloud Relay (Node.js)                     |
-|  REST proxy . Event forwarding . Push notifications   |
-|  Device pairing . Phone WebSocket bridge              |
-+------------------------------------------------------+
+```mermaid
+flowchart TB
+    UI["<b>Frontend (React SPA)</b><br/>Chat UI · Approval Cards · Settings · Files"]
+
+    subgraph daemon["Daemon (FastAPI + uvicorn)"]
+        direction TB
+        AM["AgentManager<br/><i>lifecycle</i>"]
+        SAM["SubAgentManager<br/><i>delegation</i>"]
+        TM["TriggerManager<br/><i>cron · file watch</i>"]
+        Loop["Agent Loop<br/><i>streaming · safety guards</i>"]
+        TR["Transports<br/>Pipe · PTY · SDK · ACP"]
+        LLM["LLM Provider<br/><i>OpenAI + Anthropic SDK</i>"]
+        Tools["Tool Registry<br/><i>shell · file · browser · triggers</i>"]
+        Auto["Autonomy Interceptor<br/><i>approve · deny · bypass</i>"]
+
+        AM --> Loop
+        SAM --> TR
+        TM --> AM
+        Loop --> LLM
+        Loop --> Tools
+        Loop --> Auto
+    end
+
+    Platform["<b>Platform Layer</b><br/>Windows sandbox user · macOS Seatbelt · Linux bubblewrap (planned)"]
+    Relay["<b>Cloud Relay (Node.js, optional)</b><br/>REST proxy · Event forwarding · Push notifications · Pairing"]
+    Phone["Phone"]
+
+    UI <-->|REST + WS| AM
+    UI <-->|REST + WS| SAM
+    Tools --> Platform
+    AM -.WebSocket tunnel.-> Relay
+    Relay -.WebSocket.-> Phone
 ```
 
 **设计决策:**
+- **记忆即产品**: agent 维护结构化的项目状态(当前状态、决策、经验),并在每个会话重新读取——工作不断积累,而不是被清零
 - **Isolation**: OS 级别 sandbox(Windows sandbox user / macOS Seatbelt / Linux bubblewrap 在规划中)
 - **Fail-closed interceptor**: 审批系统出错后默认 DENY,绝不 ALLOW
 - **单 daemon**: PID 文件强制只能存在一个实例
@@ -183,7 +194,13 @@ Orbital 把每个 agent 工作单元当成一个 **project**——而不是一�
 | Triggers(定时 + 文件监听) | ✅ | ❌ | ✅(`openclaw cron`) | ✅(`/schedule`) |
 | 开源 | GPL-3.0 | ❌ | MIT | ❌ |
 
-**一句话总结:** Claude Projects 验证了心智模型,OpenClaw 验证了本地 agent 可行,Cowork 验证了用户希望 agent 自己跑起来。Orbital 把这三件事合到一起——在你自己机器上,agent 能真正更新 project,多个 agent 在同一个工作空间里协作。
+**一句话总结:** Claude Projects 验证了心智模型,OpenClaw 验证了本地 agent 可行,Cowork 验证了用户希望 agent 自主运行。Orbital 用一个 agent 在你自己的机器上同时做到这三件事——它跨会话维护自己的项目状态,并把执行委派给你选择的任何 sub-agent。它永不从零开始。
+
+---
+
+## 功能详解
+
+完整的功能详解——project 与工作空间模型、上下文管理与压缩(*永不从零开始*背后的引擎)、sub-agent 委派与传输层、任务队列、Quick Tasks、自我改进的 skills、内置工具、浏览器自动化、triggers、LLM 路由与 BYOK、autonomy 与审批、budget 控制、手机远程、凭据管理、agent loop 安全保护、桌面应用——以英文为准,见 [English README → Feature Deep Dives](README.md#feature-deep-dives),避免双边维护导致信息不准确。
 
 ---
 
@@ -191,14 +208,14 @@ Orbital 把每个 agent 工作单元当成一个 **project**——而不是一�
 
 ### Windows
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.5) 下载 [`Orbital-Setup-0.6.5.exe`](https://github.com/zqiren/Orbital/releases/download/v0.6.5/Orbital-Setup-0.6.5.exe)（最新 Windows 版本）
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.7.2) 下载 [`Orbital-Setup-0.7.2.exe`](https://github.com/zqiren/Orbital/releases/download/v0.7.2/Orbital-Setup-0.7.2.exe)（最新 Windows 版本）
 2. 运行安装程序,按提示完成
 3. 从开始菜单或桌面快捷方式启动 Orbital
 
 <details>
 <summary>Windows SmartScreen 警告</summary>
 
-Orbital 暂未做代码签名,Windows 会提示安全警告:
+Orbital 的 Windows 安装包暂未做代码签名,Windows 会提示安全警告:
 
 > **Windows 已保护你的电脑** —— Microsoft Defender SmartScreen 阻止了一个无法识别的应用启动。
 
@@ -207,26 +224,13 @@ Orbital 暂未做代码签名,Windows 会提示安全警告:
 
 ### macOS
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.6.5) 下载 [`Orbital-0.6.5-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.6.5/Orbital-0.6.5-macOS.dmg)
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.7.2) 下载 [`Orbital-0.7.2-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.7.2/Orbital-0.7.2-macOS.dmg)
 2. 打开 DMG,把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
 需要 macOS 13 (Ventura) 及以上,**仅支持 Apple Silicon(M1 及更新机型)**。本版本为 arm64 构建,**不支持 Intel Mac**。
 
-<details>
-<summary>macOS Gatekeeper 警告</summary>
-
-Orbital 暂未做代码签名,macOS 第一次启动时会拦截:
-
-> **「Orbital」无法打开,因为 Apple 无法检查其是否包含恶意软件。**
-
-解决方式:
-1. 打开 **系统设置 → 隐私与安全性**
-2. 往下滑,会看到 "Orbital was blocked"
-3. 点 **「仍要打开」**
-
-只需做一次。代码签名会在后续版本加上。
-</details>
+正式发布版已完成 Developer-ID 签名和 Apple 公证(notarization),首次启动直接打开——没有 Gatekeeper 拦截,不需要任何「仍要打开」操作。(从源码自行构建或下载 CI 分支产物的版本仍是 ad-hoc 签名,macOS 会要求你右键 → 打开确认一次。)
 
 ### 从源码运行
 
@@ -262,9 +266,21 @@ Agent 在跑时,Orbital 会通过系统级别的接口阻止机器进入休眠(W
 
 ## Roadmap
 
-**已完成:** 多 LLM 路由 + 失败轮换、三档 autonomy preset(并向 sub-agent 级联)、流式 chat + WebSocket 实时事件、带反检测的浏览器自动化(Patchright)、定时 / 文件监听 trigger、自然语言创建 trigger、cloud relay + 推送通知 + 设备配对、上下文压缩 + 压缩前记忆 flush、按 project 的 budget 上限和成本统计、凭据管理(API key + 网站登录)、桌面应用 + 系统托盘 + 原生窗口、agent loop 安全保护(迭代上限、重复检测、ping-pong、断路器)、agent 活动期间的系统休眠抑制、`@mention` 路由的 sub-agent 派发。
+**已完成:** 多 LLM 路由 + 失败轮换、三档 autonomy preset(并向 sub-agent 级联)、流式 chat + WebSocket 实时事件、带反检测的浏览器自动化(Patchright)、定时 / 文件监听 trigger、自然语言创建 trigger、cloud relay + 推送通知 + 设备配对、上下文压缩 + 压缩前记忆 flush、前缀缓存优化的 prompt 组装(v0.4.2)、按 project 的 budget 上限和成本统计、凭据管理(API key + 网站登录)、桌面应用 + 系统托盘 + 原生窗口、agent loop 安全保护(迭代上限、重复检测、ping-pong、断路器)、agent 活动期间的系统休眠抑制、`@mention` 路由的 sub-agent 派发。
 
-**接下来:** Webhook trigger、pipeline trigger(把一个 project 的输出作为另一个的输入)、按 project 的网络隔离(OS 级 domain allowlist)、Linux 上的 bubblewrap 沙箱、代码签名(消除 Windows SmartScreen 警告)、daemon 重启后自动恢复进行中的会话。
+**接下来:** Webhook trigger、pipeline trigger(把一个 project 的输出作为另一个的输入)、按 project 的网络隔离(OS 级 domain allowlist)、Linux 上的 bubblewrap 沙箱、Windows 代码签名(消除 SmartScreen 警告)、daemon 重启后自动恢复进行中的会话。
+
+---
+
+## 我为什么做 Orbital
+
+我喜欢 Claude Projects,但受不了 agent 不能自己更新 project,也受不了它不在我自己的机器上。
+
+我喜欢 OpenClaw,但受不了那种失控感——没有 budget,没有 sandbox,人离开电脑就没法从手机上监督。
+
+Orbital 就是我自己想要的那个东西:一个记得我们做过的一切的 agent。sandbox、budget、审批都由我控制。不在电脑前时用手机看一眼。Claude Code、Codex、Gemini CLI 是它委派的双手——换掉双手,保留记忆。一个永不从零开始的 agent。
+
+全职工作之余的晚上和周末做出来的,还很早期。欢迎反馈和 issue。
 
 ---
 
@@ -273,7 +289,7 @@ Agent 在跑时,Orbital 会通过系统级别的接口阻止机器进入休眠(W
 Orbital 采用 [GNU General Public License v3.0](LICENSE) 协议开源。
 
 ```
-Orbital — The project workspace you and your agent share.
+Orbital — The agent that never starts from zero.
 Copyright (C) 2026 Orbital Contributors
 
 This program is free software: you can redistribute it and/or modify
