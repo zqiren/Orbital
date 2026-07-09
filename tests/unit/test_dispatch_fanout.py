@@ -393,6 +393,36 @@ async def test_list_active_and_status_report_registered_workers(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_fanout_forbids_orbital_dir_for_every_worker(tmp_path):
+    """Spec 013 race #5: workers must not write Layer-1 memory files —
+    the management session owns memory. The orbital dir is auto-appended
+    to every task's forbidden_paths, including tasks with no files_scope,
+    and user-supplied forbidden entries survive."""
+    captured: list[tuple] = []
+
+    def _recording_factory(allowed_paths, forbidden_paths):
+        captured.append((allowed_paths, forbidden_paths))
+        return _StubToolRegistry()
+
+    mgr, rec = _make_manager(tmp_path, registry_factory=_recording_factory)
+    tasks = [
+        {"brief": "investigate A", "label": "task-a",
+         "files_scope": {"allowed": ["src/"], "forbidden": ["src/x"]}},
+        {"brief": "investigate B", "label": "task-b"},   # no files_scope
+    ]
+    await mgr.dispatch_fanout(PID, tasks, session_id=SID)
+
+    from agent_os.agent.project_paths import ProjectPaths
+    expected = ProjectPaths(str(tmp_path)).orbital_dir
+    assert len(captured) == 2
+    for allowed, forbidden in captured:
+        assert forbidden is not None and expected in forbidden
+    assert "src/x" in captured[0][1]          # user entry preserved
+    assert captured[0][0] == ["src/"]         # allowed untouched
+    assert captured[1][0] is None             # scopeless task: allowed stays None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_fanout_accepts_files_scope(tmp_path):
     mgr, rec = _make_manager(tmp_path)
     tasks = [

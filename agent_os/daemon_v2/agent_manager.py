@@ -819,6 +819,17 @@ class AgentManager:
             return provider, utility_provider
 
         async def session_end_callback():
+            # Spec 013: finish any in-flight background consolidation before
+            # the final synchronous one — never two passes at once.
+            # NOTE (reviewer finding C): this callback is currently NOT invoked
+            # by the production loop (the on_session_end invocation was removed
+            # — see loop.py:1422); live teardown goes through terminate(),
+            # which CANCELS the in-flight pass — safe because consolidation is
+            # discardable (spec 013 Fact 3). This drain is future-proofing for
+            # a re-wired session boundary, not the live guarantee.
+            h = self._handles.get(sk)
+            if h is not None and h.loop is not None:
+                await h.loop.drain_refresh()
             live_provider, live_utility = _live_providers()
             await run_session_end_routine(
                 session=session,
@@ -963,7 +974,7 @@ class AgentManager:
             from agent_os.agent.tools.checkpoint_state import CheckpointStateTool
 
             async def on_agent_checkpoint():
-                await loop.trigger_checkpoint()
+                return await loop.trigger_checkpoint()
 
             registry.register(CheckpointStateTool(on_checkpoint=on_agent_checkpoint))
             # Keep tool_names in PromptContext in sync

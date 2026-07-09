@@ -14,6 +14,7 @@ import os
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
+from agent_os.agent.project_paths import ProjectPaths
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
 from agent_os.daemon_v2.models import (
     SessionKey,
@@ -1040,12 +1041,19 @@ class SubAgentManager:
             # try block succeeds (last line before the except), so a
             # failure here never needs to unwind that dict at all.
             registered_handles: list[str] = []
+            # Spec 013 (race #5): the management session owns Layer-1 memory.
+            # Workers may READ memory files (scope gates only write/edit) but
+            # must never write them — a worker writing DECISIONS.md mid-flight
+            # would race the management session's background consolidation.
+            _memory_forbidden = ProjectPaths(workspace).orbital_dir
             try:
                 for i, task in enumerate(tasks):
                     handle = make_worker_handle(fanout_id, i)
                     files_scope = task.get("files_scope") or {}
                     allowed = files_scope.get("allowed")
-                    forbidden = files_scope.get("forbidden")
+                    forbidden = list(files_scope.get("forbidden") or [])
+                    if _memory_forbidden not in forbidden:
+                        forbidden.append(_memory_forbidden)
 
                     # WorkerDeps is one shared instance per batch (Task 1);
                     # bind on_activity to THIS handle right before

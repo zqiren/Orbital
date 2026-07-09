@@ -225,6 +225,11 @@ async def test_30_turn_session_fires_refresh_at_turn_15_and_30():
       trigger="turn_count" and status="done".
     - PROJECT_STATE mtime changes between turns 14→16 and 29→31.
     - context_manager._last_checkpoint_turn reflects the updated turn.
+
+    Spec 013: refreshes run in the background now. Counts hold because the
+    mocked pass completes within the yielding turn loop and REFRESH_DEBOUNCE_S
+    is patched to 0 here; the production default (300s) intentionally
+    coalesces same-window fires like these into a single pass.
     """
     total_turns = 2 * COOLDOWN_TURNS  # 30
 
@@ -294,7 +299,9 @@ async def test_30_turn_session_fires_refresh_at_turn_15_and_30():
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
-            await loop.run("Start a 30-turn session")
+            with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+                await loop.run("Start a 30-turn session")
+            await loop.drain_refresh()
 
         # ---- Assertions ----
 
@@ -329,8 +336,23 @@ async def test_project_state_mtime_changes_between_refreshes():
 
     Captures mtime before the second refresh and asserts it differs from
     what was set in the first refresh (i.e., the second refresh wrote the file).
+
+    Spec 013: refreshes run in the background now, so this test's real
+    ``asyncio.sleep(0.01)`` (kept for filesystem-mtime granularity) plays out
+    concurrently with the loop's own iterations rather than blocking them.
+    ``_run_refresh``'s existing finally-block reset of
+    ``_turns_since_last_update`` (unchanged — see loop.py's "deliberately
+    discarded" comment) fires whenever the background pass actually
+    completes, which lands at whatever iteration the event loop happens to
+    schedule it — not necessarily aligned to a clean COOLDOWN_TURNS window.
+    A budget of exactly ``2 * COOLDOWN_TURNS`` turns is no longer enough to
+    deterministically guarantee two completed passes (only one may land
+    before the loop ends). A generous turn budget makes at least two
+    completed passes reliable regardless of real-world scheduling speed; the
+    test's own assertions are existence/ordering checks (``>= 1``, ordering),
+    not an exact refresh count, so extra passes beyond two do not break them.
     """
-    total_turns = 2 * COOLDOWN_TURNS  # 30
+    total_turns = 10 * COOLDOWN_TURNS
 
     with tempfile.TemporaryDirectory() as workspace:
         pp = ProjectPaths(workspace)
@@ -429,7 +451,9 @@ async def test_project_state_mtime_changes_between_refreshes():
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
-            await loop.run("Start")
+            with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+                await loop.run("Start")
+            await loop.drain_refresh()
 
         # Both refreshes should have recorded an mtime
         assert len(mtime_after_first) >= 1, (
@@ -448,7 +472,13 @@ async def test_project_state_mtime_changes_between_refreshes():
 @pytest.mark.asyncio
 async def test_ws_event_log_contains_exactly_two_turn_count_events():
     """WS event log must have exactly 2 state_refresh.lifecycle events with
-    trigger=turn_count and status=done over a 30-turn session."""
+    trigger=turn_count and status=done over a 30-turn session.
+
+    Spec 013: refreshes run in the background now. Counts hold because the
+    mocked pass completes within the yielding turn loop and REFRESH_DEBOUNCE_S
+    is patched to 0 here; the production default (300s) intentionally
+    coalesces same-window fires like these into a single pass.
+    """
     total_turns = 2 * COOLDOWN_TURNS  # 30
 
     with tempfile.TemporaryDirectory() as workspace:
@@ -498,7 +528,9 @@ async def test_ws_event_log_contains_exactly_two_turn_count_events():
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
-            await loop.run("go")
+            with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+                await loop.run("go")
+            await loop.drain_refresh()
 
         events = _lifecycle_events(ws)
 

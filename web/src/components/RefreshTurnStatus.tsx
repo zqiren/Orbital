@@ -13,14 +13,14 @@
  *   skipped     — muted, lower opacity
  *
  * The trigger prop shows which mechanism fired: turn_count, agent_decided,
- * or token_pressure.
+ * agent_decided_coalesced, or token_pressure.
  */
 
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
 export type RefreshStatus = 'in_progress' | 'done' | 'failed' | 'skipped';
-export type RefreshTrigger = 'turn_count' | 'agent_decided' | 'token_pressure';
+export type RefreshTrigger = 'turn_count' | 'agent_decided' | 'agent_decided_coalesced' | 'token_pressure';
 
 interface RefreshTurnStatusProps {
   status: RefreshStatus;
@@ -31,6 +31,7 @@ interface RefreshTurnStatusProps {
 const TRIGGER_LABEL_KEYS: Record<RefreshTrigger, StringKey> = {
   turn_count: 'refreshTurn.trigger.turnCount',
   agent_decided: 'refreshTurn.trigger.agentDecided',
+  agent_decided_coalesced: 'refreshTurn.trigger.agentDecidedCoalesced',
   token_pressure: 'refreshTurn.trigger.tokenPressure',
 };
 

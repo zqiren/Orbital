@@ -215,6 +215,12 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
 
     So with checkpoint at turn 8 and total_turns = 8 + 2*COOLDOWN_TURNS, we
     expect exactly: 1 agent_decided fire + 2 turn_count fires = 3 refreshes.
+
+    Spec 013: refreshes now run in the background (scheduled, not awaited
+    inline). Counts hold here because REFRESH_DEBOUNCE_S is patched to 0 (so
+    wall-clock never defers a trigger) and the mocked routine completes
+    within the awaited `loop.run()` call anyway; `drain_refresh()` after
+    `run()` mops up any pass still in flight when run() returns.
     """
     # Checkpoint at turn 8. Run enough turns to capture two subsequent
     # turn_count fires (one per COOLDOWN_TURNS window after the checkpoint).
@@ -283,7 +289,9 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
-            await loop.run("Start task")
+            with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+                await loop.run("Start task")
+            await loop.drain_refresh()
 
         events = _lifecycle_events(ws)
         done_events = [e for e in events if e.get("status") == "done"]
@@ -318,7 +326,15 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
 @pytest.mark.asyncio
 async def test_agent_decided_fires_once_regardless_of_turn_count():
     """Agent calling checkpoint_state fires exactly one agent_decided refresh
-    and does NOT double-fire with a simultaneous turn_count trigger."""
+    and does NOT double-fire with a simultaneous turn_count trigger.
+
+    Spec 013: the same-turn turn_count/agent_decided pair is now coalesced by
+    the single-flight gate (schedule_checkpoint) rather than serialized by
+    inline awaits — whichever trigger observes the gate first spawns the
+    pass, the other sets the dirty bit and is coalesced into it (or, if the
+    first pass already completed, spawns its own pass). REFRESH_DEBOUNCE_S is
+    patched to 0 so wall-clock never additionally defers either trigger.
+    """
     CHECKPOINT_TURN = COOLDOWN_TURNS  # trigger at same turn as COOLDOWN_TURNS threshold
     total_turns = COOLDOWN_TURNS + 1
 
@@ -377,7 +393,9 @@ async def test_agent_decided_fires_once_regardless_of_turn_count():
 
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
-            await loop.run("Start")
+            with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
+                await loop.run("Start")
+            await loop.drain_refresh()
 
         events = _lifecycle_events(ws)
         done_events = [e for e in events if e.get("status") == "done"]
@@ -397,3 +415,82 @@ async def test_agent_decided_fires_once_regardless_of_turn_count():
             f"Expected at least 1 done event, got 0. "
             f"Refresh trigger machinery not working."
         )
+
+
+@pytest.mark.asyncio
+async def test_debounce_suppresses_turn_count_after_agent_decided():
+    """With a huge debounce, the turn_count trigger that follows an
+    agent-decided pass is DEFERRED (dirty bit), not fired — at most one
+    consolidation per debounce window regardless of trigger mix (spec 013)."""
+    CHECKPOINT_TURN = 8
+    total_turns = CHECKPOINT_TURN + 2 * COOLDOWN_TURNS
+
+    with tempfile.TemporaryDirectory() as workspace:
+        pp = ProjectPaths(workspace)
+        os.makedirs(pp.orbital_dir, exist_ok=True)
+
+        project_id = "proj_chk_debounce"
+        ws = _build_ws_mock()
+        session = Session.new("sess-chk-debounce", workspace)
+        session.is_paused = MagicMock(return_value=False)
+        session.is_stopped = MagicMock(return_value=False)
+        session._paused_for_approval = False
+        session.pending_tool_calls = set()
+        session.pop_queued_messages = MagicMock(return_value=[])
+        session.resolve_pending_tool_calls = MagicMock()
+        session.pop_deferred_messages = MagicMock(return_value=[])
+
+        wfm = WorkspaceFileManager(workspace)
+        wfm.ensure_dir()
+
+        ctx = _TrackingContextManager(session)
+
+        refresh_callback = _make_refresh_callback(ws, project_id, session, wfm)
+
+        checkpoint_tool_holder = {"tool": None}
+
+        registry = _CountingRegistry()
+
+        loop = AgentLoop(
+            session=session,
+            provider=MagicMock(),
+            tool_registry=registry,
+            context_manager=ctx,
+            on_session_end_refresh=refresh_callback,
+            max_iterations=total_turns + 1,
+        )
+
+        async def on_agent_checkpoint():
+            await loop.trigger_checkpoint()
+
+        checkpoint_tool = CheckpointStateTool(on_checkpoint=on_agent_checkpoint)
+        registry._checkpoint_tool = checkpoint_tool
+
+        call_n = {"n": 0}
+
+        async def mock_stream(context, tool_schemas):
+            call_n["n"] += 1
+            if call_n["n"] == CHECKPOINT_TURN:
+                return _checkpoint_response(call_n["n"])
+            if call_n["n"] > total_turns:
+                return _text_response("All done.")
+            return _tool_response(call_n["n"])
+
+        loop._stream_response = mock_stream
+
+        async def fake_session_end_routine(**kwargs):
+            wfm.write("state", f"# State\nOK")
+
+        with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 10_000):
+            with patch.object(wsf_module, "run_session_end_routine",
+                              new=AsyncMock(side_effect=fake_session_end_routine)):
+                await loop.run("Start task")
+            await loop.drain_refresh()
+
+        events = _lifecycle_events(ws)
+        done_events = [e for e in events if e.get("status") == "done"]
+        # Exactly ONE pass total: the agent_decided one. Both turn_count windows
+        # fall inside the debounce and set the dirty bit instead.
+        assert len(done_events) == 1, done_events
+        assert done_events[0].get("trigger") == "agent_decided"
+        assert loop._refresh_dirty is True

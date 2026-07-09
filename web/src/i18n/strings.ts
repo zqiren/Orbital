@@ -525,6 +525,7 @@ export const STRINGS = {
   "refreshTurn.inProgress": { en: "Checkpointing project state…", zh: "检查点 - 保存项目状态中…" },
   "refreshTurn.skipped": { en: "Checkpoint skipped", zh: "已跳过检查点" },
   "refreshTurn.trigger.agentDecided": { en: "agent-decided", zh: "Agent发起" },
+  "refreshTurn.trigger.agentDecidedCoalesced": { en: "agent-decided (coalesced)", zh: "Agent发起（合并）" },
   "refreshTurn.trigger.tokenPressure": { en: "token-pressure", zh: "上下文受限" },
   "refreshTurn.trigger.turnCount": { en: "turn-count", zh: "回合数" },
   // --- scopeChip: Quick Tasks cross-project read scope (Spec 012 §2c) ---
