@@ -59,3 +59,14 @@ def test_no_hint_for_non_network_command(tmp_path):
     tool = _make_tool(tmp_path, "Received HTTP code 403 from proxy after CONNECT")
     result = tool.execute(command="echo hello")
     assert "[network-policy]" not in result.content
+
+
+def test_hint_appended_on_modern_curl_tunnel_phrasing(tmp_path):
+    """curl 8.x (macOS) phrases a blocked CONNECT as 'CONNECT tunnel failed,
+    response 403' instead of the older 'Received HTTP code 403 from proxy'."""
+    tool = _make_tool(
+        tmp_path,
+        "curl: (56) CONNECT tunnel failed, response 403",
+    )
+    result = tool.execute(command="curl https://x.com/somepage")
+    assert "[network-policy]" in result.content

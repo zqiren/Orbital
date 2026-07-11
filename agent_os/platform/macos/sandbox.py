@@ -85,7 +85,8 @@ def generate_profile(
     lines.append(
         '(allow file-read* (subpath "/usr") (subpath "/Library") (subpath "/System")'
         ' (subpath "/private") (subpath "/dev") (subpath "/bin")'
-        ' (subpath "/sbin") (subpath "/Applications") (literal "/"))'
+        ' (subpath "/sbin") (subpath "/Applications") (literal "/")'
+        ' (literal "/etc") (literal "/var") (literal "/tmp"))'
     )
 
     # ------------------------------------------------------------------

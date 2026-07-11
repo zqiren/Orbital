@@ -23,7 +23,8 @@ _NETWORK_CMD_RE = re.compile(r'\b(curl|wget|npm|pip|git)\b')
 
 # Markers proving the proxy rejected a domain on policy grounds.
 _PROXY_BLOCK_MARKERS = (
-    "received http code 403 from proxy",   # curl's CONNECT-refused message
+    "received http code 403 from proxy",   # curl's CONNECT-refused message (older curl)
+    "connect tunnel failed, response 403", # curl 8.x CONNECT-refused message
     "orbital network policy",              # our own 403 body (plain-HTTP path)
 )
 

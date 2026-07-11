@@ -184,3 +184,18 @@ class TestBasePermissions:
             assert f'(subpath "{path}")' in profile, (
                 f"Expected read access to {path} in profile"
             )
+
+    def test_base_read_symlink_literals_present(self):
+        """Profile grants read on the /etc, /var, /tmp symlink nodes themselves.
+
+        (subpath "/private") only covers the resolved target of these
+        top-level symlinks; resolving a path *through* /etc, /var, or /tmp
+        requires an explicit (literal ...) grant on the symlink node, or
+        Seatbelt denies the traversal (breaking TLS cert lookups via
+        /etc/ssl/cert.pem, for example).
+        """
+        profile = generate_profile("/tmp/workspace")
+        for node in ("/etc", "/var", "/tmp"):
+            assert f'(literal "{node}")' in profile, (
+                f"Expected (literal \"{node}\") read grant in profile"
+            )
