@@ -95,3 +95,44 @@ class TestProxySurvivesCreatorLoop:
         asyncio.run(p.stop())  # different asyncio.run() loop than start()
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", port), timeout=1)
+
+
+import sys
+import time
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="MacOSProvider is darwin-only")
+class TestRunCommandDoesNotBlockLoop:
+    @pytest.mark.asyncio
+    async def test_event_loop_stays_responsive_during_run_command(
+        self, monkeypatch, tmp_path
+    ):
+        from agent_os.platform.macos import provider as macos_provider
+
+        prov = macos_provider.MacOSPlatformProvider()
+
+        def slow_run(*args, **kwargs):          # stands in for sandbox-exec
+            time.sleep(0.6)
+
+            class R:
+                returncode = 0
+                stdout = "ok"
+                stderr = ""
+
+            return R()
+
+        monkeypatch.setattr(macos_provider.subprocess, "run", slow_run)
+
+        ticks = []
+
+        async def ticker():
+            for _ in range(6):
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.1)
+
+        t = asyncio.create_task(ticker())
+        result = await prov.run_command("p1", "/bin/echo", ["hi"], str(tmp_path))
+        await t
+
+        assert result.exit_code == 0
+        gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+        assert max(gaps) < 0.4, f"event loop starved during run_command: {gaps}"

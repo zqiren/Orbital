@@ -4,6 +4,7 @@
 
 """WindowsPlatformProvider — assembles all isolation components into a single provider."""
 
+import asyncio
 import logging
 import os
 from typing import Literal
@@ -209,8 +210,13 @@ class WindowsPlatformProvider(PlatformProvider):
             env["NO_PROXY"] = "localhost,127.0.0.1"
         if extra_env:
             env.update(extra_env)
-        return self._process_launcher.run_and_capture(
-            command, args, working_dir, env_vars=env, timeout_sec=timeout_sec
+        return await asyncio.to_thread(
+            self._process_launcher.run_and_capture,
+            command,
+            args,
+            working_dir,
+            env_vars=env,
+            timeout_sec=timeout_sec,
         )
 
     async def stop_process(self, project_id: str, timeout_sec: int = 10) -> bool:
