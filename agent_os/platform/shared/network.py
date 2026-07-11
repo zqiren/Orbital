@@ -15,6 +15,7 @@ import asyncio
 import logging
 from urllib.parse import urlparse
 
+from agent_os.platform.shared.network_loop import NetworkLoop
 from agent_os.platform.types import BlockedCallback, NetworkRules
 
 logger = logging.getLogger("agent_os.platform.shared.network")
@@ -47,7 +48,10 @@ class NetworkProxy:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the proxy server."""
+        """Start the proxy server (always on the shared network loop)."""
+        await NetworkLoop.get().run(self._start_on_network_loop())
+
+    async def _start_on_network_loop(self) -> None:
         if self._server is not None:
             raise RuntimeError("Proxy is already running")
 
@@ -65,7 +69,10 @@ class NetworkProxy:
         )
 
     async def stop(self) -> None:
-        """Stop the proxy server and cancel all active connections."""
+        """Stop the proxy server (always on the shared network loop)."""
+        await NetworkLoop.get().run(self._stop_on_network_loop())
+
+    async def _stop_on_network_loop(self) -> None:
         if self._server is None:
             return
 

@@ -50,3 +50,48 @@ class TestNetworkLoop:
         assert asyncio.run(go()) == "first"      # loop A now closed
         assert asyncio.run(go()) == "first"      # loop B works identically
         assert results == ["first", "first"]
+
+
+class TestProxySurvivesCreatorLoop:
+    def test_proxy_serves_after_creator_loop_closes(self):
+        """THE zombie-proxy regression test.
+
+        Pre-fix: the socket connects (kernel backlog) but no bytes ever
+        arrive — recv() times out. Post-fix: instant 403 for a blocked
+        domain, served by the network loop.
+        """
+        from agent_os.platform.shared.network import NetworkProxy
+        from agent_os.platform.types import NetworkRules
+
+        def create_in_ephemeral_loop() -> "NetworkProxy":
+            async def go():
+                p = NetworkProxy(project_id="zombie_test")
+                p.set_rules(NetworkRules(mode="allowlist", domains=["allowed.example"]))
+                await p.start()
+                return p
+
+            return asyncio.run(go())  # creator loop is CLOSED on return
+
+        p = create_in_ephemeral_loop()
+        try:
+            with socket.create_connection(("127.0.0.1", p.port), timeout=2) as s:
+                s.sendall(b"CONNECT x.com:443 HTTP/1.1\r\nHost: x.com:443\r\n\r\n")
+                s.settimeout(2)
+                data = s.recv(1024)
+            assert b"403" in data, f"expected 403, got: {data!r}"
+        finally:
+            asyncio.run(p.stop())
+
+    def test_stop_works_from_a_different_loop(self):
+        from agent_os.platform.shared.network import NetworkProxy
+
+        async def make():
+            p = NetworkProxy(project_id="stop_test")
+            await p.start()
+            return p
+
+        p = asyncio.run(make())
+        port = p.port
+        asyncio.run(p.stop())  # different asyncio.run() loop than start()
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1)
