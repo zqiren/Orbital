@@ -25,6 +25,7 @@ class WebSocketManager:
         self._subscriptions: dict[object, set[str]] = {}  # ws -> set of project_ids
         self._queue: asyncio.Queue | None = None
         self._drain_task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None  # loop owning queue/drain
         self._on_broadcast_hooks: list = []  # list of async callables(project_id, payload)
 
     def add_broadcast_hook(self, hook) -> None:
@@ -35,11 +36,20 @@ class WebSocketManager:
         self._on_broadcast_hooks.append(hook)
 
     def _ensure_drain(self) -> None:
-        """Start the background drain loop if not running."""
+        """Start the background drain loop if not running.
+
+        Only the loop that owns the queue/drain task may (re)create them.
+        If called while a *different* loop is running on the calling
+        thread, this is a no-op — the queue already belongs to another
+        loop and must not be touched from here (see ``broadcast()``).
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        if self._loop is not None and loop is not self._loop:
+            return
+        self._loop = loop
         if self._queue is None:
             self._queue = asyncio.Queue()
         if self._drain_task is None or self._drain_task.done():
@@ -83,14 +93,29 @@ class WebSocketManager:
     def broadcast(self, project_id: str, payload: dict) -> None:
         """Send payload to all clients subscribed to project_id.
 
-        Safe to call from sync code. Enqueues for async delivery.
-        Falls back to direct (sync) send_json for non-async WS objects
-        (e.g. MagicMock in unit tests).
+        Safe to call from sync code, including from a thread other than
+        the one that owns the drain loop (e.g. NetworkProxy's dedicated
+        network-loop thread). Enqueues for async delivery. Falls back to
+        direct (sync) send_json for non-async WS objects (e.g. MagicMock
+        in unit tests).
         """
         self._ensure_drain()
         if self._queue is not None:
+            item = (project_id, payload)
             try:
-                self._queue.put_nowait((project_id, payload))
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            try:
+                if self._loop is not None and running_loop is not self._loop:
+                    # Called from a foreign thread — either it's running
+                    # its own event loop, or no loop at all. Either way,
+                    # a raw put_nowait() would touch the owning loop's
+                    # Queue/Future machinery from off-thread, which is
+                    # not thread-safe. Marshal onto the owning loop.
+                    self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+                else:
+                    self._queue.put_nowait(item)
                 return
             except Exception:
                 pass
