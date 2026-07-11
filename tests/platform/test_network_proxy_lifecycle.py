@@ -138,3 +138,52 @@ class TestRunCommandDoesNotBlockLoop:
             assert max(gaps) < 0.4, f"event loop starved during run_command: {gaps}"
         finally:
             await prov.teardown()
+
+
+async def _raw_request(port: int, payload: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(payload)
+    await writer.drain()
+    data = await asyncio.wait_for(reader.read(4096), timeout=2)
+    writer.close()
+    return data
+
+
+class TestLegibleBlockedResponse:
+    @pytest.mark.asyncio
+    async def test_blocked_connect_gets_403_with_policy_body(self):
+        from agent_os.platform.shared.network import NetworkProxy
+        from agent_os.platform.types import NetworkRules
+
+        p = NetworkProxy(project_id="legible_test")
+        p.set_rules(NetworkRules(mode="allowlist", domains=["allowed.example"]))
+        await p.start()
+        try:
+            data = await _raw_request(
+                p.port, b"CONNECT x.com:443 HTTP/1.1\r\nHost: x.com:443\r\n\r\n"
+            )
+            assert b"403" in data
+            assert b"X-Orbital-Blocked: policy" in data
+            assert b"Orbital network policy" in data
+            assert b"x.com" in data
+            assert b"browser tool" in data
+        finally:
+            await p.stop()
+
+    @pytest.mark.asyncio
+    async def test_blocked_plain_http_gets_policy_body(self):
+        from agent_os.platform.shared.network import NetworkProxy
+        from agent_os.platform.types import NetworkRules
+
+        p = NetworkProxy(project_id="legible_http_test")
+        p.set_rules(NetworkRules(mode="allowlist", domains=["allowed.example"]))
+        await p.start()
+        try:
+            data = await _raw_request(
+                p.port,
+                b"GET http://x.com/ HTTP/1.1\r\nHost: x.com\r\n\r\n",
+            )
+            assert b"403" in data
+            assert b"Orbital network policy" in data
+        finally:
+            await p.stop()

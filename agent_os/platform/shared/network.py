@@ -22,6 +22,16 @@ logger = logging.getLogger("agent_os.platform.shared.network")
 
 _MAX_FIRST_LINE = 8192  # reject first lines longer than 8 KB
 
+_BLOCKED_BODY_TEMPLATE = (
+    "Blocked by Orbital network policy: '{host}' is not on this project's "
+    "allowlist.\n"
+    "This is a policy block, not a network failure. The sandbox shell can "
+    "only reach approved domains (package registries, LLM provider APIs, "
+    "GitHub, and domains approved for this project).\n"
+    "To read web content, use the browser tool instead of shell HTTP "
+    "clients.\n"
+)
+
 
 class NetworkProxy:
     """Async HTTP/HTTPS forward proxy with domain-level filtering."""
@@ -246,7 +256,7 @@ class NetworkProxy:
 
         if not self._is_allowed(host):
             logger.info("Blocked CONNECT to %s for project %s", host, self._project_id)
-            self._send_error(client_writer, 403, "Forbidden")
+            self._send_blocked(client_writer, host)
             self._fire_blocked(host, "CONNECT")
             return
 
@@ -294,7 +304,7 @@ class NetworkProxy:
 
         if not self._is_allowed(host):
             logger.info("Blocked %s to %s for project %s", method, host, self._project_id)
-            self._send_error(client_writer, 403, "Forbidden")
+            self._send_blocked(client_writer, host)
             self._fire_blocked(host, method)
             # Consume remaining client data so the connection shuts down cleanly.
             await self._consume_headers(client_reader)
@@ -421,6 +431,23 @@ class NetworkProxy:
         )
         try:
             writer.write(response.encode("latin-1"))
+        except Exception:
+            pass
+
+    def _send_blocked(self, writer: asyncio.StreamWriter, host: str) -> None:
+        """Send a 403 with a guidance body explaining the policy block."""
+        body = _BLOCKED_BODY_TEMPLATE.format(host=host)
+        encoded = body.encode()
+        response = (
+            "HTTP/1.1 403 Forbidden\r\n"
+            f"Content-Length: {len(encoded)}\r\n"
+            "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
+            "X-Orbital-Blocked: policy\r\n"
+            "\r\n"
+        ).encode() + encoded
+        try:
+            writer.write(response)
         except Exception:
             pass
 
