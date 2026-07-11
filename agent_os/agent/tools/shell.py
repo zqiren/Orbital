@@ -21,6 +21,20 @@ _HARD_CAP = 50_000
 # Patterns for detecting network-related commands
 _NETWORK_CMD_RE = re.compile(r'\b(curl|wget|npm|pip|git)\b')
 
+# Markers proving the proxy rejected a domain on policy grounds.
+_PROXY_BLOCK_MARKERS = (
+    "received http code 403 from proxy",   # curl's CONNECT-refused message
+    "orbital network policy",              # our own 403 body (plain-HTTP path)
+)
+
+_NETWORK_POLICY_HINT = (
+    "\n[network-policy] One or more domains were blocked by this project's "
+    "network allowlist. A 403 from the proxy means policy, not a broken "
+    "network — do not retry with workarounds. To read web content, use the "
+    "browser tool; shell network is reserved for approved domains "
+    "(package registries, LLM APIs, GitHub)."
+)
+
 # Pattern for extracting domains from URLs and bare domains
 _DOMAIN_RE = re.compile(
     r'(?:https?://|@)([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)+)'
@@ -185,6 +199,9 @@ class ShellTool(Tool):
             output = output[:_HARD_CAP] + "\n[OUTPUT TRUNCATED at 50,000 characters]"
 
         content = f"Exit code: {cmd_result.exit_code}\n{output}"
+        lowered = output.lower()
+        if meta.get("network") and any(m in lowered for m in _PROXY_BLOCK_MARKERS):
+            content += _NETWORK_POLICY_HINT
         return ToolResult(content=content, meta=meta)
 
     def _execute_via_subprocess(self, command: str, meta: dict) -> ToolResult:
