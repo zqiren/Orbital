@@ -187,3 +187,58 @@ class TestLegibleBlockedResponse:
             assert b"Orbital network policy" in data
         finally:
             await p.stop()
+
+
+class TestExpandedDefaults:
+    @pytest.mark.parametrize(
+        "domain",
+        [
+            # GitHub, properly wildcarded (api./gist./codeload. were blocked before)
+            "github.com",
+            "api.github.com",
+            "gist.github.com",
+            "codeload.github.com",
+            "raw.githubusercontent.com",
+            "objects.githubusercontent.com",
+            # providers the product actually ships
+            "api.moonshot.cn",
+            "api.moonshot.ai",
+            "api.minimaxi.com",
+            "api.minimax.io",
+            # package ecosystems
+            "pypi.org",
+            "files.pythonhosted.org",
+            "registry.npmjs.org",
+            "registry.yarnpkg.com",
+            "crates.io",
+            "static.crates.io",
+            "index.crates.io",
+            "proxy.golang.org",
+            "sum.golang.org",
+            # model downloads
+            "huggingface.co",
+            "cdn-lfs.huggingface.co",
+            "hf.co",
+            "cdn-lfs-us-1.hf.co",
+        ],
+    )
+    def test_default_allowlist_covers(self, domain):
+        from agent_os.platform.shared.network import NetworkProxy
+        from agent_os.platform.types import DEFAULT_ALLOWLIST_DOMAINS
+
+        assert NetworkProxy._matches_any(domain, DEFAULT_ALLOWLIST_DOMAINS), domain
+
+    @pytest.mark.parametrize(
+        "domain",
+        [
+            "x.com",
+            "evil.example",
+            "github.com.evil.example",   # suffix spoof must not match
+            "notgithub.com",
+        ],
+    )
+    def test_default_allowlist_blocks(self, domain):
+        from agent_os.platform.shared.network import NetworkProxy
+        from agent_os.platform.types import DEFAULT_ALLOWLIST_DOMAINS
+
+        assert not NetworkProxy._matches_any(domain, DEFAULT_ALLOWLIST_DOMAINS), domain

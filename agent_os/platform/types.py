@@ -72,17 +72,38 @@ class NetworkRules:
     log_blocked: bool = True
 
 DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
+    # LLM provider APIs — every provider the product's dropdown offers
     "api.openai.com",
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
     "api.deepseek.com",
     "api.mistral.ai",
+    "api.moonshot.cn",       # Kimi (China)
+    "api.moonshot.ai",       # Kimi (intl)
+    "api.minimaxi.com",      # MiniMax (China)
+    "api.minimax.io",        # MiniMax (intl)
+    # Python
     "pypi.org",
     "files.pythonhosted.org",
+    # Node
     "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    # Rust
+    "crates.io",
+    "static.crates.io",
+    "index.crates.io",
+    # Go
+    "proxy.golang.org",
+    "sum.golang.org",
+    # GitHub — wildcard does NOT match the apex, so both forms are needed
     "github.com",
-    "raw.githubusercontent.com",
-    "objects.githubusercontent.com",
+    "*.github.com",
+    "*.githubusercontent.com",
+    # Hugging Face model downloads
+    "huggingface.co",
+    "*.huggingface.co",
+    "hf.co",
+    "*.hf.co",
 ]
 
 # Type alias for proxy blocked callback
