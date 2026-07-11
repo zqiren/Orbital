@@ -140,6 +140,95 @@ class TestRunCommandDoesNotBlockLoop:
             await prov.teardown()
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="MacOSProvider is darwin-only")
+class TestEnsureProxyRaceSafe:
+    def test_concurrent_ensure_proxy_does_not_leak_a_zombie_proxy(self, monkeypatch):
+        """Two overlapping callers racing _ensure_proxy for the same project
+        (e.g. run_command + run_process, each on its own thread/loop) must
+        not both "win": whichever proxy loses the race must be stopped
+        before _ensure_proxy returns — not orphaned with a live listening
+        socket that teardown() can never reach because it was never
+        installed in ``_proxies``.
+
+        Reproduces the reviewer's race_demo.py finding: pre-fix, both
+        threads pass the unlocked ``if project_id not in self._proxies``
+        check, both start their own NetworkProxy, and whichever one loses
+        the dict-write is left listening forever (two live ports).
+        """
+        from agent_os.platform.macos import provider as macos_provider
+
+        created: list = []
+        real_proxy_cls = macos_provider.NetworkProxy
+
+        class TrackingProxy(real_proxy_cls):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.captured_port = None
+                self.stopped = False
+                created.append(self)
+
+            async def start(self):
+                await super().start()
+                self.captured_port = self._port
+
+            async def stop(self):
+                await super().stop()
+                self.stopped = True
+
+        monkeypatch.setattr(macos_provider, "NetworkProxy", TrackingProxy)
+
+        prov = macos_provider.MacOSPlatformProvider()
+        barrier = threading.Barrier(2)
+        results: list = []
+        errors: list = []
+
+        def worker():
+            async def go():
+                barrier.wait(timeout=5)
+                return await prov._ensure_proxy("raceproj")
+
+            try:
+                results.append(asyncio.run(go()))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+            assert not errors, f"_ensure_proxy raised: {errors}"
+            assert len(results) == 2
+            # The barrier forces both threads past the unlocked check before
+            # either finishes starting its proxy — confirms the race was
+            # actually exercised, not accidentally serialized.
+            assert len(created) == 2
+
+            assert len(prov._proxies) == 1
+            winner = prov._proxies["raceproj"]
+            assert results[0] is winner
+            assert results[1] is winner
+
+            with socket.create_connection(("127.0.0.1", winner.captured_port), timeout=2):
+                pass  # winner is alive and reachable
+
+            losers = [p for p in created if p is not winner]
+            for loser in losers:
+                assert loser.stopped, (
+                    "a losing proxy from the race was never stopped — "
+                    "zombie leak (unreachable via teardown())"
+                )
+                assert loser.captured_port is not None
+                with pytest.raises(OSError):
+                    socket.create_connection(
+                        ("127.0.0.1", loser.captured_port), timeout=1
+                    )
+        finally:
+            asyncio.run(prov.teardown())
+
+
 async def _raw_request(port: int, payload: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(payload)

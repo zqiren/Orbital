@@ -217,6 +217,36 @@ async def _call_ensure_drain(ws_manager):
     ws_manager._ensure_drain()
 
 
+class TestWsDrainPinnedAtStartup:
+    """The startup hook establishes ws_manager's drain loop deterministically
+    at boot, so no off-thread caller (e.g. NetworkProxy's dedicated
+    "orbital-network-loop" thread calling broadcast()) can race to be the
+    first to adopt a loop via the lazy _ensure_drain() in broadcast().
+    """
+
+    def test_startup_pins_drain_to_the_running_loop(self, tmp_path, monkeypatch):
+        # Headless keychain hang hazard (CLAUDE.md): create_app() touches
+        # credential storage during construction.
+        monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "in-memory")
+        monkeypatch.setenv("AGENT_OS_API_KEY", "test")
+
+        from fastapi.testclient import TestClient
+
+        from agent_os.api.app import create_app
+        from agent_os.api.routes import agents_v2
+
+        app = create_app(data_dir=str(tmp_path))
+        with TestClient(app):
+            ws_manager = agents_v2._ws_manager
+            assert ws_manager._loop is not None, (
+                "drain loop was not pinned during startup — _ensure_drain() "
+                "was never called before the first broadcast()"
+            )
+            assert ws_manager._drain_task is not None
+            assert not ws_manager._drain_task.done()
+            assert ws_manager._drain_task.get_loop() is ws_manager._loop
+
+
 class TestRelayOptIn:
     """Relay is only activated when AGENT_OS_RELAY_URL is set."""
 

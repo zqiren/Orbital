@@ -217,6 +217,15 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # 2. WebSocket manager
     ws_manager = WebSocketManager()
 
+    # Pin the broadcast drain to the main loop at boot. Without this,
+    # WebSocketManager._ensure_drain() adopts whatever loop happens to run
+    # the first-ever broadcast() — which can be an off-thread caller (e.g.
+    # NetworkProxy's dedicated "orbital-network-loop" thread) racing to get
+    # there first. Establishing it here deterministically wins that race.
+    @app.on_event("startup")
+    async def _start_ws_drain():
+        ws_manager._ensure_drain()
+
     # 3. Activity translator
     activity_translator = ActivityTranslator(ws_manager)
 

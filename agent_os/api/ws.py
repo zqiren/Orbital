@@ -138,6 +138,7 @@ class WebSocketManager:
         (e.g. sub-agent login progress). Same sync/async semantics as
         ``broadcast()``.
         """
+        # Main-loop-only / not thread-safe — unlike broadcast(), this has no call_soon_threadsafe marshaling for foreign-thread callers; see broadcast() for the cross-thread-safe path.
         # Use a sentinel project_id understood by the drain loop's filter
         # below: subscription set membership treats this id as if every
         # client subscribed. Easiest implementation: skip the queue and

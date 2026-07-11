@@ -437,6 +437,7 @@ class NetworkProxy:
     def _send_blocked(self, writer: asyncio.StreamWriter, host: str) -> None:
         """Send a 403 with a guidance body explaining the policy block."""
         body = _BLOCKED_BODY_TEMPLATE.format(host=host)
+        # utf-8 deliberate (Content-Length below counts these bytes) — don't copy to _send_error, which uses latin-1 for its ASCII-constant body.
         encoded = body.encode()
         response = (
             "HTTP/1.1 403 Forbidden\r\n"

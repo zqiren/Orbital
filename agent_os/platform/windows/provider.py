@@ -354,6 +354,19 @@ class WindowsPlatformProvider(PlatformProvider):
                 ))
 
             await proxy.start()
+
+            # Post-start re-check instead of a lock: two overlapping callers
+            # (e.g. run_command + run_process, each on its own thread/loop)
+            # can both pass the check above before either finishes starting.
+            # A lock held across the await would risk deadlocking the main
+            # loop if two main-loop coroutines ever raced it; this re-check
+            # is safe everywhere because interleaving on a single loop only
+            # happens at awaits, and across real threads the loser simply
+            # stops its own redundant proxy instead of leaking it.
+            existing = self._proxies.get(project_id)
+            if existing is not None:
+                await proxy.stop()
+                return existing
             self._proxies[project_id] = proxy
 
         return self._proxies[project_id]
