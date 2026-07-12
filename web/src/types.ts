@@ -58,6 +58,20 @@ export interface Project {
    *  globally, enable per project). Only enabled connectors' tools are
    *  reflected into this project's registry. */
   enabled_connectors?: string[];
+  /** TOFU network grants (Plan 2). Bare registrable domains approved for this
+   *  project's sandboxed shell/sub-agents, beyond the built-in defaults. */
+  approved_domains?: string[];
+  /** TOFU asks awaiting a decision — auto-denied under hands-off autonomy
+   *  (Plan 2 Task 5) rather than lost; surfaced in Settings → Network access. */
+  pending_domain_requests?: PendingDomainRequest[];
+}
+
+/** One TOFU network-access ask (Plan 2), as carried by
+ *  Project.pending_domain_requests. */
+export interface PendingDomainRequest {
+  domain: string;
+  reason: string;
+  requested_at: string;
 }
 
 export interface ProjectCreateRequest {
@@ -101,6 +115,11 @@ export interface ProjectUpdateRequest {
   /** Connector ids enabled for this project (rides the existing
    *  project-update flow — per-project enablement is NOT a connector route). */
   enabled_connectors?: string[];
+  /** TOFU network grants (Plan 2) — see Project.approved_domains. */
+  approved_domains?: string[];
+  /** TOFU pending requests (Plan 2) — see Project.pending_domain_requests.
+   *  Dismissals persist through this same PUT. */
+  pending_domain_requests?: PendingDomainRequest[];
 }
 
 /** PUT /projects response field carrying the reset outcome (codes only). */

@@ -103,6 +103,10 @@ class ProjectUpdate(BaseModel):
     # TOFU network grants (Plan 2 Task 2): bare registrable domains the user
     # has approved for this project; wildcarded at NetworkRules-build time.
     approved_domains: list[str] | None = None
+    # TOFU pending requests (Plan 2 Task 7): lets Settings → Network access
+    # persist dismissals (and any other pending-list edit) through this same
+    # PUT rather than a dedicated route.
+    pending_domain_requests: list[dict] | None = None
 
 
 class StartAgentRequest(BaseModel):

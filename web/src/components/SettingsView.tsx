@@ -19,6 +19,8 @@ import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
 import BudgetSection from './BudgetSection';
 import ProjectConnectorToggles from './ProjectConnectorToggles';
+import { NetworkAccessSection } from './NetworkAccessSection';
+import type { PendingDomainRequest } from '../types';
 import SettingsRail, {
   scrollToSettingsSection,
   type SettingsRailSection,
@@ -69,6 +71,7 @@ export const PROJECT_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'fallback-models', labelKey: 'fallback.heading' },
   { id: 'autonomy', labelKey: 'autonomy.level.label' },
   { id: 'budget', labelKey: 'settings.budget.label' },
+  { id: 'network', labelKey: 'settingsRail.network' },
   { id: 'connectors', labelKey: 'settingsRail.connectors' },
   { id: 'danger', labelKey: 'settings.danger.title' },
 ];
@@ -152,6 +155,18 @@ export default function SettingsView({
     project.enabled_connectors ?? [],
   );
 
+  // TOFU network grants (Plan 2). Like enabled_connectors, saved through
+  // THIS form's payload — Task 2's PUT route applies the resulting grants to
+  // a running agent's proxy immediately. pendingDomainRequests is display +
+  // approve/dismiss state; approving moves an entry into approvedDomains and
+  // drops it from pendingDomainRequests locally (persisted together on Save).
+  const [approvedDomains, setApprovedDomains] = useState<string[]>(
+    project.approved_domains ?? [],
+  );
+  const [pendingDomainRequests, setPendingDomainRequests] = useState<PendingDomainRequest[]>(
+    project.pending_domain_requests ?? [],
+  );
+
   // Budget state. Spend is NOT tracked here anymore — the Budget section reads
   // it exclusively from GET /cost via useCost (P3-F coupled removal of the
   // legacy budget_spent_usd accumulator).
@@ -200,6 +215,12 @@ export default function SettingsView({
         setBudgetAction(detail.budget_action === 'stop' ? 'stop' : 'pause');
         if (Array.isArray(detail.enabled_connectors)) {
           setEnabledConnectors(detail.enabled_connectors);
+        }
+        if (Array.isArray(detail.approved_domains)) {
+          setApprovedDomains(detail.approved_domains);
+        }
+        if (Array.isArray(detail.pending_domain_requests)) {
+          setPendingDomainRequests(detail.pending_domain_requests);
         }
       })
       .catch(() => {
@@ -356,6 +377,8 @@ export default function SettingsView({
       budget_action: budgetAction,
       disabled_sub_agents: disabledSubAgents,
       enabled_connectors: enabledConnectors,
+      approved_domains: approvedDomains,
+      pending_domain_requests: pendingDomainRequests,
     };
     if (llm.api_key) {
       data.api_key = llm.api_key;
@@ -670,11 +693,27 @@ export default function SettingsView({
           />
         </div>
 
+        {/* Network access — TOFU allowlist (Plan 2 Task 7). Approved domains +
+            pending requests, writing approved_domains / pending_domain_requests
+            through this form's save (Task 2's PUT route live-rebuilds the
+            proxy rules server-side). DOM order: budget → network → connectors
+            → danger, matching PROJECT_SETTINGS_SECTIONS. */}
+        <div data-settings-section="network" className="scroll-mt-4">
+          <NetworkAccessSection
+            approvedDomains={approvedDomains}
+            pendingRequests={pendingDomainRequests}
+            onChange={({ approvedDomains: next, pendingRequests }) => {
+              setApprovedDomains(next);
+              setPendingDomainRequests(pendingRequests);
+            }}
+          />
+        </div>
+
         {/* Connectors — per-project enablement (spec 011 §0.2/§0.6, Task E1).
             One switch per globally-connected connector, writing
             enabled_connectors through this form's save. Mounting this fills
-            the reserved 'connectors' rail entry (DOM order: budget → connectors
-            → danger, matching PROJECT_SETTINGS_SECTIONS). */}
+            the reserved 'connectors' rail entry (DOM order: budget → network →
+            connectors → danger, matching PROJECT_SETTINGS_SECTIONS). */}
         <div data-settings-section="connectors" className="scroll-mt-4">
           <ProjectConnectorToggles
             enabledConnectors={enabledConnectors}
