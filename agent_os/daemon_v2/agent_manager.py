@@ -1283,12 +1283,19 @@ class AgentManager:
             if self._browser_manager is not None:
                 try:
                     from agent_os.agent.tools.browser import BrowserTool
+                    from agent_os.daemon_v2.native_worker import _sanitize_for_filename
                     registry.register(BrowserTool(
                         browser_manager=self._browser_manager,
-                        project_id=worker_handle,          # "worker:<fanout>-<i>" scope
+                        project_id=worker_handle,          # "worker:<fanout>-<i>" scope — the
+                                                            # BrowserManager routing key; keep
+                                                            # the ":" prefix intact here.
                         workspace=workspace,
                         autonomy_preset="hands_off",       # workers always run hands-off
-                        screenshot_namespace=worker_handle,
+                        # ":" is reserved in Windows path components and
+                        # capture_screenshot() mkdirs screenshots_dir/namespace
+                        # unconditionally on every action — sanitize, unlike
+                        # project_id above which must stay the raw routing key.
+                        screenshot_namespace=_sanitize_for_filename(worker_handle),
                         user_credential_store=None,        # workers browse anonymously
                         vision_enabled=False,
                     ))

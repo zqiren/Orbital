@@ -192,6 +192,26 @@ class TestWorkerRegistryBrowserTool:
         assert isinstance(registry, ScopedToolRegistry)
         assert "browser" in list(registry.tool_names())
 
+    def test_worker_browser_tool_screenshot_namespace_is_windows_safe(self):
+        """Round-4 review finding: ``screenshot_namespace`` must NOT carry
+        the raw ``worker:<fanout>-<i>`` handle verbatim — ``:`` is invalid in
+        a Windows path component, and ``capture_screenshot`` mkdirs
+        ``screenshots_dir / namespace`` on every BrowserTool action
+        (unconditionally, even with vision off), so an unsanitized handle
+        would fail every worker browser action on Windows (WinError 123).
+        ``project_id`` (the BrowserManager routing key) must keep the raw
+        ``worker:`` prefix though — only the screenshot namespace changes."""
+        mgr = _make_manager(
+            project={"workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k"},
+            browser_manager=MagicMock(),
+        )
+        deps = mgr.build_worker_deps("proj-1", "sess-1")
+        registry = deps.make_tool_registry(None, None, "worker:f1-0")
+
+        browser_tool = registry._tools["browser"]
+        assert ":" not in browser_tool._screenshot_namespace
+        assert browser_tool._project_id == "worker:f1-0"
+
 
 class TestFanoutToolRegisteredOnManagementRegistry:
     def test_fanout_registered_next_to_agent_message(self):
