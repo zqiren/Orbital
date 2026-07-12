@@ -131,9 +131,12 @@ class AgentConfig:
     # Authenticate globally (Global Settings), enable per project.
     enabled_connectors: list[str] = field(default_factory=list)
     agent_credentials: dict = field(default_factory=dict)
-    # network_extra_domains REMOVED (TASK-network-config-cleanup): persisted but
-    # never plumbed into NetworkRules — the allowlist is internal/hardcoded
-    # (DEFAULT_ALLOWLIST_DOMAINS + per-agent manifest network_domains).
+    # TOFU network grants (Plan 2). approved_domains: bare registrable
+    # domains the user approved for THIS project (wildcarded at rules-build
+    # time). pending_domain_requests: asks that auto-denied in hands-off,
+    # awaiting a Settings decision — entries {domain, reason, requested_at}.
+    approved_domains: list[str] = field(default_factory=list)
+    pending_domain_requests: list[dict] = field(default_factory=list)
     project_name: str = ""
     project_instructions: str = ""
     budget_limit_usd: float | None = None
