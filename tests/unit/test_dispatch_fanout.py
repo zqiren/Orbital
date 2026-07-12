@@ -98,7 +98,7 @@ class _StubToolRegistry:
 
 
 def _make_registry_factory():
-    def _make_tool_registry(allowed_paths, forbidden_paths):
+    def _make_tool_registry(allowed_paths, forbidden_paths, worker_handle=None):
         return _StubToolRegistry()
     return _make_tool_registry
 
@@ -259,7 +259,7 @@ async def test_construction_failure_returns_error_and_cleans_up(tmp_path):
     FanoutRegistry."""
     calls = {"n": 0}
 
-    def _failing_registry_factory(allowed_paths, forbidden_paths):
+    def _failing_registry_factory(allowed_paths, forbidden_paths, worker_handle=None):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("boom: registry construction failed")
@@ -400,7 +400,7 @@ async def test_dispatch_fanout_forbids_orbital_dir_for_every_worker(tmp_path):
     and user-supplied forbidden entries survive."""
     captured: list[tuple] = []
 
-    def _recording_factory(allowed_paths, forbidden_paths):
+    def _recording_factory(allowed_paths, forbidden_paths, worker_handle=None):
         captured.append((allowed_paths, forbidden_paths))
         return _StubToolRegistry()
 

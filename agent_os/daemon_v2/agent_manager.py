@@ -1216,10 +1216,18 @@ class AgentManager:
         rather than duplicating credential/model resolution.
 
         Tool registry: a minimal, restricted set — read/write/edit/grep/glob/
-        shell — EXCLUDING browser (shared resource), request_credential
-        (a worker can't pause for user input), agent_message and fanout (no
-        recursive fanout in v1). Wrapped in ``ScopedToolRegistry`` when the
-        per-task ``files_scope`` (``allowed``/``forbidden``) is given.
+        shell — EXCLUDING request_credential (a worker can't pause for user
+        input), agent_message and fanout (no recursive fanout in v1).
+        ``browser`` IS included, but only when ``self._browser_manager`` is
+        set: a fresh, anonymous (no credential store, no vision), hands-off
+        ``BrowserTool`` keyed to the worker's own ``worker:<fanout>-<i>``
+        handle (Plan 3 Task 1's ``BrowserManager`` worker-scope routing
+        isolates it onto its own context/browser — never the management
+        agent's). Wrapped in ``ScopedToolRegistry`` when the per-task
+        ``files_scope`` (``allowed``/``forbidden``) is given; the browser
+        tool is registered before that wrap, so it survives it (that
+        wrapper only gates path-bearing write tools and delegates
+        ``tool_names()`` straight through — see ``scoped_registry.py``).
         """
         from agent_os.agent.tools.edit import EditTool
         from agent_os.agent.tools.glob_tool import GlobTool
@@ -1257,7 +1265,7 @@ class AgentManager:
             read_roots_cb = lambda: self._compute_scope_roots(project_id, session_id)[0]
             root_labels_cb = lambda: self._compute_scope_roots(project_id, session_id)[1]
 
-        def make_tool_registry(allowed, forbidden):
+        def make_tool_registry(allowed, forbidden, worker_handle):
             registry = ToolRegistry()
             registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb))
             registry.register(WriteTool(workspace=workspace))
@@ -1272,6 +1280,20 @@ class AgentManager:
                 platform_provider=platform_provider,
                 project_id=project_id,
             ))
+            if self._browser_manager is not None:
+                try:
+                    from agent_os.agent.tools.browser import BrowserTool
+                    registry.register(BrowserTool(
+                        browser_manager=self._browser_manager,
+                        project_id=worker_handle,          # "worker:<fanout>-<i>" scope
+                        workspace=workspace,
+                        autonomy_preset="hands_off",       # workers always run hands-off
+                        screenshot_namespace=worker_handle,
+                        user_credential_store=None,        # workers browse anonymously
+                        vision_enabled=False,
+                    ))
+                except ImportError:
+                    pass
             if allowed is not None or forbidden is not None:
                 return ScopedToolRegistry(registry, allowed, forbidden, workspace=workspace)
             return registry

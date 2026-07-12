@@ -117,7 +117,7 @@ class WorkerDeps:
     project_id: str
     parent_session_id: str
     make_tool_registry: Callable[
-        [list[str] | None, list[str] | None], ToolRegistryLike
+        [list[str] | None, list[str] | None, str], ToolRegistryLike
     ]
     on_activity: Callable[[], None] | None = None
     # WS fan-out for live drill-in streaming: ``broadcast(project_id, payload)``
@@ -259,7 +259,7 @@ class NativeWorkerAdapter:
         # actual task; this adapter never assigns it itself).
         self._background_send_task: asyncio.Task | None = None
 
-        registry = deps.make_tool_registry(allowed_paths, forbidden_paths)
+        registry = deps.make_tool_registry(allowed_paths, forbidden_paths, handle)
         if self._on_activity is not None:
             # Per-tool-call activity granularity (see WorkerDeps.on_activity
             # docstring) — wrap AFTER the factory call so allowed/forbidden

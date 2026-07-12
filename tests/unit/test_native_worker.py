@@ -146,7 +146,7 @@ class _StubToolRegistry:
 
 
 def _make_registry_factory(registry):
-    def _make_tool_registry(allowed_paths, forbidden_paths):
+    def _make_tool_registry(allowed_paths, forbidden_paths, worker_handle=None):
         return registry
     return _make_tool_registry
 
@@ -246,22 +246,26 @@ async def test_worker_session_tagged(tmp_path, stub_worker_deps):
 
 @pytest.mark.asyncio
 async def test_make_tool_registry_receives_path_scopes(tmp_path, stub_worker_deps):
-    """The adapter forwards allowed_paths/forbidden_paths verbatim to
+    """The adapter forwards allowed_paths/forbidden_paths/handle verbatim to
     deps.make_tool_registry — Task 2's spawner-provided factory is the one
-    that turns those into an enforced restricted registry; this task only
-    guarantees the call happens with the right arguments."""
+    that turns those into an enforced restricted registry (plus a
+    handle-keyed BrowserTool); this task only guarantees the call happens
+    with the right arguments."""
     seen = {}
 
-    def _make_tool_registry(allowed_paths, forbidden_paths):
+    def _make_tool_registry(allowed_paths, forbidden_paths, worker_handle=None):
         seen["allowed"] = allowed_paths
         seen["forbidden"] = forbidden_paths
+        seen["handle"] = worker_handle
         return _StubToolRegistry()
 
     stub_worker_deps.make_tool_registry = _make_tool_registry
     NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:x-0",
                         display_name="t0",
                         allowed_paths=["src/"], forbidden_paths=["secrets/"])
-    assert seen == {"allowed": ["src/"], "forbidden": ["secrets/"]}
+    assert seen == {
+        "allowed": ["src/"], "forbidden": ["secrets/"], "handle": "worker:x-0",
+    }
 
 
 @pytest.mark.asyncio

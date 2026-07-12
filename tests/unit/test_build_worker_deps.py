@@ -26,11 +26,15 @@ from agent_os.daemon_v2.models import SessionKey, make_session_key
 from agent_os.daemon_v2.native_worker import WorkerDeps
 
 
-def _make_manager(project=None, projects=None):
+def _make_manager(project=None, projects=None, browser_manager=None):
     """``projects`` (dict of project_id -> project dict) drives a live,
     multi-project ``get_project``/``list_projects`` double — needed for
     ``_compute_scope_roots`` (Spec 12 §2a) to actually walk the store, as
     opposed to the single fixed-project stub used by the rest of this file.
+
+    ``browser_manager`` defaults to ``None`` (no BrowserTool registered on
+    worker registries) — pass a double to exercise the worker BrowserTool
+    wiring (see ``TestWorkerRegistryBrowserTool`` below).
     """
     ws = MagicMock()
     project_store = MagicMock()
@@ -54,6 +58,7 @@ def _make_manager(project=None, projects=None):
         activity_translator=activity_translator,
         process_manager=process_manager,
         provider_registry=provider_registry,
+        browser_manager=browser_manager,
     )
     return mgr
 
@@ -114,7 +119,7 @@ class TestRestrictedToolRegistry:
             "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
         })
         deps = mgr.build_worker_deps("proj-1", "sess-1")
-        registry = deps.make_tool_registry(None, None)
+        registry = deps.make_tool_registry(None, None, "worker:test-0")
 
         names = set(registry.tool_names())
         assert {"read", "write", "edit", "grep", "glob", "shell"} <= names
@@ -128,7 +133,7 @@ class TestRestrictedToolRegistry:
             "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
         })
         deps = mgr.build_worker_deps("proj-1", "sess-1")
-        registry = deps.make_tool_registry(None, None)
+        registry = deps.make_tool_registry(None, None, "worker:test-0")
 
         # Plain ToolRegistry, not the scoped wrapper — has_result depends on
         # ToolRegistry-specific internals (._tools) that ScopedToolRegistry
@@ -140,11 +145,52 @@ class TestRestrictedToolRegistry:
             "workspace": str(tmp_path), "model": "gpt-4o", "api_key": "k",
         })
         deps = mgr.build_worker_deps("proj-1", "sess-1")
-        registry = deps.make_tool_registry(["safe"], None)
+        registry = deps.make_tool_registry(["safe"], None, "worker:test-0")
 
         from agent_os.agent.tools.scoped_registry import ScopedToolRegistry
         assert isinstance(registry, ScopedToolRegistry)
         assert set(registry.tool_names()) >= {"read", "write", "edit", "grep", "glob", "shell"}
+
+
+class TestWorkerRegistryBrowserTool:
+    """Plan 3 Task 2: a fanout worker gets its own anonymous ``BrowserTool``
+    keyed to its ``worker:<fanout_id>-<i>`` handle — a distinct scope from
+    the management agent's browser (Task 1's ``BrowserManager`` worker-scope
+    routing), never shared credentials, never vision."""
+
+    def test_worker_registry_includes_browser_tool_keyed_to_handle(self):
+        mgr = _make_manager(
+            project={"workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k"},
+            browser_manager=MagicMock(),
+        )
+        deps = mgr.build_worker_deps("proj-1", "sess-1")
+        registry = deps.make_tool_registry(None, None, "worker:f1-0")
+        assert "browser" in list(registry.tool_names())
+
+    def test_worker_registry_without_browser_manager_has_no_browser(self):
+        mgr = _make_manager(project={
+            "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
+        })
+        deps = mgr.build_worker_deps("proj-1", "sess-1")
+        registry = deps.make_tool_registry(None, None, "worker:f1-0")
+        assert "browser" not in list(registry.tool_names())
+
+    def test_worker_registry_with_scope_still_includes_browser_tool(self, tmp_path):
+        """The browser tool must survive the ``ScopedToolRegistry`` wrap —
+        that wrapper only gates path-bearing write tools and delegates
+        ``tool_names()`` straight to the inner registry (scoped_registry.py),
+        but workers always set a files_scope in practice, so this is the
+        realistic path."""
+        mgr = _make_manager(
+            project={"workspace": str(tmp_path), "model": "gpt-4o", "api_key": "k"},
+            browser_manager=MagicMock(),
+        )
+        deps = mgr.build_worker_deps("proj-1", "sess-1")
+        registry = deps.make_tool_registry(["safe"], None, "worker:f1-0")
+
+        from agent_os.agent.tools.scoped_registry import ScopedToolRegistry
+        assert isinstance(registry, ScopedToolRegistry)
+        assert "browser" in list(registry.tool_names())
 
 
 class TestFanoutToolRegisteredOnManagementRegistry:
@@ -189,7 +235,7 @@ class TestWorkerReadRootsInheritScratchScope:
         }
         mgr = _make_manager(projects=projects)
         deps = mgr.build_worker_deps("p_scratch", "quick_tasks_11112222")
-        registry = deps.make_tool_registry(None, None)
+        registry = deps.make_tool_registry(None, None, "worker:test-0")
         read_tool = registry._tools["read"]
         assert read_tool._read_roots is not None
         roots = read_tool._read_roots()
@@ -213,6 +259,6 @@ class TestWorkerReadRootsInheritScratchScope:
         }
         mgr = _make_manager(projects=projects)
         deps = mgr.build_worker_deps("p_other", "sess_1")
-        registry = deps.make_tool_registry(None, None)
+        registry = deps.make_tool_registry(None, None, "worker:test-0")
         read_tool = registry._tools["read"]
         assert read_tool._read_roots is None
