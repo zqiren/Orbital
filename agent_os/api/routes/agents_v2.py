@@ -553,6 +553,18 @@ async def update_project(project_id: str, body: ProjectUpdate):
         raise HTTPException(status_code=404, detail="Project not found")
     raw_body = body.model_dump()
     updates = {k: v for k, v in raw_body.items() if v is not None}
+    # TOFU allowlist: normalize every incoming approved_domains entry so a
+    # Settings save (or a legacy raw-form pending entry it promotes) can never
+    # persist a URL/port-suffixed string the proxy's exact-host/``*.`` matcher
+    # would never match. Drop ungrantable entries, dedupe preserving order.
+    if "approved_domains" in updates:
+        from agent_os.daemon_v2.network_rules_builder import normalize_domain
+        normalized: list[str] = []
+        for entry in updates["approved_domains"]:
+            d = normalize_domain(str(entry))
+            if d is not None and d not in normalized:
+                normalized.append(d)
+        updates["approved_domains"] = normalized
     # P3-F coupled removal: the legacy ``budget_spent_usd`` /
     # ``runtime_budget_spent_usd`` reset sentinels are GONE. The token ledger is
     # the single source of recorded spend; the ONLY reset surface is

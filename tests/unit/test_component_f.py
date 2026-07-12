@@ -1081,6 +1081,10 @@ class TestAgentManager:
         mgr._project_store.update_project.assert_not_called()
         mgr._platform_provider.configure_network.assert_not_called()
         mock_session.append_tool_result.assert_called_once()
+        tc_id_arg, text_arg = mock_session.append_tool_result.call_args[0]
+        assert tc_id_arg == "tc_1"
+        assert "***not-a-domain***" in text_arg
+        assert "not a grantable domain" in text_arg
 
     @pytest.mark.asyncio
     async def test_approve_network_request_non_string_domain_no_crash(self):
@@ -1116,6 +1120,10 @@ class TestAgentManager:
         mgr._project_store.update_project.assert_not_called()
         mgr._platform_provider.configure_network.assert_not_called()
         mock_session.append_tool_result.assert_called_once()
+        tc_id_arg, text_arg = mock_session.append_tool_result.call_args[0]
+        assert tc_id_arg == "tc_1"
+        assert "123" in text_arg
+        assert "not a grantable domain" in text_arg
 
     # -- Task 5: hands-off network-approval auto-deny timeout -----------
     #
@@ -1352,6 +1360,70 @@ class TestAgentManager:
 
         domains = [r["domain"] for r in project_state["pending_domain_requests"]]
         assert domains == ["x.com"]
+
+    @pytest.mark.asyncio
+    async def test_hands_off_network_timeout_normalizes_before_persisting(self):
+        """A URL-shaped domain in tool_args (e.g. an https:// form the model
+        passed instead of a bare host) must be normalized before landing in
+        pending_domain_requests — otherwise a later Settings approval copies
+        the raw string into approved_domains, where the proxy's exact-host/
+        ``*.``-suffix matcher can never match it (a grant that visibly
+        succeeds but does nothing)."""
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "https://api.x.com/path", "reason": "verify"},
+        }
+
+        handle = MagicMock(session=mock_session, interceptor=mock_interceptor,
+                            loop=MagicMock())
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr._fire_network_approval_timeout("proj_1", "default", "tc_1")
+
+        updates = mgr._project_store.update_project.call_args[0][1]
+        domains = [r["domain"] for r in updates["pending_domain_requests"]]
+        assert domains == ["api.x.com"]
+
+    @pytest.mark.asyncio
+    async def test_hands_off_network_timeout_garbage_domain_skips_persist(self):
+        """An ungrantable domain (normalize_domain returns None) must not be
+        appended to pending_domain_requests — an unrepairable garbage entry
+        would sit in Project Settings forever with no way to grant it. The
+        rest of the auto-deny tail (remove pending, broadcast, inject
+        denial, restart loop) must still run, and the denial text names the
+        raw value so the agent knows what was denied."""
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "***not-a-domain***", "reason": "verify"},
+        }
+
+        handle = MagicMock(session=mock_session, interceptor=mock_interceptor,
+                            loop=MagicMock())
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
+            await mgr._fire_network_approval_timeout("proj_1", "default", "tc_1")
+
+        mgr._project_store.update_project.assert_not_called()
+        mock_session.append_tool_result.assert_called_once()
+        tc_id_arg, text_arg = mock_session.append_tool_result.call_args[0]
+        assert tc_id_arg == "tc_1"
+        assert "***not-a-domain***" in text_arg
+        mock_session.resume.assert_called_once()
+        mock_start.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_inject_message_accepts_session_id_kwarg(self):
@@ -1995,6 +2067,31 @@ class TestRESTEndpoints:
         assert resp.status_code == 200
         assert len(resp.json()) == 8
         assert resp.headers["X-Total-Count"] == "8"
+
+    # -- approved_domains normalization on PUT (network allowlist) --
+
+    def test_put_approved_domains_normalizes_and_drops_garbage(self, app_client, tmp_path):
+        """PUT /projects/{id} with approved_domains must normalize each entry
+        (URL/port forms reduced to a bare host, case-folded) and silently drop
+        anything normalize_domain rejects, rather than persisting raw strings
+        the proxy's exact-host/``*.`` matcher can never match."""
+        resp = app_client.post("/api/v2/projects", json={
+            "name": "NetDomains",
+            "workspace": str(tmp_path),
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        pid = resp.json()["project_id"]
+
+        resp = app_client.put(f"/api/v2/projects/{pid}", json={
+            "approved_domains": [
+                "https://api.x.com/path", "API.X.COM", "***not-a-domain***",
+            ],
+        })
+        assert resp.status_code == 200
+
+        project = app_client.get(f"/api/v2/projects/{pid}").json()
+        assert project["approved_domains"] == ["api.x.com"]
 
     # -- Bulk delete tests (daemon-hardening) --
 

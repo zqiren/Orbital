@@ -29,7 +29,10 @@ def test_normalize_domain_accepts(raw, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    ["", "   ", "*.x.com", "*", "127.0.0.1", "192.168.1.10", "https://", "not a domain"],
+    [
+        "", "   ", "*.x.com", "*", "127.0.0.1", "192.168.1.10", "https://", "not a domain",
+        "::1", "2001:db8::1", "[::1]:8080", "http://[::1]/x", "fe80::1",
+    ],
 )
 def test_normalize_domain_rejects(raw):
     assert normalize_domain(raw) is None

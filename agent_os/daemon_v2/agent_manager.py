@@ -2439,23 +2439,33 @@ class AgentManager:
             return
 
         tool_args = pending.get("tool_args", {})
-        domain = str(tool_args.get("domain", ""))
+        raw_domain = str(tool_args.get("domain", ""))
 
-        project = self._project_store.get_project(project_id) or {}
-        pending_reqs = list(
-            (project.get("pending_domain_requests")
-             if isinstance(project, dict)
-             else getattr(project, "pending_domain_requests", None)) or []
-        )
-        if all(r.get("domain") != domain for r in pending_reqs):
-            pending_reqs.append({
-                "domain": domain,
-                "reason": str(tool_args.get("reason", "")),
-                "requested_at": datetime.now(timezone.utc).isoformat(),
-            })
-            self._project_store.update_project(
-                project_id, {"pending_domain_requests": pending_reqs}
+        # Normalize before persisting: a raw URL/port-suffixed string surviving
+        # into pending_domain_requests would later be copied verbatim into
+        # approved_domains on approval, where the proxy's exact-host/``*.``
+        # matcher can never match it — a grant that visibly succeeds but does
+        # nothing. Ungrantable garbage is skipped entirely rather than parked
+        # unrepairable in Settings; the raw string still names itself below.
+        from agent_os.daemon_v2.network_rules_builder import normalize_domain
+        normalized_domain = normalize_domain(raw_domain)
+
+        if normalized_domain is not None:
+            project = self._project_store.get_project(project_id) or {}
+            pending_reqs = list(
+                (project.get("pending_domain_requests")
+                 if isinstance(project, dict)
+                 else getattr(project, "pending_domain_requests", None)) or []
             )
+            if all(r.get("domain") != normalized_domain for r in pending_reqs):
+                pending_reqs.append({
+                    "domain": normalized_domain,
+                    "reason": str(tool_args.get("reason", "")),
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                })
+                self._project_store.update_project(
+                    project_id, {"pending_domain_requests": pending_reqs}
+                )
 
         handle.interceptor.remove_pending(tool_call_id)
 
@@ -2469,7 +2479,7 @@ class AgentManager:
 
         tool_result_text = (
             f"Denied for this run: the user was unavailable to approve "
-            f"'{domain}' within 3 minutes. The request remains pending in "
+            f"'{raw_domain}' within 3 minutes. The request remains pending in "
             f"Project Settings → Network — it may be granted for future "
             f"runs. Complete what you can and note the gap."
         )
