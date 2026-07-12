@@ -23,7 +23,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Protocol
+from typing import Awaitable, Callable, Protocol
 
 from agent_os.agent.context import ContextManager
 from agent_os.agent.loop import AgentLoop
@@ -127,6 +127,9 @@ class WorkerDeps:
     # session id, so these reach only a drill-in subscribed to that worker.
     # ``None`` → no streaming observer, byte-identical to the pre-streaming path.
     broadcast: Callable[[str, dict], None] | None = None
+    # Closes the worker's isolated browser context (BrowserManager.
+    # close_worker_scope). None → no browser cleanup (no browser manager).
+    close_browser_scope: Callable[[str], Awaitable[None]] | None = None
 
 
 _HANDLE_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -240,6 +243,7 @@ class NativeWorkerAdapter:
         # each adapter in a batch, so capturing it now is what makes sharing
         # one WorkerDeps instance across N adapters safe.
         self._on_activity = deps.on_activity
+        self._close_browser_scope = deps.close_browser_scope
 
         self._transport = None
         self._last_response: str | None = None
@@ -405,6 +409,7 @@ class NativeWorkerAdapter:
             self._running = False
             self._idle = True
             self._fire_activity()  # turn end
+            await self._cleanup_browser_scope()
 
     def _fire_activity(self) -> None:
         """Best-effort ``on_activity`` invocation — a broken caller-supplied
@@ -417,6 +422,18 @@ class NativeWorkerAdapter:
             logger.exception(
                 "NativeWorkerAdapter %s: on_activity callback raised",
                 self.handle,
+            )
+
+    async def _cleanup_browser_scope(self) -> None:
+        """Best-effort teardown of this worker's isolated browser context.
+        Idempotent (close_worker_scope pops); must never break the turn."""
+        if self._close_browser_scope is None:
+            return
+        try:
+            await self._close_browser_scope(self.handle)
+        except Exception:
+            logger.exception(
+                "NativeWorkerAdapter %s: browser scope cleanup failed", self.handle
             )
 
     async def stop(self) -> None:
@@ -434,6 +451,7 @@ class NativeWorkerAdapter:
         await self._loop.cancel_turn()
         self._running = False
         self._idle = True
+        await self._cleanup_browser_scope()
 
     def is_running(self) -> bool:
         return self._running

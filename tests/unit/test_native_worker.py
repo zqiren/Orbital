@@ -483,3 +483,59 @@ def test_worker_stream_broadcast_errors_are_swallowed(tmp_path):
     a = NativeWorkerAdapter(deps=deps, handle="worker:x-0", display_name="t0",
                             allowed_paths=None, forbidden_paths=None)
     a._session.notify_stream(_Chunk(text="x"))  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Browser scope teardown (Plan 3 Task 3): WorkerDeps.close_browser_scope, when
+# set, is called with the worker's own handle after the one-shot turn ends
+# (send()'s finally block) AND on stop() — BrowserManager.close_worker_scope
+# (Task 1) is idempotent, so firing from both paths is safe even if a caller
+# stops a worker mid-turn.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_closes_browser_scope_after_turn(tmp_path, stub_worker_deps):
+    closed = []
+
+    async def fake_close(scope):
+        closed.append(scope)
+
+    stub_worker_deps.close_browser_scope = fake_close
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:f1-0",
+                            display_name="t0", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("do the task")
+    assert closed == ["worker:f1-0"]
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_browser_scope(tmp_path, stub_worker_deps):
+    closed = []
+
+    async def fake_close(scope):
+        closed.append(scope)
+
+    stub_worker_deps.close_browser_scope = fake_close
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:f1-1",
+                            display_name="t1", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.stop()
+    assert closed == ["worker:f1-1"]
+
+
+@pytest.mark.asyncio
+async def test_send_browser_scope_cleanup_failure_does_not_break_turn(
+    tmp_path, stub_worker_deps
+):
+    """A broken close_browser_scope hook (e.g. Playwright teardown raising)
+    must not corrupt the worker's own turn result — mirrors the
+    on_activity-exception safety guarantee above."""
+    async def fake_close(scope):
+        raise RuntimeError("browser close boom")
+
+    stub_worker_deps.close_browser_scope = fake_close
+    a = NativeWorkerAdapter(deps=stub_worker_deps, handle="worker:f1-2",
+                            display_name="t2", allowed_paths=None,
+                            forbidden_paths=None)
+    await a.send("compute the answer")
+    assert a._last_response == "done: 42"

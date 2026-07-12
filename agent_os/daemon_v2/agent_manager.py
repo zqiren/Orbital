@@ -1308,6 +1308,14 @@ class AgentManager:
             # deltas are addressed to each worker's own session_uuid, so the
             # main chat pane (strict viewed-session filter) never sees them.
             broadcast=(self._ws.broadcast if self._ws is not None else None),
+            # Tears down the worker's isolated browser context (Plan 3 Task 1)
+            # when its turn ends / it is stopped. None when no browser
+            # manager exists — mirrors the `browser` tool's own gating above.
+            close_browser_scope=(
+                self._browser_manager.close_worker_scope
+                if self._browser_manager is not None
+                else None
+            ),
         )
 
     def has_handle(self, project_id: str) -> bool:
