@@ -342,6 +342,7 @@ export interface ApprovalResolvedEvent {
   session_id?: string;
   tool_call_id: string;
   resolution: 'approved' | 'denied';
+  auto_denied?: boolean;
 }
 
 export interface SubAgentMessageEvent {

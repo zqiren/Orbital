@@ -68,6 +68,19 @@ function renderToolArgs(toolName: string, toolArgs: Record<string, unknown>, t: 
           {toolArgs.target ? ` \u2014 ${String(toolArgs.target)}` : ''}
         </span>
       );
+    case 'request_network_access': {
+      const domain = String(toolArgs.domain ?? '');
+      const reason = String(toolArgs.reason ?? '');
+      const intent = String(toolArgs.intent ?? '');
+      return (
+        <div className="space-y-1">
+          <div className="text-xs font-mono font-semibold">{domain}</div>
+          {intent && <div className="text-xs text-secondary">{intent}</div>}
+          {reason && <div className="text-xs text-secondary">{reason}</div>}
+          <div className="text-xs text-secondary opacity-50">{t('approval.network.permanentNote')}</div>
+        </div>
+      );
+    }
     default:
       return (
         <pre className="text-xs font-mono bg-sidebar rounded-lg p-3 overflow-x-auto whitespace-pre-wrap max-h-40">

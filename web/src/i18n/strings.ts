@@ -77,6 +77,7 @@ export const STRINGS = {
   "approval.denyReason.placeholder": { en: "Why are you denying? (optional)", zh: "拒绝原因（可选）" },
   "approval.guidance.placeholder": { en: "Optional guidance for the agent...", zh: "额外指示（可选）" },
   "approval.header": { en: "Approval", zh: "审批请求" },
+  "approval.network.permanentNote": { en: "Approving adds this domain to the project allowlist permanently. Manage it in Settings → Network access." },
   "approval.recentContext": { en: "Recent context", zh: "上下文" },
   "approval.showContent": { en: "Show content", zh: "显示内容" },
   "approval.showLess": { en: "Show less", zh: "收起" },
