@@ -19,6 +19,11 @@ BROWSER_WRITE_ACTIONS = frozenset({
     "drag", "upload_file",
 })
 
+# Hands-off runs must never hang on a human. A network ask that goes
+# unanswered this long auto-denies FOR THE RUN; the request itself
+# survives in the project's pending_domain_requests (Settings → Network).
+NETWORK_APPROVAL_TIMEOUT_S = 180
+
 
 class AutonomyInterceptor:
     """Implements ToolInterceptor protocol from Component A."""

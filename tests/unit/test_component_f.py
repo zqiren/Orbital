@@ -1117,6 +1117,242 @@ class TestAgentManager:
         mgr._platform_provider.configure_network.assert_not_called()
         mock_session.append_tool_result.assert_called_once()
 
+    # -- Task 5: hands-off network-approval auto-deny timeout -----------
+    #
+    # There is no in-process blocking wait for an approval decision (see
+    # ``_on_loop_done``/``_network_approval_timeout`` in agent_manager.py):
+    # a pause is a full task exit, and resolution normally arrives later via
+    # a separate approve()/deny() call. These tests drive the real
+    # scheduling seam (``_on_loop_done``'s pause branch) with a monkeypatched
+    # near-zero timeout so the background timer fires for real within the
+    # test, rather than mocking away the mechanism being tested.
+
+    @pytest.mark.asyncio
+    async def test_hands_off_network_timeout_auto_denies_and_persists(self):
+        """An unanswered hands-off request_network_access approval auto-denies
+        after NETWORK_APPROVAL_TIMEOUT_S: the pending approval is removed, the
+        request survives (deduped) in pending_domain_requests, approval.resolved
+        broadcasts the same shape /deny emits ({resolution: "denied"}) plus the
+        additive {auto_denied: True}, the exact denial text is injected as the
+        tool result, and the loop restarts (not stranded)."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_session._paused_for_approval = True
+        mock_session.is_stopped.return_value = False
+
+        mock_interceptor = MagicMock()
+        mock_interceptor._preset = Autonomy.HANDS_OFF
+        mock_interceptor._pending_approvals = {
+            "tc_1": {
+                "tool_name": "request_network_access",
+                "tool_args": {"domain": "x.com", "reason": "verify"},
+            }
+        }
+        mock_interceptor.get_pending.side_effect = (
+            lambda tc_id: mock_interceptor._pending_approvals.get(tc_id)
+        )
+
+        def _remove(tc_id):
+            mock_interceptor._pending_approvals.pop(tc_id, None)
+
+        mock_interceptor.remove_pending.side_effect = _remove
+
+        handle = MagicMock(session=mock_session, interceptor=mock_interceptor,
+                            loop=MagicMock())
+        mgr._handles[("proj_1", "default")] = handle
+
+        mock_task = MagicMock()
+        mock_task.exception.return_value = None
+
+        with patch("agent_os.daemon_v2.autonomy.NETWORK_APPROVAL_TIMEOUT_S", 0.05), \
+             patch.object(mgr, "_start_loop", new_callable=AsyncMock) as mock_start:
+            callback = mgr._on_loop_done("proj_1", session_id="default")
+            callback(mock_task)
+            assert "tc_1" in mgr._network_approval_timers
+            await asyncio.sleep(0.2)
+
+        mock_start.assert_awaited_once()
+        mock_session.append_tool_result.assert_called_once()
+        tc_id_arg, text_arg = mock_session.append_tool_result.call_args[0]
+        assert tc_id_arg == "tc_1"
+        assert "Denied for this run" in text_arg
+        assert "Project Settings" in text_arg
+
+        updates = mgr._project_store.update_project.call_args[0][1]
+        domains = [r["domain"] for r in updates["pending_domain_requests"]]
+        assert domains == ["x.com"]
+
+        resolved = [c[0][1] for c in ws.broadcast.call_args_list
+                    if c[0][1].get("type") == "approval.resolved"]
+        assert len(resolved) == 1
+        assert resolved[0]["resolution"] == "denied"
+        assert resolved[0]["auto_denied"] is True
+
+        mock_session.resume.assert_called_once()
+        assert mock_session._paused_for_approval is False
+        assert "tc_1" not in mgr._network_approval_timers
+        assert mock_interceptor._pending_approvals == {}
+
+    @pytest.mark.asyncio
+    async def test_check_in_network_ask_gets_no_timer_and_late_approval_honored(self):
+        """check_in/supervised keep the unbounded blocking wait: no timer is
+        scheduled for a request_network_access pause, and a late approve()
+        (arriving well after what the hands-off timeout would have been) is
+        honored normally — the auto-deny effects never fire."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_session._paused_for_approval = True
+        mock_session.is_stopped.return_value = False
+
+        mock_interceptor = MagicMock()
+        mock_interceptor._preset = Autonomy.CHECK_IN
+        pending = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "x.com", "reason": "verify"},
+        }
+        mock_interceptor._pending_approvals = {"tc_2": dict(pending)}
+        mock_interceptor.get_pending.return_value = dict(pending)
+
+        handle = MagicMock(session=mock_session, interceptor=mock_interceptor,
+                            loop=MagicMock())
+        mgr._handles[("proj_1", "default")] = handle
+
+        mock_task = MagicMock()
+        mock_task.exception.return_value = None
+
+        with patch("agent_os.daemon_v2.autonomy.NETWORK_APPROVAL_TIMEOUT_S", 0.05):
+            callback = mgr._on_loop_done("proj_1", session_id="default")
+            callback(mock_task)
+            assert mgr._network_approval_timers == {}
+            # "Late" — long past what the hands-off timeout would have been.
+            await asyncio.sleep(0.2)
+
+        assert mgr._network_approval_timers == {}
+        mock_session.append_tool_result.assert_not_called()  # no auto-deny fired
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr.approve("proj_1", "tc_2")
+
+        mock_interceptor.record_approval.assert_called_once_with(
+            "request_network_access", {"domain": "x.com", "reason": "verify"}
+        )
+        mock_session.append_tool_result.assert_called_once()
+        result_text = mock_session.append_tool_result.call_args[0][1]
+        assert "Denied for this run" not in result_text
+        assert "allowlist" in result_text
+
+    @pytest.mark.asyncio
+    async def test_approve_before_timeout_cancels_timer_no_double_effects(self):
+        """Approving before the hands-off timeout expires cancels the pending
+        timer — the auto-deny effects must never fire afterward (no
+        duplicate tool result, no stray pending_domain_requests write)."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_session._paused_for_approval = True
+        mock_session.is_stopped.return_value = False
+
+        mock_interceptor = MagicMock()
+        mock_interceptor._preset = Autonomy.HANDS_OFF
+        mock_interceptor._pending_approvals = {
+            "tc_3": {
+                "tool_name": "request_network_access",
+                "tool_args": {"domain": "x.com", "reason": "verify"},
+            }
+        }
+        mock_interceptor.get_pending.side_effect = (
+            lambda tc_id: mock_interceptor._pending_approvals.get(tc_id)
+        )
+
+        def _remove(tc_id):
+            mock_interceptor._pending_approvals.pop(tc_id, None)
+
+        mock_interceptor.remove_pending.side_effect = _remove
+
+        handle = MagicMock(session=mock_session, interceptor=mock_interceptor,
+                            loop=MagicMock())
+        mgr._handles[("proj_1", "default")] = handle
+
+        mock_task = MagicMock()
+        mock_task.exception.return_value = None
+
+        with patch("agent_os.daemon_v2.autonomy.NETWORK_APPROVAL_TIMEOUT_S", 0.2):
+            callback = mgr._on_loop_done("proj_1", session_id="default")
+            callback(mock_task)
+            assert "tc_3" in mgr._network_approval_timers
+
+            with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+                await mgr.approve("proj_1", "tc_3")
+
+            assert "tc_3" not in mgr._network_approval_timers
+            # Give the (cancelled) timer's window plenty of time to have fired.
+            await asyncio.sleep(0.3)
+
+        assert mgr._project_store.update_project.call_count == 1
+        updates = mgr._project_store.update_project.call_args[0][1]
+        assert "approved_domains" in updates
+        mock_session.append_tool_result.assert_called_once()  # only approve()'s
+        result_text = mock_session.append_tool_result.call_args[0][1]
+        assert "Denied for this run" not in result_text
+
+    @pytest.mark.asyncio
+    async def test_network_timeout_dedupe_across_two_firings(self):
+        """Two independent hands-off timeouts requesting the same domain
+        must not duplicate the project's pending_domain_requests entry."""
+        mgr, ws, _, _, _ = self._make_manager()
+
+        project_state = {"pending_domain_requests": []}
+        mgr._project_store.get_project.side_effect = lambda pid: dict(project_state)
+
+        def _update(pid, updates):
+            project_state.update(updates)
+
+        mgr._project_store.update_project.side_effect = _update
+
+        def _make_pending_handle(tc_id):
+            session = MagicMock()
+            session.has_result_for.return_value = False
+            interceptor = MagicMock()
+            interceptor._pending_approvals = {
+                tc_id: {
+                    "tool_name": "request_network_access",
+                    "tool_args": {"domain": "x.com", "reason": "verify"},
+                }
+            }
+            interceptor.get_pending.side_effect = (
+                lambda t, _i=interceptor: _i._pending_approvals.get(t)
+            )
+
+            def _remove(t, _i=interceptor):
+                _i._pending_approvals.pop(t, None)
+
+            interceptor.remove_pending.side_effect = _remove
+            return MagicMock(session=session, interceptor=interceptor, loop=MagicMock())
+
+        mgr._handles[("proj_1", "s1")] = _make_pending_handle("tc_a")
+        mgr._handles[("proj_1", "s2")] = _make_pending_handle("tc_b")
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr._fire_network_approval_timeout("proj_1", "s1", "tc_a")
+            await mgr._fire_network_approval_timeout("proj_1", "s2", "tc_b")
+
+        domains = [r["domain"] for r in project_state["pending_domain_requests"]]
+        assert domains == ["x.com"]
+
     @pytest.mark.asyncio
     async def test_inject_message_accepts_session_id_kwarg(self):
         """session_id kwarg routes to the matching (project, session) handle."""

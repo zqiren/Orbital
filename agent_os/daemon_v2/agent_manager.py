@@ -126,6 +126,10 @@ class AgentManager:
         # second session from silently overwriting the first's poll task if
         # the slot ever races.
         self._idle_poll_tasks: dict[SessionKey, asyncio.Task] = {}
+        # Hands-off network-approval auto-deny timers, keyed by tool_call_id
+        # (same identity ``AutonomyInterceptor._pending_approvals`` uses).
+        # See ``_maybe_schedule_network_approval_timeout``.
+        self._network_approval_timers: dict[str, asyncio.Task] = {}
         # Per-session record of the most recent terminal event (error /
         # stopped / new_session). Lives outside `_handles` so it survives
         # handle pop on /stop. Cleared by `_clear_last_terminal_event`
@@ -1717,6 +1721,9 @@ class AgentManager:
 
                 # 4. Clean up interceptor state.
                 handle.interceptor.remove_pending(dismissed_tc_id)
+                # This dismissal beats any hands-off auto-deny timer
+                # scheduled for this tool_call_id.
+                self._cancel_network_approval_timer(dismissed_tc_id)
 
             # 5. Resume session (clears _paused flag; loop.run() clears
             #    _paused_for_approval on entry).
@@ -2346,6 +2353,133 @@ class AgentManager:
                 "network rules push failed for %s", project_id, exc_info=True,
             )
 
+    # ── Hands-off network-approval auto-deny timer ──────────────────────
+    #
+    # There is no in-process blocking wait for an approval decision: when
+    # the loop intercepts a tool call it exits entirely (`_paused_for_approval
+    # = True`, task done) and resolution happens later via a separate
+    # approve()/deny() call. A hands-off run must still not hang forever on
+    # an unanswered request_network_access ask, so a background timer is
+    # scheduled the moment such a pause is observed (`_on_loop_done`) and
+    # cancelled by every path that can resolve the same tool_call_id first
+    # (approve, deny, inject-dismiss, cancel-dismiss, stop teardown).
+    # `_network_approval_timers` is keyed by tool_call_id — the same
+    # identity `interceptor._pending_approvals` uses.
+
+    def _maybe_schedule_network_approval_timeout(
+        self, project_id: str, session_id: str | None,
+        tool_call_id: str, tool_name: str, preset,
+    ) -> None:
+        """Start the auto-deny timer iff this is a hands-off network ask.
+
+        Idempotent: a tool_call_id that already has a live timer is left
+        alone (guards against ``_on_loop_done`` somehow observing the same
+        still-pending entry twice).
+        """
+        from agent_os.agent.prompt_builder import Autonomy
+
+        if preset != Autonomy.HANDS_OFF or tool_name != "request_network_access":
+            return
+        if tool_call_id in self._network_approval_timers:
+            return
+        self._network_approval_timers[tool_call_id] = asyncio.ensure_future(
+            self._network_approval_timeout(project_id, session_id, tool_call_id)
+        )
+
+    def _cancel_network_approval_timer(self, tool_call_id: str) -> None:
+        """Cancel and forget a scheduled auto-deny timer, if one exists.
+
+        Safe to call unconditionally from every approval-resolution path —
+        a tool_call_id that never got a timer (wrong tool/preset, or the
+        timer already fired) is simply a no-op.
+        """
+        task = self._network_approval_timers.pop(tool_call_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _network_approval_timeout(self, project_id: str,
+                                         session_id: str | None,
+                                         tool_call_id: str) -> None:
+        """Sleep for the configured timeout, then auto-deny if still pending.
+
+        Reads the timeout through the ``autonomy`` module (not a from-import)
+        so tests can monkeypatch ``autonomy.NETWORK_APPROVAL_TIMEOUT_S`` at
+        call time. Cancellation (via ``_cancel_network_approval_timer``)
+        raises ``CancelledError`` out of the ``sleep`` — the effects below
+        never run, which is the whole point.
+        """
+        from agent_os.daemon_v2 import autonomy
+        await asyncio.sleep(autonomy.NETWORK_APPROVAL_TIMEOUT_S)
+        await self._fire_network_approval_timeout(
+            project_id, session_id, tool_call_id,
+        )
+
+    async def _fire_network_approval_timeout(self, project_id: str,
+                                              session_id: str | None,
+                                              tool_call_id: str) -> None:
+        """Apply the auto-deny effects for an expired network approval.
+
+        Race-safe: re-checks the approval is still pending (another path
+        may have resolved it between scheduling and firing) and no-ops if
+        the handle is gone. Mirrors ``deny()``'s tail exactly (clear pause,
+        resume, broadcast blocked count, restart the loop) so the turn is
+        never stranded.
+        """
+        self._network_approval_timers.pop(tool_call_id, None)
+
+        sk = make_session_key(project_id, session_id)
+        handle = self._handles.get(sk)
+        if handle is None or handle.interceptor is None:
+            return
+        pending = handle.interceptor.get_pending(tool_call_id)
+        if pending is None:
+            return  # already resolved via approve/deny/dismiss
+        if handle.session.has_result_for(tool_call_id):
+            handle.interceptor.remove_pending(tool_call_id)
+            return
+
+        tool_args = pending.get("tool_args", {})
+        domain = str(tool_args.get("domain", ""))
+
+        project = self._project_store.get_project(project_id) or {}
+        pending_reqs = list(
+            (project.get("pending_domain_requests")
+             if isinstance(project, dict)
+             else getattr(project, "pending_domain_requests", None)) or []
+        )
+        if all(r.get("domain") != domain for r in pending_reqs):
+            pending_reqs.append({
+                "domain": domain,
+                "reason": str(tool_args.get("reason", "")),
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._project_store.update_project(
+                project_id, {"pending_domain_requests": pending_reqs}
+            )
+
+        handle.interceptor.remove_pending(tool_call_id)
+
+        self._broadcast(project_id, {
+            "type": "approval.resolved",
+            "project_id": project_id,
+            "tool_call_id": tool_call_id,
+            "resolution": "denied",
+            "auto_denied": True,
+        }, session_id=session_id)
+
+        tool_result_text = (
+            f"Denied for this run: the user was unavailable to approve "
+            f"'{domain}' within 3 minutes. The request remains pending in "
+            f"Project Settings → Network — it may be granted for future "
+            f"runs. Complete what you can and note the gap."
+        )
+        handle.session.append_tool_result(tool_call_id, tool_result_text)
+
+        handle.session._paused_for_approval = False
+        handle.session.resume()
+        self._broadcast_blocked_count()
+        await self._start_loop(project_id, session_id=session_id)
+
     def get_pending_approval(self, project_id: str, *,
                              session_id: str | None = None) -> dict | None:
         """Return the pending approval payload for a session, or None.
@@ -2392,6 +2526,10 @@ class AgentManager:
         pending = handle.interceptor.get_pending(tool_call_id)
         if pending is None:
             raise KeyError(f"No pending approval for tool_call_id '{tool_call_id}'")
+
+        # This resolution beats any hands-off auto-deny timer scheduled for
+        # this tool_call_id — cancel it so it can't double-fire later.
+        self._cancel_network_approval_timer(tool_call_id)
 
         # Guard: don't append a second result if one already exists
         if handle.session.has_result_for(tool_call_id):
@@ -2533,6 +2671,10 @@ class AgentManager:
             except (asyncio.TimeoutError, Exception):
                 pass
 
+        # This resolution beats any hands-off auto-deny timer scheduled for
+        # this tool_call_id — cancel it so it can't double-fire later.
+        self._cancel_network_approval_timer(tool_call_id)
+
         # Record denial in approval history
         pending = handle.interceptor.get_pending(tool_call_id)
         if pending:
@@ -2651,6 +2793,9 @@ class AgentManager:
                             session_id=session_id,
                         )
                         handle.interceptor.remove_pending(tc_id)
+                        # This dismissal beats any hands-off auto-deny timer
+                        # scheduled for this tool_call_id.
+                        self._cancel_network_approval_timer(tc_id)
                 # Clear the approval-pause flag and the legacy paused flag.
                 handle.session._paused_for_approval = False
                 handle.session.resume()
@@ -2764,6 +2909,12 @@ class AgentManager:
         handle = self._handles.get(sk)
         if handle is None:
             raise KeyError(f"No active session for project '{project_id}'")
+
+        # Full teardown must not leave a hands-off auto-deny timer running
+        # against a handle that's about to disappear.
+        if handle.interceptor is not None:
+            for tc_id in list(handle.interceptor._pending_approvals.keys()):
+                self._cancel_network_approval_timer(tc_id)
 
         # The queue dispatcher is project-scoped: created at daemon startup,
         # torn down only at daemon shutdown or project deletion. It deliberately
@@ -3870,6 +4021,19 @@ class AgentManager:
             # or broadcast idle while a tool call is awaiting user decision.
             # Queued messages will be drained after the approval is resolved.
             if handle.session._paused_for_approval:
+                # Hands-off runs must not hang on a human forever: a fresh
+                # request_network_access pause gets a background auto-deny
+                # timer here (check-in/supervised keep the unbounded wait —
+                # a late approval must still be honored for those presets).
+                if handle.interceptor is not None:
+                    for tc_id, data in list(
+                        handle.interceptor._pending_approvals.items()
+                    ):
+                        self._maybe_schedule_network_approval_timeout(
+                            project_id, session_id, tc_id,
+                            data.get("tool_name", ""),
+                            getattr(handle.interceptor, "_preset", None),
+                        )
                 self._broadcast(project_id, {
                     "type": "agent.status",
                     "project_id": project_id,
