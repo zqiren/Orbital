@@ -18,6 +18,7 @@ import time
 import warnings
 from collections import deque
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import psutil
 
@@ -27,8 +28,17 @@ try:
 except ImportError:
     async_playwright = None
     HAS_PLAYWRIGHT = False
+    if TYPE_CHECKING:
+        Browser = object
+        BrowserContext = object
+        Page = object
 
 logger = logging.getLogger(__name__)
+
+# Keys with this prefix route to the SEPARATE headless worker browser
+# (isolated ephemeral contexts), never to the user's persistent profile.
+# Matches SubAgentManager's fanout handle format "worker:<fanout_id>-<i>".
+WORKER_SCOPE_PREFIX = "worker:"
 
 # Stealth init script — injected into every browser context to spoof
 # automation-detection signals that Patchright does not cover natively.
@@ -226,6 +236,17 @@ class BrowserManager:
         self._context = None
         self._warmup_active = False
 
+        # Separate headless browser for fanout workers: plain launch(), no
+        # user profile → no SingletonLock involvement, no signed-in state.
+        # All state transitions (launch, context creation, context/browser
+        # teardown) run under _worker_lock so the region is correct by
+        # construction — see ensure_worker_browser/_get_worker_context/
+        # close_worker_scope. asyncio.Lock is not reentrant: never call
+        # ensure_worker_browser() from a path that already holds it.
+        self._worker_browser: Browser | None = None
+        self._worker_contexts: dict[str, BrowserContext] = {}  # scope -> BrowserContext
+        self._worker_lock = asyncio.Lock()
+
         # Per-project page tracking: project_id -> list[page]
         self._project_pages: dict[str, list] = {}
 
@@ -265,6 +286,105 @@ class BrowserManager:
             return self._context
 
         return await self._launch()
+
+    async def ensure_worker_browser(self):
+        """Lazily launch the separate headless worker browser.
+
+        Thin lock wrapper — the public entry point for callers outside this
+        module. Never call from a path that already holds ``_worker_lock``
+        (asyncio.Lock is not reentrant); use ``_ensure_worker_browser_unlocked``
+        there instead.
+        """
+        async with self._worker_lock:
+            return await self._ensure_worker_browser_unlocked()
+
+    async def _ensure_worker_browser_unlocked(self):
+        """Launch (or reuse) the worker browser. Caller must hold ``_worker_lock``."""
+        if self._worker_browser is not None and self._worker_browser.is_connected():
+            return self._worker_browser
+        if async_playwright is None and self._playwright is None:
+            raise RuntimeError(
+                "patchright is not installed — install with: pip install patchright"
+            )
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        launch_kwargs = dict(
+            headless=True,
+            args=self.CHROME_FLAGS,
+            ignore_default_args=["--enable-automation"],
+        )
+        last_exc: Exception | None = None
+        for channel in ("chrome", "msedge", None):  # None = bundled Chromium
+            try:
+                kwargs = dict(launch_kwargs)
+                if channel:
+                    kwargs["channel"] = channel
+                browser = await self._playwright.chromium.launch(**kwargs)
+                self._worker_browser = browser
+                logger.info(
+                    "Worker browser launched (%s)", channel or "bundled chromium"
+                )
+                return self._worker_browser
+            except Exception as exc:
+                last_exc = exc
+                logger.info(
+                    "Worker browser tier %s unavailable (%s)", channel, _exc_summary(exc)
+                )
+        raise RuntimeError(
+            "No browser available for worker contexts. Install Chrome or Edge, "
+            "or run 'python -m patchright install chromium'."
+        ) from last_exc
+
+    async def _get_worker_context(self, scope: str):
+        """Get or create the isolated context for a worker scope."""
+        async with self._worker_lock:
+            ctx = self._worker_contexts.get(scope)
+            if ctx is not None:
+                return ctx
+            browser = await self._ensure_worker_browser_unlocked()
+            try:
+                ctx = await browser.new_context()
+            except BaseException:
+                # This creation was the only reason `browser` might still be
+                # alive (no scope holds a context on it yet) — clean it up
+                # here rather than orphaning it for good.
+                if not self._worker_contexts and self._worker_browser is browser:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        logger.debug(
+                            "worker browser close failed after new_context error",
+                            exc_info=True,
+                        )
+                    self._worker_browser = None
+                raise
+            self._worker_contexts[scope] = ctx
+            return ctx
+
+    async def close_worker_scope(self, scope: str) -> None:
+        """Close a worker's pages + context; stop the worker browser when
+        the last context goes. Idempotent."""
+        await self.close_project_pages(scope)
+        async with self._worker_lock:
+            ctx = self._worker_contexts.pop(scope, None)
+            if ctx is not None:
+                try:
+                    await ctx.close()
+                except Exception:
+                    logger.debug("worker context close failed for %s", scope, exc_info=True)
+            # Only close the browser if THIS call removed the last context.
+            # A close arriving while a sibling creation is in flight simply
+            # waits for the lock: by the time it runs, that creation has
+            # either registered its context (dict non-empty, no close) or
+            # failed and already cleaned up the browser itself (dict empty,
+            # _worker_browser already None) — both orders are correct.
+            if ctx is not None and not self._worker_contexts and self._worker_browser is not None:
+                try:
+                    await self._worker_browser.close()
+                except Exception:
+                    logger.debug("worker browser close failed", exc_info=True)
+                self._worker_browser = None
 
     async def _get_clean_user_agent(self) -> str | None:
         """Launch browser briefly to get real UA, strip 'Headless', cache result.
@@ -567,7 +687,10 @@ class BrowserManager:
 
     async def get_page(self, project_id: str):
         """Get or create the active page for a project."""
-        ctx = await self.ensure_browser()
+        if project_id.startswith(WORKER_SCOPE_PREFIX):
+            ctx = await self._get_worker_context(project_id)
+        else:
+            ctx = await self.ensure_browser()
 
         # Return existing page if alive
         if project_id in self._project_pages:
@@ -601,7 +724,10 @@ class BrowserManager:
 
     async def new_tab(self, project_id: str, url: str = None):
         """Open a new tab for a project."""
-        ctx = await self.ensure_browser()
+        if project_id.startswith(WORKER_SCOPE_PREFIX):
+            ctx = await self._get_worker_context(project_id)
+        else:
+            ctx = await self.ensure_browser()
         total = sum(len(ps) for ps in self._project_pages.values())
         if total >= self._max_pages:
             await self._evict_lru_page()
