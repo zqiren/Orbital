@@ -805,6 +805,11 @@ class AgentManager:
             session_id=session_id,
         )
 
+        # Push this project's TOFU network grants to the platform provider so
+        # the management agent's own proxy sees them too, not just bare
+        # defaults (previously only sub-agent starts applied approved_domains).
+        self._apply_network_rules(project_id)
+
         # 11. Session-end callback.
         # Providers are resolved at CALL time from the live handle (not
         # closure-captured from session start) so the memory flush / state
@@ -2308,6 +2313,33 @@ class AgentManager:
                 project_id, preset, session_id=session_id,
             )
         return True
+
+    def _apply_network_rules(self, project_id: str) -> None:
+        """Rebuild and push this project's NetworkRules (defaults + TOFU
+        grants). Safe with no provider (dev/null) and unknown projects.
+
+        Called at handle creation (so the management agent's own proxy sees
+        project grants, not just bare defaults) and from the projects PUT
+        route whenever ``approved_domains`` changes, so a live proxy is
+        rebuilt without waiting for the next agent start.
+        """
+        if self._platform_provider is None:
+            return
+        from agent_os.daemon_v2.network_rules_builder import build_network_rules
+        project = self._project_store.get_project(project_id) or {}
+        approved = (
+            project.get("approved_domains")
+            if isinstance(project, dict)
+            else getattr(project, "approved_domains", None)
+        )
+        try:
+            self._platform_provider.configure_network(
+                project_id, build_network_rules(approved)
+            )
+        except RuntimeError:
+            logger.warning(
+                "network rules push failed for %s", project_id, exc_info=True,
+            )
 
     def get_pending_approval(self, project_id: str, *,
                              session_id: str | None = None) -> dict | None:

@@ -100,6 +100,9 @@ class ProjectUpdate(BaseModel):
     # also honored (mirrors the legacy runtime reset's direct-value pattern).
     reset_budget_anchor: bool | None = None
     budget_anchor_ts: str | None = None
+    # TOFU network grants (Plan 2 Task 2): bare registrable domains the user
+    # has approved for this project; wildcarded at NetworkRules-build time.
+    approved_domains: list[str] | None = None
 
 
 class StartAgentRequest(BaseModel):
@@ -633,6 +636,12 @@ async def update_project(project_id: str, body: ProjectUpdate):
             _agent_manager.update_autonomy(project_id, new_autonomy)
         except ValueError:
             pass  # invalid value already persisted — interceptor keeps old preset
+
+    # Push a TOFU grant-list change to a running agent's proxy immediately
+    # (Task 8's Settings save and Task 4's approve both funnel through this
+    # PUT route) rather than waiting for the next agent start.
+    if "approved_domains" in updates and _agent_manager is not None:
+        _agent_manager._apply_network_rules(project_id)
 
     # P2-D nudge: a budget config change (limit raise, period roll, anchor move)
     # must reach a budget-paused dispatcher so its lazy auto-resume guard re-runs

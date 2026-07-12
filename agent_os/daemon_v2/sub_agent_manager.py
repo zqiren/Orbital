@@ -20,7 +20,6 @@ from agent_os.daemon_v2.models import (
     SessionKey,
     make_session_key,
 )
-from agent_os.platform.types import NetworkRules, DEFAULT_ALLOWLIST_DOMAINS
 
 logger = logging.getLogger(__name__)
 
@@ -246,10 +245,10 @@ class SubAgentManager:
         # does.
         if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
-                rules = NetworkRules(
-                    mode="allowlist",
-                    domains=list(DEFAULT_ALLOWLIST_DOMAINS),
-                )
+                from agent_os.daemon_v2.network_rules_builder import build_network_rules
+                project = self._project_store.get_project(project_id) if self._project_store else {}
+                approved = project.get("approved_domains") if isinstance(project, dict) else getattr(project, "approved_domains", None)
+                rules = build_network_rules(approved)
                 self._platform_provider.configure_network(project_id, rules)
             except RuntimeError as e:
                 return f"Error: network configuration failed: {e}"
@@ -677,8 +676,9 @@ class SubAgentManager:
         # path above — belt-and-braces, currently unreachable for workers.
         if self._platform_provider is not None and not handle.startswith("worker:"):
             try:
-                domains = config_dict.get("network_domains", []) + list(DEFAULT_ALLOWLIST_DOMAINS)
-                rules = NetworkRules(mode="allowlist", domains=domains)
+                from agent_os.daemon_v2.network_rules_builder import build_network_rules
+                approved = project.get("approved_domains") if isinstance(project, dict) else getattr(project, "approved_domains", None)
+                rules = build_network_rules(approved, extra=config_dict.get("network_domains", []))
                 self._platform_provider.configure_network(project_id, rules)
             except RuntimeError as e:
                 return f"Error: network configuration failed: {e}"
