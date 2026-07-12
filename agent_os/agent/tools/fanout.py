@@ -40,7 +40,11 @@ class FanoutTool(Tool):
             "sessions. Use only when sub-tasks do not depend on each "
             "other's output. Give each task a disjoint files_scope when "
             "tasks write files. You will be woken ONCE with all results "
-            "when every task finishes."
+            "when every task finishes. Each worker has its own isolated "
+            "anonymous browser context — briefs may include web "
+            "reading/verification steps, but sites requiring sign-in may "
+            "show login walls to workers; keep signed-in browsing in the "
+            "main session."
         )
         self.parameters = {
             "type": "object",
