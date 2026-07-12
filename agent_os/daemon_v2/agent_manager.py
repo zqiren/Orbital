@@ -1119,6 +1119,11 @@ class AgentManager:
         except ImportError:
             pass
         try:
+            from agent_os.agent.tools.request_network_access import RequestNetworkAccessTool
+            registry.register(RequestNetworkAccessTool())
+        except ImportError:
+            pass
+        try:
             from agent_os.agent.tools.agent_message import AgentMessageTool
             registry.register(AgentMessageTool(sub_agent_manager=self._sub_agent_manager, project_id=project_id, depth=0, session_id=session_id))
         except ImportError:

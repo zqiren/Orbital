@@ -86,6 +86,10 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
         "accessibility tree, then target elements by their ref ID."
     ),
     "request_credential": "Request website credentials from the user (secure modal, never chat)",
+    "request_network_access": (
+        "Request permanent approval for a domain not on this project's "
+        "network allowlist"
+    ),
     "create_trigger": "Create a scheduled trigger to run a task automatically",
     "list_triggers": "List all triggers for this project",
     "update_trigger": "Update an existing trigger's settings",
@@ -234,6 +238,18 @@ Use navigate when you need to interact with a page (click, fill forms, etc).
 
 """ + _BROWSER_SIGNIN_FALLBACK
 
+_NETWORK_ROUTING_GUIDANCE = (
+    "Network routing: to LOOK AT anything on the web (read a page, verify "
+    "content, search), use the browser — never shell HTTP clients. Shell "
+    "network reaches only approved domains; a proxy 403 is policy, not an "
+    "outage — do not retry with workarounds. If a task genuinely needs an "
+    "unapproved domain (API calls, artifact uploads), call "
+    "request_network_access with the domain and reason — ideally at task "
+    "start when the need is already clear from the user's request. In "
+    "hands-off mode the request may auto-deny after a few minutes; if so, "
+    "complete what you can and note the gap."
+)
+
 # Maximum chars for bootstrap files
 _BOOTSTRAP_TRUNCATE = 20_000
 
@@ -281,6 +297,7 @@ class PromptBuilder:
             self._sub_agents(context),
             self._sub_agent_awareness(context),
             self._browser_section(context),
+            self._network_access_section(context),
             self._skills(context),
             self._os_instructions(context),
         ]))
@@ -770,6 +787,11 @@ class PromptBuilder:
         if context.vision_enabled:
             return _BROWSER_USAGE_PROMPT_VISION
         return _BROWSER_USAGE_PROMPT_TEXT_ONLY
+
+    def _network_access_section(self, context: PromptContext) -> str | None:
+        if "request_network_access" not in context.tool_names:
+            return None
+        return _NETWORK_ROUTING_GUIDANCE
 
     def _skills(self, context: PromptContext) -> str | None:
         if self._skill_loader is None:

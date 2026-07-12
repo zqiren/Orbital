@@ -34,6 +34,7 @@ _NETWORK_POLICY_HINT = (
     "network — do not retry with workarounds. To read web content, use the "
     "browser tool; shell network is reserved for approved domains "
     "(package registries, LLM APIs, GitHub)."
+    " If the task genuinely needs the domain, call request_network_access."
 )
 
 # Pattern for extracting domains from URLs and bare domains

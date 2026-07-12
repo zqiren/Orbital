@@ -30,6 +30,8 @@ _BLOCKED_BODY_TEMPLATE = (
     "GitHub, and domains approved for this project).\n"
     "To read web content, use the browser tool instead of shell HTTP "
     "clients.\n"
+    "If the task genuinely needs this domain, call the request_network_access "
+    "tool to ask the user.\n"
 )
 
 

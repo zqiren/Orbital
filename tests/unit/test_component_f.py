@@ -244,6 +244,17 @@ class TestAutonomyInterceptor:
         interceptor = self._make_interceptor(Autonomy.CHECK_IN)
         assert interceptor.should_intercept({"id": "1", "name": "request_access", "arguments": {}})
 
+    def test_request_network_access_intercepted_in_all_presets(self):
+        """TOFU network grants require human interaction regardless of
+        autonomy preset, same invariant as request_credential (:68)."""
+        from agent_os.agent.prompt_builder import Autonomy
+
+        call = {"id": "t1", "name": "request_network_access",
+                "arguments": {"domain": "x.com", "reason": "r"}}
+        for preset in (Autonomy.HANDS_OFF, Autonomy.CHECK_IN, Autonomy.SUPERVISED):
+            interceptor = self._make_interceptor(preset)
+            assert interceptor.should_intercept(call) is True, preset
+
     def test_check_in_does_not_intercept_read(self):
         from agent_os.agent.prompt_builder import Autonomy
 

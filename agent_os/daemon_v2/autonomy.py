@@ -64,8 +64,9 @@ class AutonomyInterceptor:
         name = tool_call.get("name", "")
         args = tool_call.get("arguments", {})
 
-        # Credentials always require human interaction, regardless of autonomy preset
-        if name == "request_credential":
+        # Credentials and network-domain grants always require human
+        # interaction, regardless of autonomy preset
+        if name in ("request_credential", "request_network_access"):
             return True
 
         # Check approve-all bypass (time-bounded session-level override)
