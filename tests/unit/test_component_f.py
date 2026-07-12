@@ -983,6 +983,141 @@ class TestAgentManager:
             mock_session.resume.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_approve_network_request_persists_and_rebuilds(self):
+        """Approving a request_network_access call grants the domain
+        permanently, rebuilds live network rules, and injects a retry-style
+        tool result (not the generic registry-execute path)."""
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._platform_provider = MagicMock()
+        mgr._project_store.get_project.return_value = {}
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "api.stripe.com", "reason": "billing sync"},
+        }
+
+        mock_task = asyncio.ensure_future(asyncio.sleep(0))
+        await asyncio.sleep(0)
+
+        handle = MagicMock(
+            session=mock_session, task=mock_task, interceptor=mock_interceptor,
+            loop=MagicMock(),
+        )
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr.approve("proj_1", "tc_1")
+
+        updates = mgr._project_store.update_project.call_args[0][1]
+        assert "api.stripe.com" in updates["approved_domains"]
+        mgr._platform_provider.configure_network.assert_called()  # live rebuild
+
+        mock_session.append_tool_result.assert_called_once()
+        result_text = mock_session.append_tool_result.call_args[0][1]
+        assert "api.stripe.com" in result_text
+        assert "allowlist" in result_text
+
+    @pytest.mark.asyncio
+    async def test_approve_network_request_dedupes(self):
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._platform_provider = MagicMock()
+        mgr._project_store.get_project.return_value = {
+            "approved_domains": ["x.com"],
+        }
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "x.com", "reason": "r"},
+        }
+
+        mock_task = asyncio.ensure_future(asyncio.sleep(0))
+        await asyncio.sleep(0)
+
+        handle = MagicMock(
+            session=mock_session, task=mock_task, interceptor=mock_interceptor,
+            loop=MagicMock(),
+        )
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr.approve("proj_1", "tc_1")
+
+        updates = mgr._project_store.update_project.call_args[0][1]
+        assert updates["approved_domains"].count("x.com") == 1
+
+    @pytest.mark.asyncio
+    async def test_approve_network_request_invalid_domain_no_grant(self):
+        """A garbage domain must not crash approve() and must not persist
+        a grant or trigger a rules rebuild."""
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._platform_provider = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": "***not-a-domain***", "reason": "r"},
+        }
+
+        mock_task = asyncio.ensure_future(asyncio.sleep(0))
+        await asyncio.sleep(0)
+
+        handle = MagicMock(
+            session=mock_session, task=mock_task, interceptor=mock_interceptor,
+            loop=MagicMock(),
+        )
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr.approve("proj_1", "tc_1")
+
+        mgr._project_store.update_project.assert_not_called()
+        mgr._platform_provider.configure_network.assert_not_called()
+        mock_session.append_tool_result.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_approve_network_request_non_string_domain_no_crash(self):
+        """tool_args round-trip through raw JSON with no schema validation and
+        the interceptor never runs the tool's own execute(), so a non-string
+        ``domain`` (e.g. a JSON number/array/bool) can reach approve()
+        directly. It must not raise (an uncaught exception here would skip
+        remove_pending/resume/_start_loop and strand the session paused
+        forever), must not grant, and must still inject an error result."""
+        mgr, ws, _, _, _ = self._make_manager()
+        mgr._platform_provider = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.has_result_for.return_value = False
+        mock_interceptor = MagicMock()
+        mock_interceptor.get_pending.return_value = {
+            "tool_name": "request_network_access",
+            "tool_args": {"domain": 123, "reason": "r"},
+        }
+
+        mock_task = asyncio.ensure_future(asyncio.sleep(0))
+        await asyncio.sleep(0)
+
+        handle = MagicMock(
+            session=mock_session, task=mock_task, interceptor=mock_interceptor,
+            loop=MagicMock(),
+        )
+        mgr._handles[("proj_1", "default")] = handle
+
+        with patch.object(mgr, "_start_loop", new_callable=AsyncMock):
+            await mgr.approve("proj_1", "tc_1")  # must not raise
+
+        mgr._project_store.update_project.assert_not_called()
+        mgr._platform_provider.configure_network.assert_not_called()
+        mock_session.append_tool_result.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_inject_message_accepts_session_id_kwarg(self):
         """session_id kwarg routes to the matching (project, session) handle."""
         mgr, ws, _, _, _ = self._make_manager()

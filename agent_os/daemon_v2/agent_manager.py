@@ -2432,6 +2432,47 @@ class AgentManager:
                     tool_call_id,
                     json.dumps({"status": "error", "path": path, "error": result.error}),
                 )
+        elif pending["tool_name"] == "request_network_access":
+            # Approving a domain request is a permanent, project-wide grant
+            # (TOFU): persist to approved_domains, drop the matching pending
+            # request, and rebuild the live proxy rules so a retry succeeds
+            # without restarting the agent.
+            from agent_os.daemon_v2.network_rules_builder import normalize_domain
+            tool_args = pending["tool_args"]
+            raw_domain = tool_args.get("domain", "")
+            domain = normalize_domain(str(raw_domain))
+            if domain is None:
+                handle.session.append_tool_result(
+                    tool_call_id,
+                    f"Error: '{raw_domain}' is not a grantable "
+                    f"domain (bare registrable domains only — no IPs, "
+                    f"wildcards, or paths).",
+                )
+            else:
+                project = self._project_store.get_project(project_id) or {}
+                approved = list(
+                    (project.get("approved_domains") if isinstance(project, dict)
+                     else getattr(project, "approved_domains", None)) or []
+                )
+                if domain not in approved:
+                    approved.append(domain)
+                pending_reqs = [
+                    r for r in (
+                        (project.get("pending_domain_requests") if isinstance(project, dict)
+                         else getattr(project, "pending_domain_requests", None)) or []
+                    )
+                    if r.get("domain") != domain
+                ]
+                self._project_store.update_project(project_id, {
+                    "approved_domains": approved,
+                    "pending_domain_requests": pending_reqs,
+                })
+                self._apply_network_rules(project_id)
+                handle.session.append_tool_result(
+                    tool_call_id,
+                    f"Approved: {domain} is now on this project's allowlist. "
+                    f"Retry the command.",
+                )
         else:
             # Execute the approved tool call (async-aware)
             try:
