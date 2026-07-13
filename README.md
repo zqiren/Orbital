@@ -67,21 +67,16 @@ Orbital is an agent built around that fact. Everything it finishes — the artif
 
 ## Quick Start
 
-1. **Launch Orbital** — the setup wizard guides you through three steps:
+1. **Launch Orbital** — the setup wizard guides you through two steps:
 
-   **Step 1 — LLM Provider:** Connect your API key. Supports Anthropic, OpenAI, Moonshot, DeepSeek, and a dozen other providers.
+   **Step 1 — LLM Provider:** Pick a provider from the preset cards, follow the key-console link to grab an API key, and paste it in. Supports DeepSeek, Anthropic, OpenAI, Moonshot, and a dozen other providers.
 
-   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1: select an LLM provider and enter your API key" width="100%"></p>
-
-
-   **Step 2 — Sandbox:** Orbital creates an isolated user account so agents can't access your personal files or network without permission.
-
-   <p align="center"><img src="docs/screenshots/sandbox-setup.png" alt="Setup wizard step 2: sandbox isolation confirmation" width="100%"></p>
+   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1: pick an LLM provider from preset cards and enter your API key" width="100%"></p>
 
 
-   **Step 3 — Browser Warm-up:** Sign into sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs.
+   **Step 2 — Connect Your Accounts:** Link API connectors (Google Calendar, Drive) and sign in to sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs. Everything here is optional and can be done later in Settings.
 
-   <p align="center"><img src="docs/screenshots/browser-warm-up.png" alt="Setup wizard step 3: browser warm-up, signing into sites the agent will use" width="100%"></p>
+   <p align="center"><img src="docs/screenshots/connect-accounts.png" alt="Setup wizard step 2: connect accounts — API connectors and agent browser sign-in" width="100%"></p>
 
 
 2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
@@ -293,7 +288,7 @@ The agent must declare an outcome on every item; it can't silently drift to the 
 
 **Compounding by design.** Each completed item's artifacts are already in the project when the next item starts, so later tasks build on earlier ones instead of starting over. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
 
-<p align="center"><img src="docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png" alt="Queue tab showing Now Running, Queued, and Automations sections; the queue can be paused to chat and steer" width="100%"></p>
+<p align="center"><img src="docs/screenshots/queue-paused.png" alt="Queue tab showing Now Running, Queued, Completed, and Automations sections; the queue can be paused to chat and steer" width="100%"></p>
 <p align="center"><em>Queue tasks and walk away — each finished one becomes context the next builds on</em></p>
 
 </details>
@@ -312,8 +307,7 @@ The sidebar includes a **Quick Task** section for fire-and-forget interactions. 
 
 Agents create reusable skills from multi-step workflows and consult matching skills before starting similar tasks. Skills are stored as SKILL.md files in the workspace and managed through the Settings UI — another way the project gets more capable the longer it runs.
 
-<!-- Kept docs/screenshots/skills.png (real skills) over the new setting-skill.png, which shows an empty "No skills installed" list and undersells the feature. Re-grab from a project that has real skills if you want it current. -->
-<p align="center"><img src="docs/screenshots/skills.png" alt="Skills settings list: reusable operational patterns the agent follows" width="100%"></p>
+<p align="center"><img src="docs/screenshots/skills.png" alt="Skills section in project settings: reusable operational patterns the agent follows" width="100%"></p>
 <p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how your agent works — and the agent adds its own</em></p>
 
 </details>
@@ -369,11 +363,11 @@ The management agent translates this into a `create_trigger` tool call with the 
 | **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
 | **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
 
-<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger config: monitoring auth/ for .py changes, running tests on every save" width="100%"></p>
-<p align="center"><em>File watch trigger: monitors auth/ for .py changes, runs tests on every save. 22 runs so far.</em></p>
+<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger detail: watching uploads/ for new .jpg files, analyzing each on arrival" width="100%"></p>
+<p align="center"><em>File watch trigger: watches uploads/ for new photos and analyzes each one on arrival</em></p>
 
-<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Scheduled trigger config: daily research scan at 6 AM" width="100%"></p>
-<p align="center"><em>Scheduled trigger: scans arxiv, Hacker News, and tech blogs every day at 6 AM. 12 runs.</em></p>
+<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Schedule trigger detail: daily competitor watch at 2 PM with task, schedule, and run history" width="100%"></p>
+<p align="center"><em>Schedule trigger: a daily competitor watch dispatched every day at 2 PM — 19 runs so far</em></p>
 
 **Real-world example — Health Tracker with file watch:**
 
@@ -468,7 +462,7 @@ Control agents from your phone on the local network or via a cloud relay.
 <details>
 <summary><strong>Credential Management</strong></summary>
 
-<p align="center"><img src="docs/screenshots/credential-store.png" alt="Credential store: website passwords stored in the system keychain, with the New Credential form" width="100%"></p>
+<p align="center"><img src="docs/screenshots/credential-store.png" alt="Credential store: website passwords stored in the system keychain, with browser sign-in and connectors" width="100%"></p>
 <p align="center"><em>Website credentials stored in your system keychain. Your agent always asks permission before using them.</em></p>
 
 - **API keys**: Stored in OS keychain (`keyring`), masked in API responses, per-project BYOK override

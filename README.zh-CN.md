@@ -67,30 +67,24 @@ Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的
 
 ## 快速开始
 
-1. **启动 Orbital** —— 设置向导引导你完成三步:
+1. **启动 Orbital** —— 设置向导引导你完成两步:
 
-   **Step 1 — LLM Provider:** 配置 API key。支持 Anthropic、OpenAI、Moonshot (Kimi)、DeepSeek 等十余家服务商。
+   **Step 1 — LLM Provider:** 从预设卡片里选择服务商,点「获取 API 密钥」直达密钥控制台,粘贴即可。支持 DeepSeek、Moonshot (Kimi)、智谱、MiniMax、Anthropic、OpenAI 等十余家服务商。
 
    <p align="center">
-     <img src="docs/screenshots/apikey-setup.png" alt="设置向导第一步——配置 LLM provider 和 API key" width="700">
+     <img src="docs/screenshots/zh/apikey-setup.png" alt="设置向导第一步——从预设卡片选择 LLM provider 并配置 API key" width="700">
    </p>
 
-   **Step 2 — Sandbox:** Orbital 创建一个隔离的系统账号,agent 在没有授权时无法访问你的个人文件或网络。
+   **Step 2 — 关联账户:** 连接 API 连接器(Google Calendar、Drive),并提前登录 agent 需要访问的站点(Google、GitHub 等),防止它在浏览时被验证码挡住。这一步可跳过,之后随时可在设置中完成。
 
    <p align="center">
-     <img src="docs/screenshots/sandbox-setup.png" alt="设置向导第二步——sandbox 隔离确认" width="700">
-   </p>
-
-   **Step 3 — Browser Warm-up:** 提前登录 agent 需要访问的站点(Google、GitHub 等),存下 cookie,防止它在浏览时被验证码挡住。
-
-   <p align="center">
-     <img src="docs/screenshots/browser-warm-up.png" alt="设置向导第三步——浏览器预热,提前登录 agent 需要访问的站点" width="700">
+     <img src="docs/screenshots/zh/connect-accounts.png" alt="设置向导第二步——关联账户:API 连接器与 Agent 浏览器登录" width="700">
    </p>
 
 2. **创建 project** —— 起个名字,选择本地的一个文件夹,设定 autonomy 等级
 
    <p align="center">
-     <img src="docs/screenshots/new-project-setting.png" alt="新建 project 对话框——选择工作空间目录和 autonomy 等级" width="700">
+     <img src="docs/screenshots/zh/new-project-setting.png" alt="新建 project 页面——选择工作空间目录和 autonomy 等级" width="700">
    </p>
 3. **开始对话** —— 在聊天框输入任务,管理 agent 自己处理
 4. **走开** —— 把后续任务排进队列;每个完成项都会成为下一项构建的上下文
@@ -99,28 +93,28 @@ Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的
 
 ## 看工作如何积累
 
-<p align="center"><img src="docs/screenshots/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md 由 agent 维护,每个会话读回" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md 由 agent 维护,每个会话读回" width="800"></p>
 <p align="center"><em>project 自己维护状态、决策与经验——由 agent 书写,每个会话开始时读回,所以每次都从"上次结束的地方"继续</em></p>
 
 <p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="把任务派给 Claude Code sub-agent,它读取 project 上下文、完成工作并把成果写回工作空间" width="800"></p>
 <p align="center"><em>把任务派给 Claude Code、Codex 或 Gemini——它们读取同一份积累的上下文,完成后把成果写回工作空间</em></p>
 
-<p align="center"><img src="docs/screenshots/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
 <p align="center"><em>在每个 project 的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
 
-<p align="center"><img src="docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png" alt="任务队列——正在运行、排队中、自动化三个区块;队列可暂停以便介入引导" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/queue-paused.png" alt="任务队列——正在运行、排队中、已完成、自动任务分区;队列可暂停以便介入引导" width="800"></p>
 <p align="center"><em>把任务排进队列然后走开——agent 逐项处理,每个完成项都会成为下一项的上下文;随时可暂停介入引导,再继续</em></p>
 
-<p align="center"><img src="docs/screenshots/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
 <p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式,下次遇到类似任务先查阅</em></p>
 
-<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="定时 trigger 配置——每天定时扫描 arxiv、Hacker News、技术博客" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/scheduled-trigger.png" alt="定时 trigger 详情——每天下午 2 点的竞品观察任务,含计划、上次触发与运行次数" width="800"></p>
 <p align="center"><em>定时与文件监听 trigger——让管理 agent 定期检查并自动派发 sub-agent,无需你动手</em></p>
 
-<p align="center"><img src="docs/screenshots/settings-budget.png" alt="Budget 设置——花费上限、重置周期、按模型的实时成本明细、可编辑的价格表" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/settings-budget.png" alt="Budget 设置——花费上限、重置周期、按模型的实时成本明细、可编辑的价格表" width="800"></p>
 <p align="center"><em>为每个 project 设定 budget 上限和重置周期,实时查看按模型的花费与成本明细</em></p>
 
-<p align="center"><img src="docs/screenshots/credential-store.png" alt="凭据管理——网站密码存放在系统钥匙串中" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/credential-store.png" alt="凭据管理——网站密码存放在系统钥匙串中" width="800"></p>
 <p align="center"><em>网站凭据存放在系统钥匙串里,绝不暴露给聊天</em></p>
 
 <p align="center">
