@@ -37,6 +37,8 @@
 | 1 | **Cloud hosting for project files** | 2026-06-26 · user-flagged "very important". Implementation spec at [`BACKLOG/specs/001-…md`](BACKLOG/specs/001-cloud-hosting-for-project-files.md); see Spec 1 note below. |
 | 10 | **Group projects — shared project state + merge engine** | 2026-07-03 · Strategy note. Group projects need a **merge/reconciliation engine** (not worktrees per se — members sync via the Spec 001 backend). Merge-engine decisions resolved (three-way + recency tiebreaker, per-change latest-edit ordering, archive losers, per-file-class policy, git-optional); first consumer is fanout phase 2. Blocked behind Spec 001's open questions. Spec at [`BACKLOG/specs/010-…md`](BACKLOG/specs/010-group-projects-shared-state.md); see Spec 10 note below. |
 
+## Done
+
 | # | Feature | Shipped |
 |---|---------|---------|
 | 2 | **Clickable local paths in chat → drawer** | 2026-07-01 · shipped in claude-code session. |

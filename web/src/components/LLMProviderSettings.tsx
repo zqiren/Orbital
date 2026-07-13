@@ -186,6 +186,10 @@ export default function LLMProviderSettings({
       // Populate from global settings
       if (globalSettings) {
         const gp = globalSettings.provider || '';
+        // Seeded only by the no-saved-provider branch below, where
+        // globalSettings.base_url is never set — used to avoid storing ''
+        // (breaks the backend's OpenAI client, which treats '' unlike None).
+        let defaultBaseUrlSeed = '';
         if (gp && gp !== 'custom' && providers[gp]) {
           setProvider(gp);
           resolvedProvider = gp;
@@ -206,10 +210,11 @@ export default function LLMProviderSettings({
           setProvider(defaultProviderKey);
           resolvedProvider = defaultProviderKey;
           setSdk(providers[defaultProviderKey].sdk);
+          defaultBaseUrlSeed = resolveBaseUrl(providers[defaultProviderKey], 'global');
         }
         setModel(globalSettings.model || '');
         setModelInputValue(globalSettings.model || '');
-        setBaseUrl(globalSettings.base_url || '');
+        setBaseUrl(globalSettings.base_url || defaultBaseUrlSeed);
         if (globalSettings.sdk) setSdk(globalSettings.sdk as 'openai' | 'anthropic');
       } else if (defaultProviderKey) {
         setProvider(defaultProviderKey);

@@ -201,6 +201,26 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
       expect(select.value).toBe(CUSTOM_PROVIDER_KEY);
     });
   });
+
+  // Final-review Finding 2: when globalSettings exists but has no saved
+  // provider/base_url (fresh install), the default-provider branch pre-selects
+  // DeepSeek — but base_url must seed from DeepSeek's registry base_url, not
+  // fall through to ''. An empty string is a legitimate "inherit from global"
+  // sentinel in *project* mode only; in global mode it gets saved as-is and
+  // passed raw to the backend's OpenAI client, breaking the request.
+  it('seeds the Advanced base URL field from the default provider, not empty, on a fresh install', async () => {
+    mockApi({ settings: { provider: '', base_url: null } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('deepseek');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+
+    const baseUrlInput = await screen.findByDisplayValue(REGISTRY.deepseek.base_url!);
+    expect(baseUrlInput).toBeTruthy();
+  });
 });
 
 // ---- Region defaults to China on new selection ----
