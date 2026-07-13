@@ -3,6 +3,8 @@
     "openai": {
       "display_name": "OpenAI",
       "base_url": "https://api.openai.com/v1",
+      "console_url": "https://platform.openai.com/api-keys",
+      "no_china_endpoint": true,
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -467,6 +469,8 @@
     "anthropic": {
       "display_name": "Anthropic",
       "base_url": "https://api.anthropic.com",
+      "console_url": "https://console.anthropic.com/settings/keys",
+      "no_china_endpoint": true,
       "currency": "USD",
       "supports_model_list": true,
       "model_list_endpoint": "/v1/models",
@@ -833,6 +837,7 @@
     "deepseek": {
       "display_name": "DeepSeek",
       "base_url": "https://api.deepseek.com",
+      "console_url": "https://platform.deepseek.com/api_keys",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -968,6 +973,7 @@
       "display_name": "Moonshot (Kimi)",
       "base_url": "https://api.moonshot.ai/v1",
       "china_base_url": "https://api.moonshot.cn/v1",
+      "console_url": "https://platform.moonshot.cn/console/api-keys",
       "currency": "CNY",
       "supports_model_list": true,
       "sdk": "openai",
@@ -1143,6 +1149,7 @@
       "display_name": "Zhipu AI (GLM)",
       "base_url": "https://api.z.ai/v1",
       "china_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
       "currency": "CNY",
       "supports_model_list": false,
       "sdk": "openai",
@@ -1393,6 +1400,7 @@
       "display_name": "Alibaba Cloud Qwen (DashScope)",
       "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "china_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "console_url": "https://bailian.console.aliyun.com",
       "currency": "USD",
       "supports_model_list": false,
       "sdk": "openai",
@@ -1648,6 +1656,7 @@
     "xai": {
       "display_name": "xAI",
       "base_url": "https://api.x.ai/v1",
+      "console_url": "https://console.x.ai",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -1829,6 +1838,8 @@
     "google": {
       "display_name": "Google Gemini",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "console_url": "https://aistudio.google.com/apikey",
+      "no_china_endpoint": true,
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -2030,6 +2041,7 @@
     "mistral": {
       "display_name": "Mistral",
       "base_url": "https://api.mistral.ai/v1",
+      "console_url": "https://console.mistral.ai/api-keys",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -2256,6 +2268,7 @@
     "groq": {
       "display_name": "Groq",
       "base_url": "https://api.groq.com/openai/v1",
+      "console_url": "https://console.groq.com/keys",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -2495,6 +2508,7 @@
     "together": {
       "display_name": "Together AI",
       "base_url": "https://api.together.xyz/v1",
+      "console_url": "https://api.together.xyz/settings/api-keys",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -2673,6 +2687,7 @@
     "openrouter": {
       "display_name": "OpenRouter",
       "base_url": "https://openrouter.ai/api/v1",
+      "console_url": "https://openrouter.ai/settings/keys",
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
@@ -2871,6 +2886,7 @@
       "display_name": "MiniMax",
       "base_url": "https://api.minimax.io/v1",
       "china_base_url": "https://api.minimaxi.com/v1",
+      "console_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
       "currency": "USD",
       "supports_model_list": false,
       "sdk": "openai",

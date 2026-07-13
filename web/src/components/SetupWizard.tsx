@@ -206,7 +206,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               {t('wizard.intro')}
             </p>
 
-            <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />
+            <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
 
             <div className="mt-6 flex justify-end">
               <button
