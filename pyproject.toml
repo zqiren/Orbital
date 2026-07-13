@@ -29,6 +29,14 @@ dependencies = [
 browser = [
     "patchright>=1.40",
 ]
+office = [
+    # Office document generation/parsing (Spec 007 Tier A): docx / xlsx / pptx
+    # via pure-Python libraries, no pandoc/LibreOffice. See the
+    # "Office Documents" skill hint in agent_os/agent/prompt_builder.py.
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
+]
 macos = [
     # EventKit calendar source (Spec 011 §0.5). macOS-only; the calendar hub
     # degrades gracefully when it is absent, so this stays optional and is

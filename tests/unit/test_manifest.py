@@ -85,6 +85,7 @@ class TestManifestLoader:
         assert m.runtime.adapter == "built_in"
         assert m.runtime.command is None
         assert "research" in m.capabilities.skills
+        assert "document_generation" in m.capabilities.skills
         assert m.permissions.shell is True
 
     def test_validate_missing_required(self):
