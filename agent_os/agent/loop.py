@@ -60,6 +60,13 @@ COOLDOWN_TURNS = 50
 # which stay synchronous and drain the gate instead.
 REFRESH_DEBOUNCE_S = 300
 
+# Max nudge-retries per run when the model returns a no-tool-call response
+# with no visible text (e.g. generation died inside its thinking block and
+# the provider finalized the stream anyway — MiniMax-M3, 2026-07-13). Bounded
+# so a persistently misbehaving model becomes a declared error, not a spend
+# loop.
+_EMPTY_RESPONSE_NUDGE_LIMIT = 2
+
 
 def normalize_tool_call(tc_raw: dict) -> dict:
     """Normalize tool call from nested/flat/string-args formats."""
@@ -626,6 +633,7 @@ class AgentLoop:
             action_hashes: deque = deque(maxlen=15)
             consecutive_overflows = 0
             llm_retries = 0
+            empty_response_nudges = 0
 
             # Fallback provider rotation state
             _all_providers = [self._provider] + list(self._fallback_providers)
@@ -882,6 +890,7 @@ class AgentLoop:
                     final_usage_chunk_seen=getattr(
                         response, "final_usage_chunk_seen", False
                     ),
+                    finish_reason=response.finish_reason,
                 )
 
                 # Track token usage
@@ -904,7 +913,11 @@ class AgentLoop:
                 if response.usage:
                     self._emit_ledger_event(active_provider, response.usage)
 
-                # Text-only response: append and exit
+                # Text-only response: append and exit — but only when the
+                # model actually said something. A turn may end in exactly
+                # three states: a user-visible message, a tool handoff, or a
+                # declared error. "No tool calls" alone does not prove the
+                # first.
                 if not response.has_tool_calls:
                     assistant_msg = {
                         "role": "assistant",
@@ -919,6 +932,52 @@ class AgentLoop:
                     reasoning = (response.raw_message or {}).get("reasoning_content")
                     if reasoning:
                         assistant_msg["reasoning_content"] = reasoning
+
+                    if not (response.text or "").strip():
+                        # Whitespace-only, no tool calls: the generation was
+                        # cut off (typically inside its thinking block; the
+                        # provider finalizes the stream cleanly so nothing
+                        # raises). Ending the turn here is the silent-stall
+                        # bug — the UI shows a thinking capsule, then nothing.
+                        # Persist the partial (its reasoning helps the model
+                        # resume), then nudge, bounded per run.
+                        self._session.append(assistant_msg)
+                        if empty_response_nudges < _EMPTY_RESPONSE_NUDGE_LIMIT:
+                            empty_response_nudges += 1
+                            logger.warning(
+                                "Empty final response (finish_reason=%s, "
+                                "reasoning_len=%d) — nudging model to "
+                                "continue (%d/%d)",
+                                response.finish_reason,
+                                len(reasoning or ""),
+                                empty_response_nudges,
+                                _EMPTY_RESPONSE_NUDGE_LIMIT,
+                            )
+                            self._diag(
+                                "empty_response_nudge",
+                                iteration=iteration,
+                                finish_reason=response.finish_reason,
+                                nudge=empty_response_nudges,
+                            )
+                            self._session.append_system(
+                                "Your previous reply contained no visible text "
+                                "and no tool call — the response appears to "
+                                "have been cut off (finish_reason="
+                                f"{response.finish_reason}). Continue from "
+                                "where you stopped: produce the user-facing "
+                                "message or the next tool call."
+                            )
+                            continue
+                        self._llm_failed = True
+                        self._session.append_system(
+                            f"The model returned {empty_response_nudges + 1} "
+                            "consecutive empty responses (no text, no tool "
+                            "calls). Giving up on this turn — retry, or switch "
+                            "the project's model."
+                        )
+                        self._note_exit("empty_response", iteration)
+                        break
+
                     self._session.append(assistant_msg)
                     truncate_consumed_tool_results(
                         self._session, response.text, iteration,
