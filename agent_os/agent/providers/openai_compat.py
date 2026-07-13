@@ -597,6 +597,7 @@ class LLMProvider:
                     is_final=True,
                     usage=usage,
                     reasoning_content=reasoning,
+                    finish_reason=choice.finish_reason,
                 )
             elif chunk.usage is not None and not text and not tc_delta and not reasoning:
                 usage = _make_token_usage(chunk.usage)
@@ -606,7 +607,12 @@ class LLMProvider:
                     usage=usage,
                 )
             else:
-                yield StreamChunk(text=text, tool_calls_delta=tc_delta, reasoning_content=reasoning)
+                yield StreamChunk(
+                    text=text,
+                    tool_calls_delta=tc_delta,
+                    reasoning_content=reasoning,
+                    finish_reason=choice.finish_reason,
+                )
 
         # Flush any buffered inline-think remainder (an unclosed <think> block,
         # or a trailing partial tag) once the upstream stream is exhausted.

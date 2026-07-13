@@ -388,6 +388,10 @@ def translate_stream_event(event, state: StreamState) -> StreamChunk | None:
                 cache_read_tokens=state.cache_read_tokens,
                 cache_write_tokens=state.cache_write_tokens,
             ),
+            finish_reason=(
+                _STOP_REASON_MAP.get(state.stop_reason, state.stop_reason)
+                if state.stop_reason else None
+            ),
         )
 
     # Unknown event type — ignore

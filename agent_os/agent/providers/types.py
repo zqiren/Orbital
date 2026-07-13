@@ -36,6 +36,10 @@ class StreamChunk:
     is_final: bool = False
     usage: TokenUsage | None = None
     reasoning_content: str = ""
+    # The provider's own finish/stop reason, normalized to OpenAI vocabulary
+    # where the adapter knows the mapping ("stop"/"length"/"tool_calls"/...).
+    # None on delta chunks and for providers that never report one.
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -62,6 +66,7 @@ class StreamAccumulator:
         self.tool_calls_parts: dict[int, dict] = {}
         self.usage: TokenUsage | None = None
         self.reasoning_parts: list[str] = []
+        self.finish_reason: str | None = None
 
     @staticmethod
     def _get_attr(obj, key, default=""):
@@ -119,6 +124,8 @@ class StreamAccumulator:
                     entry["function"]["arguments"] += func_args
         if chunk.usage:
             self.usage = chunk.usage
+        if chunk.finish_reason:
+            self.finish_reason = chunk.finish_reason
 
     def _assemble_tool_calls(self) -> list[dict]:
         if not self.tool_calls_parts:
@@ -141,7 +148,12 @@ class StreamAccumulator:
         if self.reasoning_parts:
             raw_message["reasoning_content"] = "".join(self.reasoning_parts)
         status_text = self._extract_status(text)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        # Prefer the provider's real finish_reason (it distinguishes a
+        # truncated response, "length", from a completed one). Synthesize
+        # only for providers that never reported one.
+        finish_reason = self.finish_reason or (
+            "tool_calls" if tool_calls else "stop"
+        )
         return LLMResponse(
             raw_message=raw_message,
             text=text,
