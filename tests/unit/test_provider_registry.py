@@ -222,6 +222,40 @@ class TestAllProviders:
         assert "openai" in providers
         assert "deepseek" in providers
 
+    def test_console_url_present_for_all_non_custom_providers(self, registry):
+        """Spec 17: every provider a user can create a key for carries a console_url
+        for the wizard's "Get your API key" link. Passed through raw (no dataclass
+        strips it), so this also guards against a future strict response model
+        dropping the field."""
+        providers = registry.all_providers()
+        non_custom = [k for k in providers if k not in ("custom", "unknown_model")]
+        assert non_custom, "expected at least one non-custom provider"
+        for key in non_custom:
+            assert providers[key].get("console_url"), f"{key} missing console_url"
+
+    def test_custom_provider_has_no_console_url(self, registry):
+        providers = registry.all_providers()
+        assert "console_url" not in providers["custom"]
+
+    def test_no_china_endpoint_flag_only_on_openai_anthropic_google(self, registry):
+        """Spec 17: the "no mainland-China endpoint" caption is driven by this
+        flag, and only these three providers should carry it."""
+        providers = registry.all_providers()
+        flagged = {k for k, v in providers.items() if v.get("no_china_endpoint")}
+        assert flagged == {"openai", "anthropic", "google"}
+
+    def test_get_provider_data_includes_new_fields(self, registry):
+        """get_provider_data is a raw passthrough — confirm it isn't stripped
+        by any dataclass parsing on the provider-level (only model-level
+        entries go through ModelInfo)."""
+        openai_data = registry.get_provider_data("openai")
+        assert openai_data["console_url"] == "https://platform.openai.com/api-keys"
+        assert openai_data["no_china_endpoint"] is True
+
+        deepseek_data = registry.get_provider_data("deepseek")
+        assert deepseek_data["console_url"] == "https://platform.deepseek.com/api_keys"
+        assert "no_china_endpoint" not in deepseek_data
+
 
 # --- Edge cases ---
 

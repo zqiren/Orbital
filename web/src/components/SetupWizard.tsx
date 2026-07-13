@@ -23,6 +23,8 @@ import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
 import { useT } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import { LOCALES } from '../i18n/locales';
 
 type WizardStep = 'api_key' | 'accounts';
 
@@ -32,6 +34,7 @@ interface SetupWizardProps {
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const t = useT();
+  const { locale, setLocale } = useLocale();
   const [step, setStep] = useState<WizardStep>('api_key');
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -167,6 +170,27 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-lg">
+        {/* A2 header widget (Spec 008) — ambient language toggle, visible on
+            every wizard step. Reuses the LOCALES select from
+            GlobalSettings.tsx; no new i18n keys needed (labels are
+            language-neutral). */}
+        <div className="flex justify-end mb-2">
+          <div className="inline-flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-secondary" aria-hidden="true" />
+            <select
+              aria-label={t('global.language')}
+              data-testid="wizard-locale-select"
+              value={locale}
+              onChange={(e) => setLocale(e.target.value as typeof locale)}
+              className="text-xs bg-background border border-border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+            >
+              {LOCALES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="text-center mb-8">
           <span className="font-mono text-lg text-primary tracking-tight">
             {t('setupGate.wordmark')}
@@ -182,7 +206,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               {t('wizard.intro')}
             </p>
 
-            <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />
+            <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
 
             <div className="mt-6 flex justify-end">
               <button

@@ -8,6 +8,10 @@ export interface ProviderInfo {
   display_name: string;
   base_url: string | null;
   china_base_url?: string | null;
+  /** Console URL where a user can create an API key for this provider (Spec 17). */
+  console_url?: string | null;
+  /** True for providers with no native mainland-China endpoint (Spec 17). */
+  no_china_endpoint?: boolean;
   supports_model_list: boolean;
   sdk: 'openai' | 'anthropic';
   suggested_models: string[];

@@ -43,9 +43,44 @@ interface LLMProviderSettingsProps {
   hideSaveButton?: boolean;
   /** Ref to expose save function to parent */
   saveRef?: React.MutableRefObject<(() => Promise<boolean>) | null>;
+  /** Provider picker style. 'cards' is wizard-only (Spec 17); everywhere else
+   * keeps the compact dropdown. Default 'dropdown'. */
+  providerPicker?: 'dropdown' | 'cards';
 }
 
-const CUSTOM_PROVIDER_KEY = '__custom__';
+export const CUSTOM_PROVIDER_KEY = '__custom__';
+
+/** Explicit fresh-state default (Spec 17 §9) — works from both CN and global
+ * networks, single endpoint, nothing to misconfigure. Never 'custom'. */
+const DEFAULT_PROVIDER = 'deepseek';
+
+/** Fixed provider ordering for everyone — CN-friendly providers first, no
+ * locale logic (Spec 17 §9, "i dont want to over complicate this"). Unknown
+ * registry keys are appended after the known ones in registry order; any
+ * 'custom' entry (registry key or the CUSTOM_PROVIDER_KEY sentinel) is always
+ * last. Shared by the dropdown and the wizard's preset cards. */
+const PROVIDER_ORDER = [
+  'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax',
+  'openai', 'anthropic', 'google', 'xai', 'mistral', 'groq', 'together', 'openrouter',
+];
+
+export function orderProviders(keys: string[]): string[] {
+  const isCustom = (k: string) => k === 'custom' || k === CUSTOM_PROVIDER_KEY;
+  const known = PROVIDER_ORDER.filter((k) => keys.includes(k));
+  const unknown = keys.filter((k) => !PROVIDER_ORDER.includes(k) && !isCustom(k));
+  const custom = keys.filter(isCustom);
+  return [...known, ...unknown, ...custom];
+}
+
+/** Region default for a newly-selected provider (Spec 17 §9): dual-endpoint
+ * providers default to 'china' (launch audience is the Chinese X community);
+ * everyone else defaults to 'global'. Does NOT apply to saved-config
+ * derivation (base_url === china_base_url), which is handled separately. */
+export function regionDefaultForProvider(
+  info: Pick<ProviderInfo, 'china_base_url'> | undefined,
+): 'global' | 'china' {
+  return info?.china_base_url ? 'china' : 'global';
+}
 
 export default function LLMProviderSettings({
   mode,
@@ -53,6 +88,7 @@ export default function LLMProviderSettings({
   onChange,
   hideSaveButton,
   saveRef,
+  providerPicker = 'dropdown',
 }: LLMProviderSettingsProps) {
   const t = useT();
   // Collapsed state for project mode
@@ -140,6 +176,9 @@ export default function LLMProviderSettings({
     if (providersLoading || !globalLoaded) return;
 
     const providerKeys = Object.keys(providers);
+    // Explicit default (never 'custom'); guard against DEFAULT_PROVIDER being
+    // absent from the registry by falling back to the first known key.
+    const defaultProviderKey = providers[DEFAULT_PROVIDER] ? DEFAULT_PROVIDER : providerKeys[0];
     // Track the provider we resolve to so we can seed the model picker below.
     let resolvedProvider = '';
 
@@ -147,7 +186,11 @@ export default function LLMProviderSettings({
       // Populate from global settings
       if (globalSettings) {
         const gp = globalSettings.provider || '';
-        if (gp && providers[gp]) {
+        // Seeded only by the no-saved-provider branch below, where
+        // globalSettings.base_url is never set — used to avoid storing ''
+        // (breaks the backend's OpenAI client, which treats '' unlike None).
+        let defaultBaseUrlSeed = '';
+        if (gp && gp !== 'custom' && providers[gp]) {
           setProvider(gp);
           resolvedProvider = gp;
           setSdk(providers[gp].sdk);
@@ -156,29 +199,33 @@ export default function LLMProviderSettings({
           if (info.china_base_url && globalSettings.base_url === info.china_base_url) {
             setRegion('china');
           }
-        } else if (gp && !providers[gp]) {
+        } else if (gp) {
+          // Unknown provider, or the registry's literal 'custom' entry — both
+          // resolve to the CUSTOM_PROVIDER_KEY sentinel, the single Custom
+          // affordance in the picker.
           setProvider(CUSTOM_PROVIDER_KEY);
           resolvedProvider = CUSTOM_PROVIDER_KEY;
           setShowAdvanced(true);
-        } else if (providerKeys.length > 0) {
-          setProvider(providerKeys[0]);
-          resolvedProvider = providerKeys[0];
-          setSdk(providers[providerKeys[0]].sdk);
+        } else if (defaultProviderKey) {
+          setProvider(defaultProviderKey);
+          resolvedProvider = defaultProviderKey;
+          setSdk(providers[defaultProviderKey].sdk);
+          defaultBaseUrlSeed = resolveBaseUrl(providers[defaultProviderKey], 'global');
         }
         setModel(globalSettings.model || '');
         setModelInputValue(globalSettings.model || '');
-        setBaseUrl(globalSettings.base_url || '');
+        setBaseUrl(globalSettings.base_url || defaultBaseUrlSeed);
         if (globalSettings.sdk) setSdk(globalSettings.sdk as 'openai' | 'anthropic');
-      } else if (providerKeys.length > 0) {
-        setProvider(providerKeys[0]);
-        resolvedProvider = providerKeys[0];
-        setSdk(providers[providerKeys[0]].sdk);
-        setBaseUrl(resolveBaseUrl(providers[providerKeys[0]], 'global'));
+      } else if (defaultProviderKey) {
+        setProvider(defaultProviderKey);
+        resolvedProvider = defaultProviderKey;
+        setSdk(providers[defaultProviderKey].sdk);
+        setBaseUrl(resolveBaseUrl(providers[defaultProviderKey], 'global'));
       }
     } else if (mode === 'project') {
       // Populate from project values, fallback to global
       const pv = projectValues;
-      if (pv?.provider && providers[pv.provider]) {
+      if (pv?.provider && pv.provider !== 'custom' && providers[pv.provider]) {
         setProvider(pv.provider);
         resolvedProvider = pv.provider;
         setSdk(providers[pv.provider].sdk);
@@ -186,14 +233,17 @@ export default function LLMProviderSettings({
         if (info.china_base_url && pv.base_url === info.china_base_url) {
           setRegion('china');
         }
-      } else if (pv?.provider && !providers[pv.provider]) {
+      } else if (pv?.provider) {
+        // Unknown provider, or the registry's literal 'custom' entry — both
+        // resolve to the CUSTOM_PROVIDER_KEY sentinel, the single Custom
+        // affordance in the picker.
         setProvider(CUSTOM_PROVIDER_KEY);
         resolvedProvider = CUSTOM_PROVIDER_KEY;
         setShowAdvanced(true);
-      } else if (providerKeys.length > 0) {
-        setProvider(providerKeys[0]);
-        resolvedProvider = providerKeys[0];
-        setSdk(providers[providerKeys[0]].sdk);
+      } else if (defaultProviderKey) {
+        setProvider(defaultProviderKey);
+        resolvedProvider = defaultProviderKey;
+        setSdk(providers[defaultProviderKey].sdk);
       }
       setModel(pv?.model || '');
       setModelInputValue(pv?.model || '');
@@ -252,23 +302,36 @@ export default function LLMProviderSettings({
   const currentProviderHasChinaUrl =
     provider !== CUSTOM_PROVIDER_KEY && !!providers[provider]?.china_base_url;
 
+  // Fixed order, shared by the dropdown and the wizard's preset cards. The
+  // registry's literal 'custom' entry is excluded — the CUSTOM_PROVIDER_KEY
+  // sentinel below is the single Custom affordance; rendering both produced
+  // duplicate "Custom / Self-Hosted" chips/options.
+  const orderedProviderKeys = orderProviders(
+    Object.keys(providers).filter((k) => k !== 'custom'),
+  );
+
   function handleProviderChange(key: string) {
     setProvider(key);
     setModel('');
     setModelInputValue('');
     setTestStatus('idle');
     setTestMessage('');
-    setRegion('global');
     // Seed the dropdown from the catalog immediately (no key required).
     seedModelsFromCatalog(key);
     if (key === CUSTOM_PROVIDER_KEY) {
+      setRegion('global');
       setBaseUrl('');
       setSdk('openai');
       setShowAdvanced(true);
     } else {
       const info: ProviderInfo | undefined = providers[key];
+      // Spec 17: a newly-selected dual-endpoint provider defaults to the China
+      // region (no saved base_url for it yet). Saved-config derivation (the
+      // base_url === china_base_url check in the init effect) is untouched.
+      const defaultRegion = regionDefaultForProvider(info);
+      setRegion(defaultRegion);
       if (info) {
-        setBaseUrl(resolveBaseUrl(info, 'global'));
+        setBaseUrl(resolveBaseUrl(info, defaultRegion));
         setSdk(info.sdk);
       }
     }
@@ -596,18 +659,51 @@ export default function LLMProviderSettings({
       {/* Provider */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>
-        <select
-          value={provider}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
-        >
-          {Object.entries(providers).map(([key, info]) => (
-            <option key={key} value={key}>{info.display_name}</option>
-          ))}
-          <option value={CUSTOM_PROVIDER_KEY}>{t('llm.provider.custom')}</option>
-        </select>
+        {providerPicker === 'cards' ? (
+          <div className="flex flex-wrap gap-2">
+            {orderedProviderKeys.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => handleProviderChange(key)}
+                className={`text-sm px-3 py-1.5 rounded-full border transition-all duration-150 ${
+                  provider === key
+                    ? 'bg-accent text-white border-accent'
+                    : 'bg-sidebar text-secondary border-border hover:text-primary hover:border-secondary/40'
+                }`}
+              >
+                {providers[key].display_name}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => handleProviderChange(CUSTOM_PROVIDER_KEY)}
+              className={`text-sm px-3 py-1.5 rounded-full border transition-all duration-150 ${
+                provider === CUSTOM_PROVIDER_KEY
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-sidebar text-secondary border-border hover:text-primary hover:border-secondary/40'
+              }`}
+            >
+              {t('llm.provider.custom')}
+            </button>
+          </div>
+        ) : (
+          <select
+            value={provider}
+            onChange={(e) => handleProviderChange(e.target.value)}
+            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+          >
+            {orderedProviderKeys.map((key) => (
+              <option key={key} value={key}>{providers[key].display_name}</option>
+            ))}
+            <option value={CUSTOM_PROVIDER_KEY}>{t('llm.provider.custom')}</option>
+          </select>
+        )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
           <p className="text-xs text-secondary mt-1">{providers[provider].notes}</p>
+        )}
+        {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.no_china_endpoint && (
+          <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.noChinaEndpoint')}</p>
         )}
       </div>
 
@@ -645,6 +741,19 @@ export default function LLMProviderSettings({
       {/* API Key */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
+        {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.console_url && (
+          <div className="mb-1.5">
+            <a
+              href={providers[provider].console_url!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-accent hover:underline"
+            >
+              {t('llm.apiKey.getKey')}
+            </a>
+            <p className="text-xs text-secondary/70 mt-0.5">{t('llm.apiKey.howTo')}</p>
+          </div>
+        )}
         <input
           type="password"
           value={apiKey}

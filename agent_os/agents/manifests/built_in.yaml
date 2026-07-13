@@ -13,6 +13,7 @@ capabilities:
     - file_management
     - research
     - writing
+    - document_generation
     - analysis
     - task_planning
   input_types: [text, files]

@@ -416,6 +416,16 @@ class PromptBuilder:
             lines.append("When the user asks you to write, create, or save to a specific file, "
                          "you MUST use the write tool to produce that file. Describing the content "
                          "in your chat response is not a substitute for actually creating the file.")
+
+        # Office document generation — no dedicated tool; shell + libraries (Spec 007 Tier A)
+        if "shell" in context.tool_names:
+            lines.append("")
+            lines.append("### Office Documents")
+            lines.append("For .docx / .pptx / .xlsx generation or parsing, write a Python script "
+                         "using python-docx / python-pptx / openpyxl and run it via the shell tool. "
+                         "If an import is missing, `pip install python-docx python-pptx openpyxl` "
+                         "first (pypi.org is network-allowlisted). Write the output file into the "
+                         "workspace so the user gets the existing download card.")
         return "\n".join(lines)
 
     def _safety(self, context: PromptContext) -> str:
