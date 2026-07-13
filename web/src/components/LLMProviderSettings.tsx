@@ -186,7 +186,7 @@ export default function LLMProviderSettings({
       // Populate from global settings
       if (globalSettings) {
         const gp = globalSettings.provider || '';
-        if (gp && providers[gp]) {
+        if (gp && gp !== 'custom' && providers[gp]) {
           setProvider(gp);
           resolvedProvider = gp;
           setSdk(providers[gp].sdk);
@@ -195,7 +195,10 @@ export default function LLMProviderSettings({
           if (info.china_base_url && globalSettings.base_url === info.china_base_url) {
             setRegion('china');
           }
-        } else if (gp && !providers[gp]) {
+        } else if (gp) {
+          // Unknown provider, or the registry's literal 'custom' entry — both
+          // resolve to the CUSTOM_PROVIDER_KEY sentinel, the single Custom
+          // affordance in the picker.
           setProvider(CUSTOM_PROVIDER_KEY);
           resolvedProvider = CUSTOM_PROVIDER_KEY;
           setShowAdvanced(true);
@@ -217,7 +220,7 @@ export default function LLMProviderSettings({
     } else if (mode === 'project') {
       // Populate from project values, fallback to global
       const pv = projectValues;
-      if (pv?.provider && providers[pv.provider]) {
+      if (pv?.provider && pv.provider !== 'custom' && providers[pv.provider]) {
         setProvider(pv.provider);
         resolvedProvider = pv.provider;
         setSdk(providers[pv.provider].sdk);
@@ -225,7 +228,10 @@ export default function LLMProviderSettings({
         if (info.china_base_url && pv.base_url === info.china_base_url) {
           setRegion('china');
         }
-      } else if (pv?.provider && !providers[pv.provider]) {
+      } else if (pv?.provider) {
+        // Unknown provider, or the registry's literal 'custom' entry — both
+        // resolve to the CUSTOM_PROVIDER_KEY sentinel, the single Custom
+        // affordance in the picker.
         setProvider(CUSTOM_PROVIDER_KEY);
         resolvedProvider = CUSTOM_PROVIDER_KEY;
         setShowAdvanced(true);
@@ -291,8 +297,13 @@ export default function LLMProviderSettings({
   const currentProviderHasChinaUrl =
     provider !== CUSTOM_PROVIDER_KEY && !!providers[provider]?.china_base_url;
 
-  // Fixed order, shared by the dropdown and the wizard's preset cards.
-  const orderedProviderKeys = orderProviders(Object.keys(providers));
+  // Fixed order, shared by the dropdown and the wizard's preset cards. The
+  // registry's literal 'custom' entry is excluded — the CUSTOM_PROVIDER_KEY
+  // sentinel below is the single Custom affordance; rendering both produced
+  // duplicate "Custom / Self-Hosted" chips/options.
+  const orderedProviderKeys = orderProviders(
+    Object.keys(providers).filter((k) => k !== 'custom'),
+  );
 
   function handleProviderChange(key: string) {
     setProvider(key);

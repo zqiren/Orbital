@@ -75,6 +75,12 @@ const REGISTRY: ProviderRegistry = {
     no_china_endpoint: true,
     sdk: 'anthropic',
   }),
+  // Production registry shape: GET /api/v2/providers serves a literal 'custom'
+  // entry alongside the CUSTOM_PROVIDER_KEY sentinel the picker adds itself.
+  custom: makeProvider({
+    display_name: 'Custom / Self-Hosted',
+    base_url: '',
+  }),
 };
 
 interface MockSettings {
@@ -303,5 +309,52 @@ describe('LLMProviderSettings — preset cards (providerPicker="cards", wizard-o
     mockApi({ settings: { provider: '' } });
     render(<LLMProviderSettings mode="global" />);
     await waitFor(() => expect(screen.getAllByRole('combobox')[0]).toBeTruthy());
+  });
+});
+
+// ---- Duplicate Custom entry (registry literal 'custom' vs. the sentinel) ----
+//
+// GET /api/v2/providers serves a literal 'custom' registry entry (display_name
+// "Custom / Self-Hosted"), matching the REGISTRY fixture above. Without the
+// fix, that entry rendered alongside the CUSTOM_PROVIDER_KEY sentinel option,
+// producing two identical "Custom / Self-Hosted" chips/options.
+
+describe('LLMProviderSettings — no duplicate Custom entry', () => {
+  it('renders exactly one Custom option in dropdown mode', async () => {
+    mockApi({ settings: { provider: '' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('deepseek');
+    });
+    expect(screen.getAllByText('Custom / Self-Hosted')).toHaveLength(1);
+  });
+
+  it('renders exactly one Custom chip in cards mode', async () => {
+    mockApi({ settings: { provider: '' } });
+    render(<LLMProviderSettings mode="global" hideSaveButton providerPicker="cards" />);
+    await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy());
+    expect(screen.getAllByText('Custom / Self-Hosted')).toHaveLength(1);
+  });
+
+  it('a saved provider="custom" resolves to the sentinel Custom, shows Advanced, and keeps the saved base_url', async () => {
+    mockApi({
+      settings: {
+        provider: 'custom',
+        base_url: 'https://my-llm.example/v1',
+        model: 'my-model',
+      },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe(CUSTOM_PROVIDER_KEY);
+    });
+    // Only one Custom option ever renders (the sentinel) — same fixed-fixture
+    // assertion as above, re-checked against the saved-custom-config path.
+    expect(screen.getAllByText('Custom / Self-Hosted')).toHaveLength(1);
+    // Advanced is expanded (as the pre-existing unknown-provider branch does),
+    // and the saved base_url is preserved rather than cleared.
+    expect(screen.getByDisplayValue('https://my-llm.example/v1')).toBeTruthy();
   });
 });
