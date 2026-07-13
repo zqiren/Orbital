@@ -25,6 +25,8 @@
 import { render, screen, waitFor, cleanup, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Connector } from '../types';
+import { LocaleProvider } from '../i18n/LocaleContext';
+import { LOCALE_STORAGE_KEY } from '../i18n/locales';
 
 const apiMock = vi.hoisted(() => vi.fn());
 const MockApiError = vi.hoisted(() => {
@@ -288,6 +290,41 @@ describe('SetupWizard — connect flow', () => {
       ).toBe('Connected as alice@example.com'),
     );
     expect(screen.queryByTestId('wizard-connector-connect-google-calendar')).toBeNull();
+  });
+});
+
+describe('SetupWizard — language widget (Spec 008 A2)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('renders on the api_key step, switches locale on change, and persists to localStorage', async () => {
+    mockApi({ apiKeySet: false });
+    render(
+      <LocaleProvider>
+        <SetupWizard onComplete={vi.fn()} />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Welcome to Orbital')).toBeTruthy());
+    const select = screen.getByTestId('wizard-locale-select') as HTMLSelectElement;
+    expect(select.value).toBe('en');
+
+    fireEvent.change(select, { target: { value: 'zh' } });
+
+    await waitFor(() => expect(screen.getByText('欢迎使用 Orbital')).toBeTruthy());
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('zh');
+  });
+
+  it('renders on the accounts step too — ambient on every step', async () => {
+    mockApi({ apiKeySet: true });
+    render(
+      <LocaleProvider>
+        <SetupWizard onComplete={vi.fn()} />
+      </LocaleProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
+    expect(screen.getByTestId('wizard-locale-select')).toBeTruthy();
   });
 });
 

@@ -15,12 +15,22 @@ interface LocaleContextValue {
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
 
-function readInitialLocale(): Locale {
+/**
+ * First-run locale resolution: localStorage wins; otherwise fall back to the
+ * device's OS/browser language (Spec 008 §8 B1) before defaulting to 'en'.
+ * Exported (pure function) so it's directly testable without a DOM render.
+ */
+export function readInitialLocale(): Locale {
   try {
     const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
     if (stored === 'en' || stored === 'zh') return stored;
   } catch {
     /* localStorage unavailable (SSR/private mode) — use default */
+  }
+  try {
+    if (navigator?.language?.startsWith('zh')) return 'zh';
+  } catch {
+    /* navigator unavailable — use default */
   }
   return DEFAULT_LOCALE;
 }
