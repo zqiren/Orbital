@@ -388,6 +388,33 @@ def test_two_markers_with_same_dispatch_id_render_exactly_one_bubble(tmp_path):
     assert out[-1] is messages[-1]   # the second marker's one-liner stands alone
 
 
+def test_race_recovered_transcript_renders_correctly_end_to_end(tmp_path):
+    """End-to-end confirmation of the FIFO write-side fix's effect on
+    rendering (Important review finding): given a transcript where the FIFO
+    fix correctly stamped the aborted (cancelled) turn with dispatch A's id
+    (no response — a stopped turn produces no completion summary) and the
+    real turn with dispatch B's id (the real response), marker A gets no
+    bubble and marker B gets the real turn's bubble — no aliasing,
+    regardless of the rapid-redispatch race that produced this data."""
+    transcript = tmp_path / "claude-code" / "run.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _write_transcript(transcript, [
+        # Aborted turn: cancelled before producing a response chunk.
+        _boundary("2026-06-13T10:00:01+00:00", "idA"),
+        {"content": "the real response", "chunk_type": "response", "timestamp": "2026-06-13T10:00:02+00:00"},
+        _boundary("2026-06-13T10:00:03+00:00", "idB"),
+    ])
+    messages = [
+        _routed("claude-code", "first (raced) dispatch", transcript, "2026-06-13T10:00:00+00:00", dispatch_id="idA"),
+        _routed("claude-code", "second dispatch", transcript, "2026-06-13T10:00:00+00:00", dispatch_id="idB"),
+    ]
+    out = _interleave_sub_agent_summaries(messages)
+    subs = _subs(out)
+    assert len(subs) == 1
+    assert subs[0]["content"] == "the real response"
+    assert subs[0]["sub_agent_handle"] == "claude-code"
+
+
 def test_started_marker_is_not_an_anchor(tmp_path):
     """Regression guard: the (now-dead) started marker must NOT trigger a
     bubble — it carries no ``_meta`` (LifecycleObserver.on_started never

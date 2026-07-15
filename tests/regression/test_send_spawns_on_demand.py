@@ -199,6 +199,76 @@ class TestDispatchIdMinting:
         assert all(ids)
 
 
+class TestDispatchIdFifoDesyncGuard:
+    """Important review finding on TASK-dispatch-id-pairing: if the dispatch
+    fails AFTER set_active_dispatch enqueues an id but BEFORE the transport
+    ever owns the turn, nobody will ever pop that id via a real boundary —
+    left in the FIFO it would misalign every later dispatch to this handle
+    (the FIRST-in-first-out queue would hand THIS orphaned id to the NEXT
+    turn's boundary instead of its own). send() must remove it before
+    letting the failure surface (never silently swallowed)."""
+
+    async def test_send_clears_dispatch_id_when_dispatch_raises(self):
+        mgr, adapter = _manager_with_spawnable()
+        # Give the adapter a transport with a `.dispatch()` that raises —
+        # exercises _dispatch_async's non-blocking (SDK) branch, which
+        # awaits transport.dispatch() directly (send()'s own try/except is
+        # what must catch this, since _dispatch_async itself doesn't).
+        adapter._transport = adapter
+
+        async def _raise(message):
+            raise RuntimeError("boom — transport never owned this turn")
+
+        adapter.dispatch = _raise
+
+        with pytest.raises(RuntimeError):
+            await mgr.send("proj_x", "claude-code", "go", session_id="sess_x")
+
+        mgr._process_manager.clear_dispatch.assert_called_once()
+        clear_call = mgr._process_manager.clear_dispatch.call_args
+        assert clear_call.args[0] == "proj_x"
+        assert clear_call.args[1] == "claude-code"
+        assert clear_call.kwargs.get("session_id") == "sess_x"
+
+        # The id cleared must be the EXACT one that was enqueued moments
+        # earlier — not a different/stale value.
+        set_call = mgr._process_manager.set_active_dispatch.call_args
+        assert clear_call.args[2] == set_call.args[2]
+
+    async def test_send_clears_dispatch_id_when_blocking_response_is_falsy(self):
+        """Closure requested after re-review: adapter.send() SUCCEEDS but the
+        response is falsy (empty/None) — the existing code has no ``else``
+        branch there at all, so ``note_turn_closed()`` never runs and no
+        boundary will ever pop this dispatch's id. Post-FIFO this isn't
+        merely a missing boundary row: it PERMANENTLY shifts the queue —
+        every later turn on this (project, session, handle) pops the WRONG
+        id until a respawn clears the whole thing. clear_dispatch must run
+        for the falsy-response case exactly like the raised-exception case.
+        """
+        mgr, adapter = _manager_with_spawnable()
+        # _IdleAdapter.send() (see helper above) leaves _last_response as
+        # None — exercises the falsy-response gap exactly. adapter._transport
+        # stays None, so this goes through _dispatch_async's blocking
+        # fallback (detached _background_send_task), not the SDK branch.
+
+        await mgr.send("proj_x", "claude-code", "go", session_id="sess_x")
+        await adapter._background_send_task   # let the detached task finish
+
+        mgr._process_manager.clear_dispatch.assert_called_once()
+        clear_call = mgr._process_manager.clear_dispatch.call_args
+        assert clear_call.args[0] == "proj_x"
+        assert clear_call.args[1] == "claude-code"
+        assert clear_call.kwargs.get("session_id") == "sess_x"
+
+        set_call = mgr._process_manager.set_active_dispatch.call_args
+        assert clear_call.args[2] == set_call.args[2]
+
+        # The gap this closes: no boundary was ever going to be written for
+        # this turn, since note_turn_closed is only reached inside `if
+        # response:`.
+        mgr._process_manager.note_turn_closed.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Tool level: start is gone; H1 budget/yield semantics
 # ---------------------------------------------------------------------------

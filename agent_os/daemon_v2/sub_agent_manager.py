@@ -955,7 +955,21 @@ class SubAgentManager:
 
             self._process_manager.set_active_dispatch(
                 project_id, handle, dispatch_id, session_id=session_id)
-            await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
+            try:
+                await self._dispatch_async(
+                    adapter, project_id, handle, message,
+                    session_id=session_id, dispatch_id=dispatch_id)
+            except Exception:
+                # FIFO desync guard (Important review finding,
+                # TASK-dispatch-id-pairing): the transport never owned this
+                # turn, so no boundary will ever pop the id enqueued above.
+                # Left in the queue it would be handed to the NEXT
+                # dispatch's boundary instead of its own. Remove it, then
+                # let the failure surface exactly as before — send() has
+                # never swallowed a dispatch exception.
+                self._process_manager.clear_dispatch(
+                    project_id, handle, dispatch_id, session_id=session_id)
+                raise
 
         if self._lifecycle_observer:
             await self._lifecycle_observer.on_message_routed(
@@ -1165,12 +1179,21 @@ class SubAgentManager:
         return _on_activity
 
     async def _dispatch_async(self, adapter, project_id: str, handle: str, message: str,
-                              *, session_id: str | None = None) -> None:
+                              *, session_id: str | None = None,
+                              dispatch_id: str | None = None) -> None:
         """Dispatch message to adapter without blocking on response.
 
         For transports that support non-blocking dispatch (SDK with queue),
         writes to the adapter and returns. For blocking transports (Pipe, ACP)
         and legacy PTY paths, wraps the send in a background task.
+
+        ``dispatch_id`` (TASK-dispatch-id-pairing, FIFO desync guard) is used
+        ONLY by the blocking-transport branch below: its failure happens
+        asynchronously inside a detached background task, so this function
+        must clean up the queued id itself when that task fails before ever
+        producing a response. The non-blocking (SDK) branch's failure is a
+        synchronous raise straight out of this ``await`` — the caller
+        (``send()``) wraps that call and does the equivalent cleanup there.
         """
         transport = getattr(adapter, '_transport', None)
 
@@ -1266,6 +1289,18 @@ class SubAgentManager:
                         # never emit turn_complete).
                         self._process_manager.note_turn_closed(
                             project_id, handle, session_id=session_id)
+                elif dispatch_id:
+                    # FIFO desync guard, closure requested after re-review
+                    # (TASK-dispatch-id-pairing): adapter.send() SUCCEEDED
+                    # but produced no response, so none of the branches
+                    # above ran — in particular note_turn_closed() never
+                    # fires, so no boundary will EVER pop this id. Left
+                    # queued it wouldn't just mean a missing boundary row
+                    # (as it did pre-FIFO): it would permanently shift the
+                    # queue, handing THIS id to whatever dispatch runs next
+                    # on this (project, session, handle) instead of its own.
+                    self._process_manager.clear_dispatch(
+                        project_id, handle, dispatch_id, session_id=session_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -1274,6 +1309,15 @@ class SubAgentManager:
                     project_id, handle, exc_info=True,
                 )
                 adapter._broken = True
+                # FIFO desync guard (Important review finding,
+                # TASK-dispatch-id-pairing): adapter.send() failed before a
+                # response was ever produced, so note_turn_closed() above
+                # never ran — no boundary will pop the id set_active_dispatch
+                # enqueued for this dispatch. Left queued it would be handed
+                # to the NEXT dispatch's boundary instead of its own.
+                if dispatch_id:
+                    self._process_manager.clear_dispatch(
+                        project_id, handle, dispatch_id, session_id=session_id)
                 if self._lifecycle_observer is not None:
                     try:
                         # on_failed injects into the management session (not

@@ -10,6 +10,7 @@ v5: ProcessManager never writes role=agent to the management session.
 
 import asyncio
 import logging
+from collections import deque
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,26 @@ class ProcessManager:
         # transports. Without it, blocking transports (Pipe/ACP/PTY) leave a
         # boundaryless transcript and the multi-turn split aliases.
         self._transcripts: dict[str, object] = {}
-        # same key -> the dispatch_id of the turn currently in flight
-        # (TASK-dispatch-id-pairing). Set by SubAgentManager.send() right
-        # before it starts the turn; consumed (popped) when the boundary row
-        # that closes the turn is written, so the chat renderer can join a
-        # dispatch marker to ITS OWN turn by id instead of by position —
-        # positional pairing broke once a transcript outlived its first chat
-        # session (any later session's i-th marker paired with the file's
-        # i-th turn, not its own).
-        self._active_dispatch_id: dict[str, str] = {}
+        # same key -> a FIFO queue of dispatch_ids enqueued but not yet
+        # consumed by a boundary (TASK-dispatch-id-pairing). set_active_
+        # dispatch() appends; the boundary write (consume()'s turn_complete
+        # branch, or note_turn_closed for blocking transports) pops the
+        # OLDEST entry, so the chat renderer can join a dispatch marker to
+        # ITS OWN turn by id instead of by position.
+        #
+        # A per-key FIFO (not a single last-writer-wins slot) matters
+        # because a second dispatch to the same handle can be enqueued
+        # before the first turn's boundary has been written (rapid
+        # re-dispatch — no busy-guard on the real dispatch path; the
+        # transport cancels the prior turn and emits ITS boundary before the
+        # next turn's query() runs). Boundaries therefore close in dispatch
+        # order, so FIFO restores 1:1 pairing by construction — whichever id
+        # was enqueued first is popped by whichever boundary closes first. A
+        # single overwritable slot would let the second enqueue clobber the
+        # first id before it's consumed, misattributing dispatch 2's id
+        # onto dispatch 1's (possibly partial-text) aborted turn and losing
+        # dispatch 2's own id entirely (Important review finding).
+        self._active_dispatch_id: dict[str, "deque[str]"] = {}
 
     @staticmethod
     def _key(project_id: str, session_id: "str | None", handle: str) -> str:
@@ -94,19 +106,62 @@ class ProcessManager:
     def set_active_dispatch(self, project_id: str, handle: str,
                             dispatch_id: "str | None",
                             *, session_id: "str | None" = None) -> None:
-        """Record the dispatch_id of the turn about to start on this handle.
+        """Enqueue the dispatch_id of the turn about to start on this handle.
 
         Called by ``SubAgentManager.send()`` right before it dispatches, so
         the boundary row this turn closes with can be stamped with the same
         id the message_routed marker carries in its ``_meta``
-        (TASK-dispatch-id-pairing). A falsy ``dispatch_id`` clears any
-        stale slot instead of stamping one.
+        (TASK-dispatch-id-pairing). APPENDS to a per-key FIFO rather than
+        overwriting a single slot — see the ``_active_dispatch_id`` field
+        comment for why a single slot is unsafe under rapid re-dispatch. A
+        falsy ``dispatch_id`` is a no-op (nothing to enqueue); use
+        ``clear_dispatch`` to remove a specific id that was enqueued but
+        will never be consumed.
+        """
+        if not dispatch_id:
+            return
+        key = self._key(project_id, session_id, handle)
+        self._active_dispatch_id.setdefault(key, deque()).append(dispatch_id)
+
+    def clear_dispatch(self, project_id: str, handle: str, dispatch_id: str,
+                       *, session_id: "str | None" = None) -> None:
+        """Remove ONE specific, not-yet-consumed dispatch_id from this
+        handle's queue.
+
+        Guard against FIFO desync (Important review finding): if a dispatch
+        fails after ``set_active_dispatch`` enqueued its id but BEFORE the
+        transport ever owned the turn (``transport.dispatch()`` raised, or
+        the blocking-send background task failed before producing a
+        response), no boundary will EVER pop that id — left in the queue it
+        would be handed to the NEXT dispatch's boundary instead of its own,
+        permanently misaligning every later pairing on this handle. Removes
+        by VALUE (not position), so an older still-pending id ahead of it
+        in the queue is untouched. A no-op if the id isn't present (already
+        consumed, or never enqueued).
         """
         key = self._key(project_id, session_id, handle)
-        if dispatch_id:
-            self._active_dispatch_id[key] = dispatch_id
-        else:
+        dq = self._active_dispatch_id.get(key)
+        if dq is None:
+            return
+        try:
+            dq.remove(dispatch_id)
+        except ValueError:
+            return
+        if not dq:
             self._active_dispatch_id.pop(key, None)
+
+    def _pop_active_dispatch(self, key: str) -> "str | None":
+        """Pop and return the OLDEST enqueued dispatch_id for ``key``, or
+        ``None`` if none is pending. Called at every boundary write so each
+        closing turn consumes exactly the id that was enqueued for it, in
+        FIFO order (TASK-dispatch-id-pairing)."""
+        dq = self._active_dispatch_id.get(key)
+        if not dq:
+            return None
+        dispatch_id = dq.popleft()
+        if not dq:
+            self._active_dispatch_id.pop(key, None)
+        return dispatch_id
 
     def _matching_keys(self, project_id: str, handle: str) -> list[str]:
         """All consumer keys for (project, handle) across sessions — used by
@@ -143,6 +198,12 @@ class ProcessManager:
                 await prior
             except (asyncio.CancelledError, Exception):
                 pass
+            # TASK-dispatch-id-pairing, guard (b): a respawn discards the OLD
+            # transport/adapter entirely — any dispatch_id(s) still queued
+            # for it will never be popped by a real boundary (that turn's
+            # consumer is gone). Fail closed: clear them here rather than
+            # risk a stale id leaking into the NEW incarnation's pairing.
+            self._active_dispatch_id.pop(key, None)
 
         async def consume():
             last_response_text = ""
@@ -228,13 +289,13 @@ class ProcessManager:
                         # boundary would drift the i-th marker ↔ i-th slice
                         # pairing and alias the next turn's text into this
                         # dispatch's bubble (TASK-subagent-last-message-display).
-                        # Consume (pop) the active dispatch_id so it stamps
-                        # ONLY this boundary — a later turn with no fresh
-                        # send() call must never inherit a stale id
-                        # (TASK-dispatch-id-pairing).
+                        # Consume (pop) the OLDEST queued dispatch_id so it
+                        # stamps ONLY this boundary, in FIFO order — a later
+                        # turn with no fresh send() call must never inherit
+                        # a stale id (TASK-dispatch-id-pairing).
                         self._append_turn_boundary(
                             transcript, handle,
-                            self._active_dispatch_id.pop(key, None))
+                            self._pop_active_dispatch(key))
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
                         self._turn_open[key] = False
@@ -348,6 +409,13 @@ class ProcessManager:
                 # emit NOTHING. The old unconditional on_completed here is
                 # what stamped "completed" on killed sub-agents.
                 if self._turn_open.get(key):
+                    # FIFO desync guard, closure requested after re-review
+                    # (TASK-dispatch-id-pairing): no turn_complete was ever
+                    # emitted for this turn, so no boundary will EVER pop
+                    # its queued id. Discard it (no boundary row is written
+                    # here either, unchanged) — left queued it would leak
+                    # into whatever dispatch runs next on this key.
+                    self._pop_active_dispatch(key)
                     if self._lifecycle and transcript is not None:
                         await self._lifecycle.on_error(
                             project_id, handle,
@@ -359,6 +427,10 @@ class ProcessManager:
             except asyncio.CancelledError:
                 pass
             except Exception as e:
+                # Same FIFO guard: an unexpected exception inside the
+                # consumer loop itself means this turn's boundary will
+                # never be written either — discard its queued id.
+                self._pop_active_dispatch(key)
                 if self._lifecycle and transcript is not None:
                     await self._lifecycle.on_error(
                         project_id, handle, str(e), transcript.filepath,
@@ -376,25 +448,34 @@ class ProcessManager:
         Called by the blocking-send path (Pipe/ACP — transports that never
         emit ``turn_complete``) after it fires on_completed/on_error itself,
         so a later clean teardown's stream-end is not misread as an abnormal
-        mid-turn death. ``session_id=None`` closes the turn flag in every
-        session-scoped slot for (project, handle) — legacy back-compat.
+        mid-turn death.
 
         This is the blocking-transport analog of the consume() turn_complete
-        branch, so it also appends the per-turn boundary (when the caller names
-        a session): without it a blocking transcript has ZERO boundaries and the
-        multi-turn split collapses to one slice, aliasing the last turn's text
-        onto the first dispatch.
+        branch, so it also appends the per-turn boundary, popping the OLDEST
+        queued dispatch_id (TASK-dispatch-id-pairing, FIFO): without a
+        boundary a blocking transcript has ZERO of them and the multi-turn
+        split collapses to one slice, aliasing the last turn's text onto the
+        first dispatch.
+
+        (Minor review finding, resolved: this used to special-case
+        ``session_id=None`` as "clear the turn_open flag in every matching
+        (project, handle) slot, no boundary" — a legacy fallback from before
+        per-session keying (Piece 3 Part E). Confirmed dead: every real
+        caller (``SubAgentManager._dispatch_async``'s blocking-send path)
+        always passes a concrete ``session_id``, and the fallback's
+        "clear every session's flag but write no boundary, pop no id"
+        behavior doesn't even have a well-defined dispatch_id/transcript to
+        act on when scanning multiple sessions at once. Removed rather than
+        patched to "honor the invariant": ``session_id`` (including a bare
+        ``None``) now always resolves to its own single key via ``_key()``,
+        the same as every other call — one code path, no silent partial
+        cleanup.)
         """
-        if session_id is not None:
-            key = self._key(project_id, session_id, handle)
-            self._turn_open[key] = False
-            self._append_turn_boundary(
-                self._transcripts.get(key), handle,
-                self._active_dispatch_id.pop(key, None))
-            return
-        for k in list(self._turn_open):
-            if k.startswith(f"{project_id}:") and k.endswith(f":{handle}"):
-                self._turn_open[k] = False
+        key = self._key(project_id, session_id, handle)
+        self._turn_open[key] = False
+        self._append_turn_boundary(
+            self._transcripts.get(key), handle,
+            self._pop_active_dispatch(key))
 
     async def stop(self, project_id: str, handle: str, *,
                    session_id: "str | None" = None) -> None:
