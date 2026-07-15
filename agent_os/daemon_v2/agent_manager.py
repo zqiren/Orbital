@@ -1108,6 +1108,22 @@ class AgentManager:
         except ImportError:
             pass
         try:
+            from agent_os.agent.tools.sessions_tool import (
+                ListSessionsTool,
+                ReadSessionTool,
+            )
+            sessions_cb = lambda: self.list_sessions(project_id)
+            registry.register(ListSessionsTool(
+                list_sessions=sessions_cb,
+                current_session_id=session_id,
+            ))
+            registry.register(ReadSessionTool(
+                workspace=config.workspace,
+                list_sessions=sessions_cb,
+            ))
+        except ImportError:
+            pass
+        try:
             from agent_os.agent.tools.shell import ShellTool
             registry.register(ShellTool(
                 workspace=config.workspace,
@@ -3289,7 +3305,28 @@ class AgentManager:
         workspace = (project or {}).get("workspace", "") if project else ""
         if not workspace:
             return []
-        sessions_dir = ProjectPaths(workspace).sessions_dir
+        paths = ProjectPaths(workspace)
+        workspace_root = os.path.realpath(workspace)
+        orbital_root = os.path.realpath(paths.orbital_dir)
+        sessions_dir = os.path.realpath(paths.sessions_dir)
+        try:
+            orbital_is_trusted = (
+                orbital_root != workspace_root
+                and os.path.commonpath((workspace_root, orbital_root)) == workspace_root
+            )
+            sessions_are_trusted = (
+                sessions_dir != orbital_root
+                and os.path.commonpath((orbital_root, sessions_dir)) == orbital_root
+            )
+        except ValueError:
+            orbital_is_trusted = False
+            sessions_are_trusted = False
+        if not orbital_is_trusted or not sessions_are_trusted:
+            logger.warning(
+                "Ignoring session directory outside workspace boundary for project %s",
+                project_id,
+            )
+            return []
         from agent_os.daemon_v2.native_worker import is_worker_session_stem
         try:
             fnames = os.listdir(sessions_dir)
@@ -3306,13 +3343,30 @@ class AgentManager:
                 continue
             if uuid in seen_uuids:
                 continue  # already represented by a live in-memory handle
+            candidate = os.path.realpath(os.path.join(sessions_dir, fname))
+            try:
+                candidate_is_trusted = (
+                    candidate != sessions_dir
+                    and os.path.commonpath((sessions_dir, candidate)) == sessions_dir
+                )
+            except ValueError:
+                candidate_is_trusted = False
+            if not candidate_is_trusted:
+                continue
+            resolved_fname = os.path.basename(candidate)
+            if not resolved_fname.endswith(".jsonl"):
+                continue
+            if is_worker_session_stem(resolved_fname[:-6]):
+                # A friendly-looking symlink must not hide a legacy worker
+                # filename that predates durable session_kind metadata.
+                continue
             last_activity_at = None
             stored_name = None  # name on the session_start meta, if present
             origin = "chat"  # session_start meta origin; legacy logs → chat
             first_user_content = None  # for name backfill
             is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
             try:
-                with open(os.path.join(sessions_dir, fname), "r", encoding="utf-8") as fh:
+                with open(candidate, "r", encoding="utf-8") as fh:
                     first_real = None  # first non-meta (conversation) record
                     last_real = None
                     for raw in fh:

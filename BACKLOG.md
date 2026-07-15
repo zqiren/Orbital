@@ -18,10 +18,9 @@
 
 | # | Feature | Notes |
 |---|---------|-------|
-| 8 | **Language toggle during onboarding** | 2026-07-13 · decisions resolved (all defaults): A2 header widget + B1 `navigator.language` fallback, no daemon persistence. XS ~½ day, frontend-only. **Hard prerequisite for 17.** See Spec 8. |
-| 17 | **First-launch onboarding guide — Tier 1** | 2026-07-13 · decisions resolved (3rd pass): upgraded single provider screen — fixed preset order for everyone (no locale logic), **default = DeepSeek, never Custom**, **region toggle defaults to China** (CN-first launch audience); per-provider "Get your API key" console links; static "no CN endpoint" captions replace the locale-triggered hint band; official CN endpoints only. S ~2-3 days, frontend + `providers.json`. Depends on Spec 8. See Spec 17. |
-| 15 | **`AGENTS.md` at workspace root** | 2026-07-13 · decisions resolved (all defaults + content pivot): **memory-system manual for external agents** — positioning / when-to-read / when-to-update per memory file. Full read/write on all memory files (agents are collaborators, not hostile — user 2026-07-13); hands off only machine-managed runtime dirs (sessions/ledger/tool-results/transcripts). XS ~½ day, docs-only. See Spec 15. |
-| 7 | **Document generation — Tier A** | 2026-07-13 · decisions resolved: Tier A skill-only — bundle python-docx/openpyxl/python-pptx (~5 MB `[office]` extra) + doc-gen skill + prompt hint; no new tools, no UI, no pandoc/LibreOffice. XS ~½ day. Tier B only on evidence. See Spec 7. |
+| 18 | **File tree scrollbar on parent click** | 2026-07-14 · implementation complete on `codex/backlog-18-19`; regression, desktop overflow, and mobile panel-swap smoke passed. Awaiting human diff review/merge. XS. See Spec 18. |
+| 19 | **Sibling-session list/read tools for the management agent** | 2026-07-14 · implementation complete on `codex/backlog-18-19`; current-project read-only tools, project-boundary symlink hardening, full tests, and live MiniMax smoke passed. Awaiting human diff review/merge. S. See Spec 19. |
+| 20 | **BUG FIX: sub-agent bubbles paired to wrong transcript turn (stale spec-005 ghost)** | 2026-07-15 · implementation complete on `fix/subagent-turn-pairing` (off `codex/backlog-18-19`, 4 commits + docs). Root cause: renderer paired i-th dispatch-in-session with i-th turn-in-file; persistent per-handle transcripts broke the invariant — every later session rendered turn 0 (Jun-29 spec-005 run). Fix: explicit per-dispatch `dispatch_id` stamped on session marker `_meta` + transcript `turn_complete` boundary; renderer = pure identity join (no positional/timestamp fallback), idempotent per (transcript,id); per-key FIFO with guaranteed consume-or-clear on every turn path. One-shot migration (`scripts/migrate_dispatch_ids.py`, fail-closed logical-dispatch grouping) ALREADY RUN on all real workspaces (69 pairs; idempotent re-run clean); e2e-verified on the two affected sessions. All commits per-task reviewed + adversarially re-reviewed; whole-branch verdict ready-to-merge; suite 2606 passed. **Follow-ups logged:** (a) @mention path double-writes markers — thread `initiator` through `send()` so the route call supersedes; (b) migration's flat 5s grouping window fail-closes genuine rapid same-handle re-mentions (completeness, not corruption); (c) one codex transcript (4 markers/3 turns) left unmigrated by design; (d) minor test debt: no end-to-end test through the real deferred-message persistence seam. Awaiting human diff review/merge. |
 
 ## Next (queued)
 
@@ -47,6 +46,10 @@
 | 5 | **Sub-agent session context continuity across dispatch paths** | 2026-07-01 · shipped in claude-code session. |
 | 9 | **Sub-agent fanout: parallel native worker sessions** | shipped — confirmed by user 2026-07-13. |
 | 12 | **Cross-project scope for Quick Tasks (the global lens)** | shipped — confirmed by user 2026-07-13. |
+| 7 | **Document generation — Tier A** | shipped in v0.7.3 — verified on `main` 2026-07-14. |
+| 8 | **Language toggle during onboarding** | shipped in v0.7.3 — verified on `main` 2026-07-14. |
+| 15 | **`AGENTS.md` at workspace root** | shipped in v0.7.3 — verified on `main` 2026-07-14. |
+| 17 | **First-launch onboarding guide — Tier 1** | shipped in v0.7.3 — verified on `main` 2026-07-14. |
 
 ## Specs
 
@@ -250,3 +253,40 @@ User said: *"another idea. i think we need an onboarding guide when first launch
 [Spec at `BACKLOG/specs/017-onboarding-guide-first-launch.md`](BACKLOG/specs/017-onboarding-guide-first-launch.md) covers: current-state citations, the three tiers with file:line diff plans and effort estimates, a provider-preset table (who offers a CN endpoint, who doesn't), the Spec 8 dependency wiring, a Tier-vs-resolves-confusion matrix, and **10 open questions** (which tier, regional preset list, official-CN-endpoint knowledge responsibility, language-toggle placement, force-once vs resumable, IA — modal vs dedicated route vs sidebar, skip-tour button + re-trigger mechanism, integration with [Spec 11](BACKLOG/specs/011-proactive-connectors-onboarding.md)'s `connect accounts` step, post-onboarding `?help` in-app guide, telemetry for where users actually get stuck).
 
 → Decisions resolved 2026-07-13 (3rd pass): **Tier 1 minimal** — upgraded single provider screen (Tier 2 tour deferred). Q8 promoted into scope — per-provider `console_url` + "Get your API key →" link with one-line how-to (the user's reframed priority). **Fixed preset order for everyone** (CN-friendly first; no locale logic), **default = DeepSeek, never Custom**, **region toggle defaults to China** (CN-first launch audience; region-locked keys mean the default decides who sees a first-try 401). Static "no mainland-China endpoint" captions on OpenAI/Anthropic/Google replace the locale-triggered hint band. Official CN endpoints only; Test Connection prominent but not gating; Spec 8 (A2 widget) is a hard prerequisite. See spec §9.
+
+### Spec 18 — File tree: scroll bar doesn't appear when clicking a parent node
+**Status:** ready · **Added:** 2026-07-14 · **Decisions resolved:** 2026-07-14
+
+User said: *"one bug here. in file tab, if you click on the parent node, the scroll bar wont occur - you have to click on the child node. this is unacceptable. please investigate into it and propose a task spec"*
+
+**Sub-agent diagnosis:** `web/src/components/FileExplorer.tsx:247` stacks `md:block` (static) and `flex` (from the `mobileShowPreview ? 'hidden md:flex' : 'flex'` ternary) on the same tree-pane element. When `mobileShowPreview=false` — the initial state, and the state after any **parent/folder** click, since only file clicks set it to true — Tailwind's stylesheet ordering makes `md:block` win at ≥768px, breaking the flex-col chain and rendering the `flex-1 overflow-y-auto` scroll container as unbounded auto-height (no scrollbar). Clicking a **child file** flips `mobileShowPreview=true`, which adds `md:flex` to the class string and restores the flex layout (scrollbar returns). The fix is a one-line className cleanup.
+
+The detailed spec (root-cause evidence with quoted className strings, exact `FileExplorer.tsx` line citations, ruled-out hypotheses — `react-arborist` ResizeObserver, focus/scroll-into-view, mobile-only, `transition-all duration-150` — `ChatTab.tsx` / `QueueTab.tsx` comparison confirming the bug is FileExplorer-local, two candidate fixes A/B, effort = **XS ~1 hr**, and 5 open questions for the user) lives at:
+- **[`BACKLOG/specs/018-file-tree-scroll-on-parent-click.md`](BACKLOG/specs/018-file-tree-scroll-on-parent-click.md)**
+
+→ Ready. Chosen fix: drop the static `md:block`; keep the existing responsive state branches. Regression, desktop overflow, and mobile panel-swap smoke gates are recorded in the spec.
+
+### Spec 19 — Sibling-session listing + read tool for the management agent
+**Status:** ready · **Added:** 2026-07-14 · **Decisions resolved/rebased:** 2026-07-14
+
+User said: *"we need to allow management agent to list other session-log in the same project. potentially for search or to grep something."*
+
+**Resolved direction (from discussion, before spec):** **two new tools, not grep.** Grep can reach `orbital/sessions/*.jsonl` (it lives inside the workspace), but it's the wrong primitive — it's a content matcher, not a session browser:
+
+- **Hard caps bite.** `grep_tool.py` enforces `_MAX_MATCHES=100`, `_MAX_COUNT_PER_FILE=50`, `_MAX_COLUMNS=500`, `_TIMEOUT_SECONDS=10`, and hitting any of them returns a synthetic error message — not partial results. This project alone has **23 sibling JSONLs**; one assistant-message line can be 5–10 KB, so the 500-char column cap silently truncates multi-tool-call turns.
+- **No metadata access.** Sessions write `session_start` / `session_end` meta blocks (provider, model, sdk, origin, display name, timestamps, turn count, token totals). Grep sees text — "show me all sessions that used `claude-opus-4-20250514`" requires parsing JSONL inline.
+- **No F1/F2 identity.** Format-1 `session_id` (user-facing chat id, persists across cold resumes) vs Format-2 `session_uuid` (filename stem — `{sanitized_project}_{uuid4().hex[:8]}`, per `session.py:167` and `project_paths.py:126-137`). Grep would have you grepping one and finding the other.
+- **No ordering / pagination / filtering.** Sort by recency, top-N longest, "since yesterday" — none expressible in grep.
+
+**Proposed:** two new tools,
+
+1. `list_sessions(project=None, since=None, limit=20, sort="last_activity")` → metadata-only rows `{session_uuid, session_id (F1), name, origin, provider, model, started_at, last_activity_at, message_count, file_size}`. **Excludes the calling session** by default.
+2. `read_session(session_uuid, from_line=None, max_lines=200, grep=None)` → streams messages from one chosen session, optionally substring-filtered. Composes with the existing `grep` for arbitrary content search inside a chosen session.
+
+Two-tier design — listing is metadata-only (cheap, fast), reading is content (heavier, opt-in). Mirrors the existing two-step pattern in `_inject_recovery_context` (`context.py:94-186`: glób dir → sort by mtime → load last 20 messages), which is the closest prior art but is private, automatic, and reads only the single most recent session for cold resume.
+
+The detailed spec (full code-path citations — `project_paths.py:126-137` (session file layout), `session.py:112-134` (F1/F2 docstring), `session.py:25-27` (ISO-8601 timestamps), `session.py:354-366` (regular message row format), `session.py:398-418` (first `_write_line` flush), `session.py:487-488` (model-swap comment), `session.py:508-548` (`sub_agent_thread`), `session.py:558-567` (`set_name` pattern), `session.py:581-611` (`session_start` meta rewrite), `session.py:33-55` (`_derive_name`), `context.py:78,96` (`_recovery_injected`), `context.py:108-109` (Layer-1 missing check), `context.py:116-117` (F2 comment), `context.py:128,133-135` (mtime sort), `context.py:137-147` (read-every-line), `context.py:153` (last 20 messages), `context.py:172` (tool/system role skip), `agent_manager.py:721` (tool_names → prompt), `agent_manager.py:1057-1197` (`_register_tools`), `agent_manager.py:1084-1108` (tool registration shape), `agent_manager.py:664-667` (F1 session_id threading), `grep_tool.py:36-39,120,222,228,232-234,288-289,300` (constants and output shape), `project_paths.py:143-160` (`sub_agents_dir` — separate, must NOT be listed), on-the-fly JSONL parse of `session_start`/`session_end` blocks (no sidecar index needed; 24 files is sub-ms), pagination/cap design mirroring grep's, sub-agent exclusion (sub-agents have their own session_uuid; including them would let mgmt agent read another agent's transcript — confirm intended vs unintended), **and 7+ open questions** for the user: archived/compressed sessions (if any), raw JSONL lines vs parsed message objects, scope — management-only or also sub-agents, cross-project isolation (`project=None` default = current project; what is "current project" for the mgmt agent?), read-only vs write-into (user's stated need is list/search/grep → read-only sufficient; write is a heavier story), PII redaction (sibling sessions can contain pasted API keys / personal data — does the existing PII handling in `agent_os/agent/` cover this?), and recovery-injection unification (now mgmt has two paths to a prior session — auto-injection + the new tool; refactor the auto path to call the new tool, or keep duplicated)) lives at:
+
+- **[`BACKLOG/specs/019-list-sibling-sessions-tool.md`](BACKLOG/specs/019-list-sibling-sessions-tool.md)**
+
+→ Ready after rebasing onto the current canonical-session implementation. Reuse the daemon's existing disk-backed session listing; current-project, management-only, read-only, parsed messages, self excluded by default, workers/sub-agents excluded, same-workspace trust, and no cold-resume refactor. Effort = **S** (~½–1 day).

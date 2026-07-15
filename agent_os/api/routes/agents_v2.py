@@ -1120,11 +1120,23 @@ async def inject_message(project_id: str, req: InjectRequest):
             project_id, req.session_id, user_msg,
         )
 
+        # dispatch_id (TASK-dispatch-id-pairing): minted HERE, up front,
+        # because this route fires its OWN "user_mention"-flavored marker
+        # below IN ADDITION to the "management_agent"-flavored one send()
+        # stamps internally — both describe the same physical dispatch, so
+        # both must carry the identical id or they'd join to different (or
+        # no) transcript turns.
+        from uuid import uuid4
+        dispatch_id = f"{mention_session_id}:{uuid4().hex[:8]}"
+
         # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
         # manual try-send -> on-error-start -> re-send dance that used to
         # live here is now the manager's single built-in implementation.
         try:
-            result = await _sub_agent_manager.send(project_id, req.target, effective_content, session_id=mention_session_id)
+            result = await _sub_agent_manager.send(
+                project_id, req.target, effective_content,
+                session_id=mention_session_id, dispatch_id=dispatch_id,
+            )
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
         if result.startswith("Error"):
@@ -1151,6 +1163,7 @@ async def inject_message(project_id: str, req: InjectRequest):
                 message_preview=effective_content[:100],
                 transcript_path=transcript_path,
                 session_id=mention_session_id,
+                dispatch_id=dispatch_id,
             )
 
         return {"status": result}
@@ -2061,15 +2074,20 @@ def _read_chat_messages_single(jsonl_path: str, limit: int, offset: int) -> tupl
     return result, total
 
 
-# Matches the per-dispatch "message_routed" marker the lifecycle observer writes
-# into the management session JSONL — either
+# Matches the per-dispatch "message_routed" marker's PROSE — either
 #   [Sub-agent] Message sent to {handle}: "{preview}". Transcript: {path}
 # or the user-@mention variant
 #   [Sub-agent] User sent @{handle}: "{preview}". Transcript: {path}
 # Group 1 = handle, group 2 = transcript path. DOTALL + tail-anchored on the
-# final "Transcript:" because the message preview may contain newlines. The
-# `started` marker is deliberately NOT matched: it is suppressed on the real
-# dispatch path (announce=False), so anchoring on it never fired in production.
+# final "Transcript:" because the message preview may contain newlines.
+#
+# NOT used by _interleave_sub_agent_summaries below (TASK-dispatch-id-pairing
+# replaced the positional-count pairing this regex used to drive with an
+# explicit ``_meta.dispatch_id`` identity join — see that function). Kept
+# here only because the one-shot legacy-data migration script imports this
+# constant to backfill dispatch_ids into transcripts written before this
+# task shipped, by recovering (handle, transcript_path) from old markers
+# that have no ``_meta`` at all.
 _SUB_AGENT_DISPATCH_RE = re.compile(
     r'^\[Sub-agent\]\s+(?:Message sent to |User sent @)([\w.-]+):'
     r'.*\bTranscript:\s*(.+?)\s*$',
@@ -2080,21 +2098,46 @@ _SUB_AGENT_DISPATCH_RE = re.compile(
 def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
     """Inline each sub-agent dispatch's per-turn final message as a display bubble.
 
-    Anchored on the per-dispatch ``message_routed`` marker (the line that fires
-    once per dispatch on the real routing path and carries the transcript path).
-    For the i-th dispatch to a given transcript, read the i-th per-turn slice
-    from ``read_sub_agent_summary``; when that slice carries a final response,
-    insert a synthetic ``source="sub_agent"`` message right after the marker.
-    The frontend renders it as an agent header + tool capsule + response bubble,
-    so the management chat carries the durable per-turn record of the
-    sub-agent's work — not just the one-line completion marker.
+    Identity join (TASK-dispatch-id-pairing): a dispatch marker (the
+    ``message_routed`` system message) carries ``_meta.dispatch_id`` +
+    ``_meta.transcript_path``, stamped at dispatch time by
+    ``LifecycleObserver.on_message_routed`` / ``SubAgentManager.send()``.
+    Each transcript turn (``read_sub_agent_summary``) carries the
+    ``dispatch_id`` of the boundary row that closed it. This function looks
+    up the turn whose id matches the marker's and, when that turn carries a
+    final response, inserts a synthetic ``source="sub_agent"`` message right
+    after the marker. The frontend renders it as an agent header + tool
+    capsule + response bubble, so the management chat carries the durable
+    per-turn record of the sub-agent's work — not just the one-line
+    completion marker.
 
-    Honest degradation (never alias another turn's text into the wrong slot):
-    - A slice with NO response (errored / interrupted / tool-only) → no bubble;
-      the existing one-line terminal marker stands.
-    - More dispatches than completed slices (last dispatch still in flight) →
-      bubbles for the completed slices only; the trailing one appears on a later
-      reload once it completes.
+    This replaces the old positional pairing ("the i-th dispatch in the
+    CURRENT session's messages pairs with the i-th turn-slice in the WHOLE
+    transcript file"), which was only correct for a transcript's very FIRST
+    chat session — a sub-agent transcript is a persistent per-(workspace,
+    handle) file that outlives any one session, so every later session's
+    markers paired against stale early turns.
+
+    Honest degradation (never alias another turn's text into the wrong slot,
+    and never fall back to position or timestamp):
+    - No ``_meta`` at all (a legacy marker written before this task shipped,
+      or a non-dispatch system message) → no bubble; the marker line stands
+      untouched. A separate migration script backfills ids into old data.
+    - The id isn't found in the transcript's turns (still in flight — no
+      closing boundary yet, or the id is simply unknown) → no bubble.
+    - A matched turn with NO response (errored / interrupted / tool-only) →
+      no bubble; the existing one-line terminal marker stands.
+    - Idempotent join: once a (transcript_path, dispatch_id) pair has
+      rendered a bubble, a LATER marker carrying the SAME pair renders no
+      bubble of its own (first marker wins). Scoped by transcript_path too
+      — dispatch_ids are minted globally-unique in practice, but the join
+      key stays scoped the same way the lookup itself is, so a
+      synthetically-colliding id on a DIFFERENT transcript is unaffected.
+      This is join hygiene, not a second render path — it guards against a
+      known pre-existing root cause (the @mention route fires a second
+      marker for the same physical dispatch that send() already marked
+      internally) turning one turn into two bubbles; it does not fix that
+      root cause.
 
     Read-only and best-effort: a missing/unreadable transcript is a no-op.
     Operates on the already-paginated page, so it never changes the total-count
@@ -2104,39 +2147,47 @@ def _interleave_sub_agent_summaries(messages: list[dict]) -> list[dict]:
     """
     out: list[dict] = []
     slices_by_path: dict[str, "list | None"] = {}
-    dispatch_idx: dict[str, int] = {}
+    seen_dispatch_keys: set[tuple[str, str]] = set()
     for msg in messages:
         out.append(msg)
         if msg.get("role") != "system":
             continue
-        content = msg.get("content") or ""
-        m = _SUB_AGENT_DISPATCH_RE.match(content)
-        if not m:
+        meta = msg.get("_meta") or {}
+        dispatch_id = meta.get("dispatch_id")
+        transcript_path = meta.get("transcript_path")
+        if not dispatch_id or not transcript_path:
+            # No structured id — legacy marker (pre-migration) or a
+            # non-dispatch system message. Honest degradation: no bubble.
             continue
-        handle, transcript_path = m.group(1), m.group(2)
-        # The i-th dispatch to THIS transcript pairs with its i-th completed
-        # turn-slice (markers and turns derive from the same ordered stream).
-        i = dispatch_idx.get(transcript_path, 0)
-        dispatch_idx[transcript_path] = i + 1
+        dispatch_key = (transcript_path, dispatch_id)
+        if dispatch_key in seen_dispatch_keys:
+            # Same (path, id) already rendered a bubble at an earlier marker
+            # (e.g. the @mention double-marker) — never render the same turn
+            # twice. The later marker's own one-liner stands untouched.
+            continue
         if transcript_path not in slices_by_path:
             try:
                 slices_by_path[transcript_path] = read_sub_agent_summary(transcript_path)
             except Exception:
                 slices_by_path[transcript_path] = None
         slices = slices_by_path[transcript_path]
-        if not slices or i >= len(slices):
-            # No transcript, or this dispatch is still in flight (no slice yet).
+        if not slices:
+            # No transcript on disk (missing/unreadable).
             continue
-        turn = slices[i]
+        turn = next((t for t in slices if t.get("dispatch_id") == dispatch_id), None)
+        if turn is None:
+            # Still in flight (no closing boundary yet) or an unknown id.
+            continue
         if not (turn.get("response") or "").strip():
             # Errored / interrupted / tool-only turn: let the existing terminal
             # marker one-liner speak. Never alias a neighboring turn's text.
             continue
+        seen_dispatch_keys.add(dispatch_key)
         out.append({
             "role": "assistant",
             "content": turn.get("response") or "",
             "source": "sub_agent",
-            "sub_agent_handle": handle,
+            "sub_agent_handle": meta.get("handle", ""),
             "sub_agent_tool_rows": turn.get("tool_rows", []),
             "sub_agent_duration": turn.get("total_duration_seconds", 0.0),
             "timestamp": msg.get("timestamp", ""),

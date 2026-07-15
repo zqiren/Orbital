@@ -244,7 +244,7 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
       {/* File Tree - left panel on desktop, full screen on mobile when no preview */}
       <div
         className={`
-          w-full md:w-[260px] md:min-w-[260px] md:block
+          w-full md:w-[260px] md:min-w-[260px]
           border-r border-border flex flex-col min-h-0
           ${mobileShowPreview ? 'hidden md:flex' : 'flex'}
         `}

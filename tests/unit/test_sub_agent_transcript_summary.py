@@ -234,3 +234,55 @@ def test_trailing_inflight_turn_after_last_boundary_is_dropped(tmp_path):
     summary = read_sub_agent_summary(str(p))
     assert len(summary) == 1                       # in-flight 2nd turn not yet a slice
     assert summary[0]["response"] == "DONE-1"
+
+
+# ---------------------------------------------------------------------------
+# dispatch_id (TASK-dispatch-id-pairing): each turn carries the id of the
+# boundary row that closed it, so the chat renderer can identity-join a
+# marker to ITS OWN turn instead of pairing by position.
+# ---------------------------------------------------------------------------
+
+def _boundary_with_id(ts, dispatch_id):
+    row = _boundary(ts)
+    row["dispatch_id"] = dispatch_id
+    return row
+
+
+def test_turn_carries_dispatch_id_from_its_closing_boundary(tmp_path):
+    p = tmp_path / "ids.jsonl"
+    _write_transcript(p, [
+        {"content": "TURN-1", "chunk_type": "response", "timestamp": "2026-06-13T10:00:01+00:00"},
+        _boundary_with_id("2026-06-13T10:00:02+00:00", "sessA:aaaa1111"),
+        {"content": "TURN-2", "chunk_type": "response", "timestamp": "2026-06-13T10:01:01+00:00"},
+        _boundary_with_id("2026-06-13T10:01:02+00:00", "sessB:bbbb2222"),
+    ])
+    summary = read_sub_agent_summary(str(p))
+    assert len(summary) == 2
+    assert summary[0]["dispatch_id"] == "sessA:aaaa1111"
+    assert summary[1]["dispatch_id"] == "sessB:bbbb2222"
+    assert summary[0]["response"] == "TURN-1"
+    assert summary[1]["response"] == "TURN-2"
+
+
+def test_legacy_boundary_without_dispatch_id_yields_none(tmp_path):
+    """Pre-migration data: boundary rows exist but carry no dispatch_id yet."""
+    p = tmp_path / "legacy_boundary.jsonl"
+    _write_transcript(p, [
+        {"content": "OLD TURN", "chunk_type": "response", "timestamp": "2026-06-13T10:00:01+00:00"},
+        _boundary("2026-06-13T10:00:02+00:00"),  # no dispatch_id key at all
+    ])
+    summary = read_sub_agent_summary(str(p))
+    assert len(summary) == 1
+    assert summary[0]["dispatch_id"] is None
+
+
+def test_flat_legacy_transcript_zero_boundaries_has_none_dispatch_id(tmp_path):
+    """A pre-boundary flat transcript (no turn_complete rows at all) has no
+    boundary to source an id from — dispatch_id is None."""
+    p = tmp_path / "flat.jsonl"
+    _write_transcript(p, [
+        {"content": "legacy answer", "chunk_type": "response", "timestamp": "2026-06-13T10:00:00+00:00"},
+    ])
+    summary = read_sub_agent_summary(str(p))
+    assert len(summary) == 1
+    assert summary[0]["dispatch_id"] is None

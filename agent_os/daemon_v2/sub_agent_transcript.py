@@ -113,6 +113,15 @@ def read_sub_agent_summary(transcript_path: str) -> "list | None":
     completed turn is the run of chunks BEFORE a boundary; the boundary closes
     it. Returns one ``_summarize_turn`` dict per completed turn, in order.
 
+    Each turn dict also carries ``"dispatch_id"``: the id stamped on the
+    boundary row that closed it (TASK-dispatch-id-pairing), or ``None`` when
+    the boundary carries none (legacy data written before dispatch_ids
+    existed) or there is no boundary at all (flat legacy transcript). The
+    chat renderer (``_interleave_sub_agent_summaries``) joins a dispatch
+    marker to its turn by this id — NOT by position — since a transcript
+    spans many chat sessions and positional pairing only lines up for the
+    file's first session.
+
     Rules:
     - Trailing chunks AFTER the last boundary are an in-flight turn → NOT
       returned (they get a bubble on a later reload, once complete).
@@ -148,21 +157,32 @@ def read_sub_agent_summary(transcript_path: str) -> "list | None":
 
     # Split on turn_complete boundary rows. Each boundary closes the turn that
     # precedes it; trailing post-boundary chunks (in-flight) are dropped.
+    # ``boundary_ids`` tracks each closed turn's dispatch_id in lockstep with
+    # ``turns`` so it can be zipped back on below.
     turns: list = []
+    boundary_ids: list = []
     current: list = []
     boundary_seen = False
     for e in entries:
         if e.get("chunk_type") == "turn_complete":
             boundary_seen = True
             turns.append(current)
+            boundary_ids.append(e.get("dispatch_id"))
             current = []
         else:
             current.append(e)
     if not boundary_seen:
-        # Legacy flat transcript (no boundary) → the whole file is one turn.
+        # Legacy flat transcript (no boundary) → the whole file is one turn,
+        # with no boundary to source a dispatch_id from.
         turns = [current]
+        boundary_ids = [None]
 
-    return [_summarize_turn(t) for t in turns]
+    result = []
+    for turn_entries, dispatch_id in zip(turns, boundary_ids):
+        summary = _summarize_turn(turn_entries)
+        summary["dispatch_id"] = dispatch_id
+        result.append(summary)
+    return result
 
 
 class SubAgentTranscript:

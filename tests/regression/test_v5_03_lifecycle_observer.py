@@ -58,6 +58,52 @@ class TestLifecycleObserver:
         assert "Message sent to claude-code" in content
 
     @pytest.mark.asyncio
+    async def test_on_message_routed_stamps_meta_with_dispatch_id(self):
+        """TASK-dispatch-id-pairing: when a dispatch_id is given, it is
+        stamped onto the injected message's ``_meta`` alongside handle and
+        transcript_path — the join key the chat renderer uses instead of
+        positional pairing."""
+        am = MagicMock()
+        am.inject_system_message = AsyncMock(return_value="delivered")
+        ws = MagicMock()
+
+        observer = LifecycleObserver(am, ws)
+        await observer.on_message_routed(
+            "proj1", "claude-code", "management_agent",
+            "refactor auth", "/path/t.jsonl",
+            dispatch_id="sess_X:aaaa1111",
+        )
+
+        am.inject_system_message.assert_awaited_once()
+        kwargs = am.inject_system_message.await_args.kwargs
+        assert kwargs.get("meta") == {
+            "dispatch_id": "sess_X:aaaa1111",
+            "handle": "claude-code",
+            "transcript_path": "/path/t.jsonl",
+        }
+        # Human-readable prose is untouched — the migration script and old
+        # UIs still rely on its exact shape.
+        content = am.inject_system_message.call_args[0][1]
+        assert "Message sent to claude-code" in content
+
+    @pytest.mark.asyncio
+    async def test_on_message_routed_without_dispatch_id_omits_meta(self):
+        """Back-compat: a caller that doesn't pass dispatch_id gets the old
+        behavior — no ``meta`` kwarg at all (never a bare ``None`` id)."""
+        am = MagicMock()
+        am.inject_system_message = AsyncMock(return_value="delivered")
+        ws = MagicMock()
+
+        observer = LifecycleObserver(am, ws)
+        await observer.on_message_routed(
+            "proj1", "claude-code", "management_agent",
+            "refactor auth", "/path/t.jsonl",
+        )
+
+        kwargs = am.inject_system_message.await_args.kwargs
+        assert "meta" not in kwargs
+
+    @pytest.mark.asyncio
     async def test_on_error_injects_system_message(self):
         am = MagicMock()
         am.inject_system_message = AsyncMock(return_value="delivered")

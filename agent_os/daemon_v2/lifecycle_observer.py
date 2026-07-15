@@ -76,14 +76,31 @@ class LifecycleObserver:
 
     async def on_message_routed(self, project_id: str, handle: str, initiator: str,
                                 message_preview: str, transcript_path: str,
-                                *, session_id: str | None = None) -> None:
-        """A message was routed to a sub-agent."""
+                                *, session_id: str | None = None,
+                                dispatch_id: str | None = None) -> None:
+        """A message was routed to a sub-agent.
+
+        ``dispatch_id`` (TASK-dispatch-id-pairing), when given, is stamped
+        onto this marker's ``_meta`` alongside ``handle``/``transcript_path``
+        — the identity the chat renderer joins against the transcript's
+        matching ``turn_complete`` boundary row, instead of pairing markers
+        to turns by position (which drifted once a transcript outlived the
+        chat session that started it). The human-readable ``content`` prose
+        is unchanged either way — old UIs and the legacy-data migration
+        script both still rely on its exact shape. Omitted only by callers
+        that predate the id; such a marker renders no bubble on read (its
+        one-line text still shows).
+        """
         preview = message_preview[:100]
         if initiator == "user_mention":
             content = f'[Sub-agent] User sent @{handle}: "{preview}". Transcript: {transcript_path}'
         else:
             content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
-        await self._inject(project_id, content, session_id=session_id)
+        meta = None
+        if dispatch_id:
+            meta = {"dispatch_id": dispatch_id, "handle": handle,
+                    "transcript_path": transcript_path}
+        await self._inject(project_id, content, session_id=session_id, meta=meta)
 
     async def on_completed(self, project_id: str, handle: str, summary: str,
                            transcript_path: str,
@@ -295,19 +312,27 @@ class LifecycleObserver:
             )
 
     async def _inject(self, project_id: str, content: str,
-                      *, session_id: str | None = None) -> None:
+                      *, session_id: str | None = None,
+                      meta: dict | None = None) -> None:
         """Inject a system message into the management agent's session.
 
         ``session_id`` carries the management session that owns this sub-agent
         so the push lands under the correct SessionKey (the handle that ran
         the dispatch). Without it, inject_system_message defaults to the
         single-loop sentinel and can miss a non-default management session.
+
+        ``meta``, when given, is forwarded to ``inject_system_message`` as
+        structured ``_meta`` on the appended record (e.g. the dispatch_id
+        join key — TASK-dispatch-id-pairing). Omitted entirely (not passed
+        as an explicit ``None``) when absent, so callers with a narrower
+        ``inject_system_message`` signature are unaffected.
         """
         if self._agent_manager is None:
             return
         try:
-            await self._agent_manager.inject_system_message(
-                project_id, content, session_id=session_id,
-            )
+            kwargs = {"session_id": session_id}
+            if meta:
+                kwargs["meta"] = meta
+            await self._agent_manager.inject_system_message(project_id, content, **kwargs)
         except Exception as e:
             logger.warning("Failed to inject lifecycle message for %s: %s", project_id, e)
