@@ -64,7 +64,8 @@ def _manager_with_spawnable(handle="claude-code", start_result=None):
     mgr = SubAgentManager(process_manager=pm)
     adapter = _IdleAdapter()
 
-    async def _spawn(project_id, h, depth=0, *, session_id=None, announce=True):
+    async def _spawn(project_id, h, depth=0, *, session_id=None, announce=True,
+                     fresh=False):
         sk = make_session_key(project_id, mgr._resolve_session_id(session_id))
         mgr._adapters.setdefault(sk, {})[h] = adapter
         return start_result or f"Started Claude Code (fresh session — first spawn)"
@@ -134,6 +135,68 @@ class TestSendSpawnsOnDemand:
             len(mgr.start.await_args.args) >= 3
             and mgr.start.await_args.args[2] == 2
         )
+
+
+class TestDispatchIdMinting:
+    """TASK-dispatch-id-pairing: send() mints (or accepts) a dispatch_id
+    identifying the ONE turn it starts, tells the ProcessManager so the
+    closing transcript boundary can be stamped with it, and stamps the SAME
+    id onto the on_message_routed marker — the chat renderer joins the two
+    by this id instead of by position (the bug: position drifted across
+    chat sessions sharing one transcript file)."""
+
+    async def test_send_mints_dispatch_id_and_threads_to_process_manager_and_marker(self):
+        mgr, adapter = _manager_with_spawnable()
+        mgr._lifecycle_observer = MagicMock()
+        mgr._lifecycle_observer.on_message_routed = AsyncMock()
+
+        await mgr.send("proj_x", "claude-code", "do the task", session_id="sess_x")
+
+        mgr._process_manager.set_active_dispatch.assert_called_once()
+        call = mgr._process_manager.set_active_dispatch.call_args
+        assert call.args[0] == "proj_x"
+        assert call.args[1] == "claude-code"
+        minted_id = call.args[2]
+        assert minted_id, "a dispatch_id must be minted when none is supplied"
+        assert call.kwargs.get("session_id") == "sess_x"
+
+        mgr._lifecycle_observer.on_message_routed.assert_awaited_once()
+        routed_kwargs = mgr._lifecycle_observer.on_message_routed.await_args.kwargs
+        assert routed_kwargs.get("dispatch_id") == minted_id
+
+    async def test_send_uses_caller_supplied_dispatch_id_verbatim(self):
+        """The @mention API route mints an id up front (so it can stamp its
+        OWN separate marker for the same physical dispatch) and passes it
+        in — send() must use it as-is, not mint a second one."""
+        mgr, adapter = _manager_with_spawnable()
+        mgr._lifecycle_observer = MagicMock()
+        mgr._lifecycle_observer.on_message_routed = AsyncMock()
+
+        await mgr.send("proj_x", "claude-code", "go", session_id="sess_x",
+                       dispatch_id="sess_x:caller-supplied")
+
+        call = mgr._process_manager.set_active_dispatch.call_args
+        assert call.args[2] == "sess_x:caller-supplied"
+        routed_kwargs = mgr._lifecycle_observer.on_message_routed.await_args.kwargs
+        assert routed_kwargs.get("dispatch_id") == "sess_x:caller-supplied"
+
+    async def test_two_sends_to_same_handle_mint_distinct_ids(self):
+        """Two dispatches in one session to the same handle must not share
+        an id — each turn needs its own join key."""
+        mgr, adapter = _manager_with_spawnable()
+        mgr._lifecycle_observer = MagicMock()
+        mgr._lifecycle_observer.on_message_routed = AsyncMock()
+
+        await mgr.send("proj_x", "claude-code", "first", session_id="sess_x")
+        await mgr.send("proj_x", "claude-code", "second", session_id="sess_x")
+
+        ids = [
+            c.kwargs.get("dispatch_id")
+            for c in mgr._lifecycle_observer.on_message_routed.await_args_list
+        ]
+        assert len(ids) == 2
+        assert ids[0] != ids[1]
+        assert all(ids)
 
 
 # ---------------------------------------------------------------------------

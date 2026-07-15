@@ -870,7 +870,7 @@ class SubAgentManager:
 
     async def send(self, project_id: str, handle: str, message: str,
                    *, session_id: str | None = None, depth: int = 0,
-                   fresh: bool = False) -> str:
+                   fresh: bool = False, dispatch_id: str | None = None) -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -895,8 +895,21 @@ class SubAgentManager:
         than continuing the in-memory client. Without the teardown, a handle
         that is already running would silently keep its old context and the
         reset would be a no-op.
+
+        ``dispatch_id`` (TASK-dispatch-id-pairing) identifies this ONE
+        dispatch across the marker written into the management session and
+        the transcript boundary row that closes the turn it starts — the
+        chat renderer joins the two by this id instead of by position
+        (positional pairing broke once a transcript outlived the chat
+        session that started it). Minted here when the caller doesn't
+        already have one in scope; the @mention API route mints its own up
+        front (it fires a SECOND marker of its own for the same physical
+        dispatch) and passes it in so both markers agree.
         """
         session_id = self._resolve_session_id(session_id)
+        if dispatch_id is None:
+            from uuid import uuid4
+            dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
         sk = make_session_key(project_id, session_id)
 
         # §4d reset: drop any live adapter for this handle so the spawn-on-
@@ -940,6 +953,8 @@ class SubAgentManager:
             transcript = self._transcripts.get((project_id, session_id, handle))
             transcript_path = transcript.filepath if transcript else "unknown"
 
+            self._process_manager.set_active_dispatch(
+                project_id, handle, dispatch_id, session_id=session_id)
             await self._dispatch_async(adapter, project_id, handle, message, session_id=session_id)
 
         if self._lifecycle_observer:
@@ -949,6 +964,7 @@ class SubAgentManager:
                 message_preview=message[:100],
                 transcript_path=transcript_path,
                 session_id=session_id,
+                dispatch_id=dispatch_id,
             )
 
         return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"

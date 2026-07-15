@@ -102,6 +102,29 @@ async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mention_threads_same_dispatch_id_to_send_and_lifecycle_marker(monkeypatch):
+    """TASK-dispatch-id-pairing: the @mention route calls send() (which
+    stamps its own 'management_agent'-flavored marker internally) AND fires
+    its own 'user_mention'-flavored marker for the same physical dispatch.
+    Both describe the SAME turn, so both must carry the identical
+    dispatch_id — otherwise the two markers would incorrectly join to
+    different (or no) transcript turns."""
+    sam, ws, lifecycle = _wire(monkeypatch)
+    req = InjectRequest(content="hi", target="researcher", session_id="proj_x_sessA")
+
+    await agents_v2.inject_message("proj_x", req)
+
+    # send() must receive a dispatch_id (the route mints one up front so it
+    # can reuse it for its own marker below).
+    send_kwargs = sam.send.await_args.kwargs
+    assert send_kwargs.get("dispatch_id"), "route must pass a dispatch_id into send()"
+
+    lifecycle.on_message_routed.assert_awaited_once()
+    routed_kwargs = lifecycle.on_message_routed.await_args.kwargs
+    assert routed_kwargs.get("dispatch_id") == send_kwargs.get("dispatch_id")
+
+
+@pytest.mark.asyncio
 async def test_mention_session_less_resolves_to_chat_session_not_raise(monkeypatch):
     # No session_id from the client: must resolve to the persisted chat session
     # (a concrete uuid), never forward None into the hard-raising resolver.

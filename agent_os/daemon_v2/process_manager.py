@@ -50,28 +50,63 @@ class ProcessManager:
         # transports. Without it, blocking transports (Pipe/ACP/PTY) leave a
         # boundaryless transcript and the multi-turn split aliases.
         self._transcripts: dict[str, object] = {}
+        # same key -> the dispatch_id of the turn currently in flight
+        # (TASK-dispatch-id-pairing). Set by SubAgentManager.send() right
+        # before it starts the turn; consumed (popped) when the boundary row
+        # that closes the turn is written, so the chat renderer can join a
+        # dispatch marker to ITS OWN turn by id instead of by position —
+        # positional pairing broke once a transcript outlived its first chat
+        # session (any later session's i-th marker paired with the file's
+        # i-th turn, not its own).
+        self._active_dispatch_id: dict[str, str] = {}
 
     @staticmethod
     def _key(project_id: str, session_id: "str | None", handle: str) -> str:
         return f"{project_id}:{session_id or ''}:{handle}"
 
     @staticmethod
-    def _append_turn_boundary(transcript, handle: str) -> None:
+    def _append_turn_boundary(transcript, handle: str,
+                              dispatch_id: "str | None" = None) -> None:
         """Append the per-turn delimiter the read path splits on.
 
         Empty content → never renders (chatTransform gates empty agent rows;
-        the unfiltered chat merge drops turn_complete rows outright). Exactly one
-        per terminal turn keeps the i-th message_routed marker paired with the
-        i-th transcript slice — a missing boundary drifts the pairing and aliases
-        the next turn's text into this dispatch's bubble.
+        the unfiltered chat merge drops turn_complete rows outright).
+
+        ``dispatch_id``, when given, is stamped onto the boundary row —
+        ``read_sub_agent_summary`` surfaces it per-turn so the chat renderer
+        can identity-join a dispatch marker to THIS turn (TASK-dispatch-id-
+        pairing), rather than pairing markers to turns by position (which
+        drifted once a transcript outlived the chat session that started
+        it). Omitted (no key at all) when no active dispatch was recorded —
+        e.g. legacy data, or a boundary that fires without a fresh dispatch.
         """
         if transcript is not None:
-            transcript.append({
+            row = {
                 "source": handle,
                 "content": "",
                 "timestamp": _now(),
                 "chunk_type": "turn_complete",
-            })
+            }
+            if dispatch_id:
+                row["dispatch_id"] = dispatch_id
+            transcript.append(row)
+
+    def set_active_dispatch(self, project_id: str, handle: str,
+                            dispatch_id: "str | None",
+                            *, session_id: "str | None" = None) -> None:
+        """Record the dispatch_id of the turn about to start on this handle.
+
+        Called by ``SubAgentManager.send()`` right before it dispatches, so
+        the boundary row this turn closes with can be stamped with the same
+        id the message_routed marker carries in its ``_meta``
+        (TASK-dispatch-id-pairing). A falsy ``dispatch_id`` clears any
+        stale slot instead of stamping one.
+        """
+        key = self._key(project_id, session_id, handle)
+        if dispatch_id:
+            self._active_dispatch_id[key] = dispatch_id
+        else:
+            self._active_dispatch_id.pop(key, None)
 
     def _matching_keys(self, project_id: str, handle: str) -> list[str]:
         """All consumer keys for (project, handle) across sessions — used by
@@ -193,7 +228,13 @@ class ProcessManager:
                         # boundary would drift the i-th marker ↔ i-th slice
                         # pairing and alias the next turn's text into this
                         # dispatch's bubble (TASK-subagent-last-message-display).
-                        self._append_turn_boundary(transcript, handle)
+                        # Consume (pop) the active dispatch_id so it stamps
+                        # ONLY this boundary — a later turn with no fresh
+                        # send() call must never inherit a stale id
+                        # (TASK-dispatch-id-pairing).
+                        self._append_turn_boundary(
+                            transcript, handle,
+                            self._active_dispatch_id.pop(key, None))
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
                         self._turn_open[key] = False
@@ -347,7 +388,9 @@ class ProcessManager:
         if session_id is not None:
             key = self._key(project_id, session_id, handle)
             self._turn_open[key] = False
-            self._append_turn_boundary(self._transcripts.get(key), handle)
+            self._append_turn_boundary(
+                self._transcripts.get(key), handle,
+                self._active_dispatch_id.pop(key, None))
             return
         for k in list(self._turn_open):
             if k.startswith(f"{project_id}:") and k.endswith(f":{handle}"):
@@ -364,6 +407,7 @@ class ProcessManager:
         for key in keys:
             self._turn_open.pop(key, None)
             self._transcripts.pop(key, None)
+            self._active_dispatch_id.pop(key, None)
             task = self._tasks.pop(key, None)
             if task is not None and not task.done():
                 task.cancel()

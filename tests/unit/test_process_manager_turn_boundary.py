@@ -137,6 +137,92 @@ def test_interrupted_turn_appends_boundary():
     assert [e.get("chunk_type") for e in tx.entries][-1] == "turn_complete"
 
 
+def test_boundary_carries_dispatch_id_set_before_the_turn():
+    """TASK-dispatch-id-pairing: ``set_active_dispatch`` records the id that
+    started this turn; the closing boundary row is stamped with it, and the
+    slot is cleared so a later turn WITHOUT a fresh dispatch never inherits a
+    stale id."""
+    script = [
+        _Chunk("TURN-1 final", "response"),
+        _Chunk("", "turn_complete", {"cause": "success", "session_id": "s1"}),
+    ]
+
+    async def run():
+        pm = ProcessManager(_WS(), _Activity(), _Lifecycle())
+        tx = _Transcript()
+        pm.set_active_dispatch("proj", "claude-code", "sess:aaaa1111", session_id="sess")
+        await pm.start("proj", "claude-code", _Adapter(script), transcript=tx, session_id="sess")
+        key = pm._key("proj", "sess", "claude-code")
+        await pm._tasks[key]
+        return pm, tx, key
+
+    pm, tx, key = asyncio.run(run())
+    boundary = [e for e in tx.entries if e.get("chunk_type") == "turn_complete"][0]
+    assert boundary["dispatch_id"] == "sess:aaaa1111"
+    # Consumed — a later boundary with no fresh set_active_dispatch call must
+    # not inherit this id (would misattribute the next turn to this dispatch).
+    assert key not in pm._active_dispatch_id
+
+
+def test_boundary_has_no_dispatch_id_key_when_none_was_set():
+    """No set_active_dispatch call before the turn (e.g. a stray/legacy path)
+    → the boundary carries no dispatch_id key at all (not even None) —
+    read_sub_agent_summary treats a missing key the same as None."""
+    script = [
+        _Chunk("TURN-1 final", "response"),
+        _Chunk("", "turn_complete", {"cause": "success", "session_id": "s1"}),
+    ]
+    pm, tx = asyncio.run(_run(script))
+    boundary = [e for e in tx.entries if e.get("chunk_type") == "turn_complete"][0]
+    assert "dispatch_id" not in boundary
+
+
+def test_second_turn_without_new_dispatch_gets_no_stale_id():
+    """Two turns, but set_active_dispatch is only called once (for turn 1).
+    Turn 2's boundary must NOT silently carry turn 1's id."""
+    script = [
+        _Chunk("TURN-1", "response"),
+        _Chunk("", "turn_complete", {"cause": "success", "session_id": "s1"}),
+        _Chunk("TURN-2", "response"),
+        _Chunk("", "turn_complete", {"cause": "success", "session_id": "s1"}),
+    ]
+
+    async def run():
+        pm = ProcessManager(_WS(), _Activity(), _Lifecycle())
+        tx = _Transcript()
+        pm.set_active_dispatch("proj", "claude-code", "sess:one", session_id="sess")
+        await pm.start("proj", "claude-code", _Adapter(script), transcript=tx, session_id="sess")
+        key = pm._key("proj", "sess", "claude-code")
+        await pm._tasks[key]
+        return tx
+
+    tx = asyncio.run(run())
+    boundaries = [e for e in tx.entries if e.get("chunk_type") == "turn_complete"]
+    assert boundaries[0]["dispatch_id"] == "sess:one"
+    assert "dispatch_id" not in boundaries[1]
+
+
+def test_note_turn_closed_stamps_dispatch_id_for_blocking_transports():
+    """The blocking-transport boundary path (note_turn_closed) also consumes
+    the active dispatch id, mirroring the streaming consume() path."""
+    async def run():
+        pm = ProcessManager(_WS(), _Activity(), _Lifecycle())
+        tx = _Transcript()
+        await pm.start("proj", "claude-code", _Adapter([]), transcript=tx, session_id="sess")
+        key = pm._key("proj", "sess", "claude-code")
+        await pm._tasks[key]
+        tx.append({"source": "claude-code", "content": "pipe result", "chunk_type": "response",
+                   "timestamp": "2026-06-13T10:00:00+00:00"})
+        pm.set_active_dispatch("proj", "claude-code", "sess:blocking1", session_id="sess")
+        pm.note_turn_closed("proj", "claude-code", session_id="sess")
+        return pm, tx, key
+
+    pm, tx, key = asyncio.run(run())
+    boundary = [e for e in tx.entries if e.get("chunk_type") == "turn_complete"][0]
+    assert boundary["dispatch_id"] == "sess:blocking1"
+    assert key not in pm._active_dispatch_id
+
+
 def test_note_turn_closed_appends_boundary_for_blocking_transports():
     """Blocking transports (Pipe/ACP/PTY) never emit turn_complete — they call
     note_turn_closed after each dispatch. That hook MUST append the turn
