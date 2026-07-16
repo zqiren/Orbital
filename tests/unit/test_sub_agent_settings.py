@@ -200,6 +200,17 @@ class TestSubAgentConfigStore:
             store.set("claude-code", {"model": model})
             assert store.get("claude-code") == {"model": model}
 
+    def test_fable_alias_and_pin_selectable(self, tmp_path):
+        """Claude 5 generation: the `fable` alias (documented by the
+        claude-code CLI as auto-tracking the newest model) and the explicit
+        claude-fable-5 pin must both be offered. Regression: the whitelist
+        predated Fable, so the newest subscription model was only reachable
+        by clearing the override entirely ("default")."""
+        store = SubAgentConfigStore(str(tmp_path / "config.json"))
+        for model in ("fable", "claude-fable-5"):
+            store.set("claude-code", {"model": model})
+            assert store.get("claude-code") == {"model": model}
+
     def test_invalid_effort_rejected(self, tmp_path):
         store = SubAgentConfigStore(str(tmp_path / "config.json"))
         with pytest.raises(SubAgentConfigError):
