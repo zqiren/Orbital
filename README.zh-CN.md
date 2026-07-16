@@ -2,11 +2,10 @@
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital 在真实 project 中工作——工作空间里不断积累 agent 产出的成果、决策与记忆文件" width="100%"></p>
-<p align="center"><em>你把工作交给 agent。它读取 project 里已经积累的一切,完成任务,再把学到的写回去。</em></p>
+<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital 管理一个真实 project——协调 agent、决策、审批与项目成果" width="100%"></p>
 
-<h2 align="center">永不从零开始的 agent。</h2>
-<p align="center">agent 每完成一件工作,都会成为下一条指令的上下文。<br>project 跑得越久,能力越强——而不是被清零重来。</p>
+<h2 align="center">一个 agent 管理整个 project。任何 agent 都能完成工作。</h2>
+<p align="center">Orbital 是一个持久运行的管理 agent,负责规划、委派、监督和记忆。它在同一个本地 project 中协调 Claude Code、Codex、Gemini 和其他 agent,共享上下文、审批规则和 budget。</p>
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.7.4/Orbital-Setup-0.7.4.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
@@ -27,31 +26,32 @@
 
 ## 为什么要有 Orbital
 
-现在的 agent 都会遗忘。每开一个会话,你都得把同样的背景重新粘贴一遍;每天早上,把项目重新解释一遍。上周已经敲定的决策,随着会话结束一起消失,于是这周只能再敲定一次。
+人们已经在长期 project 中使用多个能力很强的 agent。但每个 agent 都困在自己的孤岛里:各有各的计划、决策和会话。没有共享计划,也没有人在会话结束后继续对 project 负责。
 
-Agent 会退场,会话会结束。但你的工作不该跟着消失。
+Orbital 在 project 之上放置一个管理 agent。状态、决策、经验、budget、队列和成果都由它负责;worker agent 基于同一份上下文执行。聊天关闭后,管理 agent 仍然知道什么正在进行、什么已经完成、什么需要处理。
 
-Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的成果、做过的决策、学到的经验——都会写进 project,并在下一个会话开始时读回来。你的 agent 不再从零开始,而是从它已经做完的一切出发。工作会不断积累、产生复利。
+工作之所以能安全继续,是因为整个 project 只有一个队列、一份 budget、一套审批策略和一条审计记录。
 
 ---
 
 ## Orbital 的不同之处
 
-**成果会复利。** project 里的大部分工作,是 agent 在产出成果——代码、文档、调研、报告。每一份完成的成果,连同它持续维护的状态、决策和经验,都会成为下一个会话、下一份成果的参考材料。昨天打开过的 project 知道昨天发生了什么——并在这个基础上继续构建。
+**它是 agent,不是 dashboard** —— Orbital 有自己的 loop,会做管理决策。
 
-**扎根在你的真实工作里。** project 就是你硬盘上的一个文件夹,local-first。你的文件不只是存储——它们是 agent 在产出任何东西之前先读取的内容,所以它的成果针对的是你真实的代码库、真实的文档、真实的数据,而不是凭空生成、只是听起来合理的输出。
+**Worker 可以互换** —— 管理 agent 掌握 project 的上下文,所以你可以为每项任务选择最合适的 agent,而不会丢失连续性。
 
-**换掉双手,保留记忆。** 你的 agent 把执行委派给 sub-agent——Claude Code、Codex、Gemini CLI 或任何 CLI agent。它们是可互换的:每一个都基于同一份积累的上下文工作——同样的文件、决策、instructions 和历史——完成的工作再流回 project。换掉 sub-agent,什么都不丢。
+**Project 能跨越每一次会话** —— 状态、决策、经验和成果始终由同一个管理 agent 负责。
 
-**放心挂机。** 把任务排进队列然后走开:agent 逐项处理,每一项都必须声明结果——完成并附总结,或者受阻并说明原因、等你来解决。它在你设定的 sandbox 边界内、在每个 project 的 budget 之下、按你控制的审批规则工作。
+这个管理 agent 用一个队列、一份 budget、一套审批策略和一条审计记录治理整个 project。
 
 ---
 
 ## 一览
 
-- **持久上下文** —— PROJECT_STATE.md、DECISIONS.md、LESSONS.md 跨会话持续维护,每个会话都从上一个会话完成的一切出发
-- **以 project 为单位管理 agent** —— 每个 project 是一个文件夹,带自己的工作空间、instructions、budget 和 autonomy 等级
-- **Sub-agent 委派** —— 管理 agent 监控工作空间、对照目标评估进展,把工作派给 Claude Code、Codex、Gemini CLI 或任何 CLI agent——它们读取同一份积累的上下文
+- **有明确责任人的管理 loop** —— 一个 agent 为整个 project 规划、委派、监督并记录结果
+- **持久的 project 上下文** —— PROJECT_STATE.md、DECISIONS.md、LESSONS.md 和成果跨会话保留,供管理 agent 使用
+- **以 project 为单位治理** —— 每个 project 是一个文件夹,带自己的工作空间、instructions、队列、budget、审批策略和审计记录
+- **可互换的 worker** —— 管理 agent 把工作派给 Claude Code、Codex、Gemini CLI 或任何 CLI agent,它们使用同一份 project 上下文
 - **自我改进的 skills** —— agent 从多步流程中沉淀可复用的 skill,遇到类似任务先查阅
 - **任务队列** —— 按 project 排队然后走开;agent 逐项处理,每项标记完成(附总结)或受阻(附原因);中途可暂停介入引导,再继续
 - **Triggers** —— 设置 cron 定时或文件监听,让管理 agent 定期检查并自动派发 sub-agent
@@ -91,13 +91,13 @@ Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的
 
 ---
 
-## 看工作如何积累
+## 看 project 如何始终由一个管理 agent 负责
 
 <p align="center"><img src="docs/screenshots/zh/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md 由 agent 维护,每个会话读回" width="800"></p>
-<p align="center"><em>project 自己维护状态、决策与经验——由 agent 书写,每个会话开始时读回,所以每次都从"上次结束的地方"继续</em></p>
+<p align="center"><em>管理 agent 跨会话维护 project 的状态、决策与经验</em></p>
 
 <p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="把任务派给 Claude Code sub-agent,它读取 project 上下文、完成工作并把成果写回工作空间" width="800"></p>
-<p align="center"><em>把任务派给 Claude Code、Codex 或 Gemini——它们读取同一份积累的上下文,完成后把成果写回工作空间</em></p>
+<p align="center"><em>管理 agent 基于同一份 project 上下文把任务派给 Claude Code、Codex 或 Gemini,再记录执行结果</em></p>
 
 <p align="center"><img src="docs/screenshots/zh/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
 <p align="center"><em>在每个 project 的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
@@ -128,7 +128,7 @@ Orbital 是围绕这个事实构建的 agent。它完成的一切——产出的
 
 ## 工作原理
 
-Orbital 是绑定在一个 **project** 上的 agent——而不是一个聊天会话。project 把工作空间目录、持续演进的 instructions、autonomy preset、budget、审批规则和持久状态绑成一个受监督的整体。你的 agent 在其中规划与委派,sub-agent 负责执行,它们完成的一切都写回 project,成为下一条指令的上下文。你可以从任何地方监督。
+Orbital 是绑定在一个 **project** 上的持久管理 agent——而不是一个聊天会话。它是 project 的本地 control plane,统一管理工作空间、instructions、状态、队列、budget 和审批规则。管理 agent 负责规划、委派、监督并记录结果;worker agent 基于同一份 project 上下文执行。你可以从任何地方监督。
 
 ```mermaid
 flowchart TB
@@ -140,7 +140,7 @@ flowchart TB
         SAM["SubAgentManager<br/><i>delegation</i>"]
         TM["TriggerManager<br/><i>cron · file watch</i>"]
         Loop["Agent Loop<br/><i>streaming · safety guards</i>"]
-        TR["Transports<br/>Pipe · PTY · SDK · ACP"]
+        TR["Worker Transports<br/>Codex app-server · SDK · PTY · ACP · Pipe"]
         LLM["LLM Provider<br/><i>OpenAI + Anthropic SDK</i>"]
         Tools["Tool Registry<br/><i>shell · file · browser · triggers</i>"]
         Auto["Autonomy Interceptor<br/><i>approve · deny · bypass</i>"]
@@ -165,7 +165,7 @@ flowchart TB
 ```
 
 **设计决策:**
-- **记忆即产品**: agent 维护结构化的项目状态(当前状态、决策、经验),并在每个会话重新读取——工作不断积累,而不是被清零
+- **管理 agent 对 project 负责**: agent 维护结构化的状态、决策、经验和会话历史,让规划与责任始终归于一处
 - **Isolation**: OS 级别 sandbox(Windows sandbox user / macOS Seatbelt / Linux bubblewrap 在规划中)
 - **Fail-closed interceptor**: 审批系统出错后默认 DENY,绝不 ALLOW
 - **单 daemon**: PID 文件强制只能存在一个实例
@@ -175,26 +175,22 @@ flowchart TB
 
 ## 与同类产品对比
 
-| | Orbital | Claude Projects | OpenClaw | Claude Cowork |
-| --- | --- | --- | --- | --- |
-| Project 在你自己机器上 | ✅(工作空间就是你的目录) | ❌(云端托管) | ✅(agent workspace) | 部分(目录访问,VM 沙箱) |
-| Agent 能更新 project | ✅(记忆、决策、经验由 agent 自己维护) | ❌(只能人工编辑) | 部分(MEMORY.md,无结构化状态) | ❌(仅限会话) |
-| 跨会话的结构化项目状态 | ✅(PROJECT_STATE.md、DECISIONS.md、LESSONS.md) | ❌ | 部分 | ❌ |
-| 派给外部 CLI agent | ✅(Claude Code、Codex、Gemini CLI 及任意 CLI agent) | ❌ | 部分(子会话,非外部 CLI) | ❌(仅限内部 Claude sub-agent) |
-| 多个 agent 共享一个工作空间 | ✅ | ❌ | ❌ | ❌ |
-| 审批流 + 手机监督 | ✅(可配置 autonomy,手机审批) | ❌ | 部分(仅 exec,IM 内联按钮) | ❌ |
-| 按 project 设 budget 上限(实际美元) | ✅ | ❌ | ❌ | ❌(订阅制) |
-| 默认 sandbox 运行 | ✅(Windows sandbox user、macOS Seatbelt) | N/A(云端) | 可选(Docker,非默认) | ✅(VM,但 Computer Use 在 VM 外运行) |
-| Triggers(定时 + 文件监听) | ✅ | ❌ | ✅(`openclaw cron`) | ✅(`/schedule`) |
-| 开源 | GPL-3.0 | ❌ | MIT | ❌ |
+| 能力(截至 2026 年 7 月) | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
+| --- | --- | --- | --- | --- | --- |
+| 持久记忆、定时任务和 sub-agent | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 管理 loop 有自己的 project 决策 | ✅(状态 + 决策 + 经验) | 部分(任务 loop + 记忆) | 部分(任务 loop + 记忆) | 部分(agent loop + 自我改进记忆) | 部分(agent loop + workspace 记忆) |
+| 同一个 project 管理 agent 下的混合 worker | ✅(Claude Code、Codex、Gemini、任意 CLI) | ❌(Claude worker) | ❌(Codex worker) | ❌(Hermes worker) | 部分(通过 ACP 调用外部 agent) |
+| Project 队列强制以 completed/blocked 闭环 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 一份 project budget + 审批策略 + 审计记录 | ✅ | 部分(权限 + 运行历史) | 部分(审批 + 企业审计) | 部分(命令审批) | 部分(审批 + 日志) |
+| 手机监督 | ✅(启动、引导、审批) | ✅(Dispatch + Remote Control) | ✅(Remote) | ✅(聊天平台) | ✅(手机 + 聊天平台) |
 
-**一句话总结:** Claude Projects 验证了心智模型,OpenClaw 验证了本地 agent 可行,Cowork 验证了用户希望 agent 自主运行。Orbital 用一个 agent 在你自己的机器上同时做到这三件事——它跨会话维护自己的项目状态,并把执行委派给你选择的任何 sub-agent。它永不从零开始。
+**一句话总结:** 持久记忆、定时任务和 sub-agent 本身已经不是差异点。Orbital 的不同在于这套组合:一个有明确责任的管理 agent、共享其 project 上下文的混合 worker、强制闭环的队列,以及 project 级治理。
 
 ---
 
 ## 功能详解
 
-完整的功能详解——project 与工作空间模型、上下文管理与压缩(*永不从零开始*背后的引擎)、sub-agent 委派与传输层、任务队列、Quick Tasks、自我改进的 skills、内置工具、浏览器自动化、triggers、LLM 路由与 BYOK、autonomy 与审批、budget 控制、手机远程、凭据管理、agent loop 安全保护、桌面应用——以英文为准,见 [English README → Feature Deep Dives](README.md#feature-deep-dives),避免双边维护导致信息不准确。
+完整的功能详解——project 与工作空间模型、管理 agent 的上下文维护与压缩、sub-agent 委派与传输层(Codex 原生 app-server JSON-RPC、Claude Code SDK、其他 worker PTY/ACP)、任务队列、Quick Tasks、自我改进的 skills、内置工具、浏览器自动化、triggers、LLM 路由与 BYOK、autonomy 与审批、budget 控制、手机远程、凭据管理、agent loop 安全保护、桌面应用——以英文为准,见 [English README → Feature Deep Dives](README.md#feature-deep-dives),避免双边维护导致信息不准确。
 
 ---
 
@@ -272,7 +268,7 @@ Agent 在跑时,Orbital 会通过系统级别的接口阻止机器进入休眠(W
 
 我喜欢 OpenClaw,但受不了那种失控感——没有 budget,没有 sandbox,人离开电脑就没法从手机上监督。
 
-Orbital 就是我自己想要的那个东西:一个记得我们做过的一切的 agent。sandbox、budget、审批都由我控制。不在电脑前时用手机看一眼。Claude Code、Codex、Gemini CLI 是它委派的双手——换掉双手,保留记忆。一个永不从零开始的 agent。
+Orbital 就是我自己想要的那个东西:一个对整个 project 负责的 agent——计划、决策、队列、budget 和审批都归它管理。不在电脑前时用手机看一眼。Claude Code、Codex、Gemini CLI 是它可以按任务选择的 worker,但 project 的上下文始终留在管理 agent 手里。
 
 全职工作之余的晚上和周末做出来的,还很早期。欢迎反馈和 issue。
 
@@ -283,7 +279,7 @@ Orbital 就是我自己想要的那个东西:一个记得我们做过的一切�
 Orbital 采用 [GNU General Public License v3.0](LICENSE) 协议开源。
 
 ```
-Orbital — The agent that never starts from zero.
+Orbital — One agent runs the project. Any agent can do the work.
 Copyright (C) 2026 Orbital Contributors
 
 This program is free software: you can redistribute it and/or modify
