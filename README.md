@@ -26,23 +26,27 @@
 
 ## Why this exists
 
-People already use multiple capable agents on projects that outlive any chat. But each agent works in its own silo: its own plan, its own decisions, its own session. There is no shared queue and no one accountable when a session ends.
+People already use multiple capable agents at work — for the newest model, the leftover quota, or because their context is locked into one tool. But each agent works in its own silo: its own sessions, its own decisions, its own context. You end up working as their intern, ferrying context between them to keep your own project moving.
 
-Orbital puts one manager over the project. It owns the state, decisions, lessons, budget, queue, and artifacts; worker agents execute against that shared context. When a chat closes, the manager still knows what is in motion, what finished, and what needs attention.
+Every agent is accountable for a session. No agent is accountable for your project.
 
-The work continues safely because the project has one queue, one budget, one approval policy, and one audit trail.
+Orbital puts a management agent over your project. It owns the project's memory, state, decisions, lessons, budget, task queue, and artifacts; worker sub-agents execute against that shared context. When a chat closes, the manager still knows what is in motion, what finished, and what needs attention.
+
+Orbital is accountable for your project.
 
 ---
 
 ## What makes Orbital different
 
-**An agent, not a dashboard** — Orbital has its own loop and makes management decisions.
+**An agent, not a dashboard** — Orbital has its own management agent that maintains the project's state, memory, and progress.
 
 **Workers are interchangeable** — the manager keeps the project's context, so you can use the best agent for each task without losing continuity.
 
-**The project survives every session** — state, decisions, lessons and artifacts remain under one accountable manager.
+**Your project stays yours** — state, decisions, lessons and artifacts live on your machine.
 
-That manager governs the whole project with one queue, one budget, one approval policy, and one audit trail.
+One project has one queue, one budget, one approval policy, and one audit trail.
+
+Swap agents as often as you like — your work and your progress are always yours.
 
 ---
 
