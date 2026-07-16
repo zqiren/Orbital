@@ -239,7 +239,7 @@ class ACPSDKTransport(AgentTransport):
                 ),
             ),
             client_info=Implementation(
-                name="orbital", title="Orbital", version="0.7.4"
+                name="orbital", title="Orbital", version="0.7.5"
             ),
         )
         if response.protocol_version != PROTOCOL_VERSION:
