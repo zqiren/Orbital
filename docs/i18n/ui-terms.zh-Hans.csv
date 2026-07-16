@@ -418,6 +418,8 @@ subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page t
 subAgentSettings.intro,How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目空间。,Do not translate Orbital; CLI as-is.
 subAgentSettings.refreshing,Refreshing...,status,SubAgentSettings.tsx,Button label while refreshing,刷新中…,
 subAgentSettings.refresh,Refresh,button,SubAgentSettings.tsx,Refreshes the sub-agent list,刷新,
+subAgentSettings.installHint,"Don't see an agent? Install its CLI, then Refresh.",description,SubAgentSettings.tsx,Explains how to make an installed CLI appear,没有看到所需Agent？安装其 CLI 后点击刷新。,Keep CLI.
+subAgentSettings.noInstalled,"No installed sub-agents. Install a sub-agent CLI, then Refresh.",empty_state,SubAgentSettings.tsx,Shown when no installed sub-agent CLI is detected,未检测到已安装的子Agent。安装子Agent CLI 后点击刷新。,Keep CLI.
 subAgentSettings.credNote,"Sub-agent credentials are stored by the sub-agent itself, not by Orbital.",description,SubAgentSettings.tsx,Italic note about credential storage,子Agent密钥由子Agent自身存储。,Do not translate Orbital.
 subAgentSettings.loading,Loading sub-agents...,status,SubAgentSettings.tsx,Loading state,正在加载子Agent…,
 subAgentSettings.empty,No sub-agents found in the registry.,empty_state,SubAgentSettings.tsx,Empty state when registry has none,未找到子Agent。,
@@ -439,6 +441,9 @@ subAgentCard.param.model,Model,label,SubAgentSettings.tsx,Friendly label for the
 subAgentCard.param.effort,Thinking level,label,SubAgentSettings.tsx,Friendly label for the effort param,思考强度,
 subAgentCard.param.permissionMode,Permission mode,label,SubAgentSettings.tsx,Friendly label for permission-mode param,权限模式,
 subAgentCard.param.approvalMode,Approval mode,label,SubAgentSettings.tsx,Friendly label for approval-mode param,审批模式,
+subAgentCard.permission.autoDefault,Auto (default),menu,SubAgentSettings.tsx,Default Cursor permission policy that runs without pausing,自动执行（默认）,
+subAgentCard.permission.ask,Ask via permission card,menu,SubAgentSettings.tsx,Cursor permission policy that asks through Orbital UI,通过权限卡询问,
+subAgentCard.permission.cursorHint,Auto keeps queued work moving. Ask routes Cursor permission requests through Orbital's permission card.,description,SubAgentSettings.tsx,Explains Cursor permission policy choices,自动执行可让队列中的任务持续运行；询问模式会将 Cursor 权限请求转到 Orbital 权限卡。,Do not translate Cursor or Orbital.
 subAgentCard.param.default,(default),menu,SubAgentSettings.tsx,Select option for unset param,（默认）,
 subAgentCard.param.cliDefault,(use CLI default),placeholder,SubAgentSettings.tsx,Placeholder for free-text param,（使用 CLI 默认值）,Keep CLI.
 subAgentCard.saving,Saving...,status,SubAgentSettings.tsx,Button label while saving config,保存中…,

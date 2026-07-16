@@ -1904,6 +1904,8 @@ async def approve(project_id: str, req: ApproveRequest):
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
                 project_id, req.tool_call_id, approved=True,
                 session_id=req.session_id,
+                reply_text=req.reply_text,
+                approve_all=req.approve_all,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")

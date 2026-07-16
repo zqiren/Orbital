@@ -10,6 +10,7 @@ prefix and transcript path.
 """
 
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,67 @@ class LifecycleObserver:
             meta = {"dispatch_id": dispatch_id, "handle": handle,
                     "transcript_path": transcript_path}
         await self._inject(project_id, content, session_id=session_id, meta=meta)
+
+    async def on_interaction_required(
+        self, project_id: str, handle: str, *, interaction_id: str,
+        kind: str, prompt: str, options=None, plan=None,
+        session_id: str | None = None,
+    ) -> None:
+        """A sub-agent is blocked on an answer from its management agent.
+
+        This is intentionally provider-neutral.  The transport retains the
+        original in-flight request; Orbital only wakes its owning management
+        session and gives it the opaque interaction id needed by
+        ``agent_message(action="respond")``.
+        """
+        detail = prompt or "(no prompt supplied)"
+        if options:
+            detail += f" Options: {json.dumps(options, ensure_ascii=False)}"
+        if plan:
+            detail += f" Plan: {json.dumps(plan, ensure_ascii=False)}"
+        if plan or kind.endswith("create_plan"):
+            response_guidance = (
+                "For a plan, pass selection=\"accept\", "
+                "selection=\"reject\" (with message only as an optional "
+                "rejection reason), or selection=\"cancel\"."
+            )
+        elif options:
+            response_guidance = (
+                "Choose the offered option id with selection=\"option-id\"; "
+                "for multiple questions use selection={\"question-id\": "
+                "[\"option-id\"]}. Use message only when the interaction "
+                "explicitly requests free-form text."
+            )
+        else:
+            response_guidance = (
+                "For a free-form question, put the answer in message."
+            )
+        content = (
+            f"[Sub-agent] {handle} requires input ({kind}): {detail} "
+            f"Respond on the same in-flight request with "
+            f"agent_message(action=\"respond\", agent=\"{handle}\", "
+            f"interaction_id=\"{interaction_id}\", ...). "
+            f"{response_guidance} Do not send a new task."
+        )
+        meta = {
+            "event": "interaction_required",
+            "handle": handle,
+            "interaction_id": interaction_id,
+            "kind": kind,
+        }
+        await self._inject(
+            project_id, content, session_id=session_id, meta=meta)
+        self._ws.broadcast(project_id, {
+            "type": "sub_agent.interaction_required",
+            "project_id": project_id,
+            "session_id": session_id,
+            "handle": handle,
+            "interaction_id": interaction_id,
+            "kind": kind,
+            "prompt": prompt,
+            "options": options,
+            "plan": plan,
+        })
 
     async def on_completed(self, project_id: str, handle: str, summary: str,
                            transcript_path: str,

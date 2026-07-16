@@ -31,7 +31,8 @@ class AgentMessageTool(Tool):
         self.name = "agent_message"
         self.description = (
             "Communicate with sub-agents: send (dispatches a task — spawns "
-            "the agent automatically if it is not running), stop, list, status. "
+            "the agent automatically if it is not running), respond to a "
+            "blocked interaction, stop, list, status. "
             "A send resumes the sub-agent's prior conversation in this chat "
             "session by default; pass fresh=true to start a clean thread."
         )
@@ -45,12 +46,25 @@ class AgentMessageTool(Tool):
                     "type": "string",
                     "description": (
                         "Action: send (dispatch a task; spawns on demand), "
-                        "stop, list, status"
+                        "respond (answer a blocked in-flight request), stop, "
+                        "list, status"
                     ),
-                    "enum": ["send", "stop", "list", "status"],
+                    "enum": ["send", "respond", "stop", "list", "status"],
                 },
                 "agent": {"type": "string", "description": "Agent handle"},
                 "message": {"type": "string", "description": "The task to dispatch (required for send)"},
+                "interaction_id": {
+                    "type": "string",
+                    "description": "Opaque id from an interaction_required event (required for respond)",
+                },
+                "selection": {
+                    "description": "Optional provider-offered selection id or ids for respond",
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                },
                 "fresh": {
                     "type": "boolean",
                     "description": (
@@ -72,13 +86,14 @@ class AgentMessageTool(Tool):
         self._send_count = 0
 
     async def execute(self, action: str, agent: str = "", message: str = "",
-                      fresh: bool = False, **kwargs) -> ToolResult:
+                      fresh: bool = False, interaction_id: str = "",
+                      selection=None, **kwargs) -> ToolResult:
         try:
             if self.sub_agent_manager is None:
                 return ToolResult(content="Error: sub-agent support not yet available.")
 
             # Require agent for start/send/stop
-            if action in ("send", "stop") and not agent:
+            if action in ("send", "respond", "stop") and not agent:
                 return ToolResult(
                     content=f"Error: 'agent' parameter is required for action '{action}'"
                 )
@@ -136,6 +151,32 @@ class AgentMessageTool(Tool):
                 # docs/investigations/REPORT-dispatch-yield-and-push.md.
                 return ToolResult(
                     content=f"Dispatched to {agent}. Awaiting completion. {result}",
+                    meta={"yield_turn": True},
+                )
+
+            if action == "respond":
+                if not interaction_id:
+                    return ToolResult(
+                        content="Error: 'interaction_id' is required for action 'respond'"
+                    )
+                routed = await self.sub_agent_manager.respond_to_interaction(
+                    self.project_id, agent, interaction_id,
+                    session_id=self.session_id,
+                    text=message or None,
+                    selection=selection,
+                )
+                if not routed:
+                    return ToolResult(
+                        content=(
+                            f"Error: no pending interaction '{interaction_id}' "
+                            f"for agent '{agent}'"
+                        )
+                    )
+                return ToolResult(
+                    content=(
+                        f"Response delivered to {agent}. "
+                        "Awaiting the current task's completion."
+                    ),
                     meta={"yield_turn": True},
                 )
 
