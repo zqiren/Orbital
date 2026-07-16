@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Unit tests for CodexTransport (codex app-server JSON-RPC, pinned 0.125.0).
+"""Unit tests for CodexTransport (codex app-server JSON-RPC, pinned 0.144.5).
 
 All payloads are verbatim from the probe traces in
 artifacts-2026-06-06-codex-lifecycle/codex_appserver/traces/. No codex
