@@ -71,6 +71,17 @@ class ProcessManager:
         # onto dispatch 1's (possibly partial-text) aborted turn and losing
         # dispatch 2's own id entirely (Important review finding).
         self._active_dispatch_id: dict[str, "deque[str]"] = {}
+        # Optional orchestration hooks. SubAgentManager wires these at
+        # construction time; keeping them optional preserves standalone
+        # ProcessManager use in tests and legacy embedders.
+        self.on_turn_closed = None
+        self.on_permission_request = None
+
+    def set_turn_closed_callback(self, callback) -> None:
+        self.on_turn_closed = callback
+
+    def set_permission_request_callback(self, callback) -> None:
+        self.on_permission_request = callback
 
     @staticmethod
     def _key(project_id: str, session_id: "str | None", handle: str) -> str:
@@ -299,6 +310,11 @@ class ProcessManager:
                         last_response_text = ""  # reset for next turn
                         last_error_text = ""
                         self._turn_open[key] = False
+                        if self.on_turn_closed is not None:
+                            await self.on_turn_closed(
+                                project_id, handle, session_id=session_id,
+                                cause=cause,
+                            )
                         continue
                     if chunk.chunk_type == "thread_started":
                         # BACKLOG 005 §4a — eager resume-record persistence.
@@ -329,6 +345,27 @@ class ProcessManager:
                                 proc_pid=proc_pid,
                                 proc_create_time=proc_create_time,
                                 rollout_path=meta.get("rollout_path"),
+                            )
+                        continue
+                    if chunk.chunk_type == "interaction_required":
+                        # A reverse request blocks the current provider turn;
+                        # it is control-plane state, not transcript content.
+                        # Wake the owning management session so it can answer
+                        # through agent_message(respond) on the same request.
+                        self._turn_open[key] = True
+                        metadata = getattr(chunk, "metadata", None) or {}
+                        if self._lifecycle is not None:
+                            await self._lifecycle.on_interaction_required(
+                                project_id, handle,
+                                interaction_id=str(
+                                    metadata.get("interaction_id", "")),
+                                kind=str(metadata.get("kind", "question")),
+                                prompt=str(
+                                    metadata.get("prompt")
+                                    or metadata.get("question") or ""),
+                                options=metadata.get("options"),
+                                plan=metadata.get("plan"),
+                                session_id=session_id,
                             )
                         continue
                     entry = {
@@ -385,17 +422,36 @@ class ProcessManager:
 
                     if chunk.chunk_type == "approval_request":
                         metadata = getattr(chunk, 'metadata', {}) or {}
-                        self._ws.broadcast(project_id, {
+                        request_id = str(
+                            metadata.get("request_id")
+                            or metadata.get("permission_id") or "")
+                        handled = False
+                        if self.on_permission_request is not None and request_id:
+                            handled = await self.on_permission_request(
+                                project_id, handle, request_id,
+                                session_id=session_id, metadata=metadata,
+                            )
+                        if not handled:
+                            raw_tool_args = metadata.get(
+                                "tool_input", metadata.get("tool_args", {}))
+                            tool_args = (
+                                dict(raw_tool_args)
+                                if isinstance(raw_tool_args, dict)
+                                else {"input": raw_tool_args}
+                            )
+                            if metadata.get("options"):
+                                tool_args["permission_options"] = metadata["options"]
+                            self._ws.broadcast(project_id, {
                             "type": "approval.request",
                             "project_id": project_id,
                             "session_id": session_id,
                             "what": f"Sub-agent {handle} requests approval",
                             "tool_name": metadata.get("tool_name", ""),
-                            "tool_call_id": metadata.get("request_id", ""),
-                            "tool_args": metadata.get("tool_input", {}),
+                            "tool_call_id": request_id,
+                            "tool_args": tool_args,
                             "source": handle,
                             "recent_activity": [],
-                        })
+                            })
 
                     self._activity_translator.on_message(
                         {"role": "agent", "source": handle, "content": chunk.text, "timestamp": entry["timestamp"]},
@@ -416,6 +472,11 @@ class ProcessManager:
                     # here either, unchanged) — left queued it would leak
                     # into whatever dispatch runs next on this key.
                     self._pop_active_dispatch(key)
+                    if self.on_turn_closed is not None:
+                        await self.on_turn_closed(
+                            project_id, handle, session_id=session_id,
+                            cause="stream_ended",
+                        )
                     if self._lifecycle and transcript is not None:
                         await self._lifecycle.on_error(
                             project_id, handle,
@@ -431,6 +492,11 @@ class ProcessManager:
                 # consumer loop itself means this turn's boundary will
                 # never be written either — discard its queued id.
                 self._pop_active_dispatch(key)
+                if self.on_turn_closed is not None:
+                    await self.on_turn_closed(
+                        project_id, handle, session_id=session_id,
+                        cause="consumer_exception",
+                    )
                 if self._lifecycle and transcript is not None:
                     await self._lifecycle.on_error(
                         project_id, handle, str(e), transcript.filepath,

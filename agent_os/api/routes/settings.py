@@ -196,6 +196,35 @@ def _build_sub_agent_status_entry(s) -> dict:
     }
 
 
+async def _codex_live_models(binary: str | None = None) -> list[str] | None:
+    """Indirection over the cached codex model/list probe (monkeypatch seam
+    for route tests). None means "list unavailable" — callers degrade to the
+    static schema (free-text model entry)."""
+    from agent_os.agent.transports.codex_models import get_codex_models_cached
+    return await get_codex_models_cached(binary or "codex")
+
+
+async def _augment_codex_live_models(entries: list[dict]) -> list[dict]:
+    """Replace the codex entry's free-text model schema with the account's
+    LIVE model list when available (TASK-live-model-config).
+
+    Codex model IDs are gated per account+client — a free-text override the
+    gate rejects (e.g. `gpt-5.6` from Codex desktop) 400s on every dispatch.
+    The live list turns the settings field into a dropdown of models that
+    actually work; probe failure leaves the static schema untouched.
+    """
+    for entry in entries:
+        if entry.get("slug") != "codex":
+            continue
+        model_schema = (entry.get("param_schema") or {}).get("model")
+        if model_schema is None:
+            continue
+        models = await _codex_live_models(entry.get("binary_path"))
+        if models:
+            model_schema["allowed"] = models
+    return entries
+
+
 @router.get("/settings/sub-agents")
 async def list_sub_agent_settings():
     """List all sub-agents with install status, auth status, and current config.
@@ -206,11 +235,11 @@ async def list_sub_agent_settings():
     if _setup_engine is None:
         return []
     statuses = await asyncio.to_thread(_setup_engine.check_all)
-    return [
+    return await _augment_codex_live_models([
         _build_sub_agent_status_entry(s)
         for s in statuses
         if s.slug != "built-in"
-    ]
+    ])
 
 
 class SubAgentConfigRequest(BaseModel):
@@ -250,6 +279,18 @@ async def put_sub_agent_config(slug: str, req: SubAgentConfigRequest):
         raise HTTPException(status_code=503, detail="Sub-agent config store not available")
     from agent_os.daemon_v2.sub_agent_config_store import SubAgentConfigError
     params = _request_to_params(req)
+    # Codex models are gated per account+client: a value the gate rejects
+    # saves fine as free text and then 400s on EVERY dispatch (invisibly, if
+    # the management turn is mid-flight). Fail at save time instead, with
+    # the valid ids in the message. Probe unavailable → free-text fallback;
+    # clearing (empty string) never consults the probe.
+    codex_model = (params.get("model") or "").strip() if slug == "codex" else ""
+    if codex_model:
+        live = await _codex_live_models()
+        if live is not None and codex_model not in live:
+            raise HTTPException(status_code=400, detail=(
+                f"invalid value for codex.model: '{codex_model}'. This "
+                f"account's codex CLI accepts: {live}"))
     try:
         cleaned = _sub_agent_config_store.set(slug, params)
     except SubAgentConfigError as exc:
@@ -264,12 +305,16 @@ async def refresh_sub_agent_status():
         return []
     if hasattr(_setup_engine, "invalidate_cache"):
         _setup_engine.invalidate_cache()
+    # User-triggered refresh wants CURRENT state — drop the codex model/list
+    # cache too so a just-fixed install / new model generation shows up.
+    from agent_os.agent.transports.codex_models import clear_codex_models_cache
+    clear_codex_models_cache()
     statuses = await asyncio.to_thread(_setup_engine.check_all)
-    return [
+    return await _augment_codex_live_models([
         _build_sub_agent_status_entry(s)
         for s in statuses
         if s.slug != "built-in"
-    ]
+    ])
 
 
 def _resolve_setup_command(slug: str, action: str) -> str | None:
@@ -308,8 +353,13 @@ def _resolve_setup_command(slug: str, action: str) -> str | None:
         # reasonable default for known CLIs that ship a logout subcommand.
         if not binary:
             return None
-        if manifest.runtime.command in ("claude", "codex"):
-            return f"{binary} {'auth logout' if manifest.runtime.command == 'claude' else 'logout'}"
+        if manifest.runtime.command in ("claude", "codex", "agent", "cursor-agent"):
+            subcommand = (
+                "auth logout"
+                if manifest.runtime.command == "claude"
+                else "logout"
+            )
+            return f"{binary} {subcommand}"
         return None
     return None
 

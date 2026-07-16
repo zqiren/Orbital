@@ -55,7 +55,8 @@ def _manager_with(projects: dict) -> AgentManager:
 SCRATCH = {"project_id": "p_s", "name": "Quick Tasks", "agent_name": "Assistant",
            "workspace": "/tmp/s", "is_scratch": True}
 NORMAL = {"project_id": "p_n", "name": "Hn-daily", "workspace": "/tmp/n",
-          "is_scratch": False}
+          "is_scratch": False,
+          "sub_agent_deployment_instructions": "Use Codex for implementation."}
 
 
 def test_auto_start_config_carries_is_scratch_and_agent_name():
@@ -71,3 +72,4 @@ def test_auto_start_config_non_scratch_stays_false():
     assert cfg.is_scratch is False
     # agent_name falls back to the project name, matching the /agents/start route
     assert cfg.agent_name == "Hn-daily"
+    assert cfg.sub_agent_deployment_instructions == "Use Codex for implementation."

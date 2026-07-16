@@ -10,6 +10,10 @@ is [OBSERVED] against codex-cli 0.125.0 — see
 artifacts-2026-06-06-codex-lifecycle/codex_appserver/FINDINGS-codex-appserver-lifecycle-parity.md.
 The protocol is version-pinned: on a codex upgrade, re-run
 `codex app-server generate-json-schema --out <dir>` and the codex test suite.
+Re-verified on 0.144.5 (2026-07-16): schema diff additive on every surface
+used here (new server-sent approval fields startedAtMs/environmentId;
+AbsolutePathBuf renamed LegacyAppPathString, still a string); every value we
+SEND (on-request/never, workspace-write) unchanged; live suite green.
 
 Duck-typed surface mirrors SDKTransport so SubAgentManager / CLIAdapter /
 ProcessManager contracts are untouched: dispatch(), _event_queue,
@@ -39,7 +43,7 @@ from agent_os.agent.transports.tool_risk import should_auto_approve
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_CODEX_VERSION = "0.125.0"
+SUPPORTED_CODEX_VERSION = "0.144.5"
 
 # Autonomy preset -> (approvalPolicy, thread/start sandbox string enum).
 # FINDINGS A4a: `untrusted` is NOT "ask me everything" — it silently

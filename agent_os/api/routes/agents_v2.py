@@ -55,6 +55,9 @@ class CreateProjectRequest(BaseModel):
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
+    sub_agent_deployment_instructions: str | None = Field(
+        default=None, max_length=4000,
+    )
     agent_credentials: dict | None = None
     agent_name: str | None = None
     is_scratch: bool = False
@@ -64,6 +67,11 @@ class CreateProjectRequest(BaseModel):
     budget_action: str | None = None
     budget_period: str | None = None
     budget_currency: str | None = None
+
+    @field_validator("sub_agent_deployment_instructions", mode="before")
+    @classmethod
+    def normalize_sub_agent_deployment_instructions(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class ProjectUpdate(BaseModel):
@@ -78,6 +86,9 @@ class ProjectUpdate(BaseModel):
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
+    sub_agent_deployment_instructions: str | None = Field(
+        default=None, max_length=4000,
+    )
     # Spec 011 — per-project connector enablement (gates tool reflection).
     enabled_connectors: list[str] | None = None
     agent_credentials: dict | None = None
@@ -107,6 +118,11 @@ class ProjectUpdate(BaseModel):
     # persist dismissals (and any other pending-list edit) through this same
     # PUT rather than a dedicated route.
     pending_domain_requests: list[dict] | None = None
+
+    @field_validator("sub_agent_deployment_instructions", mode="before")
+    @classmethod
+    def normalize_sub_agent_deployment_instructions(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class StartAgentRequest(BaseModel):
@@ -362,6 +378,9 @@ def _redact_project(project: dict) -> dict:
     """Return project dict with api_key masked."""
     from agent_os.daemon_v2.project_store import DEFAULT_NOTIFICATION_PREFS
     result = dict(project)
+    # list_projects() bypasses ProjectStore.get_project(), so normalize this
+    # legacy-safe scalar here as well to keep list/detail response parity.
+    result.setdefault("sub_agent_deployment_instructions", "")
     # Legacy dead config (TASK-network-config-cleanup): tolerated on old
     # records, never exposed externally; dropped from disk on next save.
     result.pop("network_extra_domains", None)
@@ -467,6 +486,10 @@ async def create_project(req: CreateProjectRequest):
         project_data["enabled_sub_agents"] = req.enabled_sub_agents
     if req.disabled_sub_agents is not None:
         project_data["disabled_sub_agents"] = req.disabled_sub_agents
+    if req.sub_agent_deployment_instructions is not None:
+        project_data["sub_agent_deployment_instructions"] = (
+            req.sub_agent_deployment_instructions.strip()
+        )
     if req.agent_credentials is not None:
         project_data["agent_credentials"] = req.agent_credentials
     if req.notification_prefs is not None:
@@ -553,6 +576,10 @@ async def update_project(project_id: str, body: ProjectUpdate):
         raise HTTPException(status_code=404, detail="Project not found")
     raw_body = body.model_dump()
     updates = {k: v for k, v in raw_body.items() if v is not None}
+    if "sub_agent_deployment_instructions" in updates:
+        updates["sub_agent_deployment_instructions"] = updates[
+            "sub_agent_deployment_instructions"
+        ].strip()
     # TOFU allowlist: normalize every incoming approved_domains entry so a
     # Settings save (or a legacy raw-form pending entry it promotes) can never
     # persist a URL/port-suffixed string the proxy's exact-host/``*.`` matcher
@@ -1006,6 +1033,9 @@ async def start_agent(req: StartAgentRequest):
         provider=project.get("provider", "custom"),
         project_name=project.get("name", ""),
         project_instructions=project.get("instructions", ""),
+        sub_agent_deployment_instructions=(project.get(
+            "sub_agent_deployment_instructions", ""
+        ) or ""),
         agent_slug=project.get("agent_slug", "built-in"),
         enabled_sub_agents=project.get("enabled_sub_agents", []),
         disabled_sub_agents=project.get("disabled_sub_agents", []),
@@ -1904,6 +1934,8 @@ async def approve(project_id: str, req: ApproveRequest):
             routed = await _sub_agent_manager.resolve_sub_agent_approval(
                 project_id, req.tool_call_id, approved=True,
                 session_id=req.session_id,
+                reply_text=req.reply_text,
+                approve_all=req.approve_all,
             )
             if not routed:
                 raise HTTPException(status_code=404, detail="No pending approval found")

@@ -42,6 +42,15 @@ class MockPromptBuilder:
         return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
 
 
+class CapturingPromptBuilder:
+    def __init__(self):
+        self.deployment_values = []
+
+    def build(self, context: PromptContext) -> tuple[str, str, str]:
+        self.deployment_values.append(context.sub_agent_deployment_instructions)
+        return ("cached-system-prefix", "semi-stable-suffix", "dynamic-runtime")
+
+
 def make_context(**overrides) -> PromptContext:
     """Create a standard PromptContext with sensible defaults."""
     defaults = {
@@ -120,6 +129,37 @@ class TestLessonsLayer1Injection:
         msgs2 = cm.prepare()
         content2 = " ".join(m["content"] for m in msgs2 if m["role"] == "system")
         assert "Avoid eval" in content2
+
+
+class TestLiveSubAgentDeploymentInstructions:
+    def test_provider_value_is_refreshed_on_each_prepare(self, tmp_path):
+        current = {"value": "Use Codex."}
+        session = Session.new("deployment-live", str(tmp_path))
+        builder = CapturingPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        cm = ContextManager(
+            session,
+            builder,
+            ctx,
+            sub_agent_deployment_instructions_provider=lambda: current["value"],
+        )
+
+        cm.prepare()
+        current["value"] = "Use Claude Code."
+        cm.prepare()
+
+        assert builder.deployment_values == ["Use Codex.", "Use Claude Code."]
+
+    def test_without_provider_keeps_creation_time_value(self, tmp_path):
+        session = Session.new("deployment-static", str(tmp_path))
+        builder = CapturingPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        ctx.sub_agent_deployment_instructions = "Static routing."
+        cm = ContextManager(session, builder, ctx)
+
+        cm.prepare()
+
+        assert builder.deployment_values == ["Static routing."]
 
 
 # ===========================================================================

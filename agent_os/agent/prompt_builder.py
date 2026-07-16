@@ -37,6 +37,7 @@ class PromptContext:
     context_usage_pct: float = 0.0  # 0.0 - 1.0
     project_name: str = ""
     project_instructions: str = ""
+    sub_agent_deployment_instructions: str = ""
     is_scratch: bool = False
     global_preferences_path: str = ""
     agent_name: str = ""
@@ -730,6 +731,26 @@ class PromptBuilder:
             if routing_hint:
                 lines.append(f"  Routing hint: {routing_hint}")
         lines.append("")
+        deployment_instructions = (
+            context.sub_agent_deployment_instructions or ""
+        ).strip()
+        if deployment_instructions:
+            lines.extend([
+                "### Project-Specific Deployment Instructions",
+                "",
+                "The user configured these instructions for how you should deploy sub-agents in",
+                "this project:",
+                "",
+                "<sub_agent_deployment_instructions>",
+                deployment_instructions,
+                "</sub_agent_deployment_instructions>",
+                "",
+                "Follow these instructions when deciding whether, when, and how to delegate.",
+                "They do not make a disabled, unavailable, or unsafe agent available. If an",
+                "instruction cannot be followed, use the project's normal autonomy rules to",
+                "choose the safest viable alternative or ask the user when a decision is needed.",
+                "",
+            ])
         lines.append("To interact with sub-agents, use the agent_message tool:")
         lines.append('- Dispatch a task: agent_message(action="send", agent="<handle>", message="your task here")')
         lines.append("  send is the ONLY dispatch verb: it spawns the agent automatically if it is not")

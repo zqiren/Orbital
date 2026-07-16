@@ -4,6 +4,8 @@
 
 """Integration tests for project settings API -- real user journeys."""
 import os
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
 from agent_os.api.app import create_app
@@ -47,6 +49,98 @@ class TestProjectSettingsJourney:
         })
         assert resp.status_code == 201
         assert resp.json()["agent_name"] == "MyProject"
+
+    def test_sub_agent_deployment_instructions_roundtrip_and_clear(
+        self, client, workspace
+    ):
+        resp = client.post("/api/v2/projects", json={
+            "name": "Routing Project",
+            "workspace": workspace,
+            "model": "gpt-4",
+            "api_key": "sk-test",
+            "sub_agent_deployment_instructions": "  Use Codex for implementation.\n  Use Claude for review.  ",
+        })
+        assert resp.status_code == 201
+        pid = resp.json()["project_id"]
+        expected = "Use Codex for implementation.\n  Use Claude for review."
+        assert resp.json()["sub_agent_deployment_instructions"] == expected
+
+        listed = next(
+            p for p in client.get("/api/v2/projects").json()
+            if p["project_id"] == pid
+        )
+        assert listed["sub_agent_deployment_instructions"] == expected
+        assert client.get(f"/api/v2/projects/{pid}").json()[
+            "sub_agent_deployment_instructions"
+        ] == expected
+
+        cleared = client.put(f"/api/v2/projects/{pid}", json={
+            "sub_agent_deployment_instructions": "  \n\t ",
+        })
+        assert cleared.status_code == 200
+        assert cleared.json()["sub_agent_deployment_instructions"] == ""
+
+    def test_sub_agent_deployment_instructions_legacy_default(
+        self, client, workspace
+    ):
+        resp = client.post("/api/v2/projects", json={
+            "name": "Legacy Project",
+            "workspace": workspace,
+            "model": "gpt-4",
+            "api_key": "sk-test",
+        })
+        assert resp.status_code == 201
+        pid = resp.json()["project_id"]
+        assert resp.json()["sub_agent_deployment_instructions"] == ""
+        assert client.get(f"/api/v2/projects/{pid}").json()[
+            "sub_agent_deployment_instructions"
+        ] == ""
+
+    def test_explicit_agent_start_carries_deployment_instructions(
+        self, client, workspace, monkeypatch
+    ):
+        from agent_os.api.routes import agents_v2
+
+        created = client.post("/api/v2/projects", json={
+            "name": "Explicit Start",
+            "workspace": workspace,
+            "model": "gpt-4",
+            "api_key": "sk-test",
+            "sub_agent_deployment_instructions": "Use Gemini for research.",
+        })
+        pid = created.json()["project_id"]
+        starter = AsyncMock()
+        monkeypatch.setattr(agents_v2._agent_manager, "start_agent", starter)
+
+        resp = client.post("/api/v2/agents/start", json={"project_id": pid})
+
+        assert resp.status_code == 200
+        config = starter.await_args.args[1]
+        assert config.sub_agent_deployment_instructions == "Use Gemini for research."
+
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_sub_agent_deployment_instructions_rejects_over_4000_chars(
+        self, client, workspace, method
+    ):
+        payload = {"sub_agent_deployment_instructions": "界" * 4001}
+        if method == "post":
+            payload.update({
+                "name": "Too Long",
+                "workspace": workspace,
+                "model": "gpt-4",
+                "api_key": "sk-test",
+            })
+            resp = client.post("/api/v2/projects", json=payload)
+        else:
+            created = client.post("/api/v2/projects", json={
+                "name": "Existing",
+                "workspace": workspace,
+                "model": "gpt-4",
+                "api_key": "sk-test",
+            })
+            pid = created.json()["project_id"]
+            resp = client.put(f"/api/v2/projects/{pid}", json=payload)
+        assert resp.status_code == 422
 
     def test_duplicate_agent_name_rejected(self, client, workspace, tmp_path):
         ws2 = tmp_path / "workspace2"

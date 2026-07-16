@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../config';
+import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 
 // ---------------------------------------------------------------------------
@@ -13,6 +14,8 @@ import { useT } from '../i18n/useT';
 interface ParamSchemaEntry {
   /** Allowed values, or null for free-text. */
   allowed: string[] | null;
+  /** Effective runtime value when no override has been persisted. */
+  default?: string | null;
 }
 
 interface SubAgentEntry {
@@ -44,12 +47,27 @@ const PARAM_REQUEST_KEY: Record<string, string> = {
 };
 
 // Friendly labels for known params (catalog keys, resolved via t() at render).
-const PARAM_LABEL_KEY: Record<string, 'subAgentCard.param.model' | 'subAgentCard.param.effort' | 'subAgentCard.param.permissionMode' | 'subAgentCard.param.approvalMode'> = {
+const PARAM_LABEL_KEY: Record<string, StringKey> = {
   'model': 'subAgentCard.param.model',
   'effort': 'subAgentCard.param.effort',
   'permission-mode': 'subAgentCard.param.permissionMode',
   'approval-mode': 'subAgentCard.param.approvalMode',
 };
+
+function paramOptionLabel(
+  slug: string,
+  paramKey: string,
+  value: string,
+  t: (key: StringKey) => string,
+): string {
+  if (slug === 'cursor' && paramKey === 'permission-mode') {
+    if (value === 'auto') return t('subAgentCard.permission.autoDefault');
+    if (value === 'ask') return t('subAgentCard.permission.ask');
+  }
+  // Provider model IDs and unknown provider-native option IDs are dynamic and
+  // intentionally remain untranslated.
+  return value;
+}
 
 // Sub-agents that accept an API key via stdin (vs. an interactive OAuth flow).
 const API_KEY_LOGIN_SLUGS = new Set<string>(['codex']);
@@ -139,7 +157,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
       </div>
 
       <p className="text-xs text-secondary mb-1">
-        Don't see an agent? Install its CLI, then Refresh.
+        {t('subAgentSettings.installHint')}
       </p>
       <p className="text-xs text-secondary mb-4 italic">
         {t('subAgentSettings.credNote')}
@@ -157,7 +175,7 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
 
       {installedEntries !== null && installedEntries.length === 0 && (
         <div className="text-sm text-secondary">
-          No installed sub-agents. Install a sub-agent CLI, then Refresh.
+          {t('subAgentSettings.noInstalled')}
         </div>
       )}
 
@@ -392,7 +410,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
         <div className="border-t border-border pt-3 mt-1 flex flex-col gap-3">
           {paramKeys.map(paramKey => {
             const schema = entry.param_schema[paramKey];
-            const value = draft[paramKey] ?? '';
+            const value = draft[paramKey] ?? schema.default ?? '';
             return (
               <div key={paramKey} className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-primary">
@@ -405,9 +423,25 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                     disabled={!entry.installed}
                     className="text-sm bg-sidebar border border-border rounded px-2 py-1.5 text-primary focus:outline-none focus:border-accent disabled:opacity-50"
                   >
-                    <option value="">{t('subAgentCard.param.default')}</option>
+                    {!schema.default && (
+                      <option value="">{t('subAgentCard.param.default')}</option>
+                    )}
+                    {/* A saved value absent from the (possibly live-populated)
+                        list would render the select BLANK — keep it visible so
+                        the user can see the stale override they're replacing.
+                        Saving it again is rejected server-side. */}
+                    {value !== '' && !schema.allowed.includes(value) && (
+                      <option value={value}>{value}</option>
+                    )}
                     {schema.allowed.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
+                      <option key={opt} value={opt}>
+                        {paramOptionLabel(
+                          entry.slug,
+                          paramKey,
+                          opt,
+                          t,
+                        )}
+                      </option>
                     ))}
                   </select>
                 ) : (
@@ -419,6 +453,11 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                     placeholder={t('subAgentCard.param.cliDefault')}
                     className="text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
                   />
+                )}
+                {entry.slug === 'cursor' && paramKey === 'permission-mode' && (
+                  <p className="text-xs text-secondary">
+                    {t('subAgentCard.permission.cursorHint')}
+                  </p>
                 )}
               </div>
             );

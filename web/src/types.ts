@@ -58,6 +58,9 @@ export interface Project {
   budget_anchor_ts?: string | null;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Optional project-specific instructions for how the management agent
+   *  should deploy the sub-agents available to this project. */
+  sub_agent_deployment_instructions?: string;
   /** Connector ids enabled for this project (Spec 011 §0.2 — authenticate
    *  globally, enable per project). Only enabled connectors' tools are
    *  reflected into this project's registry. */
@@ -89,6 +92,7 @@ export interface ProjectCreateRequest {
   provider?: string;
   sdk?: string;
   agent_name?: string;
+  sub_agent_deployment_instructions?: string;
   budget_limit_usd?: number | null;
 }
 
@@ -116,6 +120,8 @@ export interface ProjectUpdateRequest {
   reset_budget_anchor?: boolean;
   /** Sub-agent slugs hidden from the management agent for this project. */
   disabled_sub_agents?: string[];
+  /** Optional project-specific instructions for management-agent delegation. */
+  sub_agent_deployment_instructions?: string;
   /** Connector ids enabled for this project (rides the existing
    *  project-update flow — per-project enablement is NOT a connector route). */
   enabled_connectors?: string[];

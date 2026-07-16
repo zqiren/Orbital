@@ -35,6 +35,10 @@ class _ParamSchema:
     name: str
     allowed: tuple[str, ...] | None  # None = free-text
     flag_template: str  # e.g. "--model {value}"
+    # Effective runtime value when the user has not persisted an override.
+    # Most CLI parameters deliberately have no Orbital default and continue
+    # to inherit the provider's own default.
+    default: str | None = None
 
 
 # Authoritative tier-5 stable parameters for each sub-agent. Anything not on
@@ -43,15 +47,17 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
     "claude-code": {
         "model": _ParamSchema(
             name="model",
-            # Aliases (haiku/sonnet/opus) auto-track the claude-code CLI's
-            # current default mapping and never go stale — keep them. The
-            # explicit pins must be refreshed each model generation; these are
-            # the current flagship IDs (was: claude-sonnet-4-6 / claude-opus-4-7
-            # / claude-haiku-4-5-20251001).
+            # Aliases (fable/haiku/sonnet/opus) auto-track the claude-code
+            # CLI's current default mapping and never go stale — keep them.
+            # The explicit pins must be refreshed each model generation; these
+            # are the current flagship IDs (was: claude-sonnet-4-6 /
+            # claude-opus-4-7 / claude-haiku-4-5-20251001).
             allowed=(
+                "fable",
                 "haiku",
                 "sonnet",
                 "opus",
+                "claude-fable-5",
                 "claude-opus-4-8",
                 "claude-sonnet-5",
                 "claude-haiku-4-5",
@@ -84,6 +90,26 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             name="model",
             allowed=None,
             flag_template="-m {value}",
+        ),
+    },
+    "cursor": {
+        # Cursor model IDs are account-dependent and change independently of
+        # Orbital releases, so this stays free-text.  The ACP transport moves
+        # this global option before the final ``acp`` subcommand.
+        "model": _ParamSchema(
+            name="model",
+            allowed=None,
+            flag_template="--model {value}",
+        ),
+        # This is an Orbital permission policy consumed by ACPSDKTransport,
+        # not a Cursor CLI flag.  ``auto`` preserves unattended queue
+        # execution; ``ask`` forwards native ACP permission requests to
+        # Orbital's permission card.
+        "permission-mode": _ParamSchema(
+            name="permission-mode",
+            allowed=("auto", "ask"),
+            flag_template="--orbital-permission-mode {value}",
+            default="auto",
         ),
     },
     "gemini-cli": {
@@ -230,10 +256,15 @@ class SubAgentConfigStore:
         ``flag_template``, splitting on whitespace so each token is a
         separate argv element.
         """
-        params = self.get(slug)
+        slug_schema = SCHEMA.get(slug, {})
+        params = {
+            name: schema.default
+            for name, schema in slug_schema.items()
+            if schema.default is not None
+        }
+        params.update(self.get(slug))
         if not params:
             return []
-        slug_schema = SCHEMA.get(slug, {})
         argv: list[str] = []
         for key, value in params.items():
             schema = slug_schema.get(key)
@@ -251,6 +282,7 @@ class SubAgentConfigStore:
         return {
             name: {
                 "allowed": list(s.allowed) if s.allowed is not None else None,
+                "default": s.default,
             }
             for name, s in slug_schema.items()
         }

@@ -56,6 +56,10 @@ def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
         "message": "response",
         "tool_use": "tool_activity",
         "permission_request": "approval_request",
+        # Provider reverse requests (questions/plans) block the current turn
+        # and must reach ProcessManager as control-plane state, not fall
+        # through to an ordinary response bubble.
+        "interaction_required": "interaction_required",
         "status": "status",
         "turn_complete": "status",
         # Errors must keep their identity: without this mapping they fell
@@ -68,6 +72,10 @@ def transport_event_to_chunk(event: TransportEvent) -> "OutputChunk":
         # NOT treat it as response content (the "response" default would write
         # it to the transcript and broadcast it as a sub-agent message).
         "thread_started": "thread_started",
+        # ACP SDK exposes the freshly-created session before the provider's
+        # first prompt. Treat it as the same identity control-plane event,
+        # never as an empty response that opens a phantom turn.
+        "session_created": "thread_started",
     }
     return OutputChunk(
         text=event.raw_text or event.data.get("text", ""),

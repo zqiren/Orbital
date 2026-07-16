@@ -1,0 +1,81 @@
+# Cursor CLI's official Agent Client Protocol server. Global Cursor options
+# must precede the final `acp` subcommand (`agent --model <id> acp`). The
+# ACPSDKTransport owns that argv normalization and consumes Orbital's internal
+# `--orbital-permission-mode` setting before spawning the provider.
+
+manifest_version: "1"
+name: "Cursor"
+slug: "cursor"
+description: "Cursor's coding agent, connected through its official ACP server"
+author: "cursor"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "agent"
+  transport: acp-sdk
+  mode: pipe
+  args: ["acp"]
+  interactive: false
+
+setup:
+  install_command: "curl https://cursor.com/install -fsS | bash"
+  check_command: "agent --version"
+  credentials:
+    - key: "cursor_auth"
+      label: "Cursor Account"
+      type: oauth_cli
+      required: true
+      check_command: "agent status --format json"
+      check_field: "isAuthenticated"
+      check_value: "true"
+      setup_command: "agent login"
+      setup_label: "Log in to Cursor"
+  # The official installer currently creates both names. `agent` is the
+  # canonical command; `cursor-agent` remains a supported compatibility name.
+  auto_detect:
+    windows:
+      - "%LOCALAPPDATA%\\Programs\\cursor\\resources\\app\\bin\\agent.cmd"
+      - "%LOCALAPPDATA%\\Programs\\cursor\\resources\\app\\bin\\cursor-agent.cmd"
+      - "%APPDATA%\\npm\\agent.cmd"
+      - "%APPDATA%\\npm\\cursor-agent.cmd"
+    macos:
+      - "$HOME/.local/bin/agent"
+      - "$HOME/.local/bin/cursor-agent"
+      - "/usr/local/bin/agent"
+      - "/usr/local/bin/cursor-agent"
+      - "/opt/homebrew/bin/agent"
+      - "/opt/homebrew/bin/cursor-agent"
+    linux:
+      - "$HOME/.local/bin/agent"
+      - "$HOME/.local/bin/cursor-agent"
+      - "$HOME/.npm-global/bin/agent"
+      - "$HOME/.npm-global/bin/cursor-agent"
+      - "$HOME/.npm/bin/agent"
+      - "$HOME/.npm/bin/cursor-agent"
+      - "/usr/local/bin/agent"
+      - "/usr/local/bin/cursor-agent"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks through Cursor, including Grok models available in Cursor"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  network_domains:
+    - "cursor.com"
+    - "api.cursor.com"
+    - "api2.cursor.sh"
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: hands_off

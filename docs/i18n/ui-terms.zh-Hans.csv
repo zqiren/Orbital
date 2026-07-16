@@ -76,9 +76,13 @@ settings.projectInstructions.label,Project Instructions,label,SettingsView.tsx,F
 settings.projectInstructions.hint,"Persistent instructions the agent always follows. E.g., ""always write tests"", ""use PostgreSQL""",description,SettingsView.tsx,Helper text describing standing rules,"影响Agent行为的常驻指示。例如：""""每个功能必须有测试用例""""、""""数据库使用 PostgreSQL""""。",Keep PostgreSQL as-is.
 settings.projectInstructions.placeholder,One rule per line...,placeholder,SettingsView.tsx,Placeholder for standing rules textarea,每行一条规则…,
 settings.subAgents.label,Sub-Agents,label,SettingsView.tsx,Section label for per-project sub-agent enable/disable,子Agent,
-settings.subAgents.labelSuffix,— which delegation targets this project can use,label,SettingsView.tsx,Inline secondary label after Sub-Agents heading,— 可用子Agent,
-settings.subAgents.hint,Uncheck a sub-agent to hide it from the management agent for this project — it won't be suggested or dispatched here. Install & sign-in live in global Settings → Sub-Agents.,description,SettingsView.tsx,Explains the per-project sub-agent toggles,取消勾选将在此空间内屏蔽该子Agent，不会给该agent派发任务。安装与登录请前往全局 设置 → 子Agent。,"""management agent"" = 管理Agent. Keep arrow → ."
-settings.subAgents.saveReminder,Remember to Save changes below.,description,SettingsView.tsx,Italic reminder to save toggles,在下方保存更改。,
+settings.subAgents.labelSuffix,— delegation targets and their memory for this project,label,SettingsView.tsx,Inline secondary label after Sub-Agents heading,— 本项目的派发对象及其记忆,
+settings.subAgents.hint,"Enable or disable sub-agents for this project, and edit the long-term memory they read on every dispatch. Disabled agents stay listed (dimmed) so you can still curate their memory.",description,SettingsView.tsx,Explains per-project sub-agent availability and memory,"为本项目启用或停用子Agent，并编辑它们在每次派发时都会读取的长期记忆。停用的子Agent仍会显示（呈灰色），以便你继续管理其记忆。",
+settings.subAgents.deploymentInstructions.label,Sub-agent deployment instructions,label,SettingsView.tsx,Project-level instructions for management-agent delegation,子Agent派发指示,
+settings.subAgents.deploymentInstructions.hint,Optional instructions for when and how the management agent should delegate work in this project. Leave blank to let it decide.,description,SettingsView.tsx,Explains the optional deployment-instructions field,可选：说明管理Agent在本项目中应于何时、以何种方式派发任务。留空则由管理Agent自行决定。,
+settings.subAgents.deploymentInstructions.placeholder,"Example: Use Gemini for research, Claude Code for planning and review, and Codex for implementation. Continue existing sessions unless the task is unrelated.",placeholder,SettingsView.tsx,Example project-specific sub-agent deployment policy,示例：使用 Gemini 进行调研，Claude Code 负责规划和审查，Codex 负责实现。除非任务无关，否则继续使用现有会话。,"Do not translate Gemini, Claude Code, or Codex."
+settings.subAgents.installHint,Install an agent's CLI on your machine to use it here.,empty_state,SettingsView.tsx,Shown when no installed sub-agents are available,在本机安装Agent的 CLI 后即可在此使用。,Keep CLI.
+settings.subAgents.saveReminder,Remember to Save enablement and deployment-instruction changes below. Memory edits save immediately.,description,SettingsView.tsx,Italic reminder describing form-save and immediate-save behavior,请在下方保存启用状态和派发指示的更改。记忆编辑会立即保存。,
 settings.subAgentMemories.label,Sub-Agent Memories,label,SettingsView.tsx,Section label for per-sub-agent memory,子Agent记忆,
 settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目空间中每个子Agent的长期记忆,
 settings.subAgentMemories.hint,Each sub-agent maintains its own memory across dispatches. Edit here to curate what they remember.,description,SettingsView.tsx,Explains sub-agent memory,每个子Agent将自动维护自己的项目记忆。在此编辑以管理它们记住的内容。,
@@ -418,6 +422,8 @@ subAgentSettings.title,Sub-agents,heading,SubAgentSettings.tsx,Standalone page t
 subAgentSettings.intro,How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.,description,SubAgentSettings.tsx,Intro paragraph (embedded mode),Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目空间。,Do not translate Orbital; CLI as-is.
 subAgentSettings.refreshing,Refreshing...,status,SubAgentSettings.tsx,Button label while refreshing,刷新中…,
 subAgentSettings.refresh,Refresh,button,SubAgentSettings.tsx,Refreshes the sub-agent list,刷新,
+subAgentSettings.installHint,"Don't see an agent? Install its CLI, then Refresh.",description,SubAgentSettings.tsx,Explains how to make an installed CLI appear,没有看到所需Agent？安装其 CLI 后点击刷新。,Keep CLI.
+subAgentSettings.noInstalled,"No installed sub-agents. Install a sub-agent CLI, then Refresh.",empty_state,SubAgentSettings.tsx,Shown when no installed sub-agent CLI is detected,未检测到已安装的子Agent。安装子Agent CLI 后点击刷新。,Keep CLI.
 subAgentSettings.credNote,"Sub-agent credentials are stored by the sub-agent itself, not by Orbital.",description,SubAgentSettings.tsx,Italic note about credential storage,子Agent密钥由子Agent自身存储。,Do not translate Orbital.
 subAgentSettings.loading,Loading sub-agents...,status,SubAgentSettings.tsx,Loading state,正在加载子Agent…,
 subAgentSettings.empty,No sub-agents found in the registry.,empty_state,SubAgentSettings.tsx,Empty state when registry has none,未找到子Agent。,
@@ -439,6 +445,9 @@ subAgentCard.param.model,Model,label,SubAgentSettings.tsx,Friendly label for the
 subAgentCard.param.effort,Thinking level,label,SubAgentSettings.tsx,Friendly label for the effort param,思考强度,
 subAgentCard.param.permissionMode,Permission mode,label,SubAgentSettings.tsx,Friendly label for permission-mode param,权限模式,
 subAgentCard.param.approvalMode,Approval mode,label,SubAgentSettings.tsx,Friendly label for approval-mode param,审批模式,
+subAgentCard.permission.autoDefault,Auto (default),menu,SubAgentSettings.tsx,Default Cursor permission policy that runs without pausing,自动执行（默认）,
+subAgentCard.permission.ask,Ask via permission card,menu,SubAgentSettings.tsx,Cursor permission policy that asks through Orbital UI,通过权限卡询问,
+subAgentCard.permission.cursorHint,Auto keeps queued work moving. Ask routes Cursor permission requests through Orbital's permission card.,description,SubAgentSettings.tsx,Explains Cursor permission policy choices,自动执行可让队列中的任务持续运行；询问模式会将 Cursor 权限请求转到 Orbital 权限卡。,Do not translate Cursor or Orbital.
 subAgentCard.param.default,(default),menu,SubAgentSettings.tsx,Select option for unset param,（默认）,
 subAgentCard.param.cliDefault,(use CLI default),placeholder,SubAgentSettings.tsx,Placeholder for free-text param,（使用 CLI 默认值）,Keep CLI.
 subAgentCard.saving,Saving...,status,SubAgentSettings.tsx,Button label while saving config,保存中…,

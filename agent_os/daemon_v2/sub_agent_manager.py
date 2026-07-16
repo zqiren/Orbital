@@ -11,6 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import time
+from collections import deque
+from dataclasses import dataclass
 
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
@@ -25,6 +28,16 @@ logger = logging.getLogger(__name__)
 
 
 MAX_CONCURRENT_SUBAGENTS = 5  # Max active sub-agents per project
+
+
+@dataclass
+class _QueuedPrompt:
+    """One provider turn waiting behind the active turn for a handle."""
+
+    message: str
+    dispatch_id: str
+    transcript_path: str
+    initiator: str = "management_agent"
 
 
 class SubAgentManager:
@@ -110,6 +123,30 @@ class SubAgentManager:
         # "unavailable" error rather than raising.
         self._fanout_registry = None
         self._worker_deps_factory = None
+        # Prompt execution is serialized independently for every owning
+        # management session and sub-agent handle.  The existing
+        # ProcessManager dispatch-id deque labels transcript boundaries; it
+        # does not prevent a second provider prompt from cancelling or racing
+        # the first.  This queue owns that execution invariant.
+        self._prompt_queues: dict[tuple[str, str, str], deque[_QueuedPrompt]] = {}
+        self._prompt_active: set[tuple[str, str, str]] = set()
+        # "Approve all" is Orbital's existing temporary (10 minute) bypass,
+        # never a request for a provider-persistent allow grant.
+        self._permission_bypass_until: dict[tuple[str, str, str], float] = {}
+
+        # ProcessManager observes the genuine streaming turn boundary.  Keep
+        # this duck-typed so focused tests and older embedders can supply a
+        # lightweight process-manager double.
+        if hasattr(self._process_manager, "set_turn_closed_callback"):
+            self._process_manager.set_turn_closed_callback(
+                self._on_prompt_turn_closed)
+        else:
+            self._process_manager.on_turn_closed = self._on_prompt_turn_closed
+        if hasattr(self._process_manager, "set_permission_request_callback"):
+            self._process_manager.set_permission_request_callback(
+                self._on_permission_request)
+        else:
+            self._process_manager.on_permission_request = self._on_permission_request
 
     @staticmethod
     def _resolve_session_id(session_id: str | None) -> str:
@@ -391,6 +428,12 @@ class SubAgentManager:
             from agent_os.agent.transports.pty_transport import PTYTransport
             approval_patterns = config_dict.get("approval_patterns", [])
             return PTYTransport(approval_patterns=approval_patterns)
+        elif transport_type == "acp-sdk":
+            from agent_os.agent.transports.acp_sdk_transport import ACPSDKTransport
+            # Permission policy and model are current config args consumed by
+            # the transport at start(); only the provider session id belongs
+            # to resume identity.
+            return ACPSDKTransport(resume_record=resume_record)
         elif transport_type == "codex-appserver":
             from agent_os.agent.transports.codex_transport import CodexTransport
             # Resume identity: threadId from the pre-checked record; the
@@ -447,6 +490,14 @@ class SubAgentManager:
             manifest = self._registry.get(handle) if self._registry else None
             transport_hint = getattr(
                 getattr(manifest, "runtime", None), "transport", None)
+            if transport_hint == "acp-sdk":
+                # ACP session identity is provider-owned. There is no
+                # provider-neutral local file whose presence proves the
+                # session still exists, so pass the persisted candidate to
+                # session/load and let transport.resume_outcome report the
+                # authoritative result after start(). In particular, never
+                # interpret an ACP id as a Claude ~/.claude session id.
+                return record, "resumed", None
             if transport_hint == "codex-appserver":
                 from agent_os.agent.transports.codex_transport import CodexTransport
                 source_ok = CodexTransport.resume_source_exists(record)
@@ -466,6 +517,23 @@ class SubAgentManager:
                 "resume_failed", project_id, handle,
             )
         return None, "fresh", "resume_failed"
+
+    @staticmethod
+    def _provider_confirmed_resume_outcome(
+        resume_record: dict | None, resume_status: str,
+        resume_reason: str | None, transport,
+    ) -> tuple[str, str | None]:
+        """Apply a provider-confirmed load outcome after transport start."""
+        if resume_record is None:
+            return resume_status, resume_reason
+        outcome = getattr(transport, "resume_outcome", None)
+        if not (isinstance(outcome, tuple) and len(outcome) == 2
+                and outcome[0] in ("resumed", "fresh")):
+            return resume_status, resume_reason
+        status, reason = outcome
+        if status == "resumed" and resume_record.get("background_loss"):
+            return "resumed_after_loss", None
+        return status, reason
 
     def _ensure_no_live_attachment(self, project_id: str, handle: str,
                                    record: dict) -> bool:
@@ -729,7 +797,8 @@ class SubAgentManager:
                 transport_hint = getattr(manifest.runtime, "transport", "auto")
                 runtime_mode = getattr(manifest.runtime, "mode", None)
                 skips_system_prompt = (
-                    transport_hint in ("pty", "acp", "codex-appserver")
+                    transport_hint in (
+                        "pty", "acp", "acp-sdk", "codex-appserver")
                     or (transport_hint == "auto" and runtime_mode != "pipe")
                 )
                 if skips_system_prompt:
@@ -837,6 +906,14 @@ class SubAgentManager:
                 self._adapters[sk] = {}
             self._adapters[sk][handle] = adapter
 
+        # ACP session/load is the authority on whether continuity actually
+        # happened.  The pre-start resume decision only says an attempt is
+        # plausible; after start, prefer the provider-confirmed outcome.
+        # Preserve the richer first-spawn / explicit-reset reason when no
+        # resume was attempted at all.
+        resume_status, resume_reason = self._provider_confirmed_resume_outcome(
+            resume_record, resume_status, resume_reason, transport)
+
         # Create transcript for this sub-agent. §4b: reuse the handle's
         # .latest transcript across respawns so the UI stays continuous; §4d
         # fresh=True mints a new file (prior one archived on disk).
@@ -911,6 +988,7 @@ class SubAgentManager:
             from uuid import uuid4
             dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
         sk = make_session_key(project_id, session_id)
+        prompt_key = (project_id, session_id, handle)
 
         # §4d reset: drop any live adapter for this handle so the spawn-on-
         # demand block below actually re-spawns fresh (the default branch only
@@ -939,49 +1017,144 @@ class SubAgentManager:
                 spawn_clause = f" ({self._format_resume_clause(status, reason)})"
 
         # Invariant 7 (reap-vs-dispatch): take the per-session lifecycle lock
-        # around the dispatch so turn-start is mutually exclusive with a reap in
-        # ``stop`` (which holds the same lock across the kill). If a reap is
-        # mid-kill, this blocks until the adapter is dropped, then finds it gone
-        # and refuses — never opening a new turn on a process being killed.
+        # around queue admission / dispatch so turn-start is mutually exclusive
+        # with a reap.  Exactly one provider prompt is active for this key; later
+        # ordinary sends enter the FIFO instead of cancelling the active turn.
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
             adapters = self._adapters.get(sk, {})
             adapter = adapters.get(handle)
             if adapter is None:
                 return f"Error: agent '{handle}' not running for project '{project_id}'"
+            if getattr(adapter, "_broken", False) is True:
+                return (
+                    f"Error: agent '{handle}' transport is broken; stop it "
+                    "before dispatching again so it can restart cleanly"
+                )
 
             transcript = self._transcripts.get((project_id, session_id, handle))
             transcript_path = transcript.filepath if transcript else "unknown"
+            queued = _QueuedPrompt(
+                message=message,
+                dispatch_id=dispatch_id,
+                transcript_path=transcript_path,
+            )
+            if prompt_key in self._prompt_active:
+                self._prompt_queues.setdefault(prompt_key, deque()).append(queued)
+                position = len(self._prompt_queues[prompt_key])
+                return (
+                    f"Message queued for {handle}{spawn_clause} "
+                    f"(position {position}). Transcript: {transcript_path}"
+                )
 
-            self._process_manager.set_active_dispatch(
-                project_id, handle, dispatch_id, session_id=session_id)
+            self._prompt_active.add(prompt_key)
             try:
-                await self._dispatch_async(
-                    adapter, project_id, handle, message,
-                    session_id=session_id, dispatch_id=dispatch_id)
+                await self._dispatch_prompt_locked(adapter, queued, project_id,
+                                                   session_id, handle)
             except Exception:
-                # FIFO desync guard (Important review finding,
-                # TASK-dispatch-id-pairing): the transport never owned this
-                # turn, so no boundary will ever pop the id enqueued above.
-                # Left in the queue it would be handed to the NEXT
-                # dispatch's boundary instead of its own. Remove it, then
-                # let the failure surface exactly as before — send() has
-                # never swallowed a dispatch exception.
-                self._process_manager.clear_dispatch(
-                    project_id, handle, dispatch_id, session_id=session_id)
+                self._prompt_active.discard(prompt_key)
                 raise
+
+        return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
+
+    async def _dispatch_prompt_locked(
+        self, adapter, prompt: _QueuedPrompt, project_id: str,
+        session_id: str, handle: str,
+    ) -> None:
+        """Start one queued prompt while the session lifecycle lock is held."""
+        self._process_manager.set_active_dispatch(
+            project_id, handle, prompt.dispatch_id, session_id=session_id)
+        try:
+            await self._dispatch_async(
+                adapter, project_id, handle, prompt.message,
+                session_id=session_id, dispatch_id=prompt.dispatch_id)
+        except Exception:
+            self._process_manager.clear_dispatch(
+                project_id, handle, prompt.dispatch_id, session_id=session_id)
+            raise
 
         if self._lifecycle_observer:
             await self._lifecycle_observer.on_message_routed(
                 project_id, handle,
-                initiator="management_agent",
-                message_preview=message[:100],
-                transcript_path=transcript_path,
+                initiator=prompt.initiator,
+                message_preview=prompt.message[:100],
+                transcript_path=prompt.transcript_path,
                 session_id=session_id,
-                dispatch_id=dispatch_id,
+                dispatch_id=prompt.dispatch_id,
             )
 
-        return f"Message sent to {handle}{spawn_clause}. Transcript: {transcript_path}"
+    async def _on_prompt_turn_closed(
+        self, project_id: str, handle: str, *, session_id: str | None = None,
+        cause: str | None = None,
+    ) -> None:
+        """Advance a handle FIFO after its provider reports a real boundary."""
+        session_id = self._resolve_session_id(session_id)
+        key = (project_id, session_id, handle)
+        sk = make_session_key(project_id, session_id)
+        lock = self._get_lock(project_id, session_id=session_id)
+        async with lock:
+            self._prompt_active.discard(key)
+            if cause in ("stream_ended", "consumer_exception"):
+                # No honest provider boundary exists and the consumer is
+                # gone. Never drain queued work into this dead/unknown
+                # transport; mark it broken so the next send fails honestly
+                # until the handle is stopped/restarted.
+                self._prompt_queues.pop(key, None)
+                adapter = self._adapters.get(sk, {}).get(handle)
+                if adapter is not None:
+                    adapter._broken = True
+                return
+            queue = self._prompt_queues.get(key)
+            if not queue:
+                self._prompt_queues.pop(key, None)
+                return
+            adapter = self._adapters.get(sk, {}).get(handle)
+            if adapter is None or getattr(adapter, "_broken", False) is True:
+                self._prompt_queues.pop(key, None)
+                return
+            prompt = queue.popleft()
+            if not queue:
+                self._prompt_queues.pop(key, None)
+            self._prompt_active.add(key)
+            try:
+                await self._dispatch_prompt_locked(
+                    adapter, prompt, project_id, session_id, handle)
+            except Exception:
+                self._prompt_active.discard(key)
+                self._prompt_queues.pop(key, None)
+                adapter._broken = True
+                logger.exception(
+                    "queued sub-agent dispatch failed for %s/%s", project_id,
+                    handle,
+                )
+                if self._lifecycle_observer is not None:
+                    await self._lifecycle_observer.on_failed(
+                        project_id, handle, reason="queued_dispatch_exception",
+                        session_id=session_id,
+                    )
+
+    async def respond_to_interaction(
+        self, project_id: str, handle: str, interaction_id: str, *,
+        session_id: str | None = None, text: str | None = None,
+        selection=None,
+    ) -> bool:
+        """Resolve a blocked provider request without opening another turn."""
+        session_id = self._resolve_session_id(session_id)
+        adapter = self._adapters.get(
+            make_session_key(project_id, session_id), {}).get(handle)
+        transport = getattr(adapter, "_transport", None) if adapter else None
+        if transport is None:
+            return False
+        pending = getattr(transport, "_pending_interactions", None)
+        if pending is not None and interaction_id not in pending:
+            return False
+        responder = getattr(transport, "respond_to_interaction", None)
+        if responder is None:
+            responder = getattr(transport, "resolve_interaction", None)
+        if responder is None:
+            return False
+        await responder(interaction_id, text=text, selection=selection)
+        return True
 
     async def dispatch_fanout(self, project_id: str, tasks: list[dict], *,
                               session_id: str, max_runtime_s: int = 3600,
@@ -1225,6 +1398,7 @@ class SubAgentManager:
                     )
             try:
                 await adapter.send(message)
+                boundary_noted = False
                 # Pipe/ACP transports store the response in _last_response
                 response = getattr(adapter, '_last_response', None)
                 if response:
@@ -1289,18 +1463,17 @@ class SubAgentManager:
                         # never emit turn_complete).
                         self._process_manager.note_turn_closed(
                             project_id, handle, session_id=session_id)
-                elif dispatch_id:
-                    # FIFO desync guard, closure requested after re-review
-                    # (TASK-dispatch-id-pairing): adapter.send() SUCCEEDED
-                    # but produced no response, so none of the branches
-                    # above ran — in particular note_turn_closed() never
-                    # fires, so no boundary will EVER pop this id. Left
-                    # queued it wouldn't just mean a missing boundary row
-                    # (as it did pre-FIFO): it would permanently shift the
-                    # queue, handing THIS id to whatever dispatch runs next
-                    # on this (project, session, handle) instead of its own.
-                    self._process_manager.clear_dispatch(
-                        project_id, handle, dispatch_id, session_id=session_id)
+                        boundary_noted = True
+                # A blocking send returning is itself its genuine request /
+                # response boundary, including an empty response.  Account
+                # for it exactly once, then advance the execution FIFO.
+                if not boundary_noted:
+                    self._process_manager.note_turn_closed(
+                        project_id, handle, session_id=session_id)
+                await self._on_prompt_turn_closed(
+                    project_id, handle, session_id=session_id,
+                    cause="success",
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -1333,6 +1506,9 @@ class SubAgentManager:
                             "lifecycle_observer.on_failed raised for project=%s handle=%s",
                             project_id, handle,
                         )
+                key = (project_id, self._resolve_session_id(session_id), handle)
+                self._prompt_active.discard(key)
+                self._prompt_queues.pop(key, None)
                 return
 
         adapter._background_send_task = asyncio.create_task(
@@ -1394,6 +1570,14 @@ class SubAgentManager:
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
+        prompt_key = (project_id, session_id, handle)
+        # A stop is also cancellation of work that has not reached the
+        # provider yet.  Pending in-flight interactions are rejected by the
+        # transport's stop() implementation so the original JSON-RPC request
+        # cannot remain stranded.
+        self._prompt_queues.pop(prompt_key, None)
+        self._prompt_active.discard(prompt_key)
+        self._permission_bypass_until.pop(prompt_key, None)
         teardown = asyncio.create_task(
             self._kill_confirm_and_release(project_id, session_id, handle),
             name=f"teardown-{project_id}-{handle}",
@@ -1661,19 +1845,48 @@ class SubAgentManager:
                 approval_data = getattr(transport, '_pending_approval_data', {})
                 for request_id in pending:
                     data = approval_data.get(request_id, {})
+                    raw_tool_args = data.get("tool_input", {})
+                    tool_args = (
+                        dict(raw_tool_args)
+                        if isinstance(raw_tool_args, dict)
+                        else {"input": raw_tool_args}
+                    )
+                    if data.get("options"):
+                        tool_args["permission_options"] = data["options"]
                     return {
                         "tool_call_id": data.get("request_id", request_id),
                         "tool_name": data.get("tool_name", ""),
-                        "tool_args": data.get("tool_input", {}),
+                        "tool_args": tool_args,
                         "what": f"Sub-agent {handle} requests approval: {data.get('tool_name', 'unknown')}",
                         "source": handle,
                     }
         return None
 
+    async def _on_permission_request(
+        self, project_id: str, handle: str, request_id: str, *,
+        session_id: str | None = None, metadata: dict | None = None,
+    ) -> bool:
+        """Auto-resolve a request covered by Orbital's temporary bypass.
+
+        Returns True when ProcessManager should suppress the permission card.
+        A provider's ordinary ``auto`` mode normally resolves before emitting
+        an event; this callback is the ask-mode, 10-minute bypass backstop.
+        """
+        session_id = self._resolve_session_id(session_id)
+        key = (project_id, session_id, handle)
+        if self._permission_bypass_until.get(key, 0.0) <= time.monotonic():
+            self._permission_bypass_until.pop(key, None)
+            return False
+        return await self.resolve_sub_agent_approval(
+            project_id, request_id, approved=True, session_id=session_id,
+        )
+
     async def resolve_sub_agent_approval(self, project_id: str, tool_call_id: str,
                                          approved: bool, *,
                                          session_id: str | None = None,
-                                         decision: str | None = None) -> bool:
+                                         decision: str | None = None,
+                                         reply_text: str | None = None,
+                                         approve_all: bool = False) -> bool:
         """Try to resolve a permission request on any sub-agent transport.
 
         Returns True if the approval was routed to a sub-agent, False if not found.
@@ -1687,10 +1900,14 @@ class SubAgentManager:
         path that legitimately tolerates None (seam 3 / D1: no "default" sentinel —
         a None search just widens to all sessions, it does not route to a phantom).
 
-        Optional ``decision`` passes a richer Codex vocabulary string (e.g.
+        Optional ``decision`` passes a richer provider vocabulary string (e.g.
         ``"cancel"`` to end the turn as ``interrupted``) to transports that
         implement ``respond_to_permission_decision``.  When ``decision`` is None
         the legacy boolean ``respond_to_permission`` path is used unchanged.
+        ``reply_text`` is forwarded only to transports whose permission
+        surface accepts guidance (ACP itself currently does not). ``approve_all`` activates Orbital's existing
+        ten-minute, in-memory bypass; it is deliberately not translated into
+        a provider-persistent ``allow_always`` grant.
         """
         if session_id is None:
             slates = [
@@ -1706,7 +1923,42 @@ class SubAgentManager:
                     # Check if this transport has the pending approval
                     pending = getattr(transport, '_pending_approvals', {})
                     if tool_call_id in pending:
-                        if decision is not None and hasattr(
+                        if approve_all and approved:
+                            if session_id is None:
+                                # Locate the concrete owning slate for the
+                                # project-wide lookup case.
+                                owning_sid = next(
+                                    (sid for (pid, sid), slate in self._adapters.items()
+                                     if pid == project_id and adapter in slate.values()),
+                                    None,
+                                )
+                            else:
+                                owning_sid = session_id
+                            if owning_sid is not None:
+                                self._permission_bypass_until[
+                                    (project_id, owning_sid, handle)
+                                ] = time.monotonic() + 600.0
+
+                        # Check the advertised surface, not just getattr():
+                        # MagicMock fabricates arbitrary attributes and would
+                        # otherwise look like it implements this optional API.
+                        rich = (
+                            getattr(transport, "respond_to_permission_response", None)
+                            if "respond_to_permission_response" in dir(transport)
+                            else None
+                        )
+                        if rich is not None:
+                            await rich(
+                                tool_call_id,
+                                approved=approved,
+                                reply_text=reply_text,
+                                # Temporary duration is explicit so a
+                                # transport cannot mistake it for permanent
+                                # provider authorization.
+                                temporary_allow_s=600 if approve_all and approved else None,
+                                decision=decision,
+                            )
+                        elif decision is not None and hasattr(
                                 transport, "respond_to_permission_decision"):
                             # Richer codex vocabulary: "cancel" ends the turn
                             # `interrupted` (Deny & stop); "decline" lets it

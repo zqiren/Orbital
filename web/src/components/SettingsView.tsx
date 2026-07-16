@@ -147,6 +147,9 @@ export default function SettingsView({
   const [disabledSubAgents, setDisabledSubAgents] = useState<string[]>(
     project.disabled_sub_agents ?? [],
   );
+  const [subAgentDeploymentInstructions, setSubAgentDeploymentInstructions] = useState(
+    project.sub_agent_deployment_instructions ?? '',
+  );
 
   // Per-project connector enablement (spec 011 §0.2 — authenticate globally,
   // enable per project). Saved through THIS form's payload, like every other
@@ -222,6 +225,7 @@ export default function SettingsView({
         if (Array.isArray(detail.pending_domain_requests)) {
           setPendingDomainRequests(detail.pending_domain_requests);
         }
+        setSubAgentDeploymentInstructions(detail.sub_agent_deployment_instructions ?? '');
       })
       .catch(() => {
         // On error, leave textareas with current (likely empty) values
@@ -376,6 +380,7 @@ export default function SettingsView({
       budget_period: budgetPeriod,
       budget_action: budgetAction,
       disabled_sub_agents: disabledSubAgents,
+      sub_agent_deployment_instructions: subAgentDeploymentInstructions,
       enabled_connectors: enabledConnectors,
       approved_domains: approvedDomains,
       pending_domain_requests: pendingDomainRequests,
@@ -466,13 +471,33 @@ export default function SettingsView({
           <div data-settings-section="sub-agents" className="scroll-mt-4">
             <label className="block text-sm font-medium text-primary mb-1.5">
               {t('settings.subAgents.label')}
-              <span className="text-secondary font-normal"> — delegation targets &amp; their memory for this project</span>
+              <span className="text-secondary font-normal"> {t('settings.subAgents.labelSuffix')}</span>
             </label>
             <p className="text-xs text-secondary mb-2">
-              Toggle a sub-agent on/off for this project, and edit the long-term
-              memory it reads on every dispatch. Disabled agents stay listed
-              (dimmed) so you can still curate their memory.
+              {t('settings.subAgents.hint')}
             </p>
+
+            <label
+              htmlFor="sub-agent-deployment-instructions"
+              className="block text-sm font-medium text-primary mb-1.5"
+            >
+              {t('settings.subAgents.deploymentInstructions.label')}
+            </label>
+            <p className="text-xs text-secondary mb-2">
+              {t('settings.subAgents.deploymentInstructions.hint')}
+            </p>
+            <textarea
+              id="sub-agent-deployment-instructions"
+              rows={4}
+              maxLength={4000}
+              value={subAgentDeploymentInstructions}
+              onChange={(e) => setSubAgentDeploymentInstructions(e.target.value)}
+              disabled={loadingDetail}
+              placeholder={loadingDetail
+                ? t('settings.loading')
+                : t('settings.subAgents.deploymentInstructions.placeholder')}
+              className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 mb-3 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+            />
 
             {memoryError && (
               <p className="text-xs text-error mb-2">{memoryError}</p>
@@ -480,7 +505,7 @@ export default function SettingsView({
 
             {installedSubAgents.length === 0 ? (
               <p className="text-xs text-secondary/60 italic">
-                Install an agent&apos;s CLI on your machine to use it here.
+                {t('settings.subAgents.installHint')}
               </p>
             ) : (
               <>
@@ -500,11 +525,10 @@ export default function SettingsView({
                   ))}
                 </div>
                 <p className="text-[11px] text-secondary/60 mt-1.5 italic">
-                  Remember to Save toggle changes below. Memory edits save
-                  immediately.
+                  {t('settings.subAgents.saveReminder')}
                 </p>
                 <p className="text-[11px] text-secondary/60 mt-1 italic">
-                  Install an agent&apos;s CLI on your machine to use it here.
+                  {t('settings.subAgents.installHint')}
                 </p>
               </>
             )}

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Codex live journeys (TEST RULE 2 + 5): real codex 0.125.0 app-server.
+"""Codex live journeys (TEST RULE 2 + 5): real codex 0.144.5 app-server.
 
 Covers: dispatch -> command + fileChange items -> final answer -> ONE honest
 turn boundary; on-request approval round-trip (decline continues / cancel
@@ -10,7 +10,7 @@ interrupts); kill -9 -> thread/resume -> context recalled; Stop leaves zero
 in-tree survivors.
 
 Heavy + costs live turns — opt-in: not in the default unit/platform run.
-Pinned to codex-cli 0.125.0; on a version bump re-run schema-gen + this file.
+Pinned to codex-cli 0.144.5; on a version bump re-run schema-gen + this file.
 """
 
 from __future__ import annotations

@@ -41,6 +41,24 @@ from agent_os.daemon_v2.sub_agent_config_store import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_real_codex_probe(monkeypatch):
+    """Keep unit tests hermetic: the settings routes probe the codex binary
+    for its live model list; never spawn the real one here. The cache and
+    the route seam stay exercised — only the subprocess layer is stubbed.
+    (TestCodexLiveModels patches the higher `_codex_live_models` seam and is
+    unaffected.)"""
+    import agent_os.agent.transports.codex_models as _cm
+
+    async def _unavailable(binary="codex", **_kw):
+        return None
+
+    monkeypatch.setattr(_cm, "fetch_codex_models", _unavailable)
+    _cm.clear_codex_models_cache()
+    yield
+    _cm.clear_codex_models_cache()
+
+
 def _make_cli_manifest(slug="test-agent", command="testagent",
                       check_command="testagent --version") -> AgentManifest:
     return AgentManifest(
@@ -197,6 +215,17 @@ class TestSubAgentConfigStore:
         though the claude-code CLI accepts them."""
         store = SubAgentConfigStore(str(tmp_path / "config.json"))
         for model in ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"):
+            store.set("claude-code", {"model": model})
+            assert store.get("claude-code") == {"model": model}
+
+    def test_fable_alias_and_pin_selectable(self, tmp_path):
+        """Claude 5 generation: the `fable` alias (documented by the
+        claude-code CLI as auto-tracking the newest model) and the explicit
+        claude-fable-5 pin must both be offered. Regression: the whitelist
+        predated Fable, so the newest subscription model was only reachable
+        by clearing the override entirely ("default")."""
+        store = SubAgentConfigStore(str(tmp_path / "config.json"))
+        for model in ("fable", "claude-fable-5"):
             store.set("claude-code", {"model": model})
             assert store.get("claude-code") == {"model": model}
 
@@ -375,3 +404,83 @@ class TestSubAgentSettingsRoutes:
                     pytest.fail(
                         f"orbital credential file appeared after login: {fname}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Codex live model list (TASK-live-model-config)
+# ---------------------------------------------------------------------------
+
+class TestCodexLiveModels:
+    """The codex model dropdown must reflect the ChatGPT account's LIVE
+    model/list, and saves must be validated against it. A free-text override
+    the account can't use (`gpt-5.6`, valid in Codex desktop but not through
+    the CLI's ChatGPT-account gate) previously saved fine and then 400'd on
+    every dispatch — invisibly."""
+
+    @staticmethod
+    def _patch_live(monkeypatch, result):
+        import agent_os.api.routes.settings as settings_routes
+
+        async def fake(binary=None):
+            return result
+
+        monkeypatch.setattr(settings_routes, "_codex_live_models", fake)
+
+    def test_get_codex_allowed_populated_from_live_list(self, client,
+                                                        monkeypatch):
+        self._patch_live(monkeypatch, ["gpt-5.5", "gpt-5.4-mini"])
+        resp = client.get("/api/v2/settings/sub-agents")
+        assert resp.status_code == 200
+        codex = next(e for e in resp.json() if e["slug"] == "codex")
+        assert codex["param_schema"]["model"]["allowed"] == [
+            "gpt-5.5", "gpt-5.4-mini"]
+
+    def test_get_codex_allowed_stays_freetext_when_unavailable(self, client,
+                                                               monkeypatch):
+        self._patch_live(monkeypatch, None)
+        resp = client.get("/api/v2/settings/sub-agents")
+        codex = next(e for e in resp.json() if e["slug"] == "codex")
+        assert codex["param_schema"]["model"]["allowed"] is None
+
+    def test_put_codex_model_rejected_when_not_in_live_list(self, client,
+                                                            monkeypatch):
+        self._patch_live(monkeypatch, ["gpt-5.5", "gpt-5.4-mini"])
+        resp = client.put("/api/v2/settings/sub-agents/codex/config",
+                          json={"model": "gpt-5.6"})
+        assert resp.status_code == 400
+        # The error must teach: name the rejected value and the valid ids.
+        assert "gpt-5.6" in resp.json()["detail"]
+        assert "gpt-5.5" in resp.json()["detail"]
+
+    def test_put_codex_model_accepted_when_in_live_list(self, client,
+                                                        monkeypatch):
+        self._patch_live(monkeypatch, ["gpt-5.5", "gpt-5.4-mini"])
+        resp = client.put("/api/v2/settings/sub-agents/codex/config",
+                          json={"model": "gpt-5.5"})
+        assert resp.status_code == 200
+        assert resp.json()["config"] == {"model": "gpt-5.5"}
+
+    def test_put_codex_model_accepted_when_live_list_unavailable(
+            self, client, monkeypatch):
+        """No live list (codex missing/broken) → free-text fallback: the
+        save must NOT be blocked on a probe failure."""
+        self._patch_live(monkeypatch, None)
+        resp = client.put("/api/v2/settings/sub-agents/codex/config",
+                          json={"model": "anything-goes"})
+        assert resp.status_code == 200
+
+    def test_put_codex_clear_skips_live_validation(self, client, monkeypatch):
+        """Clearing the override (empty string) never consults the live
+        list — clearing must always work, even with codex broken."""
+        called = []
+        import agent_os.api.routes.settings as settings_routes
+
+        async def fake(binary=None):
+            called.append(True)
+            return ["gpt-5.5"]
+
+        monkeypatch.setattr(settings_routes, "_codex_live_models", fake)
+        resp = client.put("/api/v2/settings/sub-agents/codex/config",
+                          json={"model": ""})
+        assert resp.status_code == 200
+        assert called == []

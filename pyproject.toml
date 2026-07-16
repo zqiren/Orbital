@@ -22,6 +22,7 @@ dependencies = [
     "watchdog>=3.0",
     "pyyaml>=6.0",
     "claude-agent-sdk>=0.1.48",
+    "agent-client-protocol==0.11.0",
     "mcp>=1.2",
 ]
 
