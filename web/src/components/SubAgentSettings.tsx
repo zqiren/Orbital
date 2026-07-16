@@ -426,6 +426,13 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                     {!schema.default && (
                       <option value="">{t('subAgentCard.param.default')}</option>
                     )}
+                    {/* A saved value absent from the (possibly live-populated)
+                        list would render the select BLANK — keep it visible so
+                        the user can see the stale override they're replacing.
+                        Saving it again is rejected server-side. */}
+                    {value !== '' && !schema.allowed.includes(value) && (
+                      <option value={value}>{value}</option>
+                    )}
                     {schema.allowed.map(opt => (
                       <option key={opt} value={opt}>
                         {paramOptionLabel(

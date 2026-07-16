@@ -195,4 +195,36 @@ describe('SubAgentSettings', () => {
     expect(screen.getByRole('option', { name: '通过权限卡询问' })).toBeInTheDocument();
     expect(screen.getByText(/转到 Orbital 权限卡/)).toBeInTheDocument();
   });
+
+  it('keeps a stale saved model visible in the dropdown', async () => {
+    // The codex model schema is live-populated from the account's model
+    // list; a previously saved override may no longer be in it (that's how
+    // the invalid `gpt-5.6` save was discovered). A <select> whose value has
+    // no matching <option> renders BLANK — the user couldn't even see what
+    // broken value is currently saved. The stale value must stay visible as
+    // an option until they pick a valid one.
+    api.mockResolvedValueOnce([
+      makeEntry({
+        slug: 'codex',
+        name: 'Codex',
+        config: { model: 'gpt-5.6' },
+        param_schema: {
+          model: { allowed: ['gpt-5.5', 'gpt-5.4-mini'], default: null },
+        },
+      }),
+    ]);
+
+    render(
+      <LocaleProvider>
+        <SubAgentSettings />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Codex')).toBeInTheDocument());
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    expect(select.value).toBe('gpt-5.6');
+    expect(screen.getByRole('option', { name: 'gpt-5.6' })).toBeInTheDocument();
+    // The live options are still offered alongside it.
+    expect(screen.getByRole('option', { name: 'gpt-5.5' })).toBeInTheDocument();
+  });
 });
