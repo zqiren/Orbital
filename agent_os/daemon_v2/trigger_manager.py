@@ -455,6 +455,9 @@ class TriggerManager:
                 provider=project.get("provider", "custom"),
                 project_name=project.get("name", ""),
                 project_instructions=project.get("instructions", ""),
+                sub_agent_deployment_instructions=(project.get(
+                    "sub_agent_deployment_instructions", ""
+                ) or ""),
                 is_scratch=project.get("is_scratch", False),
                 agent_name=project.get("agent_name", project.get("name", "")),
                 enabled_sub_agents=trigger_enabled_sub_agents,

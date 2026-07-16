@@ -498,6 +498,9 @@ class TestTriggerManager:
              "task": "Do the thing", "trigger_count": 0, "last_triggered": None},
         ]
         store, pid = _make_project_store(triggers=triggers)
+        store.update_project(pid, {
+            "sub_agent_deployment_instructions": "Use Codex for trigger work.",
+        })
         mock_agent_mgr = MagicMock()
         mock_agent_mgr.is_running = MagicMock(return_value=False)
         mock_agent_mgr.start_agent = AsyncMock()
@@ -517,6 +520,10 @@ class TestTriggerManager:
         assert call_kwargs.kwargs["trigger_source"] == "schedule"
         assert call_kwargs.kwargs["trigger_name"] == "Test"
         assert "Do the thing" in call_kwargs.kwargs["initial_message"]
+        config = call_kwargs.args[1]
+        assert config.sub_agent_deployment_instructions == (
+            "Use Codex for trigger work."
+        )
 
     @pytest.mark.asyncio
     async def test_fire_trigger_skips_if_agent_running(self):

@@ -139,6 +139,7 @@ class AgentConfig:
     pending_domain_requests: list[dict] = field(default_factory=list)
     project_name: str = ""
     project_instructions: str = ""
+    sub_agent_deployment_instructions: str = ""
     budget_limit_usd: float | None = None
     budget_action: str = "pause"  # normalized to "pause" | "stop" by guard.normalize_budget_action; not read by enforcement (the guard reads live config)
     budget_spent_usd: float = 0.0

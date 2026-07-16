@@ -723,6 +723,9 @@ class AgentManager:
             datetime_now=datetime.now().isoformat(),
             project_name=config.project_name,
             project_instructions=config.project_instructions,
+            sub_agent_deployment_instructions=(
+                config.sub_agent_deployment_instructions
+            ),
             is_scratch=config.is_scratch,
             agent_name=config.agent_name,
             global_preferences_path=config.global_preferences_path,
@@ -799,6 +802,11 @@ class AgentManager:
             scope_projects_provider=(
                 (lambda: self._scope_projects_for_prompt(project_id, _sid_for_provider))
                 if config.is_scratch else None
+            ),
+            sub_agent_deployment_instructions_provider=lambda: (
+                (self._project_store.get_project(project_id) or {}).get(
+                    "sub_agent_deployment_instructions", ""
+                ) or ""
             ),
         )
 
@@ -1435,6 +1443,9 @@ class AgentManager:
             provider=provider,
             project_name=project.get("name", ""),
             project_instructions=project.get("instructions", ""),
+            sub_agent_deployment_instructions=(project.get(
+                "sub_agent_deployment_instructions", ""
+            ) or ""),
             enabled_sub_agents=enabled_sub_agents or [],
             disabled_sub_agents=list(disabled),
             is_scratch=project.get("is_scratch", False),

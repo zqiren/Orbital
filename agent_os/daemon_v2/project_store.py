@@ -42,6 +42,7 @@ DEFAULT_NOTIFICATION_PREFS = {
 # the project has ever been reconciled with the bundled default skills.
 DEFAULT_PROJECT_FIELDS: dict = {
     "default_skills_reconciled": False,
+    "sub_agent_deployment_instructions": "",
 }
 
 # Queue runtime cap defaults. Applied lazily when reading

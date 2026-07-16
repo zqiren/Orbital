@@ -47,6 +47,7 @@ class ContextManager:
         workspace_files=None,
         sub_agent_provider=None,
         scope_projects_provider=None,
+        sub_agent_deployment_instructions_provider=None,
     ):
         self._session = session
         self._prompt_builder = prompt_builder
@@ -72,6 +73,9 @@ class ContextManager:
         self._refresh_in_flight_since_turn: int | None = None
         self._sub_agent_provider = sub_agent_provider  # callable() -> list[dict]
         self._scope_projects_provider = scope_projects_provider  # callable() -> list[dict]
+        self._sub_agent_deployment_instructions_provider = (
+            sub_agent_deployment_instructions_provider
+        )  # callable() -> str
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
         self._window_factor: float = 1.0
@@ -206,6 +210,11 @@ class ContextManager:
             scope_projects=(
                 self._scope_projects_provider()
                 if self._scope_projects_provider else self._base_ctx.scope_projects
+            ),
+            sub_agent_deployment_instructions=(
+                self._sub_agent_deployment_instructions_provider()
+                if self._sub_agent_deployment_instructions_provider
+                else self._base_ctx.sub_agent_deployment_instructions
             ),
             last_state_update_turn=self._last_checkpoint_turn,
             last_state_update_ts=self._last_checkpoint_ts,

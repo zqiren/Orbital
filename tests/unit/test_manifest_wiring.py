@@ -645,6 +645,65 @@ class TestPromptBuilderSubAgentsSection:
         _cached, semi_stable, _dynamic = builder.build(context)
         assert "Sub-Agents Available" not in semi_stable
 
+    def test_project_deployment_instructions_are_delimited_before_examples(
+        self, tmp_path
+    ):
+        from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
+
+        builder = PromptBuilder(workspace=str(tmp_path))
+        context = PromptContext(
+            workspace=str(tmp_path),
+            model="gpt-4",
+            autonomy=Autonomy.HANDS_OFF,
+            enabled_agents=[{
+                "handle": "codex",
+                "display_name": "Codex",
+                "type": "cli",
+            }],
+            tool_names=["agent_message"],
+            os_type="linux",
+            datetime_now="2026-01-01T00:00:00",
+            sub_agent_deployment_instructions=(
+                "Use Codex for implementation.\nUse Claude for review."
+            ),
+        )
+
+        _cached, semi_stable, _dynamic = builder.build(context)
+
+        block = (
+            "<sub_agent_deployment_instructions>\n"
+            "Use Codex for implementation.\nUse Claude for review.\n"
+            "</sub_agent_deployment_instructions>"
+        )
+        assert block in semi_stable
+        assert semi_stable.index(block) < semi_stable.index("To interact with sub-agents")
+        assert "disabled, unavailable, or unsafe agent" in semi_stable
+
+    def test_empty_project_deployment_instructions_change_no_prompt_tokens(
+        self, tmp_path
+    ):
+        from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
+
+        base = dict(
+            workspace=str(tmp_path),
+            model="gpt-4",
+            autonomy=Autonomy.HANDS_OFF,
+            enabled_agents=[{
+                "handle": "codex",
+                "display_name": "Codex",
+                "type": "cli",
+            }],
+            tool_names=["agent_message"],
+            os_type="linux",
+            datetime_now="2026-01-01T00:00:00",
+        )
+        builder = PromptBuilder(workspace=str(tmp_path))
+        before = builder.build(PromptContext(**base))
+        after = builder.build(PromptContext(
+            **base, sub_agent_deployment_instructions=" \n\t "
+        ))
+        assert after == before
+
     def test_sub_agents_section_without_optional_fields(self, tmp_path):
         """Agent without skills or routing_hint should still render correctly."""
         from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
