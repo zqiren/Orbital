@@ -110,3 +110,4 @@ docs/screenshots/merged-subagents.png
 docs/screenshots/phase3-rendered-stream.png
 docs/screenshots/budget/*
 !docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png
+uploads/

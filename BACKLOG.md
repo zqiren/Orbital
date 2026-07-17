@@ -27,6 +27,8 @@
 
 | # | Feature | Notes |
 |---|---------|-------|
+| 23 | **BUG FIX: sub-agent terminal errors can be silently swallowed (deferred-wake gap + unrendered error marker)** | 2026-07-16 · Diagnosed live on orbital-marketing (codex `gpt-5.6` 400 → user saw nothing). Three stacked defects: **(D1)** a terminal lifecycle event injected while the management turn is in flight is deferred and only *appended* at loop teardown — hot-resume exists solely for queued **user** messages (`agent_os/daemon_v2/agent_manager.py:4129` drain vs `:4163` resume), and the turn-end sub-agent poll only covers still-`running` workers, so a fast mid-turn failure never wakes the manager (**amends Spec 22's** "every terminal outcome wakes the owning session" finding — untrue for the in-flight window); **(D2)** the chat renderer's system-marker whitelist has no rule for `stopped with error:` (nor `User sent @…`), so the durable error row renders as nothing (`web/src/utils/chatTransform.ts:329-427`; `on_failed`'s `failed:` shape IS whitelisted — the contract drifted when `on_error` was added, and no parity test ties producer shapes to renderer rules); **(D3)** the @mention wake notification carries no role guidance, so a weak management model (MiniMax-M3 observed) answers the user's question on the dispatched sub-agent's behalf, papering over the silence. Fix shape: wake-on-terminal-deferred (error/failed/stopped) at `_on_loop_done`; error-styled timeline row + a backend↔frontend marker **parity test**; one guidance line in the user-mention notification. S. |
+| 22 | **Reactive sub-agent supervision and recovery contract** | 2026-07-16 · Investigation confirms the core loop already exists: dispatch yields; completion/error/failure/interruption/user-stop/background-loss wakes the owning management session; the manager can verify, fix directly, follow up, or restart fresh under normal autonomy. Proposed scope is **XS, 0.5–1 day**: add a precise negative-outcome recovery ladder to the management prompt, lock user-stop/autonomy behavior in tests, and sharpen README positioning. No watchdog, progress classifier, retry engine, worker scoring, or new UI. Alignment requested on user-stop as a universal hard boundary, Check-in's existing automatic re-dispatch semantics, and prompt-only vs persistent retry guard. Spec at [`BACKLOG/specs/022-…md`](BACKLOG/specs/022-reactive-sub-agent-supervision.md). |
 | 16 | **Cursor + Grok as sub-agents via an official-ACP-SDK transport** | 2026-07-16 · **Cursor-only v1 implementation complete on `codex/cursor-grok-acp-implementation`; standalone Grok deferred.** Added pinned official `agent-client-protocol==0.11.0`, a typed streaming `ACPSDKTransport`, Cursor manifest/detection/auth/model settings, user-visible `auto` (default) / `ask` permission policy through Orbital's existing card, provider-neutral blocked-interaction wake + `agent_message.respond`, provider-confirmed resume reporting, per-handle prompt FIFO, process-tree teardown, and English + Simplified Chinese UI. Independent review corrections prevent persistent provider grants, aggregate ACP text deltas into one answer, preserve the ten-minute bypass and permission option IDs, reject dead-stream queues honestly, and keep task text separate from workspace instructions/private memory. Automated Python/TypeScript/Vitest/i18n gates and isolated real-daemon Cursor+Grok protocol smoke pass. **Live limitations:** the authenticated account returns “Upgrade your plan to continue,” so Grok-generated content and Cursor question/plan extension names remain unverified; Cursor `session/load` returns ACP `Invalid params` for a just-created session, and the transport fails visibly rather than falsely claiming resume. Awaiting human diff review and resolution of those provider/account gates before production-ready status. Spec at [`BACKLOG/specs/016-…md`](BACKLOG/specs/016-cursor-grok-acp-sdk-transport.md). |
 | 14 | **Use open-connector as an MCP server source for connectors** | 2026-07-06 · Can Orbital consume `oomol-lab/open-connector` (840+ providers, 8,300+ Actions, exposes `/mcp`) as a Tier-0 MCP source under Spec 11's connector substrate? Sub-agent verdict: **consumable today** via the existing Custom MCP server form at `ConnectorSettings.tsx` + `POST /api/v2/connectors/custom` (`agent_os/api/routes/connectors.py:64-72`) — zero Orbital code changes. But `/mcp` exposes only 4 meta-tools (`list_apps`, `search_actions`, `get_action_guide`, `execute_action`), not direct action passthrough, so deeper integration needs an agent-loop extension. Integration shapes (a–d) compared: standalone sidecar / catalog import at build / user-installed Tier-0 / hybrid. Awaiting user answers on deployment model (local-first posture), OAuth app-registration responsibility, curated-vs-full-catalog posture. **2026-07-07 research addendum** (spec §"2026-07-07"): broker landscape + OAuth-app cost + connector roadmap. Verdicts — **Nango is not the fit** (BYO OAuth app per provider; moves tokens off keychain); **Composio** is the only managed broker that owns verified OAuth apps (removes per-service registration) but stores tokens on its SaaS cloud (breaks local-first); **first-party is best for the free/sensitive tier** since OAuth registration is ~free (real money = Google restricted-scope CASA $500–4.5k/yr + WeChat 企业认证 ¥300/$99; real barrier = a Chinese entity for CN platforms). **China workspace suite (Feishu/DingTalk/WeChat) is first-party regardless** — even China-origin open-connector ships only notification bots for them. Connector tiers + launch order recorded. Spec at [`BACKLOG/specs/014-…md`](BACKLOG/specs/014-open-connector-as-mcp-source.md). |
 
@@ -304,3 +306,32 @@ Implemented as one optional `sub_agent_deployment_instructions` textarea above t
 Spec: **[`BACKLOG/specs/021-sub-agent-deployment-instructions.md`](BACKLOG/specs/021-sub-agent-deployment-instructions.md)**
 
 → Awaiting human diff review/merge. The user accepted the recommended decisions: instructions are normally binding subject to availability/safety/autonomy, and saved changes apply on the next management-model call, never an in-flight request.
+
+### Spec 22 — Reactive sub-agent supervision and recovery contract
+**Status:** shaped · **Added:** 2026-07-16 · **Alignment pending:** user-stop boundary + Check-in re-dispatch + retry guard
+
+User said the management agent already recovers after bad sub-agent news by
+finishing the work itself or restarting the worker, and rejected a separate
+continuous-supervision design as overengineered. Code investigation confirms
+that assessment: all honest terminal outcomes already inject into and wake the
+owning management session, dispatch errors remain in-turn, successful output is
+already subject to verification, and recovery tool calls already pass through
+the management agent's autonomy interceptor.
+
+The remaining gap is a small management-prompt contract for negative outcomes:
+diagnose before retrying; choose direct correction, targeted same-thread
+follow-up, deliberate fresh reset, alternate worker, or user escalation; never
+blindly repeat; and treat an explicit user stop as a separate safety boundary.
+The spec also records the non-obvious current policy that Check-in permits
+automatic `agent_message(send)` while Supervised approval-gates it, and that
+per-run send/ping-pong guards reset after each terminal wake rather than forming
+a cross-retry cap. Recommended effort is **XS, ~0.5–1 day**, including focused
+tests and precise README positioning; no watchdog, progress classifier,
+automatic retry engine, or new UI.
+
+Spec: **[`BACKLOG/specs/022-reactive-sub-agent-supervision.md`](BACKLOG/specs/022-reactive-sub-agent-supervision.md)**
+
+→ Awaiting three policy confirmations: **user stop halts the stopped work across
+all recovery routes** (recommended), **Check-in keeps automatic re-dispatch while
+Supervised approval-gates it** (recommended), and **prompt-only no-blind-retry
+guard rather than persistent retry counters** (recommended).
