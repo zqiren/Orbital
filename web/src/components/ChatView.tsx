@@ -15,7 +15,9 @@ import {
 } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
-import type { ChatMessage as ChatMessageRow } from '../types';
+import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
+import AgentErrorNotice from './AgentErrorNotice';
+import { parseProviderError, providerErrorKey } from '../utils/providerError';
 import AttachmentChip from './AttachmentChip';
 import { uploadFile } from '../lib/attachment-upload';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
@@ -465,6 +467,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Cold-start consent card (imported non-empty workspace, first session).
   const [coldStartBusy, setColdStartBusy] = useState(false);
   const [coldStartDismissed, setColdStartDismissed] = useState(false);
+  // Translated inline error on the cold-start card (scan failed, e.g.
+  // missing API key). Previously the failure was console-only.
+  const [coldStartError, setColdStartError] = useState<string | null>(null);
+  // Classified agent/provider error for the viewed session (credential-error
+  // surfacing): fed by agent.status error broadcasts and run-status
+  // last_terminal_event hydration; rendered as AgentErrorNotice.
+  const [agentError, setAgentError] = useState<{
+    code?: string;
+    message?: string;
+  } | null>(null);
   const [loadedOffset, setLoadedOffset] = useState(0);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
@@ -832,16 +844,33 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
    * mount, on agentStatus/sessionId change, and via the existing 5s poll.
    */
   const fetchHolder = useCallback(() => {
-    api<{ project_id: string; status: string; current_holder_session_id?: string | null }>(
-      `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
-    )
+    const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    api<{
+      project_id: string;
+      status: string;
+      current_holder_session_id?: string | null;
+      last_terminal_event?: {
+        type: string;
+        details?: string | null;
+        error_code?: string;
+      } | null;
+    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/run-status${qs}`)
       .then((result) => {
         setHolderSessionId(result.current_holder_session_id ?? null);
+        // Hydrate a classified error after reload (the agent.status broadcast
+        // that carried it is ephemeral). Only fill in when nothing fresher is
+        // already showing.
+        const ev = result.last_terminal_event;
+        if (ev && ev.type === 'error') {
+          setAgentError((prev) =>
+            prev ?? { code: ev.error_code, message: ev.details ?? undefined },
+          );
+        }
       })
       .catch(() => {
         // best effort — leave the prior holder value in place
       });
-  }, [projectId]);
+  }, [projectId, sessionId]);
 
   // Pending-input queue (spec 006). Remove a kept optimistic bubble (identified
   // by its content + timestamp) from BOTH the live `items` and `rawMessages`
@@ -999,6 +1028,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   useEffect(() => {
     fetchHolder();
   }, [fetchHolder, agentStatus, statusTick, sessionId]);
+
+  // A session/project switch shows a different conversation — drop the
+  // previous session's error notice (hydration re-fills it if it applies).
+  useEffect(() => {
+    setAgentError(null);
+    setColdStartError(null);
+  }, [projectId, sessionId]);
 
   // Per-session history load. Re-runs when the viewed sessionId changes so
   // switching sessions shows that session's own history (and its own loading
@@ -1877,6 +1913,32 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     };
   }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
 
+  // Credential-error surfacing: agent.status error events for the viewed
+  // session feed the AgentErrorNotice. Events without a meaningful session
+  // match too (trigger failures broadcast project-level). Any *active* status
+  // clears the notice (a new run started); idle does NOT (error → idle
+  // transitions must not wipe the message). Separate effect from the main
+  // WS block because the filter depends on sessionId.
+  useEffect(() => {
+    function handleAgentStatusError(event: WebSocketEvent) {
+      const e = event as AgentStatusEvent & {
+        session_id?: string;
+        error_code?: string;
+      };
+      if (e.project_id !== projectId) return;
+      if (e.session_id && sessionId !== undefined && e.session_id !== sessionId) {
+        return;
+      }
+      if (e.status === 'error') {
+        setAgentError({ code: e.error_code, message: e.reason });
+      } else if (e.status !== 'idle') {
+        setAgentError(null);
+      }
+    }
+    on('agent.status', handleAgentStatusError);
+    return () => off('agent.status', handleAgentStatusError);
+  }, [projectId, sessionId, on, off]);
+
   // Fingerprint for the last item. DisplayItem has no stable id; use a
   // composite of type + a discriminating field per variant.
   function lastItemKey(item: DisplayItem | undefined): string | null {
@@ -2448,8 +2510,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           return next;
         });
       }
-    } catch {
-      setInjectError(t('chat.injectError'));
+    } catch (err) {
+      // A classified provider/credential 400 (auto-start could not build the
+      // LLM provider) gets the actionable AgentErrorNotice; anything else
+      // keeps the generic inline error line.
+      const info = parseProviderError(err);
+      if (info) {
+        setAgentError(info);
+      } else {
+        setInjectError(t('chat.injectError'));
+      }
     } finally {
       setSubAgentLoading(null);
     }
@@ -2607,13 +2677,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               <ColdStartCard
                 folderName={(project.workspace || '').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
                 busy={coldStartBusy}
+                error={coldStartError}
                 onScan={async () => {
                   setColdStartBusy(true);
+                  setColdStartError(null);
                   try {
                     // Navigation to the new session is WS-driven, like /new.
                     await coldStartScan(project.project_id);
                   } catch (err) {
                     console.error('[ChatView] cold-start scan failed:', err);
+                    // Classified 400 (e.g. missing_api_key) → actionable
+                    // message on the card; anything else → generic copy.
+                    // Never fail silently (the original bug).
+                    const info = parseProviderError(err);
+                    setColdStartError(t(providerErrorKey(info?.code)));
                     setColdStartBusy(false);
                   }
                 }}
@@ -2985,6 +3062,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           />
         )}
       </div>
+
+      {agentError && (
+        <div className="shrink-0 px-4">
+          <AgentErrorNotice
+            code={agentError.code}
+            message={agentError.message}
+            onOpenSettings={() =>
+              window.dispatchEvent(new CustomEvent('open-global-settings'))
+            }
+            onDismiss={() => setAgentError(null)}
+          />
+        </div>
+      )}
 
       {injectError && (
         <div className="shrink-0 px-4 py-1">

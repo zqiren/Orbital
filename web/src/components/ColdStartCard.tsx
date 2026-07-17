@@ -9,6 +9,9 @@ interface ColdStartCardProps {
   onScan: () => void;
   onSkip: () => void;
   busy?: boolean;
+  /** Translated error from a failed scan (e.g. missing API key). Scan stays
+   * enabled so the user can retry after fixing Settings. */
+  error?: string | null;
 }
 
 /**
@@ -16,7 +19,7 @@ interface ColdStartCardProps {
  * the empty chat view; spends no tokens until the user clicks Scan. Scan starts
  * the cold-start scan session; Skip dismisses the card for this view.
  */
-export function ColdStartCard({ folderName, onScan, onSkip, busy }: ColdStartCardProps) {
+export function ColdStartCard({ folderName, onScan, onSkip, busy, error }: ColdStartCardProps) {
   const t = useT();
   return (
     <div className="mb-3 rounded-lg border border-border bg-white overflow-hidden">
@@ -27,6 +30,11 @@ export function ColdStartCard({ folderName, onScan, onSkip, busy }: ColdStartCar
         <p className="text-sm text-secondary leading-relaxed">
           {t('coldStart.body', { folder: folderName })}
         </p>
+        {error && (
+          <p data-testid="cold-start-error" className="text-sm text-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="flex gap-2">
           <button
             onClick={onScan}

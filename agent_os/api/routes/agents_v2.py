@@ -29,6 +29,7 @@ from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
+from agent_os.daemon_v2.provider_errors import ProviderConfigError
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.routes._attachment_formatter import (
     validate_attachments,
@@ -1053,6 +1054,9 @@ async def start_agent(req: StartAgentRequest):
             initial_message=req.initial_message,
             session_id=req.session_id,
         )
+    except ProviderConfigError as e:
+        raise HTTPException(status_code=400,
+                            detail={"code": e.code, "message": str(e)})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "started"}
@@ -1076,15 +1080,28 @@ async def cold_start_scan(project_id: str):
 
     skeleton = scan_workspace(workspace)
     config = _agent_manager._build_agent_config_from_project(project_id)
+    # Validate the provider BEFORE minting: a credential failure must surface
+    # as a structured 400 the frontend can translate, and must not leave an
+    # orphan session per click (the silent-error bug minted one per attempt).
+    try:
+        _agent_manager.validate_provider_config(config)
+    except ProviderConfigError as e:
+        raise HTTPException(status_code=400,
+                            detail={"code": e.code, "message": str(e)})
     minted = await _agent_manager.new_session(project_id)
     session_id = minted["session_id"]
-    await _agent_manager.start_agent(
-        project_id, config,
-        initial_message=None,
-        session_id=session_id,
-        cold_start=True,
-        cold_start_skeleton=skeleton,
-    )
+    try:
+        await _agent_manager.start_agent(
+            project_id, config,
+            initial_message=None,
+            session_id=session_id,
+            cold_start=True,
+            cold_start_skeleton=skeleton,
+        )
+    except ProviderConfigError as e:
+        # Belt-and-braces: settings changed between validate and start.
+        raise HTTPException(status_code=400,
+                            detail={"code": e.code, "message": str(e)})
     return {"status": "started", "session_id": session_id}
 
 
@@ -1207,6 +1224,12 @@ async def inject_message(project_id: str, req: InjectRequest):
                 project_id, effective_content, nonce=req.nonce,
                 session_id=req.session_id,
             )
+        except ProviderConfigError as e:
+            # Auto-start could not construct the LLM provider (missing/invalid
+            # credentials). Surface a structured 400 the frontend can translate
+            # — never a swallowed 500.
+            raise HTTPException(status_code=400,
+                                detail={"code": e.code, "message": str(e)})
         except ValueError:
             # The manager rejected the inject — most commonly because another
             # session holds the project's active-loop slot (start_agent raised).
@@ -1322,11 +1345,16 @@ async def put_session_scope(project_id: str, session_id: str, body: SessionScope
 
 
 @router.get("/agents/{project_id}/run-status")
-async def agent_run_status(project_id: str):
+async def agent_run_status(project_id: str, session_id: str | None = None):
     """Return the current runtime status for a project agent.
 
     Also returns ``current_holder_session_id``: the F1 session_id that
     currently holds the project's active-loop slot, or None.
+
+    ``session_id`` selects which session's ``last_terminal_event`` to include
+    — the frontend uses it to re-hydrate a classified error (error_code +
+    details) after a page reload, since the agent.status broadcast that
+    carried it is ephemeral.
     """
     status = _agent_manager.get_run_status(project_id)
     holder = _agent_manager.current_holder_session_id(project_id)
@@ -1337,6 +1365,9 @@ async def agent_run_status(project_id: str):
         # Number of interactive messages queued behind the slot holder
         # (spec 006, pending-input queue).
         "pending_count": len(_agent_manager.list_pending(project_id)),
+        "last_terminal_event": _agent_manager.get_last_terminal_event(
+            project_id, session_id=session_id,
+        ),
     }
 
 

@@ -485,8 +485,23 @@ class TriggerManager:
             # project's active-loop slot, so this trigger is blocked this cycle.
             # Not an error — skip quietly without broadcasting trigger.fired.
             logger.info("Trigger %s: not started — %s", trigger_id, e)
-        except Exception:
+        except Exception as e:
             logger.exception("Trigger %s: failed to start agent for project %s", trigger_id, project_id)
+            # Surface the failure to the UI — this path was log-only, so a
+            # trigger with a missing/invalid API key failed silently forever.
+            from agent_os.daemon_v2.provider_errors import classify_llm_error
+            code, message = classify_llm_error(e)
+            self._broadcast(project_id, {
+                "type": "agent.status",
+                "project_id": project_id,
+                "status": "error",
+                "reason": message,
+                "error_code": code,
+                "source": "trigger",
+                "trigger_id": trigger_id,
+                "trigger_name": trigger_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
     def _broadcast(self, project_id: str, event: dict) -> None:
         """Broadcast a WebSocket event if ws_manager is available."""

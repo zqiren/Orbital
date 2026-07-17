@@ -296,6 +296,12 @@ export interface AgentStatusEvent {
   status: AgentRunStatus;
   source?: string;
   reason?: string;
+  /** Stable classifier code for status="error" (missing_api_key,
+   * invalid_api_key, model_not_found, provider_unreachable, provider_error)
+   * — contract with agent_os/daemon_v2/provider_errors.py. */
+  error_code?: string;
+  /** Session the event belongs to (stamped by the daemon's _broadcast). */
+  session_id?: string;
   trigger_source?: string;
 }
 

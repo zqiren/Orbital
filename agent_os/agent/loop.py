@@ -112,6 +112,8 @@ class AgentLoop:
         self._provider = provider
         self._tool_registry = tool_registry
         self._context_manager = context_manager
+        # Terminal LLM failure of the most recent run (see run() reset).
+        self.last_llm_error: Exception | None = None
         self._interceptor = interceptor
         self._utility_provider = utility_provider
         self._fallback_providers = fallback_providers or []
@@ -594,6 +596,11 @@ class AgentLoop:
         self._exit_reason = "text"
         self._exit_summary = None
         self._exit_block_reason = None
+        # Terminal LLM failure of THIS run (ABORT or retries-exhausted). The
+        # loop handles those internally (session system row + normal exit), so
+        # _on_loop_done reads this to broadcast a classified error the UI can
+        # show — without it the failure is invisible outside the JSONL.
+        self.last_llm_error = None
         # Capture our own task handle so terminate() can cancel us.
         self._task = asyncio.current_task()
         # Every run() invocation begins a fresh turn boundary: clear the
@@ -807,6 +814,7 @@ class AgentLoop:
                     # Abort: non-recoverable errors (401, 403, 400)
                     if category == ErrorCategory.ABORT:
                         self._llm_failed = True
+                        self.last_llm_error = e
                         self._session.append_system(
                             f"LLM error (non-recoverable): {e.message}. Stopping."
                         )
@@ -860,6 +868,7 @@ class AgentLoop:
                             continue
                         # All providers exhausted
                         self._llm_failed = True
+                        self.last_llm_error = e
                         self._session.append_system(
                             f"LLM error after {llm_retries} retries: "
                             f"{e.message}. Stopping."

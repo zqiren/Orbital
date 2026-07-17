@@ -30,6 +30,10 @@ from agent_os.config.provider_registry import ProviderRegistry
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.autonomy import AutonomyInterceptor
 from agent_os.daemon_v2.sub_agent_visibility import resolve_visible_sub_agent_slugs
+from agent_os.daemon_v2.provider_errors import (
+    ProviderConfigError,
+    classify_llm_error,
+)
 from agent_os.daemon_v2.models import (
     AgentConfig,
     SessionKey,
@@ -522,11 +526,30 @@ class AgentManager:
         except OSError:
             logger.warning("Failed to write approval history for project %s", project_id)
 
+    def validate_provider_config(self, config: AgentConfig) -> None:
+        """Raise ProviderConfigError if an LLM provider cannot be constructed
+        from ``config``. Used by routes to validate BEFORE minting a session
+        (cold-start scan) so a credential failure never leaves an orphan."""
+        self._build_llm_providers(config)
+
     def _build_llm_providers(self, config: AgentConfig):
         """Construct (provider, fallback_providers, utility_provider, model_info)
         from an AgentConfig. Single construction site shared by start_agent
-        (fresh session) and _start_loop (hot-resume live-resolve)."""
+        (fresh session) and _start_loop (hot-resume live-resolve).
+
+        Raises:
+            ProviderConfigError(code="missing_api_key"): when no API key
+                resolved from the project, credential store, or settings —
+                checked here (not left to the SDK client constructor) so every
+                start path gets a typed, frontend-translatable error instead
+                of an SDK-version-dependent OpenAIError.
+        """
         api_key = resolve_api_key({"api_key": config.api_key})
+        if not api_key:
+            raise ProviderConfigError(
+                "missing_api_key",
+                "No LLM API key configured for this project or globally",
+            )
         model_info = self._provider_registry.get_model_info(config.provider, config.model)
         provider = LLMProvider(
             config.model, api_key, config.base_url, sdk=config.sdk,
@@ -2288,14 +2311,47 @@ class AgentManager:
 
     def _set_last_terminal_event(self, project_id: str, session_id: str,
                                  event_type: str,
-                                 details: str | None = None) -> None:
-        """Record a terminal event for a session. Idempotent (overwrites)."""
+                                 details: str | None = None,
+                                 error_code: str | None = None) -> None:
+        """Record a terminal event for a session. Idempotent (overwrites).
+
+        ``error_code`` (only for type="error") is the stable classifier code
+        the frontend translates (missing_api_key, invalid_api_key, …); omitted
+        entirely when None so non-error payloads keep their legacy shape."""
         from datetime import datetime, timezone
-        self._last_terminal_events[make_session_key(project_id, session_id)] = {
+        event = {
             "type": event_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": details,
         }
+        if error_code is not None:
+            event["error_code"] = error_code
+        self._last_terminal_events[make_session_key(project_id, session_id)] = event
+
+    def _record_loop_error(self, project_id: str, session_id: str,
+                           exc: BaseException) -> None:
+        """Surface a loop/start failure: log with traceback, record a
+        classified terminal event, and broadcast agent.status error with the
+        stable ``error_code`` so the frontend can show an actionable message
+        (previously the reason string was broadcast but dropped by the UI).
+        """
+        code, message = classify_llm_error(exc)
+        logger.error(
+            "loop task raised for %s/%s: %s: %s",
+            project_id, session_id, type(exc).__name__, exc,
+            exc_info=exc,
+        )
+        self._set_last_terminal_event(
+            project_id, session_id, "error", details=message, error_code=code,
+        )
+        self._broadcast(project_id, {
+            "type": "agent.status",
+            "project_id": project_id,
+            "status": "error",
+            "reason": message,
+            "error_code": code,
+            "source": "management",
+        }, session_id=session_id)
 
     def _clear_last_terminal_event(self, project_id: str,
                                    session_id: str) -> None:
@@ -4077,26 +4133,7 @@ class AgentManager:
                 self._release_slot(project_id)
                 return
             if exc:
-                # Diagnostics (Point 4): the loop task raised. Previously this
-                # branch only recorded a terminal event + broadcast `error`,
-                # logging NOTHING — so mid-stream exceptions were invisible in
-                # daemon.log. Log type/message/traceback BEFORE the existing
-                # broadcast. Logging only; broadcast/terminal-event unchanged.
-                logger.error(
-                    "loop task raised for %s/%s: %s: %s",
-                    project_id, session_id, type(exc).__name__, exc,
-                    exc_info=exc,
-                )
-                self._set_last_terminal_event(
-                    project_id, session_id, "error", details=str(exc),
-                )
-                self._broadcast(project_id, {
-                    "type": "agent.status",
-                    "project_id": project_id,
-                    "status": "error",
-                    "reason": str(exc),
-                    "source": "management",
-                }, session_id=session_id)
+                self._record_loop_error(project_id, session_id, exc)
                 # Errored turn left its same-session queue undrained → clear any
                 # leftover "Waiting…" lines (Finding 1).
                 self._clear_same_session_pending(project_id, session_id)
@@ -4124,6 +4161,17 @@ class AgentManager:
                 # Slot freed (stopped holder) → dispatch pending (spec 006 §3d).
                 self._release_slot(project_id)
                 return
+
+            # Surface a terminal LLM failure the loop handled INTERNALLY
+            # (ABORT 401/403/400 or retries-exhausted): the loop appends a
+            # session system row and ends normally, so task.exception() is
+            # None and the `exc` branch above never fires. Without this the
+            # UI showed nothing for e.g. a wrong API key. isinstance guards
+            # against mocks/stale attributes.
+            loop_err = getattr(getattr(handle, "loop", None),
+                               "last_llm_error", None)
+            if isinstance(loop_err, BaseException):
+                self._record_loop_error(project_id, session_id, loop_err)
 
             # Drain any deferred messages (lifecycle notifications)
             for msg in handle.session.pop_deferred_messages():

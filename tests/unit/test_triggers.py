@@ -755,3 +755,45 @@ class TestTriggerEndpoints:
         resp = client.get(f"/api/v2/projects/{pid}/triggers")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+# ===========================================================================
+# Credential-error surfacing: a trigger whose start fails on provider
+# construction must broadcast a classified agent.status error (it was
+# previously log-only, so users never saw why their trigger did nothing).
+# ===========================================================================
+
+class TestTriggerErrorSurfacing:
+
+    @pytest.mark.asyncio
+    async def test_fire_broadcasts_classified_error_on_provider_failure(self):
+        from agent_os.daemon_v2.provider_errors import ProviderConfigError
+
+        triggers = [
+            {"id": "trg_err", "name": "Nightly", "type": "schedule",
+             "enabled": True, "schedule": {"cron": "0 7 * * *"}, "task": "Do it"},
+        ]
+        store, pid = _make_project_store(triggers=triggers)
+        mock_agent_mgr = MagicMock()
+        mock_agent_mgr.is_running.return_value = False
+        mock_agent_mgr._setup_engine = None
+        mock_agent_mgr.start_agent = AsyncMock(
+            side_effect=ProviderConfigError(
+                "missing_api_key", "No LLM API key configured"),
+        )
+        mock_ws = MagicMock()
+        tm = TriggerManager(store, mock_agent_mgr, ws_manager=mock_ws)
+
+        await tm._fire_trigger(pid, "trg_err")
+
+        events = [c.args[1] for c in mock_ws.broadcast.call_args_list]
+        err = next(
+            (e for e in events
+             if e.get("type") == "agent.status" and e.get("status") == "error"),
+            None,
+        )
+        assert err is not None, f"no agent.status error broadcast; got {events}"
+        assert err["error_code"] == "missing_api_key"
+        assert err["reason"] == "No LLM API key configured"
+        assert err["source"] == "trigger"
+        assert err["trigger_id"] == "trg_err"

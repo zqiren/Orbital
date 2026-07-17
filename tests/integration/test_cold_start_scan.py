@@ -82,7 +82,12 @@ def client(tmp_path, workspace):
         provider_registry=MagicMock(),
     )
     app.include_router(agents_v2.router)
-    return TestClient(app), {"workspace": workspace, "agent_manager": agent_manager}
+    return TestClient(app), {
+        "workspace": workspace,
+        "agent_manager": agent_manager,
+        "credential_store": mock_credential_store,
+        "settings_store": mock_settings_store,
+    }
 
 
 def _create_project(tc, workspace, name="Imported"):
@@ -146,3 +151,79 @@ def test_confirmation_files_flip_onboarding_gates(client):
         cold_start=True,
     ))
     assert "PROJECT DIRECTIVE" in section
+
+
+# ---------------------------------------------------------------------------
+# Credential-error surfacing (silent-error fix): a project with no API key
+# anywhere must get a structured 400 — never a swallowed 500 — and the scan
+# must NOT mint an orphan session per click (the original bug minted 10).
+# ---------------------------------------------------------------------------
+
+def _create_keyless_project(tc, workspace, name="Keyless"):
+    resp = tc.post("/api/v2/projects", json={
+        "name": name, "workspace": workspace, "model": "", "api_key": "",
+    })
+    assert resp.status_code == 201, resp.text
+    return resp.json()["project_id"]
+
+
+def _strip_all_keys(deps):
+    deps["credential_store"].get_api_key.return_value = None
+    deps["settings_store"].get.return_value.llm.api_key = ""
+
+
+def test_scan_without_any_api_key_is_structured_400_and_mints_nothing(client):
+    tc, deps = client
+    _strip_all_keys(deps)
+    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
+    pid = _create_keyless_project(tc, deps["workspace"])
+
+    r = tc.post(f"/api/v2/agents/{pid}/cold-start-scan")
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert detail["code"] == "missing_api_key"
+    assert detail["message"]
+    # Validate-before-mint: no orphan session left behind.
+    assert tc.get(f"/api/v2/projects/{pid}/sessions").json()["sessions"] == []
+
+
+def test_start_without_any_api_key_is_structured_400(client):
+    tc, deps = client
+    _strip_all_keys(deps)
+    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
+    pid = _create_keyless_project(tc, deps["workspace"])
+
+    r = tc.post("/api/v2/agents/start", json={"project_id": pid})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+
+
+def test_inject_without_any_api_key_is_structured_400(client):
+    tc, deps = client
+    _strip_all_keys(deps)
+    open(os.path.join(deps["workspace"], "README.md"), "w").write("# Real project")
+    pid = _create_keyless_project(tc, deps["workspace"])
+
+    r = tc.post(f"/api/v2/agents/{pid}/inject", json={"content": "hello"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "missing_api_key"
+
+
+def test_run_status_exposes_last_terminal_error_for_hydration(client):
+    tc, deps = client
+    pid = _create_keyless_project(tc, deps["workspace"])
+    am = deps["agent_manager"]
+
+    r0 = tc.get(f"/api/v2/agents/{pid}/run-status", params={"session_id": "sess_abc"})
+    assert r0.status_code == 200
+    assert r0.json()["last_terminal_event"] is None
+
+    am._set_last_terminal_event(
+        pid, "sess_abc", "error",
+        details="No LLM API key configured", error_code="missing_api_key",
+    )
+    r = tc.get(f"/api/v2/agents/{pid}/run-status", params={"session_id": "sess_abc"})
+    ev = r.json()["last_terminal_event"]
+    assert ev["type"] == "error"
+    assert ev["error_code"] == "missing_api_key"
+    assert ev["details"] == "No LLM API key configured"

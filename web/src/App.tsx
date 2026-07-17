@@ -315,6 +315,18 @@ export default function App() {
     return () => window.removeEventListener('agent-status-override', onStatusOverride);
   }, []);
 
+  // Credential-error surfacing: AgentErrorNotice's "Open Settings" action
+  // (deep in ChatView) opens Global Settings — where the API key lives —
+  // via the same window-event pattern as agent-status-override, avoiding a
+  // callback threaded through ProjectDetail/ChatTab.
+  useEffect(() => {
+    function onOpenGlobalSettings() {
+      setRoute({ name: 'settings' });
+    }
+    window.addEventListener('open-global-settings', onOpenGlobalSettings);
+    return () => window.removeEventListener('open-global-settings', onOpenGlobalSettings);
+  }, []);
+
   // Service worker registration + push subscription (remote mode only)
   useEffect(() => {
     if (!isRelayMode) return;

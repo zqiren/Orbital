@@ -38,6 +38,10 @@ let chatOlderResponse: { data: unknown[]; total: number } = { data: [], total: 0
 // live-event rendering. null = no holder.
 let runStatusHolder: string | null = null;
 
+// Configurable run-status last_terminal_event — drives the classified-error
+// hydration (credential-error surfacing) after a reload.
+let runStatusTerminalEvent: unknown = null;
+
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string) => {
     apiCalls.push(path);
@@ -48,6 +52,7 @@ vi.mock('../config', () => ({
         project_id: 'p1',
         status: 'running',
         current_holder_session_id: runStatusHolder,
+        last_terminal_event: runStatusTerminalEvent,
       };
     }
     // pending-approval: never pending in these tests.
@@ -67,7 +72,17 @@ vi.mock('../config', () => ({
     }
     return { data: [], total: 0 };
   }),
-  ApiError: class ApiError extends Error {},
+  // Mirror the real ApiError(status, detail) shape — parseProviderError reads
+  // `.detail` off instances of this class.
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      public detail: string,
+    ) {
+      super(detail);
+      this.name = 'ApiError';
+    }
+  },
   isRelayMode: false,
   BASE_URL: 'http://localhost:8000',
   WS_URL: 'ws://localhost:8000/ws',
@@ -116,6 +131,11 @@ let getPendingMock: (projectId: string) => Promise<unknown> = async () => ({
   holder: null,
   pending: [],
 });
+// Per-test override for coldStartScan (credential-error surfacing tests make
+// it reject with a structured ApiError).
+let coldStartScanMock: (...args: unknown[]) => Promise<unknown> = async () => ({
+  status: 'ok',
+});
 // v3: cancel/dequeue is server-authoritative — it returns `removed` so recall
 // knows whether it pulled back a still-queued entry (true) or the message had
 // already dispatched (false). Default: removed a live entry.
@@ -145,7 +165,7 @@ vi.mock('../hooks/useAgent', () => {
       return cancelMessageMock(...args);
     }),
     newSession: vi.fn(async () => undefined),
-    coldStartScan: vi.fn(async () => ({ status: 'ok' })),
+    coldStartScan: vi.fn((...args: unknown[]) => coldStartScanMock(...args)),
     getPending: vi.fn((projectId: string) => getPendingMock(projectId)),
     cancelPendingInput: vi.fn((...args: unknown[]) => {
       cancelPendingInputCalls.push(args);
@@ -204,7 +224,9 @@ beforeEach(() => {
   cancelMessageMock = async () => undefined;
   getPendingMock = async () => ({ holder: null, pending: [] });
   cancelPendingInputMock = async () => ({ status: 'cancelled', removed: true });
+  coldStartScanMock = async () => ({ status: 'ok' });
   runStatusHolder = null;
+  runStatusTerminalEvent = null;
   chatInitialResponse = { data: [], total: 0 };
   chatOlderResponse = { data: [], total: 0 };
   queueState = 'idle';
@@ -1901,5 +1923,133 @@ describe('ChatView: full-history reconcile after a turn settles (TASK-history-re
 
     // No spurious reconcile fired on the idle transition after the switch.
     expect(initialChatCalls()).toBe(before);
+  });
+});
+
+describe('credential-error surfacing (AgentErrorNotice)', () => {
+  it('shows the notice when agent.status error arrives for the viewed session', async () => {
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="idle"
+          mentionAgents={[]}
+          sessionId="s1"
+        />,
+      );
+    });
+    await flushEffects();
+    expect(container.querySelector('[data-testid="agent-error-notice"]')).toBeNull();
+
+    await act(async () => {
+      emitWs('agent.status', {
+        type: 'agent.status',
+        project_id: 'p1',
+        status: 'error',
+        reason: 'No LLM API key configured',
+        error_code: 'missing_api_key',
+        session_id: 's1',
+        source: 'management',
+      });
+    });
+    const notice = container.querySelector('[data-testid="agent-error-notice"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toMatch(/API key/i);
+    expect(notice!.textContent).toContain('No LLM API key configured');
+  });
+
+  it('clears the notice when a new run starts (non-error status)', async () => {
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="idle"
+          mentionAgents={[]}
+          sessionId="s1"
+        />,
+      );
+    });
+    await flushEffects();
+    await act(async () => {
+      emitWs('agent.status', {
+        type: 'agent.status',
+        project_id: 'p1',
+        status: 'error',
+        reason: 'x',
+        error_code: 'missing_api_key',
+        session_id: 's1',
+      });
+    });
+    expect(container.querySelector('[data-testid="agent-error-notice"]')).not.toBeNull();
+    await act(async () => {
+      emitWs('agent.status', {
+        type: 'agent.status',
+        project_id: 'p1',
+        status: 'running',
+        session_id: 's1',
+      });
+    });
+    expect(container.querySelector('[data-testid="agent-error-notice"]')).toBeNull();
+  });
+
+  it('hydrates the notice from run-status last_terminal_event on mount', async () => {
+    runStatusTerminalEvent = {
+      type: 'error',
+      details: 'No LLM API key configured',
+      error_code: 'missing_api_key',
+      timestamp: '2026-07-17T00:00:00Z',
+    };
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="idle"
+          mentionAgents={[]}
+          sessionId="s1"
+        />,
+      );
+    });
+    await flushEffects();
+    const notice = container.querySelector('[data-testid="agent-error-notice"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toMatch(/API key/i);
+  });
+
+  it('shows a classified inline error on the cold-start card when scan fails', async () => {
+    const { ApiError } = await import('../config');
+    coldStartScanMock = async () => {
+      throw new ApiError(
+        400,
+        JSON.stringify({
+          code: 'missing_api_key',
+          message: 'No LLM API key configured',
+        }),
+      );
+    };
+    await act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={{ ...project, is_empty_workspace: false }}
+          agentStatus="idle"
+          mentionAgents={[]}
+        />,
+      );
+    });
+    await flushEffects();
+    const scanBtn = [...container.querySelectorAll('button')].find(
+      (b) => /scan/i.test(b.textContent ?? ''),
+    );
+    expect(scanBtn).toBeTruthy();
+    await act(async () => {
+      scanBtn!.click();
+    });
+    await flushEffects();
+    const err = container.querySelector('[data-testid="cold-start-error"]');
+    expect(err).not.toBeNull();
+    expect(err!.textContent).toMatch(/API key/i);
   });
 });

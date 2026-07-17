@@ -19,4 +19,21 @@ describe('ColdStartCard', () => {
     });
     expect(onScan).toHaveBeenCalledOnce();
   });
+
+  it('shows an inline error message when error is set (scan failure)', () => {
+    render(
+      <ColdStartCard
+        folderName="r"
+        onScan={vi.fn()}
+        onSkip={vi.fn()}
+        error="No API key configured. Add one in Settings."
+      />,
+    );
+    expect(screen.getByTestId('cold-start-error').textContent).toContain(
+      'No API key configured',
+    );
+    // Scan stays clickable so the user can retry after fixing settings.
+    const scanBtn = screen.getByRole('button', { name: /scan/i }) as HTMLButtonElement;
+    expect(scanBtn.disabled).toBe(false);
+  });
 });
