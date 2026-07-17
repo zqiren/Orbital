@@ -2,7 +2,7 @@
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital 管理一个真实项目——协调 agent、决策、审批与项目成果" width="100%"></p>
+<p align="center"><img src="docs/screenshots/hero-multi-agent-handoff.gif" alt="Orbital 管理一个真实项目——协调 agent、决策、审批与项目成果" width="100%"></p>
 
 <h2 align="center">一个 agent 管理整个项目。任何 agent 都能完成工作。</h2>
 <p align="center">Orbital 是一个持久运行的管理 agent，负责规划、委派、监督，并保有记忆。它在同一个本地项目中协调 Claude Code、Codex、Gemini 和其他 agent，共享上下文、审批规则和预算。</p>
