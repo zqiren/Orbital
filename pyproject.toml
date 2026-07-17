@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os"
-version = "0.7.5"
+version = "0.7.6"
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.0",
