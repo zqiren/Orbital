@@ -2,7 +2,7 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center"><img src="docs/screenshots/hero-multi-agent-handoff.gif" alt="Orbital managing a real project — coordinating agents, decisions, approvals, and project artifacts" width="100%"></p>
+<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital managing a real project — coordinating agents, decisions, approvals, and project artifacts" width="100%"></p>
 
 <h2 align="center">One agent runs the project. Any agent can do the work.</h2>
 <p align="center">Orbital is a persistent management agent that plans, delegates, supervises and remembers. It coordinates Claude Code, Codex, Gemini and other agents inside one local project—with shared context, approvals and budgets.</p>
