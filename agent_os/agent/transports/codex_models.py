@@ -29,6 +29,8 @@ import json
 import logging
 import time
 
+from agent_os.agent.transports.jsonl_stream import read_jsonl_line
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 10.0
@@ -56,7 +58,8 @@ async def read_model_ids(reader, writer, *, timeout: float = _DEFAULT_TIMEOUT
 
     async def read_response(rpc_id: int) -> dict:
         while True:
-            line = await asyncio.wait_for(reader.readline(), timeout)
+            line = await asyncio.wait_for(
+                read_jsonl_line(reader), timeout)
             if not line:
                 raise RuntimeError(
                     "codex app-server closed the stream before responding")
@@ -97,6 +100,7 @@ async def fetch_codex_models(binary: str = "codex", *,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            limit=1024 * 1024,  # tolerant reader; limit sizes the fast path
         )
         return await read_model_ids(proc.stdout, proc.stdin, timeout=timeout)
     except Exception as exc:

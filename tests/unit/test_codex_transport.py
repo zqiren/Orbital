@@ -841,3 +841,112 @@ class TestCodexUsageCapture:
         await t._route_server_message({"jsonrpc": "2.0", "method": "turn/completed",
             "params": {"threadId": "T1",
                        "turn": {"id": "U1", "status": "completed"}}})
+
+
+class _FakePopen:
+    """Popen stand-in with a real StreamReader stdout and a kill recorder."""
+    pid = 4242
+    returncode = None
+
+    def __init__(self, stdout=None, stderr=None):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.kill_calls = 0
+
+    def kill(self):
+        self.kill_calls += 1
+
+
+def _default_limit_reader() -> asyncio.StreamReader:
+    # Mirror the asyncio default limit (2**16) that create_subprocess_exec
+    # applies when no explicit limit is passed — the regression trigger.
+    return asyncio.StreamReader(limit=2**16)
+
+
+def _notif(method: str, params: dict) -> bytes:
+    return (json.dumps({"jsonrpc": "2.0", "method": method,
+                        "params": params}) + "\n").encode("utf-8")
+
+
+class TestReadLoopResilience:
+    """Regression: incidents 2026-07-02 / 2026-07-17 — a codex app-server
+    event line >64 KiB (broad `rg` output) killed _read_loop with
+    ValueError('Separator is not found, and chunk exceed the limit'),
+    closing the turn as an error while codex kept running orphaned."""
+
+    @pytest.mark.asyncio
+    async def test_read_loop_survives_oversized_event_line(self):
+        t = _transport()
+        reader = _default_limit_reader()
+        # A commandExecution completion whose aggregatedOutput pushes the
+        # JSON-RPC line well past the 64 KiB reader limit (the 15:40
+        # incident's rg output, to scale).
+        big_item = {"type": "commandExecution", "id": "call_big",
+                    "command": "rg -n -i \"orbital|pitch\" .",
+                    "status": "completed", "exitCode": 0,
+                    "aggregatedOutput": "match\n" * 20000}  # ~120 KiB
+        reader.feed_data(_notif("item/completed", {"item": big_item}))
+        reader.feed_data(_notif("item/completed", {"item": {
+            "type": "agentMessage", "id": "msg_1", "text": "Take.",
+            "phase": "final_answer"}}))
+        reader.feed_data(_notif("turn/completed", {"threadId": "T1", "turn": {
+            "id": "U1", "status": "completed", "durationMs": 100}}))
+        reader.feed_eof()
+
+        popen = _FakePopen(stdout=reader)
+        t._popen = popen
+        t._alive = True
+        t._begin_turn()
+        t._turn_id = "U1"
+
+        await t._read_loop()
+
+        events = _drain(t)
+        kinds = [e.event_type for e in events]
+        # The oversized line is PARSED (tool_use present), the message and
+        # the SUCCESS turn_complete follow — no error close, no kill.
+        assert kinds == ["tool_use", "message", "turn_complete"]
+        assert events[0].data["tool_input"]["command"].startswith("rg ")
+        assert events[2].data["cause"] == "success"
+        assert popen.kill_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_read_loop_kills_process_and_logs_on_fatal_error(self, caplog):
+        # Any non-cancel reader death must (a) be logged NOW (not at GC as
+        # "Task exception was never retrieved"), (b) kill the codex process
+        # so it cannot run on orphaned (the 13:21 zombie, pid 75807), and
+        # (c) still close the turn honestly. The coroutine must not raise.
+        t = _transport()
+
+        class _ExplodingStream:
+            def readuntil(self, *_a, **_k):
+                raise RuntimeError("wire torn")
+
+        popen = _FakePopen(stdout=_ExplodingStream())
+        t._popen = popen
+        t._alive = True
+        t._begin_turn()
+
+        import logging as _logging
+        with caplog.at_level(_logging.ERROR):
+            await t._read_loop()  # must NOT raise
+
+        [event] = _drain(t)
+        assert event.event_type == "turn_complete"
+        assert event.data["cause"] == "error"
+        assert popen.kill_calls == 1
+        assert any("read" in r.message.lower() for r in caplog.records)
+        assert t._alive is False
+
+    @pytest.mark.asyncio
+    async def test_drain_stderr_survives_oversized_line(self):
+        # Same defect class on the stderr drain: stopping the drain on an
+        # oversized line lets the OS pipe buffer fill and block the child.
+        t = _transport()
+        reader = _default_limit_reader()
+        reader.feed_data(b"E" * (2**17) + b"\n")   # 128 KiB stderr line
+        reader.feed_data(b"normal stderr line\n")
+        reader.feed_eof()
+        t._popen = _FakePopen(stderr=reader)
+        await t._drain_stderr()
+        assert reader.at_eof()  # drained to completion, not aborted mid-way

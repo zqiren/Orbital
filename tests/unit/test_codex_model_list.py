@@ -266,3 +266,20 @@ class TestCache:
         codex_models.clear_codex_models_cache()
         await codex_models.get_codex_models_cached("codex")
         assert len(calls) == 2
+
+
+class TestOversizedLines:
+    @pytest.mark.asyncio
+    async def test_survives_notification_line_beyond_reader_limit(self):
+        # Same regression class as CodexTransport._read_loop: a server
+        # notification line >limit must be skipped, not crash the probe.
+        reader = asyncio.StreamReader(limit=2**16)
+        _feed(reader, INIT_RESULT)
+        _feed(reader, {"jsonrpc": "2.0", "method": "noise/event",
+                       "params": {"blob": "x" * (2**17)}})  # 128 KiB line
+        _feed(reader, MODEL_LIST_RESULT)
+        reader.feed_eof()
+
+        ids = await codex_models.read_model_ids(reader, FakeWriter(),
+                                                timeout=5.0)
+        assert ids == ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex"]

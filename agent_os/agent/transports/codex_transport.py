@@ -39,6 +39,10 @@ import psutil
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
+from agent_os.agent.transports.jsonl_stream import (
+    LineTooLongError,
+    read_jsonl_line,
+)
 from agent_os.agent.transports.tool_risk import should_auto_approve
 
 logger = logging.getLogger(__name__)
@@ -588,6 +592,10 @@ class CodexTransport(AgentTransport):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace, env=merged_env,
+            # App-server event lines carry full command output; the asyncio
+            # default (64 KiB) is routinely exceeded. read_jsonl_line() is
+            # tolerant of ANY limit — this just sizes the fast path.
+            limit=1024 * 1024,
         )
         try:
             self._proc = psutil.Process(self._popen.pid)
@@ -628,7 +636,12 @@ class CodexTransport(AgentTransport):
     async def _drain_stderr(self) -> None:
         try:
             while self._popen is not None and self._popen.stderr is not None:
-                line = await self._popen.stderr.readline()
+                try:
+                    line = await read_jsonl_line(self._popen.stderr)
+                except LineTooLongError as e:
+                    logger.warning("CodexTransport: dropped oversized "
+                                   "stderr line (%s)", e)
+                    continue
                 if not line:
                     return
                 logger.debug("codex stderr: %s",
@@ -641,7 +654,12 @@ class CodexTransport(AgentTransport):
     async def _read_loop(self) -> None:
         try:
             while self._popen is not None and self._popen.stdout is not None:
-                line = await self._popen.stdout.readline()
+                try:
+                    line = await read_jsonl_line(self._popen.stdout)
+                except LineTooLongError as e:
+                    logger.warning("CodexTransport: dropped oversized "
+                                   "stdout line (%s)", e)
+                    continue
                 if not line:
                     break
                 try:
@@ -655,6 +673,20 @@ class CodexTransport(AgentTransport):
                     logger.exception("CodexTransport: routing failed: %.200s", msg)
         except asyncio.CancelledError:
             raise
+        except Exception:
+            # A dead reader is a dead transport: log NOW (not at GC time as
+            # "Task exception was never retrieved") and kill the process —
+            # codex would otherwise run the turn on orphaned, then block
+            # forever on its next server->client request (the 2026-07-17
+            # zombie, pid 75807). The finally block closes the turn honestly.
+            logger.exception("CodexTransport: read loop died — killing "
+                             "codex pid=%s",
+                             getattr(self._popen, "pid", None))
+            if self._popen is not None and self._popen.returncode is None:
+                try:
+                    self._popen.kill()
+                except ProcessLookupError:
+                    pass
         finally:
             # EOF or cancel. An open turn at stream end (and not stopping)
             # is an abnormal death — close it honestly so the adapter is
