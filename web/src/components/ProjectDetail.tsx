@@ -15,6 +15,7 @@ import { useQueue } from '../hooks/useQueue';
 import { useFiles } from '../hooks/useFiles';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
+import BetaBadge from './BetaBadge';
 import type { StringKey } from '../i18n/strings';
 
 interface ProjectDetailProps {
@@ -237,6 +238,7 @@ export default function ProjectDetail({
               }`}
             >
               {t(tab.labelKey)}
+              {tab.key === 'calendar' && <BetaBadge className="ml-1.5 align-middle" />}
               {count > 0 && (
                 <span className="text-[10.5px] font-mono text-secondary">
                   {count}

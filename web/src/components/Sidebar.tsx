@@ -7,6 +7,7 @@ import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import BlockedBadge from './BlockedBadge';
 import { useT } from '../i18n/useT';
+import BetaBadge from './BetaBadge';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -131,6 +132,7 @@ export default function Sidebar({
           <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
             {t('workspace.calendar.nav')}
           </span>
+          <BetaBadge />
         </button>
         {scratchProjects.map(renderProjectRow)}
       </div>

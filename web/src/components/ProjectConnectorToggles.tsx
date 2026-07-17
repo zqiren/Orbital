@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import { useT } from '../i18n/useT';
+import BetaBadge from './BetaBadge';
 
 export interface ProjectConnectorTogglesProps {
   /** Connector ids currently enabled for this project (form state, owned by
@@ -68,8 +69,9 @@ export default function ProjectConnectorToggles({
 
   return (
     <div data-testid="project-connector-toggles">
-      <label className="block text-sm font-medium text-primary mb-1.5">
+      <label className="flex items-center gap-2 text-sm font-medium text-primary mb-1.5">
         {t('connectors.heading')}
+        <BetaBadge />
       </label>
       <p className="text-xs text-secondary mb-2">{t('connectors.project.hint')}</p>
 

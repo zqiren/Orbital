@@ -23,6 +23,7 @@ import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
 import { useT } from '../i18n/useT';
+import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
 
@@ -246,9 +247,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   <h2 className="text-sm font-medium text-primary">
                     {t('wizard.accounts.connectorsHeading')}
                   </h2>
+                  <BetaBadge />
                 </div>
-                <p className="text-xs text-secondary mb-3">
+                <p className="text-xs text-secondary mb-1">
                   {t('wizard.accounts.connectorsHint')}
+                </p>
+                <p className="text-xs text-secondary/80 mb-3">
+                  {t('connectors.betaNote')}
                 </p>
                 <ul className="space-y-2">
                   {featured.map((c) => {

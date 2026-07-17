@@ -169,7 +169,7 @@ describe('ProjectDetail — model header label', () => {
 describe('ProjectDetail — calendar lens tab visibility', () => {
   it('hides the Calendar tab by default (no availability, no connector)', () => {
     renderProjectDetail();
-    expect(screen.queryByRole('button', { name: /^Calendar$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Calendar/i })).toBeNull();
   });
 
   it('shows the Calendar tab when calendarAvailable is true', () => {
@@ -182,7 +182,7 @@ describe('ProjectDetail — calendar lens tab visibility', () => {
         calendarAvailable
       />,
     );
-    expect(screen.getByRole('button', { name: /^Calendar$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Calendar/i })).toBeInTheDocument();
   });
 
   it('shows the Calendar tab when the project has the google-calendar connector enabled', () => {
@@ -195,7 +195,7 @@ describe('ProjectDetail — calendar lens tab visibility', () => {
         setRoute={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: /^Calendar$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Calendar/i })).toBeInTheDocument();
   });
 
   it('keeps the Calendar tab hidden for an unrelated enabled connector', () => {
@@ -208,7 +208,7 @@ describe('ProjectDetail — calendar lens tab visibility', () => {
         setRoute={vi.fn()}
       />,
     );
-    expect(screen.queryByRole('button', { name: /^Calendar$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Calendar/i })).toBeNull();
   });
 
   it('clicking the Calendar tab routes to tab:calendar (clearing settings)', () => {
@@ -222,7 +222,7 @@ describe('ProjectDetail — calendar lens tab visibility', () => {
         calendarAvailable
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /^Calendar$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Calendar/i }));
     expect(setRoute).toHaveBeenCalledWith(
       expect.objectContaining({ tab: 'calendar', settings: false }),
     );

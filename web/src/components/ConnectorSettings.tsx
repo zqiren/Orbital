@@ -33,6 +33,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import { useT } from '../i18n/useT';
+import BetaBadge from './BetaBadge';
 
 /** "google" → "Google" for the provider-scoped disconnect copy. Provider ids
  *  are backend slugs, not UI chrome — capitalizing is display-only. */
@@ -170,10 +171,12 @@ export default function ConnectorSettings() {
 
   return (
     <div data-testid="connector-settings">
-      <h2 className="text-base font-semibold text-primary mb-1">
+      <h2 className="text-base font-semibold text-primary mb-1 flex items-center gap-2">
         {t('connectors.heading')}
+        <BetaBadge />
       </h2>
-      <p className="text-xs text-secondary mb-3">{t('connectors.global.hint')}</p>
+      <p className="text-xs text-secondary mb-1">{t('connectors.global.hint')}</p>
+      <p className="text-xs text-secondary/80 mb-3">{t('connectors.betaNote')}</p>
 
       {loadError && (
         <p className="text-xs text-error mb-2" role="alert">
