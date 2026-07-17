@@ -9,10 +9,10 @@
       "supports_model_list": true,
       "sdk": "openai",
       "suggested_models": [
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano"
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5"
       ],
       "notes": "Flagship: gpt-5.5 (1.05M ctx). Balanced: gpt-5.4. Fast/cheap: gpt-5.4-mini, gpt-5.4-nano, gpt-5-nano. Reasoning-tier: o1, o3, o3-mini, o4-mini. NOTE: on /chat/completions the reasoning trace is hidden server-side for both o-series and gpt-5.x; reasoning_effort is accepted as a request param. To observe or round-trip the trace you must use the Responses API (reasoning.encrypted_content). No separate China endpoint.",
       "pricing": {
@@ -95,6 +95,22 @@
         "gpt-5.3-codex": {
           "input_per_1m": 1.75,
           "output_per_1m": 14.0
+        },
+        "gpt-5.6-sol": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 30.0
+        },
+        "gpt-5.6-terra": {
+          "input_per_1m": 2.5,
+          "output_per_1m": 15.0
+        },
+        "gpt-5.6-luna": {
+          "input_per_1m": 1.0,
+          "output_per_1m": 6.0
+        },
+        "gpt-5.6": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 30.0
         }
       },
       "models": {
@@ -448,6 +464,78 @@
             "enable": "param:reasoning_effort=medium",
             "notes": "Codex variant; reasoning hidden on Chat Completions. https://developers.openai.com/api/docs/guides/reasoning"
           }
+        },
+        "gpt-5.6-sol": {
+          "display_name": "GPT-5.6 Sol",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": false,
+            "enable": "param:reasoning_effort=medium",
+            "field": null,
+            "echo_back": "none",
+            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
+          }
+        },
+        "gpt-5.6-terra": {
+          "display_name": "GPT-5.6 Terra",
+          "tier": "balanced",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": false,
+            "enable": "param:reasoning_effort=medium",
+            "field": null,
+            "echo_back": "none",
+            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
+          }
+        },
+        "gpt-5.6-luna": {
+          "display_name": "GPT-5.6 Luna",
+          "tier": "fast",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": false,
+            "enable": "param:reasoning_effort=medium",
+            "field": null,
+            "echo_back": "none",
+            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning"
+          }
+        },
+        "gpt-5.6": {
+          "display_name": "GPT-5.6 (alias of Sol)",
+          "tier": "flagship",
+          "context_window": 1050000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": false,
+            "enable": "param:reasoning_effort=medium",
+            "field": null,
+            "echo_back": "none",
+            "notes": "Reasoning hidden on Chat Completions; available via Responses API. https://developers.openai.com/api/docs/guides/reasoning Alias id gpt-5.6 routes to gpt-5.6-sol."
+          }
         }
       },
       "cache": {
@@ -476,8 +564,9 @@
       "model_list_endpoint": "/v1/models",
       "sdk": "anthropic",
       "suggested_models": [
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
         "claude-haiku-4-5"
       ],
       "notes": "Flagship: claude-opus-4-7 (1M ctx, adaptive thinking only). Balanced: claude-sonnet-4-6 (1M ctx, adaptive or legacy budget_tokens). Fast/cheap: claude-haiku-4-5 (200k ctx, manual budget_tokens). All three Claude 4.x models support extended thinking and EMIT `thinking` content blocks with opaque signatures. Echo-back of thinking blocks (signatures unmodified) is REQUIRED across tool-use turns; pure text continuations are lenient. Anthropic uses its own SDK, not /chat/completions. No separate China endpoint.",
@@ -552,6 +641,22 @@
           "input_per_1m": 3.0,
           "cached_input_per_1m": 0.3,
           "cache_write_per_1m": 3.75,
+          "output_per_1m": 15.0
+        },
+        "claude-fable-5": {
+          "input_per_1m": 10.0,
+          "output_per_1m": 50.0
+        },
+        "claude-opus-4-8": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0
+        },
+        "claude-opus-4-7": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0
+        },
+        "claude-sonnet-5": {
+          "input_per_1m": 3.0,
           "output_per_1m": 15.0
         }
       },
@@ -816,6 +921,60 @@
             "enable": "param:thinking={type:'enabled',budget_tokens:N}",
             "notes": "Pinned snapshot. Retires 2026-06-15."
           }
+        },
+        "claude-opus-4-8": {
+          "display_name": "Claude Opus 4.8",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "param:thinking={type:'adaptive'}",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking Same request surface as Opus 4.7; sampling params (temperature/top_p/top_k) rejected."
+          }
+        },
+        "claude-sonnet-5": {
+          "display_name": "Claude Sonnet 5",
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "param:thinking={type:'adaptive'}",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking Adaptive runs by DEFAULT when thinking is omitted; non-default sampling params rejected. New tokenizer: ~30% more tokens for the same text vs Sonnet 4.6."
+          }
+        },
+        "claude-fable-5": {
+          "display_name": "Claude Fable 5",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "model_only",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Thinking is ALWAYS on — explicit {type:'disabled'} returns 400; omit the thinking param (adaptive is implicit). Raw chain of thought never returned; display:'summarized' gives a readable summary. Sampling params rejected. Depth via output_config.effort (low..max). Requires 30-day data retention (400 under ZDR). https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5"
+          }
         }
       },
       "cache": {
@@ -978,9 +1137,9 @@
       "supports_model_list": true,
       "sdk": "openai",
       "suggested_models": [
+        "kimi-k3",
         "kimi-k2.6",
-        "kimi-k2.5",
-        "moonshot-v1-128k"
+        "kimi-k2.5"
       ],
       "notes": "Hybrid k2.5/k2.6 models accept thinking={type:enabled|disabled}; thinking defaults enabled on k2.6. K2.6 also exposes a 'keep' param: keep='all' REQUIRES historical reasoning_content preserved verbatim (echo-back becomes mandatory). Dedicated kimi-k2-thinking / -turbo are always-on and require echo-back unconditionally. api.moonshot.cn (China) and api.moonshot.ai / platform.kimi.ai (global) are functionally identical.",
       "pricing": {
@@ -1007,6 +1166,10 @@
         "_default": {
           "input_per_1m": 1.0,
           "output_per_1m": 3.0
+        },
+        "kimi-k3": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0
         }
       },
       "models": {
@@ -1126,6 +1289,24 @@
             "enable": "param:thinking.type=enabled",
             "notes": "Turbo preview of K2; same hybrid semantics as kimi-k2.6.",
             "needs_verification": true
+          }
+        },
+        "kimi-k3": {
+          "display_name": "Kimi K3",
+          "tier": "flagship",
+          "context_window": 1048576,
+          "max_output": 131072,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "model_only",
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "notes": "Reasoning always on — no toggle (reasoning_effort supports only 'max'; do NOT send the K2.x thinking param). temperature fixed at 1.0 — omit it. Vision input rejects public image URLs (base64 or ms://<file-id> only). https://platform.kimi.ai/docs/guide/kimi-k3-quickstart"
           }
         }
       },

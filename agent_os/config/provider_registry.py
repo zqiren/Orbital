@@ -151,6 +151,17 @@ class ProviderRegistry:
             if best:
                 entry = models[best]
 
+        # 2.5. Inherit from the provider's newest flagship. An unknown model
+        # on a known provider is almost always NEWER than the bundled catalog
+        # (users type a just-released id before we ship an update), so the
+        # best guess is the current flagship's spec — by convention
+        # suggested_models[0]. Providers without suggestions (e.g. `custom`
+        # self-hosted endpoints) skip this and keep conservative defaults.
+        if entry is None:
+            suggested = provider_data.get("suggested_models") or []
+            if suggested:
+                entry = models.get(suggested[0])
+
         # 3. Provider _default
         if entry is None:
             entry = models.get("_default")

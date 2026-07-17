@@ -59,6 +59,17 @@ def custom_registry(tmp_path):
                 "display_name": "No Models",
                 "sdk": "openai",
             },
+            "no_suggested_provider": {
+                "display_name": "No Suggested",
+                "sdk": "openai",
+                "models": {
+                    "_default": {
+                        "context_window": 64000,
+                        "max_output": 4096,
+                        "capabilities": {"vision": False, "tool_use": False, "streaming": True},
+                    },
+                },
+            },
         },
         "defaults": {
             "unknown_model": {
@@ -114,8 +125,19 @@ class TestPrefixMatch:
 # --- Fallback tests ---
 
 class TestFallback:
-    def test_provider_default(self, custom_registry):
-        info = custom_registry.get_model_info("test_provider", "unknown-model-xyz")
+    def test_unknown_model_inherits_latest_flagship_spec(self, custom_registry):
+        """Stale-catalog fallback: an unknown model on a provider inherits the
+        spec of suggested_models[0] (the provider's current flagship) rather
+        than the conservative _default — a late catalog update almost always
+        concerns a NEWER advanced model, so the newest entry is the best guess.
+        """
+        info = custom_registry.get_model_info("test_provider", "model-next-gen")
+        assert info.context_window == 200000  # model-a's spec, not _default's
+        assert info.max_output == 16384
+        assert info.capabilities.vision is True
+
+    def test_provider_default_used_when_no_suggested_models(self, custom_registry):
+        info = custom_registry.get_model_info("no_suggested_provider", "unknown-model-xyz")
         assert info.context_window == 64000
         assert info.max_output == 4096
         assert info.capabilities.tool_use is False
@@ -272,3 +294,58 @@ class TestEdgeCases:
             info.context_window = 999
         with pytest.raises(AttributeError):
             info.capabilities.vision = False
+
+
+# --- July 2026 model additions + inherit-from-latest on the real catalog ---
+
+class TestJuly2026Models:
+    def test_gpt_56_family(self, registry):
+        # Official specs: developers.openai.com/api/docs/models/gpt-5.6-{sol,terra,luna}
+        for mid in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"):
+            info = registry.get_model_info("openai", mid)
+            assert info.context_window == 1050000, mid
+            assert info.max_output == 128000, mid
+            assert info.capabilities.vision is True, mid
+
+    def test_kimi_k3(self, registry):
+        # Official specs: platform.kimi.ai/docs/guide/kimi-k3-quickstart
+        info = registry.get_model_info("moonshot", "kimi-k3")
+        assert info.context_window == 1048576
+        assert info.max_output == 131072
+        assert info.capabilities.vision is True
+        # Reasoning is always-on with no toggle (like MiniMax-M3): locked-on
+        # models make disable_reasoning a no-op, so utility calls budget long
+        # single timeouts instead of retry ladders.
+        assert info.reasoning.supported is True
+        assert info.reasoning.enable == "model_only"
+        assert info.reasoning.field == "reasoning_content"
+
+    def test_claude_fable_5(self, registry):
+        info = registry.get_model_info("anthropic", "claude-fable-5")
+        assert info.context_window == 1000000
+        assert info.max_output == 128000
+        assert info.capabilities.vision is True
+        # Thinking always on — cannot be disabled (explicit disabled → 400).
+        assert info.reasoning.supported is True
+        assert info.reasoning.enable == "model_only"
+
+    def test_claude_opus_4_8_and_sonnet_5(self, registry):
+        for mid in ("claude-opus-4-8", "claude-sonnet-5"):
+            info = registry.get_model_info("anthropic", mid)
+            assert info.context_window == 1000000, mid
+            assert info.max_output == 128000, mid
+
+    def test_unknown_future_model_inherits_flagship_not_generic_default(self, registry):
+        # A model newer than the bundled catalog (no exact/prefix match) must
+        # inherit the provider's current flagship spec, not the generic
+        # 128000/8192 defaults.
+        info = registry.get_model_info("openai", "gpt-7-hypothetical")
+        assert info.context_window == 1050000
+        assert info.max_output == 128000
+
+    def test_custom_provider_unknown_model_keeps_conservative_defaults(self, registry):
+        # `custom` (Ollama/vLLM/self-hosted) has no suggested models — a big
+        # flagship guess would be wrong there; conservative defaults stay.
+        info = registry.get_model_info("custom", "my-local-llama")
+        assert info.context_window == 128000
+        assert info.max_output == 8192
