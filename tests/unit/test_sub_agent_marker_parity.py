@@ -79,6 +79,15 @@ async def test_every_fixture_shape_matches_its_producer_exactly():
         PROJECT_ID, HANDLE, initiator="management_agent",
         message_preview="run the tests", transcript_path=TRANSCRIPT_PATH,
         session_id=SESSION_ID, dispatch_id="fixture-sess:aaaa1111")
+    # user_mention (backlog #23 D3): same dispatch shape as "sent" above, but
+    # the LLM-facing content carries a guidance line — the RENDERED text
+    # (meta.display_content) must still be the same clean "Message sent to
+    # …" form, which is why this fixture row's content is byte-identical to
+    # "sent"'s.
+    await observer.on_message_routed(
+        PROJECT_ID, HANDLE, initiator="user_mention",
+        message_preview="run the tests", transcript_path=TRANSCRIPT_PATH,
+        session_id=SESSION_ID, dispatch_id="fixture-sess:bbbb2222")
     await observer.on_completed(
         PROJECT_ID, HANDLE, "All tests passing", TRANSCRIPT_PATH,
         session_id=SESSION_ID)
@@ -91,9 +100,10 @@ async def test_every_fixture_shape_matches_its_producer_exactly():
     produced = {
         "started": agent_manager.injections[0],
         "sent": agent_manager.injections[1],
-        "completed": agent_manager.injections[2],
-        "failed": agent_manager.injections[3],
-        "stopped_with_error": agent_manager.injections[4],
+        "sent_user_mention": agent_manager.injections[2],
+        "completed": agent_manager.injections[3],
+        "failed": agent_manager.injections[4],
+        "stopped_with_error": agent_manager.injections[5],
     }
 
     # Every producer call above landed one marker, no more, no less.

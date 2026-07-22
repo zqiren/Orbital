@@ -10,6 +10,11 @@
     "content": "[Sub-agent] Message sent to claude-code: \"run the tests\". Transcript: /tmp/fixture-transcript.jsonl"
   },
   {
+    "shape": "sent_user_mention",
+    "action": "sent",
+    "content": "[Sub-agent] Message sent to claude-code: \"run the tests\". Transcript: /tmp/fixture-transcript.jsonl"
+  },
+  {
     "shape": "completed",
     "action": "completed",
     "content": "[Sub-agent] claude-code completed. Summary: All tests passing. Transcript: /tmp/fixture-transcript.jsonl."
