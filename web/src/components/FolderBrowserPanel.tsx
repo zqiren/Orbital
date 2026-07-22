@@ -139,8 +139,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
     }
   }
 
-  function handleManualNavigate(e: React.FormEvent) {
-    e.preventDefault();
+  function handleManualNavigate() {
     if (manualInput.trim()) {
       browse(manualInput.trim());
     }
@@ -159,8 +158,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
     setNewFolderError(null);
   }
 
-  async function handleCreateFolder(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleCreateFolder() {
     const name = newFolderName.trim();
     if (!name || creatingFolder) return;
     setCreatingFolder(true);
@@ -295,18 +293,29 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
           </div>
 
           {newFolderOpen && (
-            <form onSubmit={handleCreateFolder} className="px-3 py-2 border-b border-border flex items-center gap-2 shrink-0">
+            // A plain div, not a <form>: this panel is embedded inline inside
+            // CreateProject's own <form> (backlog #25 review) — a nested
+            // <form> is invalid HTML and its implicit-submit-on-Enter
+            // behavior is browser-dependent (this app ships on
+            // pywebview→WKWebView). Enter is handled explicitly below via
+            // onKeyDown + preventDefault, which also stops it from bubbling
+            // up to the outer form when embedded.
+            <div className="px-3 py-2 border-b border-border flex items-center gap-2 shrink-0">
               <input
                 ref={newFolderInputRef}
                 type="text"
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Escape') cancelNewFolder(); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') cancelNewFolder();
+                  else if (e.key === 'Enter') { e.preventDefault(); handleCreateFolder(); }
+                }}
                 placeholder={t('folderPicker.newFolder.placeholder')}
                 className="flex-1 text-xs bg-sidebar border border-border rounded-md px-2 py-1 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
               />
               <button
-                type="submit"
+                type="button"
+                onClick={handleCreateFolder}
                 disabled={!newFolderName.trim() || creatingFolder}
                 className="inline-flex items-center gap-1 text-xs font-medium text-white bg-accent rounded-md px-2.5 py-1 hover:bg-accent/90 transition-all duration-150 disabled:opacity-40"
               >
@@ -320,7 +329,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
               >
                 {t('folderPicker.cancel')}
               </button>
-            </form>
+            </div>
           )}
           {newFolderOpen && newFolderError && (
             <p className="text-xs text-error px-3 pb-2 -mt-1 shrink-0">{newFolderError}</p>
@@ -357,13 +366,16 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
         </div>
       </div>
 
-      {/* Manual path input + explicit "use this folder" (covers folders with children too) */}
+      {/* Manual path input + explicit "use this folder" (covers folders with
+          children too). A plain div, not a <form> — see the new-folder note
+          above; the same nested-form hazard applies here. */}
       <div className="border-t border-border px-3 py-2 shrink-0">
-        <form onSubmit={handleManualNavigate} className="flex gap-2">
+        <div className="flex gap-2">
           <input
             type="text"
             value={manualInput}
             onChange={(e) => setManualInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleManualNavigate(); } }}
             placeholder={t('folderPicker.manualPath.placeholder')}
             className="flex-1 text-xs font-mono bg-sidebar border border-border rounded-lg px-2.5 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
           />
@@ -375,7 +387,7 @@ export default function FolderBrowserPanel({ onSelect, compact = false }: Folder
           >
             {t('folderPicker.useThisFolder')}
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );

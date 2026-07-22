@@ -143,6 +143,45 @@ describe('FolderBrowserPanel', () => {
     expect(onSelect).toHaveBeenCalledWith('/home/user/my-app');
   });
 
+  it('does not render any <form> elements (the panel is embedded inline inside CreateProject\'s own <form>; a nested <form> is invalid HTML)', async () => {
+    const { container } = render(<FolderBrowserPanel onSelect={() => {}} />);
+    await settle();
+    expect(container.querySelectorAll('form')).toHaveLength(0);
+  });
+
+  it('Enter in the manual-path input navigates', async () => {
+    render(<FolderBrowserPanel onSelect={() => {}} />);
+    await settle();
+
+    const manualInput = screen.getByPlaceholderText('Type a path and press Enter...');
+    fireEvent.change(manualInput, { target: { value: '/home/user/projects' } });
+    fireEvent.keyDown(manualInput, { key: 'Enter' });
+    await settle();
+
+    expect(browseCallCount()).toBe(2);
+    expect(apiFn.mock.calls.some(
+      (c) => typeof c[0] === 'string' && c[0].includes(encodeURIComponent('/home/user/projects')),
+    )).toBe(true);
+  });
+
+  it('Enter in the new-folder input creates the folder', async () => {
+    const onSelect = vi.fn();
+    render(<FolderBrowserPanel onSelect={onSelect} />);
+    await settle();
+
+    fireEvent.click(screen.getByText('New folder'));
+    const input = screen.getByPlaceholderText('Folder name');
+    fireEvent.change(input, { target: { value: 'my-app' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await settle();
+
+    expect(apiFn).toHaveBeenCalledWith('/api/v2/platform/mkdir', {
+      method: 'POST',
+      body: JSON.stringify({ parent: '/home/user', name: 'my-app' }),
+    });
+    expect(onSelect).toHaveBeenCalledWith('/home/user/my-app');
+  });
+
   it('shows a mkdir error inline instead of a toast, and does not select', async () => {
     const onSelect = vi.fn();
     apiFn.mockImplementation(async (path: string, init?: { method?: string }) => {

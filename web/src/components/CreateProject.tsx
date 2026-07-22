@@ -80,7 +80,10 @@ export default function CreateProject({
    * from the folder basename only while the user hasn't manually edited it. */
   function applyWorkspace(path: string) {
     setWorkspace(path);
-    setErrors((prev) => ({ ...prev, workspace: undefined }));
+    // Clear the name error too, not just workspace's: a stale 409
+    // agent-name-collision message must not survive a folder re-selection
+    // while the name is re-deriving to a (probably different) value.
+    setErrors((prev) => ({ ...prev, workspace: undefined, name: undefined }));
     if (!nameTouched) {
       setName(basename(path));
     }
