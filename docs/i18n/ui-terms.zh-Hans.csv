@@ -58,6 +58,9 @@ createProject.budget.label,Budget Limit (USD),label,CreateProject.tsx; SettingsV
 createProject.budget.placeholder,e.g. 5.00,placeholder,CreateProject.tsx; SettingsView.tsx,Example budget amount,例如 5.00,
 createProject.budget.hint,Leave empty for no limit. Agent pauses when spend reaches the limit.,description,CreateProject.tsx,Helper text for budget limit,当API消耗达到预算上限时将暂停。,
 createProject.deploy,Deploy Agent,button,CreateProject.tsx,Submit button that creates the project / deploys the agent,部署,
+createProject.advanced.label,Advanced options,heading,CreateProject.tsx,Disclosure toggle revealing Agent Name/Instructions/Autonomy/Budget,高级选项,New in backlog #25 (progressive disclosure).
+createProject.workspace.hideBrowse,Hide,button,CreateProject.tsx,Toggle label for collapsing the inline folder browser once expanded,收起,New in backlog #25 — pairs with createProject.browse.
+createProject.submitError,Couldn't create the project. Please try again.,message_error,CreateProject.tsx,Generic fallback shown when project creation fails for a reason other than an agent-name conflict,创建项目空间失败，请重试。,New in backlog #25.
 autonomy.level.label,Autonomy Level,label,CreateProject.tsx; SettingsView.tsx,Section label for autonomy mode selection,Agent权限级别,
 autonomy.handsOff.title,Hands-off,label,CreateProject.tsx; SettingsView.tsx,Autonomy option: agent works freely,全自动,
 autonomy.handsOff.desc,Agent works freely. Asks only for new access.,description,CreateProject.tsx; SettingsView.tsx,Description of hands-off autonomy,Agent自主工作，仅在重要权限申请时询问用户。,
@@ -385,6 +388,11 @@ folderPicker.browseError,Failed to browse directory,message_error,FolderPickerMo
 folderPicker.manualPath.placeholder,Type a path and press Enter...,placeholder,FolderPickerModal.tsx,Manual path entry placeholder,输入路径并按回车…,
 folderPicker.cancel,Cancel,button,FolderPickerModal.tsx,Closes the folder picker,取消,Dedupe target.
 folderPicker.select,Select,button,FolderPickerModal.tsx,Confirms the selected folder,选择,
+folderPicker.useThisFolder,Use this folder,button,FolderBrowserPanel.tsx,Selects the currently-browsed directory even if it has children,使用此文件夹,New in backlog #25 — replaces the old modal-level Select button now that the panel is embeddable inline.
+folderPicker.newFolder.button,New folder,button,FolderBrowserPanel.tsx,Opens the inline new-folder name input,新建文件夹,New in backlog #25.
+folderPicker.newFolder.placeholder,Folder name,placeholder,FolderBrowserPanel.tsx,Placeholder for the new-folder name input,文件夹名称,New in backlog #25.
+folderPicker.newFolder.create,Create,button,FolderBrowserPanel.tsx,Confirms creating the new folder,创建,New in backlog #25.
+folderPicker.newFolder.error,Couldn't create the folder.,message_error,FolderBrowserPanel.tsx,Generic fallback when POST /api/v2/platform/mkdir fails without a backend detail,无法创建文件夹。,New in backlog #25.
 setupGate.wordmark,Orbital,heading,SetupGate.tsx; SetupWizard.tsx,Brand wordmark above the gate/wizard card,Orbital,DO NOT TRANSLATE — brand.
 setupGate.welcome,Welcome to Orbital,heading,SetupGate.tsx; SetupWizard.tsx,Welcome heading,欢迎使用 Orbital,Do not translate Orbital.
 setupGate.intro,A secure sandbox environment needs to be configured before you can create and manage agents. This requires administrator permissions and may take a moment.,description,SetupGate.tsx,Explains the sandbox setup requirement,在你创建和管理Agent之前，需要先配置一个安全沙箱环境。这需要管理员权限，可能需要片刻时间。,

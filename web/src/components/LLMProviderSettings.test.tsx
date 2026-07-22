@@ -378,3 +378,32 @@ describe('LLMProviderSettings — no duplicate Custom entry', () => {
     expect(screen.getByDisplayValue('https://my-llm.example/v1')).toBeTruthy();
   });
 });
+
+// ---- wizard mode gating (backlog #25: create-project modal shows only the
+// no-api-key warning — the loading state and the happy-path "using global
+// defaults" card render nothing) ----
+
+describe('LLMProviderSettings — wizard mode gating (backlog #25)', () => {
+  it('renders nothing while global settings are still loading', () => {
+    // Never-resolving api call keeps globalLoaded=false for the assertion window.
+    apiMock.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<LLMProviderSettings mode="wizard" />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing (no happy-path card) once a global API key is configured', async () => {
+    mockApi({ settings: { api_key_set: true, provider: 'deepseek', model: 'deepseek-chat' } });
+    const { container } = render(<LLMProviderSettings mode="wizard" />);
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/api/v2/settings'));
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText(/using global defaults/i)).toBeNull();
+  });
+
+  it('renders only the not-configured warning when no global API key is set', async () => {
+    mockApi({ settings: { api_key_set: false } });
+    render(<LLMProviderSettings mode="wizard" />);
+    await waitFor(() => {
+      expect(screen.getByText(/No LLM provider configured yet/)).toBeTruthy();
+    });
+  });
+});

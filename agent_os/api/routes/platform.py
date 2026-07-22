@@ -46,6 +46,11 @@ class BrowserWarmupRequest(BaseModel):
     url: str = "https://accounts.google.com"
 
 
+class MkdirRequest(BaseModel):
+    parent: str
+    name: str
+
+
 # ---- Dependency holder ----
 
 _platform_provider = None
@@ -59,6 +64,41 @@ def configure(platform_provider, agent_manager=None, browser_manager=None):
     _platform_provider = platform_provider
     _agent_manager = agent_manager
     _browser_manager = browser_manager
+
+
+# ---- Folder-name validation (New Project workspace picker's "New folder") ----
+#
+# Enforced on ALL platforms, not just Windows: a folder created here may later
+# sync to or be shared with a Windows machine, so names must stay valid there
+# regardless of which OS the daemon happens to run on.
+
+_INVALID_NAME_CHARS = '<>:"/\\|?*'
+_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+# ~240 leaves headroom under Windows' ~260-char MAX_PATH for the rest of a
+# real filesystem path (drive letter, parent segments) built on top of this.
+_MAX_FOLDER_PATH_LENGTH = 240
+
+
+def _validate_folder_name(name: str) -> Optional[str]:
+    """Return None if `name` is a valid cross-platform folder name, else a
+    user-legible reason string."""
+    if not name or not name.strip():
+        return "Folder name cannot be empty"
+    if name != name.strip():
+        return "Folder name cannot start or end with a space"
+    if name.startswith('.') or name.endswith('.'):
+        return "Folder name cannot start or end with a dot"
+    for ch in name:
+        if ch in _INVALID_NAME_CHARS or ord(ch) < 0x20:
+            return f'Folder name cannot contain any of: {_INVALID_NAME_CHARS}'
+    stem = name.split('.', 1)[0].upper()
+    if stem in _RESERVED_NAMES:
+        return f'"{name}" is a reserved name on Windows'
+    return None
 
 
 # ---- Endpoints ----
@@ -209,6 +249,43 @@ async def platform_browse(path: Optional[str] = None):
         "display_name": target.name or str(target),
         "entries": entries,
     }
+
+
+@router.post("/mkdir")
+async def platform_mkdir(req: MkdirRequest):
+    """Create a single leaf folder inside an existing parent, for the New
+    Project workspace picker's "New folder" affordance.
+
+    Creates ONLY the leaf (`Path.mkdir()`, never `parents=True`) so a typo'd
+    parent path fails loudly (400) instead of materializing a deep wrong tree.
+    """
+    invalid_reason = _validate_folder_name(req.name)
+    if invalid_reason:
+        raise HTTPException(status_code=400, detail=invalid_reason)
+
+    parent = Path(req.parent)
+    if not parent.is_dir():
+        raise HTTPException(status_code=400, detail="Parent directory does not exist")
+
+    new_path = parent / req.name
+    if len(str(new_path)) > _MAX_FOLDER_PATH_LENGTH:
+        raise HTTPException(status_code=400, detail="Resulting path is too long")
+
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail="A folder with that name already exists")
+
+    try:
+        new_path.mkdir()
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="A folder with that name already exists")
+    except PermissionError:
+        raise HTTPException(
+            status_code=403, detail="Permission denied creating this folder"
+        )
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "ok", "path": str(new_path)}
 
 
 @router.post("/browser/warmup")

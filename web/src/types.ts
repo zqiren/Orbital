@@ -84,8 +84,11 @@ export interface PendingDomainRequest {
 export interface ProjectCreateRequest {
   name: string;
   workspace: string;
-  model: string;
-  api_key: string;
+  // Optional (backend defaults both to ""): the simplified create-project
+  // modal only asks for workspace + name; empty already means "inherit the
+  // global provider/model" server-side.
+  model?: string;
+  api_key?: string;
   base_url?: string | null;
   autonomy?: Autonomy;
   instructions?: string;

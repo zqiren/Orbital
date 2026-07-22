@@ -46,8 +46,13 @@ router = APIRouter(prefix="/api/v2")
 class CreateProjectRequest(BaseModel):
     name: str
     workspace: str
-    model: str
-    api_key: str
+    # Optional (default ""): the create-project modal only ever asks for
+    # workspace + name up front. An empty string is already treated as
+    # "inherit the global provider/model" at runtime (BYOK dedup below,
+    # agent_manager.py runtime fallback) — this just stops every client from
+    # having to send placeholder empties for fields with a sensible default.
+    model: str = ""
+    api_key: str = ""
     base_url: str | None = None
     autonomy: str | None = None
     instructions: str | None = None

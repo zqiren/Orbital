@@ -1772,6 +1772,18 @@ class TestRESTEndpoints:
         data = resp.json()
         assert "project_id" in data
 
+    def test_create_project_omitted_model_and_api_key(self, app_client, tmp_path):
+        """model/api_key are optional (default ''): the simplified create-project
+        modal (backlog #25) no longer sends placeholder empty strings for
+        fields the backend already treats as "inherit global" when empty."""
+        resp = app_client.post("/api/v2/projects", json={
+            "name": "Test",
+            "workspace": str(tmp_path),
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "project_id" in data
+
     def test_create_project_bad_workspace(self, app_client):
         resp = app_client.post("/api/v2/projects", json={
             "name": "Test",

@@ -537,16 +537,6 @@ export default function App() {
             Wave 3; the component is kept so that swap is body-only. */}
         {route.name === 'calendar' && <CalendarPage />}
 
-        {route.name === 'create' && (
-          <CreateProject
-            onSubmit={handleCreateProject}
-            onCancel={() => {
-              setRoute({ name: 'list' });
-              setMobileView('sidebar');
-            }}
-          />
-        )}
-
         {route.name === 'project' && selectedProject && (
           // Scoped to the project view: a render crash here shows a recoverable
           // fallback instead of unmounting the whole app (the app shell/sidebar
@@ -646,6 +636,19 @@ export default function App() {
           <div data-testid="blocked-route-stub" />
         )}
       </main>
+
+      {/* New Project is a modal overlay (backlog #25), not page content — kept
+          as a sibling of <main> rather than one of its route branches so it
+          renders on top of whatever the user was looking at. */}
+      {route.name === 'create' && (
+        <CreateProject
+          onSubmit={handleCreateProject}
+          onCancel={() => {
+            setRoute({ name: 'list' });
+            setMobileView('sidebar');
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -567,33 +567,14 @@ export default function LLMProviderSettings({
 
   const canTestConnection = !!model.trim();
 
-  // ---- Wizard mode: just show a link ----
+  // ---- Wizard mode: the create-project modal only wants a heads-up when the
+  // agent CAN'T start (no global API key) — the happy-path "using global
+  // defaults" card asked users to read a paragraph to learn "nothing needed
+  // here", so it (and the loading spinner) render nothing at all. Only the
+  // not-configured warning is a visible card. ----
   if (mode === 'wizard') {
-    if (!globalLoaded) {
-      return (
-        <div className="flex items-center gap-2 text-sm text-secondary py-2">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          {t('llm.checking')}
-        </div>
-      );
-    }
-    if (globalSettings?.api_key_set) {
-      const displayProvider = globalSettings.provider && providers[globalSettings.provider]
-        ? providers[globalSettings.provider].display_name
-        : globalSettings.provider || 'Custom';
-      const displayModel = globalSettings.model || t('llm.wizard.notSet');
-      return (
-        <div className="border border-border rounded-lg p-4 bg-sidebar/50">
-          <p className="text-sm text-primary font-medium mb-1">{t('llm.provider.heading')}</p>
-          <p className="text-sm text-secondary">
-            {t('llm.wizard.usingDefaults', { provider: displayProvider, model: displayModel })}
-          </p>
-          <p className="text-xs text-secondary mt-2">
-            {t('llm.wizard.changeIn')}
-          </p>
-        </div>
-      );
-    }
+    if (!globalLoaded) return null;
+    if (globalSettings?.api_key_set) return null;
     return (
       <div className="border border-warning/30 rounded-lg p-4 bg-warning/5">
         <p className="text-sm text-primary font-medium mb-1">{t('llm.provider.heading')}</p>

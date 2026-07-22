@@ -19,6 +19,14 @@ The fix:
 
 These tests read the source files and assert the critical CSS classes
 are present so the fix is not accidentally reverted.
+
+Note (backlog #25): CreateProject.tsx stopped being <main> page content —
+it moved to a fixed-overlay modal dialog (App.tsx renders it as a sibling
+of <main>, not one of its route branches), so it no longer shares vertical
+space with the mobile back-button sibling this bug was about. The same
+overflow-safety principle now lives inside the modal card itself (shrink-0
+header/footer, only the scrollable form body grows/shrinks), so its test
+below checks for that instead of the old top-level classname.
 """
 
 from pathlib import Path
@@ -69,9 +77,16 @@ def test_global_settings_uses_flex1():
 
 
 def test_create_project_uses_flex1():
-    """CreateProject root must use flex-1 min-h-0, NOT h-full."""
+    """CreateProject is now a modal overlay (backlog #25), not <main> page
+    content sharing space with the mobile back button — so its root is a
+    fixed-position dialog wrapper, not 'flex-1 min-h-0'. The scrollable form
+    body inside the modal card must still use 'flex-1' + 'min-h-0' (with only
+    header/footer as shrink-0 chrome) so long content (Advanced expanded)
+    scrolls inside the modal instead of overflowing it, and must not fall
+    back to 'h-full' (the original bug trigger)."""
     source = _read("components/CreateProject.tsx")
-    assert "flex-1 min-h-0" in source
+    assert "overflow-y-auto min-h-0" in source
+    assert 'className="flex flex-col h-full"' not in source
 
 
 # ---- FileExplorer.tsx (upload button safe-area padding) --------------------
