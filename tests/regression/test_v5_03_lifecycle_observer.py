@@ -30,23 +30,36 @@ class TestLifecycleObserver:
         assert "/path/transcript.jsonl" in content
 
     @pytest.mark.asyncio
-    async def test_on_message_routed_user_mention_is_a_noop(self):
-        """Backlog #24 D3: the @mention API route fires this notification
-        itself, in ADDITION to the "Message sent to" one SubAgentManager.send()
-        already fires internally for the very same dispatch_id — one physical
-        dispatch was double-announced. send()'s own notification covers every
-        dispatch (immediate or queued-then-drained), so the "user_mention"
-        flavor is now a no-op rather than writing a second "User sent @"
-        marker."""
+    async def test_on_message_routed_user_mention_carries_guidance_with_clean_display(self):
+        """Backlog #23 D3 (supersedes backlog #24 D3's no-op): SubAgentManager
+        .send() now threads the ORIGINAL caller's initiator through to this,
+        its ONE internal notification for a dispatch — the @mention route no
+        longer fires a second, redundant call of its own. Since this is the
+        only marker a mention dispatch ever gets, "user_mention" can no
+        longer be a no-op: the LLM-facing content carries one guidance line
+        (the user addressed the sub-agent directly; don't answer on its
+        behalf), while _meta.display_content keeps the rendered row on the
+        same clean "Message sent to …" text a management_agent dispatch
+        gets."""
         am = MagicMock()
         am.inject_system_message = AsyncMock(return_value="delivered")
         ws = MagicMock()
 
         observer = LifecycleObserver(am, ws)
-        await observer.on_message_routed("proj1", "claude-code", "user_mention",
-                                          "refactor the auth module", "/path/t.jsonl")
+        await observer.on_message_routed(
+            "proj1", "claude-code", "user_mention",
+            "refactor the auth module", "/path/t.jsonl",
+            dispatch_id="sess_X:bbbb2222",
+        )
 
-        am.inject_system_message.assert_not_awaited()
+        am.inject_system_message.assert_awaited_once()
+        content = am.inject_system_message.call_args[0][1]
+        kwargs = am.inject_system_message.await_args.kwargs
+        display = kwargs["meta"]["display_content"]
+        assert display == '[Sub-agent] Message sent to claude-code: "refactor the auth module". Transcript: /path/t.jsonl'
+        assert content.startswith(display)
+        assert "do not answer on its behalf" in content
+        assert "do not answer on its behalf" not in display
 
     @pytest.mark.asyncio
     async def test_on_message_routed_management_agent(self):

@@ -592,6 +592,7 @@ chat.subActivity.started,started,status,ChatView.tsx,Sub-agent lifecycle marker:
 chat.subActivity.sent,sent: {preview},status,ChatView.tsx,Sub-agent lifecycle marker: message sent,已发送：{preview},
 chat.subActivity.completed,completed: {summary},status,ChatView.tsx,Sub-agent lifecycle marker: completed,已完成：{summary},Summary may be empty.
 chat.subActivity.failed,failed: {error},status,ChatView.tsx,Sub-agent lifecycle marker: failed,失败：{error},Error may be empty.
+chat.subActivity.error,stopped with error: {error},status,ChatView.tsx,Sub-agent lifecycle marker: on_error (backlog #23 D2),因错误停止：{error},Error may be empty.
 chat.result.firstChars,first {n} chars · result is {total} chars total,status,chatTransform.ts (truncateResult),Footer when tool result truncated by chars,前 {n} 个字符 · 结果共 {total} 个字符,
 chat.result.firstLines,first {n} lines · result is {total} lines total,status,chatTransform.ts (truncateResult),Footer when tool result truncated by lines,前 {n} 行 · 结果共 {total} 行,
 activity.read,Read {path},status,chatTransform.ts,Activity capsule label: file read,读取 {path},Verb forms; {path} is a file path.

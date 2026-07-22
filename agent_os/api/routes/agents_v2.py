@@ -1172,22 +1172,31 @@ async def inject_message(project_id: str, req: InjectRequest):
             project_id, req.session_id, user_msg,
         )
 
-        # dispatch_id (TASK-dispatch-id-pairing): minted HERE, up front,
-        # because this route fires its OWN "user_mention"-flavored marker
-        # below IN ADDITION to the "management_agent"-flavored one send()
-        # stamps internally — both describe the same physical dispatch, so
-        # both must carry the identical id or they'd join to different (or
-        # no) transcript turns.
+        # dispatch_id (TASK-dispatch-id-pairing): minted HERE, up front, so
+        # it is available for logging/correlation alongside this request;
+        # send() would otherwise mint its own when passed None. The single
+        # "Message sent to …" marker this dispatch gets (fired inside
+        # send() — see below) carries this same id in its meta.
         from uuid import uuid4
         dispatch_id = f"{mention_session_id}:{uuid4().hex[:8]}"
 
         # send() spawns-on-demand (TASK-collapse-dispatch-to-send): the
         # manual try-send -> on-error-start -> re-send dance that used to
         # live here is now the manager's single built-in implementation.
+        # initiator="user_mention" (backlog #23 D3): threaded through to
+        # send()'s one internal on_message_routed notification (fired here
+        # immediately, or later when a queued prompt drains) so the
+        # management agent is told the user addressed this sub-agent
+        # directly. This route used to ALSO fire its own direct
+        # on_message_routed call for the same dispatch_id — a double
+        # marker for one physical dispatch (backlog #24 D3) — now deleted;
+        # send()'s internal notification is the only one this dispatch
+        # ever gets.
         try:
             result = await _sub_agent_manager.send(
                 project_id, req.target, effective_content,
                 session_id=mention_session_id, dispatch_id=dispatch_id,
+                initiator="user_mention",
             )
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
@@ -1204,19 +1213,6 @@ async def inject_message(project_id: str, req: InjectRequest):
             "source": req.target,
             "timestamp": ack_ts,
         })
-
-        # Notify lifecycle observer (session injection handled there)
-        if _lifecycle_observer:
-            transcript = _sub_agent_manager.get_transcript(project_id, req.target)
-            transcript_path = transcript.filepath if transcript else "unknown"
-            await _lifecycle_observer.on_message_routed(
-                project_id, req.target,
-                initiator="user_mention",
-                message_preview=effective_content[:100],
-                transcript_path=transcript_path,
-                session_id=mention_session_id,
-                dispatch_id=dispatch_id,
-            )
 
         return {"status": result}
     else:

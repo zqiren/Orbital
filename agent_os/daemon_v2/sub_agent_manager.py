@@ -947,7 +947,8 @@ class SubAgentManager:
 
     async def send(self, project_id: str, handle: str, message: str,
                    *, session_id: str | None = None, depth: int = 0,
-                   fresh: bool = False, dispatch_id: str | None = None) -> str:
+                   fresh: bool = False, dispatch_id: str | None = None,
+                   initiator: str = "management_agent") -> str:
         """Dispatch message to adapter, spawning the sub-agent if needed.
 
         Returns immediately with a transcript path acknowledgement.
@@ -980,8 +981,16 @@ class SubAgentManager:
         (positional pairing broke once a transcript outlived the chat
         session that started it). Minted here when the caller doesn't
         already have one in scope; the @mention API route mints its own up
-        front (it fires a SECOND marker of its own for the same physical
-        dispatch) and passes it in so both markers agree.
+        front and passes it in.
+
+        ``initiator`` (backlog #23 D3) is threaded through ``_QueuedPrompt``
+        to the ONE ``on_message_routed`` notification this dispatch ever
+        gets (fired here, immediately, or later by
+        ``_on_prompt_turn_closed`` when a queued prompt drains) — it is how
+        that single marker learns whether a human addressed the sub-agent
+        directly via @mention (``"user_mention"``) versus the management
+        agent dispatching it itself. The @mention route passes
+        ``initiator="user_mention"`` and fires no notification of its own.
         """
         session_id = self._resolve_session_id(session_id)
         if dispatch_id is None:
@@ -1038,6 +1047,7 @@ class SubAgentManager:
                 message=message,
                 dispatch_id=dispatch_id,
                 transcript_path=transcript_path,
+                initiator=initiator,
             )
             if prompt_key in self._prompt_active:
                 self._prompt_queues.setdefault(prompt_key, deque()).append(queued)

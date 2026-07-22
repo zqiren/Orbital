@@ -4173,9 +4173,23 @@ class AgentManager:
             if isinstance(loop_err, BaseException):
                 self._record_loop_error(project_id, session_id, loop_err)
 
-            # Drain any deferred messages (lifecycle notifications)
+            # Drain any deferred messages (lifecycle notifications). A
+            # negative-terminal sub-agent event (error/failed/stopped)
+            # dropped in here mid-turn must wake the management loop the
+            # same way a queued user message does below — otherwise a fast
+            # mid-turn sub-agent failure just sits appended in session
+            # history until the user happens to send something else
+            # (backlog #23 D1; diagnosed live via a codex 400 the user never
+            # saw addressed). Scope is deliberately the negative terminals
+            # only, per the backlog row — `completed` plausibly shares the
+            # same gap but is out of scope here.
+            wake_on_deferred_terminal = False
             for msg in handle.session.pop_deferred_messages():
                 handle.session.append(msg)
+                meta = msg.get("_meta") or {}
+                if (meta.get("event") == "sub_agent_terminal"
+                        and meta.get("kind") in ("error", "failed", "stopped")):
+                    wake_on_deferred_terminal = True
 
             # Check if paused for approval FIRST — don't drain the queue
             # or broadcast idle while a tool call is awaiting user decision.
@@ -4207,9 +4221,12 @@ class AgentManager:
 
             # Drain messages queued while the loop was running (e.g. during
             # the session-end LLM call).  If any exist, append them to the
-            # session and hot-resume the loop so they get processed.
+            # session and hot-resume the loop so they get processed. A
+            # deferred negative-terminal event with no queued user message
+            # alongside it takes the same resume branch (D1 above) — the
+            # `for` loop below is simply a no-op when `queued` is empty.
             queued = handle.session.pop_queued_messages()
-            if queued:
+            if queued or wake_on_deferred_terminal:
                 for q_item in queued:
                     if isinstance(q_item, tuple):
                         q_content, q_nonce = q_item

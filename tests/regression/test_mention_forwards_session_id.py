@@ -64,8 +64,11 @@ async def test_mention_forwards_client_session_id_to_send(monkeypatch):
     # ack broadcast carries the resolved session, not None
     ack_payload = ws.broadcast.call_args.args[1]
     assert ack_payload["session_id"] == "proj_x_sessA"
-    # lifecycle transcript marker carries the resolved session
-    assert lifecycle.on_message_routed.await_args.kwargs.get("session_id") == "proj_x_sessA"
+    # backlog #23 D3: the route threads initiator="user_mention" into send()
+    # itself now — send()'s own internal on_message_routed call (inside the
+    # real SubAgentManager, mocked away here) is what carries the resolved
+    # session onward; the route no longer fires a lifecycle call directly.
+    assert sam.send.await_args.kwargs.get("initiator") == "user_mention"
     # arg-threading guard (persist_mention_message is mocked here): the route must
     # hand the resolver (project_id, req.session_id, authored user_msg) so an
     # arg-threading regression is caught even though the resolver is stubbed.
@@ -102,26 +105,24 @@ async def test_mention_spawn_on_demand_send_forwards_session_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mention_threads_same_dispatch_id_to_send_and_lifecycle_marker(monkeypatch):
-    """TASK-dispatch-id-pairing: the @mention route calls send() (which
-    stamps its own 'management_agent'-flavored marker internally) AND fires
-    its own 'user_mention'-flavored marker for the same physical dispatch.
-    Both describe the SAME turn, so both must carry the identical
-    dispatch_id — otherwise the two markers would incorrectly join to
-    different (or no) transcript turns."""
+async def test_mention_passes_dispatch_id_and_user_mention_initiator_to_send(monkeypatch):
+    """TASK-dispatch-id-pairing + backlog #23 D3: the @mention route mints a
+    dispatch_id up front and passes BOTH it and initiator="user_mention"
+    into send() — send()'s own single internal on_message_routed
+    notification (fired inside the real SubAgentManager; mocked away here)
+    is now the ONLY marker this dispatch ever gets, so the route itself must
+    no longer fire a direct notification of its own."""
     sam, ws, lifecycle = _wire(monkeypatch)
     req = InjectRequest(content="hi", target="researcher", session_id="proj_x_sessA")
 
     await agents_v2.inject_message("proj_x", req)
 
-    # send() must receive a dispatch_id (the route mints one up front so it
-    # can reuse it for its own marker below).
     send_kwargs = sam.send.await_args.kwargs
     assert send_kwargs.get("dispatch_id"), "route must pass a dispatch_id into send()"
+    assert send_kwargs.get("initiator") == "user_mention"
 
-    lifecycle.on_message_routed.assert_awaited_once()
-    routed_kwargs = lifecycle.on_message_routed.await_args.kwargs
-    assert routed_kwargs.get("dispatch_id") == send_kwargs.get("dispatch_id")
+    # The route fires no direct notification of its own anymore.
+    lifecycle.on_message_routed.assert_not_awaited()
 
 
 @pytest.mark.asyncio

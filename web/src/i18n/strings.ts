@@ -167,6 +167,7 @@ export const STRINGS = {
   "chat.slash.new.desc": { en: "Start a fresh session", zh: "开始新会话" },
   "chat.stop": { en: "Stop", zh: "停止" },
   "chat.subActivity.completed": { en: "completed: {summary}", zh: "已完成：{summary}" },
+  "chat.subActivity.error": { en: "stopped with error: {error}", zh: "因错误停止：{error}" },
   "chat.subActivity.failed": { en: "failed: {error}", zh: "失败：{error}" },
   "chat.subActivity.sent": { en: "sent: {preview}", zh: "已发送：{preview}" },
   "chat.subActivity.started": { en: "started", zh: "已开始" },

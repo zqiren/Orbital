@@ -92,29 +92,47 @@ class LifecycleObserver:
         that predate the id; such a marker renders no bubble on read (its
         one-line text still shows).
 
-        ``initiator == "user_mention"`` is a NO-OP (backlog #24 D3): the
-        @mention API route fires this notification itself, in ADDITION to
-        the one ``SubAgentManager.send()`` already fires internally (via
-        ``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — for
-        an immediate dispatch AND for a later-drained queued one, since
-        ``_on_prompt_turn_closed`` re-enters ``_dispatch_prompt_locked`` the
-        same way. That second, redundant call used to write its own "User
-        sent @{handle}" marker, double-announcing one physical dispatch.
-        Since ``send()``'s own notification is unconditional and already
-        covers every dispatch, the @mention route's copy is dropped here
-        (its call site is unaffected either way) rather than requiring a
-        change there, keeping the single surviving marker on the
-        "Message sent to …" shape the chat renderer already whitelists.
+        ``initiator == "user_mention"`` used to be a NO-OP (backlog #24 D3):
+        the @mention API route fired this notification itself, in ADDITION
+        to the one ``SubAgentManager.send()`` already fired internally (via
+        ``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — one
+        physical dispatch, two markers, so the route's copy was dropped.
+
+        Backlog #23 D3 supersedes that: ``send()`` now threads the caller's
+        ``initiator`` all the way through ``_QueuedPrompt`` to this, its one
+        internal notification call (immediate dispatch AND a later-drained
+        queued one both go through ``_dispatch_prompt_locked`` the same
+        way) — the @mention route no longer fires a call of its own at all.
+        Since this is now the ONLY marker a mention dispatch ever gets, it
+        cannot go back to being silent: the LLM-facing ``content`` carries
+        one extra guidance line telling the management agent the user
+        addressed the sub-agent directly (do not answer on its behalf;
+        supervise/relay instead) — a weak model otherwise papers over the
+        silence by answering for the sub-agent. The rendered timeline row
+        stays on the same clean "Message sent to …" text a
+        "management_agent"-initiated dispatch gets, via the same
+        ``_meta.display_content`` split ``on_completed`` uses (backlog #24
+        D2) — the guidance is agent-facing only and must never render.
         """
-        if initiator == "user_mention":
-            return
         preview = message_preview[:100]
-        content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
-        meta = None
+        display_content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
+        if initiator == "user_mention":
+            content = display_content + (
+                " The user addressed this sub-agent directly — do not "
+                "answer on its behalf; supervise or relay the sub-agent's "
+                "response instead."
+            )
+        else:
+            content = display_content
+        meta: dict = {}
         if dispatch_id:
-            meta = {"dispatch_id": dispatch_id, "handle": handle,
-                    "transcript_path": transcript_path}
-        await self._inject(project_id, content, session_id=session_id, meta=meta)
+            meta["dispatch_id"] = dispatch_id
+            meta["handle"] = handle
+            meta["transcript_path"] = transcript_path
+        if content != display_content:
+            meta["display_content"] = display_content
+        await self._inject(project_id, content, session_id=session_id,
+                           meta=meta or None)
 
     async def on_interaction_required(
         self, project_id: str, handle: str, *, interaction_id: str,
@@ -233,7 +251,13 @@ class LifecycleObserver:
             summary=error, transcript_path=transcript_path,
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id)
+            # meta.kind (backlog #23 D1): lets _on_loop_done recognize a
+            # negative-terminal event in the deferred-message drain and wake
+            # the management loop instead of silently appending it.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "error"},
+            )
         self._ws.broadcast(project_id, {
             "type": "sub_agent.error",
             "project_id": project_id,
@@ -265,7 +289,11 @@ class LifecycleObserver:
             summary=reason, transcript_path="",
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id)
+            # meta.kind (backlog #23 D1) — see on_error above.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "failed"},
+            )
         self._ws.broadcast(project_id, {
             "type": "sub_agent.failed",
             "project_id": project_id,
@@ -298,7 +326,11 @@ class LifecycleObserver:
             summary=content, transcript_path="",
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id)
+            # meta.kind (backlog #23 D1) — see on_error above.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "stopped"},
+            )
         self._ws.broadcast(project_id, {
             "type": "sub_agent.stopped",
             "project_id": project_id,

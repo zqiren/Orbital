@@ -82,14 +82,14 @@ export type DisplayItem =
        * FE-A2.
        */
       type: 'sub_agent_activity';
-      action: 'started' | 'sent' | 'completed' | 'failed';
+      action: 'started' | 'sent' | 'completed' | 'failed' | 'error';
       handle: string;
       timestamp: string;
       /** Present for action='completed'. Trimmed; may be empty. */
       summary?: string;
       /** Present for action='sent'. The first chunk of the sent message. */
       preview?: string;
-      /** Present for action='failed'. */
+      /** Present for action='failed' | 'error'. */
       error?: string;
       isHistorical?: boolean;
     }
@@ -333,6 +333,10 @@ const SUB_AGENT_STARTED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+started\b/;
 const SUB_AGENT_SENT_RE = /^\[Sub-agent\]\s+Message sent to\s+([\w.-]+):\s*(.*)$/;
 const SUB_AGENT_COMPLETED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+completed\.\s*Summary:\s*([\s\S]*)$/;
 const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
+// backlog #23 D2: on_error's marker ("stopped with error:") had no rule here
+// at all, so the durable error row rendered as nothing — the contract
+// drifted when on_error was added alongside on_failed's "failed:" shape.
+const SUB_AGENT_ERROR_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+stopped with error:\s*([\s\S]*)$/;
 
 // Fanout tool call (spec 009 §0.5). The tool call's OWN arguments only carry
 // the requested task labels — handles don't exist yet, the backend assigns
@@ -419,6 +423,15 @@ function parseSubAgentSystemMessage(
     return {
       type: 'sub_agent_activity',
       action: 'failed',
+      handle: m[1],
+      error: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_ERROR_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'error',
       handle: m[1],
       error: m[2].trim(),
       timestamp,

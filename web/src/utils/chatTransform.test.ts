@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { transformChatHistory, truncateResult, mergeRecoveredAssistantMessage } from './chatTransform';
 import type { ChatMessage } from '../types';
+import subAgentMarkerFixturesData from './subAgentMarkerFixtures.json';
 
 const TS = '2026-05-08T10:00:00Z';
 const TS2 = '2026-05-08T10:00:01Z';
@@ -720,6 +721,59 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
     expect(a.type).toBe('sub_agent_activity');
     if (a.type === 'sub_agent_activity') {
       expect(a.summary).toContain('done. Transcript: /x/y.jsonl.');
+    }
+  });
+
+  it('D2: parses [Sub-agent] "stopped with error:" lines into sub_agent_activity with error field', () => {
+    // Before this fix the renderer whitelist had no rule for on_error's
+    // marker shape (only on_failed's "failed:" was covered), so this durable
+    // error row silently rendered as nothing.
+    const messages: ChatMessage[] = [
+      sys('[Sub-agent] claude-code stopped with error: model timed out after 60s', TS),
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('error');
+      expect(a.handle).toBe('claude-code');
+      expect(a.error).toBe('model timed out after 60s');
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Producer↔renderer marker parity (backlog #23 D2). The fixture at
+// subAgentMarkerFixtures.json is the one source of truth for every
+// sub-agent system-marker shape the backend writes; the paired pytest
+// (tests/unit/test_sub_agent_marker_parity.py) drives the REAL
+// LifecycleObserver producer methods and asserts their rendered output
+// matches this same fixture exactly. Together: a producer shape that
+// changes without updating the fixture fails the pytest; a fixture shape
+// with no renderer rule (or that stops parsing) fails HERE.
+// --------------------------------------------------------------------------
+
+interface SubAgentMarkerFixture {
+  shape: string;
+  action: string;
+  content: string;
+}
+
+const subAgentMarkerFixtures = subAgentMarkerFixturesData as SubAgentMarkerFixture[];
+
+describe('transformChatHistory — producer/renderer marker parity fixture', () => {
+  it('every fixture shape renders to a sub_agent_activity item with the expected action', () => {
+    for (const fixture of subAgentMarkerFixtures) {
+      const items = transformChatHistory([sys(fixture.content, TS)]);
+      const activity = items.find(i => i.type === 'sub_agent_activity');
+      expect(
+        activity,
+        `shape "${fixture.shape}" must render, not drop silently (got: ${JSON.stringify(items)})`,
+      ).toBeDefined();
+      if (activity && activity.type === 'sub_agent_activity') {
+        expect(activity.action).toBe(fixture.action);
+      }
     }
   });
 });

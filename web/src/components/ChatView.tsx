@@ -2715,6 +2715,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               rendered = <ChatMessage key={`msg-${index}`} message={item} agentName={project.agent_name} workspace={project.workspace} onOpenPath={onOpenPath} />;
             } else if (item.type === 'sub_agent_activity') {
               // FE-A2: compact one-line marker for [Sub-agent] lifecycle.
+              // 'error' (backlog #23 D2 — the "stopped with error:" marker)
+              // mirrors 'failed''s styling/severity treatment below; it is
+              // a distinct terminal outcome (a crash mid-turn vs. a clean
+              // failure report), so it gets its own copy key.
               const label =
                 item.action === 'started' ? t('chat.subActivity.started') :
                 item.action === 'sent' ? t('chat.subActivity.sent', { preview: item.preview ?? '' }) :
@@ -2722,10 +2726,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   ? (item.summary
                       ? t('chat.subActivity.completed', { summary: item.summary })
                       : t('chat.subActivity.completed', { summary: '' }).replace(/[:：]\s*$/, ''))
+                  : item.action === 'error'
+                  ? (item.error
+                      ? t('chat.subActivity.error', { error: item.error })
+                      : t('chat.subActivity.error', { error: '' }).replace(/[:：]\s*$/, ''))
                   : /* failed */ (item.error
                       ? t('chat.subActivity.failed', { error: item.error })
                       : t('chat.subActivity.failed', { error: '' }).replace(/[:：]\s*$/, ''));
-              const tone = item.action === 'failed' ? 'text-error/80' : 'text-secondary';
+              const tone = (item.action === 'failed' || item.action === 'error') ? 'text-error/80' : 'text-secondary';
               rendered = (
                 <div
                   key={`sa-${index}`}

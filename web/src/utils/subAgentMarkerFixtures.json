@@ -1,0 +1,27 @@
+[
+  {
+    "shape": "started",
+    "action": "started",
+    "content": "[Sub-agent] claude-code started (initiated by: management_agent). Transcript: /tmp/fixture-transcript.jsonl"
+  },
+  {
+    "shape": "sent",
+    "action": "sent",
+    "content": "[Sub-agent] Message sent to claude-code: \"run the tests\". Transcript: /tmp/fixture-transcript.jsonl"
+  },
+  {
+    "shape": "completed",
+    "action": "completed",
+    "content": "[Sub-agent] claude-code completed. Summary: All tests passing. Transcript: /tmp/fixture-transcript.jsonl."
+  },
+  {
+    "shape": "failed",
+    "action": "failed",
+    "content": "[Sub-agent] claude-code failed: adapter crashed. The dispatched task did not complete."
+  },
+  {
+    "shape": "stopped_with_error",
+    "action": "error",
+    "content": "[Sub-agent] claude-code stopped with error: model timed out. Transcript: /tmp/fixture-transcript.jsonl"
+  }
+]

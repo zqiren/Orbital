@@ -150,11 +150,14 @@ async def test_on_completed_absorbed_by_fanout_skips_injection_entirely():
 
 
 # ---------------------------------------------------------------------------
-# D3 — @mention double dispatch marker
+# D3 — @mention double dispatch marker (backlog #24), superseded by backlog
+# #23 D3's initiator-aware guidance (send() now threads the caller's
+# initiator through to its one internal on_message_routed call; the
+# @mention route no longer fires a second, direct call of its own).
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_user_mention_initiator_is_a_noop():
+async def test_user_mention_initiator_adds_guidance_but_keeps_display_clean():
     agent_manager = _AgentManager()
     observer = LifecycleObserver(agent_manager, _WS())
 
@@ -163,7 +166,13 @@ async def test_user_mention_initiator_is_a_noop():
         message_preview="hi", transcript_path="/x/y.jsonl",
         session_id="s1", dispatch_id="s1:abc123")
 
-    assert agent_manager.injections == []
+    assert len(agent_manager.injections) == 1
+    _, content, kwargs = agent_manager.injections[0]
+    display = kwargs["meta"]["display_content"]
+    assert display == '[Sub-agent] Message sent to cursor: "hi". Transcript: /x/y.jsonl'
+    assert content.startswith(display)
+    assert "do not answer on its behalf" in content
+    assert "do not answer on its behalf" not in display
 
 
 @pytest.mark.asyncio
@@ -180,42 +189,43 @@ async def test_management_agent_initiator_still_writes_message_sent_marker():
     _, content, kwargs = agent_manager.injections[0]
     assert content.startswith('[Sub-agent] Message sent to cursor: "hi"')
     assert kwargs["meta"]["dispatch_id"] == "s1:abc123"
+    # No guidance for an ordinary management-agent dispatch — no split needed.
+    assert "display_content" not in kwargs["meta"]
 
 
 @pytest.mark.asyncio
 async def test_mention_dispatch_writes_exactly_one_marker_end_to_end():
-    """Mirrors agent_os/api/routes/agents_v2.py's @mention handler: mint a
-    dispatch_id, call SubAgentManager.send() (which fires the internal
-    "Message sent to" notification), then fire the route's own direct
-    "User sent @" notification for the SAME dispatch_id. Exactly one marker
-    must land in the session."""
+    """Mirrors agent_os/api/routes/agents_v2.py's @mention handler post
+    backlog #23 D3: mint a dispatch_id and call SubAgentManager.send() with
+    initiator="user_mention" — the route fires no notification of its own
+    anymore. Exactly one marker lands, carrying the guidance line, with a
+    clean display_content for the renderer."""
     agent_manager = _AgentManager()
     observer = LifecycleObserver(agent_manager, _WS())
     manager, transport = _manager_with_adapter(observer)
 
     dispatch_id = "s1:deadbeef"
     result = await manager.send(
-        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id)
-    await observer.on_message_routed(
-        "p1", "cursor", initiator="user_mention",
-        message_preview="hi @cursor", transcript_path="unknown",
-        session_id="s1", dispatch_id=dispatch_id)
+        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id,
+        initiator="user_mention")
 
     assert result.startswith("Message sent")
     assert transport.messages == ["hi @cursor"]
     assert len(agent_manager.injections) == 1
-    content = agent_manager.injections[0][1]
+    _, content, kwargs = agent_manager.injections[0]
     assert content.startswith("[Sub-agent] Message sent to cursor")
-    assert "User sent @" not in content
+    assert "do not answer on its behalf" in content
+    assert kwargs["meta"]["display_content"].startswith("[Sub-agent] Message sent to cursor")
+    assert "do not answer on its behalf" not in kwargs["meta"]["display_content"]
 
 
 @pytest.mark.asyncio
 async def test_mention_dispatch_writes_exactly_one_marker_when_queued():
-    """Same double-notification sequence, but the target is already busy so
-    send() defers to the FIFO instead of dispatching immediately — the
-    route's own "user_mention" notification (a no-op) fires BEFORE send()'s
-    internal one this time (which only fires once the queue drains). Order
-    must not matter: still exactly one marker."""
+    """Same @mention dispatch, but the target is already busy so send()
+    defers to the FIFO instead of dispatching immediately — the internal
+    on_message_routed notification only fires once the queue drains. Still
+    exactly one marker, and the drained call still carries the
+    "user_mention" initiator threaded through _QueuedPrompt."""
     agent_manager = _AgentManager()
     observer = LifecycleObserver(agent_manager, _WS())
     manager, transport = _manager_with_adapter(observer)
@@ -223,14 +233,9 @@ async def test_mention_dispatch_writes_exactly_one_marker_when_queued():
 
     dispatch_id = "s1:queued01"
     result = await manager.send(
-        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id)
+        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id,
+        initiator="user_mention")
     assert "queued" in result.lower()
-    # The route's own notification arrives immediately, before the queued
-    # prompt ever drains.
-    await observer.on_message_routed(
-        "p1", "cursor", initiator="user_mention",
-        message_preview="hi @cursor", transcript_path="unknown",
-        session_id="s1", dispatch_id=dispatch_id)
     assert agent_manager.injections == []
 
     # Draining the FIFO now fires send()'s own internal notification.
@@ -239,16 +244,18 @@ async def test_mention_dispatch_writes_exactly_one_marker_when_queued():
 
     assert transport.messages == ["hi @cursor"]
     assert len(agent_manager.injections) == 1
-    content = agent_manager.injections[0][1]
+    _, content, kwargs = agent_manager.injections[0]
     assert content.startswith("[Sub-agent] Message sent to cursor")
-    assert "User sent @" not in content
+    assert "do not answer on its behalf" in content
+    assert "do not answer on its behalf" not in kwargs["meta"]["display_content"]
 
 
 @pytest.mark.asyncio
 async def test_two_management_agent_dispatches_each_write_their_own_marker():
-    """Regression guard: the D3 fix must not suppress markers for ordinary
-    (non-@mention) dispatches — each gets a fresh dispatch_id and its own
-    marker, unaffected by the user_mention no-op."""
+    """Regression guard: the D3 fix must not affect markers for ordinary
+    (non-@mention) dispatches — each gets a fresh dispatch_id, its own
+    marker, and no guidance line, unaffected by the user_mention handling
+    above."""
     agent_manager = _AgentManager()
     observer = LifecycleObserver(agent_manager, _WS())
     manager, transport = _manager_with_adapter(observer)
@@ -261,3 +268,5 @@ async def test_two_management_agent_dispatches_each_write_their_own_marker():
     assert second.startswith("Message sent")
     assert transport.messages == ["first", "second"]
     assert len(agent_manager.injections) == 2
+    for _, content, _kwargs in agent_manager.injections:
+        assert "do not answer on its behalf" not in content
