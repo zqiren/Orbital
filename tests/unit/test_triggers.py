@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -420,9 +421,11 @@ class TestTriggerManager:
         tm = TriggerManager(store, mock_agent_mgr)
 
         await tm.start()
-        # Only the enabled trigger should be registered
-        assert "trg_aaa" in tm._timers
-        assert "trg_bbb" not in tm._timers
+        # Only the enabled trigger should be registered in the tick loop's
+        # evaluated set (schedule triggers no longer get per-trigger timers —
+        # see trigger_manager.py's tick-loop redesign).
+        assert "trg_aaa" in tm._schedule_ids
+        assert "trg_bbb" not in tm._schedule_ids
         await tm.stop()
 
     @pytest.mark.asyncio
@@ -436,9 +439,9 @@ class TestTriggerManager:
         tm = TriggerManager(store, mock_agent_mgr)
 
         await tm.start()
-        assert len(tm._timers) == 1
+        assert len(tm._schedule_ids) == 1
         await tm.stop()
-        assert len(tm._timers) == 0
+        assert len(tm._schedule_ids) == 0
 
     @pytest.mark.asyncio
     async def test_register_trigger(self):
@@ -450,7 +453,7 @@ class TestTriggerManager:
         trigger = {"id": "trg_new", "name": "New", "type": "schedule",
                    "enabled": True, "schedule": {"cron": "0 9 * * *"}, "task": "Task"}
         tm.register_trigger(pid, trigger)
-        assert "trg_new" in tm._timers
+        assert "trg_new" in tm._schedule_ids
 
         # Cleanup
         await tm.stop()
@@ -466,26 +469,37 @@ class TestTriggerManager:
 
     @pytest.mark.asyncio
     async def test_register_replaces_existing(self):
+        """Re-registering the same trigger_id is idempotent (no duplicate
+        evaluation entries) and the tick loop picks up the updated cron on
+        its next evaluation (via a fresh project_store read, not cached
+        state)."""
         store, pid = _make_project_store()
         mock_agent_mgr = MagicMock()
-        tm = TriggerManager(store, mock_agent_mgr)
+        mock_agent_mgr.is_running = MagicMock(return_value=False)
+        mock_agent_mgr.start_agent = AsyncMock()
+        fixed_now = datetime(2026, 7, 22, 15, 0, 0, tzinfo=timezone.utc)  # Wed 15:00 UTC
+        tm = TriggerManager(store, mock_agent_mgr, now_fn=lambda: fixed_now)
         await tm.start()
 
         trigger = {"id": "trg_aaa", "name": "Original", "type": "schedule",
-                   "enabled": True, "schedule": {"cron": "0 7 * * *"}, "task": "Task"}
+                   "enabled": True, "schedule": {"cron": "0 7 * * *"}, "task": "Task",
+                   "last_triggered": None, "created_at": "2020-01-01T00:00:00+00:00"}
         tm.register_trigger(pid, trigger)
-        old_task = tm._timers["trg_aaa"]
+        assert tm._schedule_ids == {"trg_aaa"}
 
-        # Re-register with updated cron
+        # Re-register with an updated cron — still exactly one entry.
         trigger2 = {"id": "trg_aaa", "name": "Updated", "type": "schedule",
-                    "enabled": True, "schedule": {"cron": "0 9 * * *"}, "task": "Task"}
+                    "enabled": True, "schedule": {"cron": "0 9 * * *"}, "task": "Task",
+                    "last_triggered": None, "created_at": "2020-01-01T00:00:00+00:00"}
         tm.register_trigger(pid, trigger2)
-        new_task = tm._timers["trg_aaa"]
+        assert tm._schedule_ids == {"trg_aaa"}
 
-        # Old task should have cancel() called (cancelling state),
-        # new task should be different from old
-        assert old_task.cancelling() > 0 or old_task.cancelled()
-        assert new_task is not old_task
+        # The tick loop reads the trigger fresh from project_store, so the
+        # re-registered (updated) cron is what actually gets evaluated —
+        # persist trigger2's cron there before evaluating.
+        store.update_project(pid, {"triggers": [trigger2]})
+        await tm._evaluate_due_triggers()
+        mock_agent_mgr.start_agent.assert_called_once()
 
         # Cleanup
         await tm.stop()
@@ -588,7 +602,7 @@ class TestTriggerManager:
 
         # Should not raise, should unregister the trigger
         await tm._fire_trigger(pid, "trg_orphan")
-        assert "trg_orphan" not in tm._timers
+        assert "trg_orphan" not in tm._schedule_ids
 
     @pytest.mark.asyncio
     async def test_fire_trigger_broadcasts_fired_event(self):

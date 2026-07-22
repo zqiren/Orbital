@@ -11,7 +11,6 @@ by calling agent_manager.start_agent(), and updates trigger state
 """
 
 import asyncio
-import concurrent.futures
 import fnmatch
 import logging
 import os
@@ -68,25 +67,44 @@ def validate_trigger(trigger: dict, workspace: str | None = None) -> str | None:
 class TriggerManager:
     """Manages scheduled triggers for all projects.
 
-    On startup, loads all triggers from all projects and registers
-    asyncio timers for enabled schedule triggers. When a trigger fires,
-    calls agent_manager.start_agent() with the task as initial_message.
+    On startup, loads all triggers from all projects, adds enabled schedule
+    triggers to a single periodic tick loop, and starts watchdog observers
+    for file_watch triggers. When a trigger fires, calls
+    agent_manager.start_agent() with the task as initial_message.
+
+    Schedule triggers are evaluated by one tick loop (`TICK_INTERVAL_SECONDS`)
+    rather than a per-trigger `asyncio.sleep(delay_to_next_occurrence)` timer.
+    Per-trigger timers run on the monotonic clock, which freezes across macOS
+    system sleep — a daily trigger armed before a sleep fires late by the
+    accumulated sleep duration, and a multi-day timer (e.g. weekly) can miss
+    its occurrence entirely across a sleep+restart. The tick loop instead
+    re-evaluates wall-clock due-ness from scratch every tick, so a missed
+    occurrence is caught up (and coalesced into a single fire) the next time
+    the loop runs — see `_evaluate_due_triggers`.
     """
 
-    def __init__(self, project_store, agent_manager, ws_manager=None):
+    TICK_INTERVAL_SECONDS = 60
+
+    def __init__(self, project_store, agent_manager, ws_manager=None, now_fn=None):
         self._project_store = project_store
         self._agent_manager = agent_manager
         self._ws = ws_manager
-        self._timers: dict[str, asyncio.Task | concurrent.futures.Future] = {}
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        # Instance attribute (not the class constant) so tests can shrink it.
+        self.tick_interval_seconds = self.TICK_INTERVAL_SECONDS
+        self._schedule_ids: set[str] = set()  # trigger_ids evaluated each tick
+        self._held: set[str] = set()  # trigger_ids currently holding on agent_busy
         self._file_observers: dict[str, Observer] = {}
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
         self._debounce_buffers: dict[str, list[str]] = {}
         self._trigger_project: dict[str, str] = {}  # trigger_id → project_id
         self._running = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._tick_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        """Load all triggers from all projects and register timers/observers."""
+        """Load all triggers from all projects, register the tick loop's
+        schedule set, start file-watch observers, and start the tick loop."""
         self._running = True
         self._loop = asyncio.get_running_loop()
         projects = self._project_store.list_projects()
@@ -100,8 +118,8 @@ class TriggerManager:
                     continue
                 ttype = trigger.get("type")
                 if ttype == "schedule":
-                    self._register_timer(project_id, trigger)
-                    schedule_count += 1
+                    if self._register_schedule(project_id, trigger):
+                        schedule_count += 1
                 elif ttype == "file_watch":
                     self._start_file_watch(project_id, trigger)
                     file_watch_count += 1
@@ -109,13 +127,23 @@ class TriggerManager:
             "TriggerManager started: %d schedule + %d file_watch triggers registered",
             schedule_count, file_watch_count,
         )
+        # The tick loop runs an immediate catch-up evaluation before its
+        # first sleep (see _tick_loop), so daemon-restart catch-up needs no
+        # special-casing here.
+        self._tick_task = asyncio.create_task(self._tick_loop())
 
     async def stop(self) -> None:
-        """Cancel all timers, stop all file observers, and shut down."""
+        """Cancel the tick loop, stop all file observers, and shut down."""
         self._running = False
-        for trigger_id, handle in self._timers.items():
-            handle.cancel()
-        self._timers.clear()
+        if self._tick_task is not None:
+            self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass
+            self._tick_task = None
+        self._schedule_ids.clear()
+        self._held.clear()
         for trigger_id in list(self._file_observers):
             self._stop_file_watch(trigger_id)
         # Cancel any pending debounce timers
@@ -129,13 +157,13 @@ class TriggerManager:
     def register_trigger(self, project_id: str, trigger: dict) -> None:
         """Register a single trigger (called after create/update)."""
         trigger_id = trigger["id"]
-        # Cancel existing timer/observer if any
+        # Drop any existing registration/observer first (idempotent re-register)
         self.unregister_trigger(trigger_id)
         self._trigger_project[trigger_id] = project_id
         if trigger.get("enabled", True):
             ttype = trigger.get("type")
             if ttype == "schedule":
-                self._register_timer(project_id, trigger)
+                self._register_schedule(project_id, trigger)
             elif ttype == "file_watch":
                 self._start_file_watch(project_id, trigger)
         # Broadcast creation event for real-time UI updates
@@ -148,13 +176,11 @@ class TriggerManager:
     def unregister_trigger(self, trigger_id: str) -> None:
         """Unregister a trigger (called after delete or disable).
 
-        Handles both asyncio.Task (from event loop thread) and
-        concurrent.futures.Future (from run_coroutine_threadsafe).
-        Also stops file-watch observers.
+        Removes it from the tick loop's evaluated set and clears any
+        held-streak tracking. Also stops file-watch observers.
         """
-        handle = self._timers.pop(trigger_id, None)
-        if handle is not None:
-            handle.cancel()
+        self._schedule_ids.discard(trigger_id)
+        self._held.discard(trigger_id)
         self._stop_file_watch(trigger_id)
         # Broadcast deletion event
         project_id = self._trigger_project.pop(trigger_id, None)
@@ -257,81 +283,179 @@ class TriggerManager:
                 self._fire_trigger(project_id, trigger_id, changed_files=changed_files)
             )
 
-    # ---- Schedule timer lifecycle ----
+    # ---- Schedule tick-loop lifecycle ----
 
-    def _register_timer(self, project_id: str, trigger: dict) -> None:
-        """Create an asyncio task that sleeps until next cron time, then fires.
+    def _register_schedule(self, project_id: str, trigger: dict) -> bool:
+        """Add a schedule trigger to the tick loop's evaluated set.
 
-        Thread-safe: uses run_coroutine_threadsafe when called from a non-event-loop
-        thread (e.g. tool execute via asyncio.to_thread), or asyncio.create_task when
-        called from the event loop thread directly.
+        Idempotent: registering the same trigger_id again is a no-op on set
+        membership. The tick loop re-reads schedule/cron/last_triggered fresh
+        from project_store on every evaluation (see _evaluate_due_triggers),
+        so there is no cached per-trigger state here to go stale or duplicate.
+        Returns False (and logs+skips, same as before) for an invalid cron.
         """
         trigger_id = trigger["id"]
-        schedule = trigger.get("schedule", {})
-        cron = schedule.get("cron")
-        tz_name = schedule.get("timezone", "UTC")
+        cron = trigger.get("schedule", {}).get("cron")
         if not cron or not croniter.is_valid(cron):
             logger.warning("Skipping trigger %s: invalid cron '%s'", trigger_id, cron)
-            return
+            return False
+        self._trigger_project[trigger_id] = project_id
+        self._schedule_ids.add(trigger_id)
+        return True
 
-        # Cancel existing timer before creating new one (idempotent)
-        existing = self._timers.pop(trigger_id, None)
-        if existing is not None:
-            existing.cancel()
+    async def _tick_loop(self) -> None:
+        """Periodic tick: evaluate all due schedule triggers, then sleep.
 
-        coro = self._timer_loop(project_id, trigger_id, cron, tz_name)
-
-        # Detect whether we're in the event loop thread or a worker thread
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-
-        if running_loop is self._loop:
-            # Called from event loop thread (e.g. during start() or direct call)
-            self._timers[trigger_id] = asyncio.create_task(coro)
-        elif self._loop is not None:
-            # Called from a worker thread (e.g. via asyncio.to_thread)
-            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-            self._timers[trigger_id] = future
-        else:
-            logger.warning(
-                "Trigger %s: no event loop captured, cannot schedule timer", trigger_id
-            )
-
-    async def _timer_loop(self, project_id: str, trigger_id: str,
-                          cron_expr: str, tz_name: str = "UTC") -> None:
-        """Loop: compute next fire time in the trigger's timezone, sleep, fire, repeat."""
-        import pytz
-        try:
-            tz = pytz.timezone(tz_name)
-        except pytz.UnknownTimeZoneError:
-            logger.warning("Trigger %s: unknown timezone '%s', falling back to UTC", trigger_id, tz_name)
-            tz = pytz.UTC
-
+        The first evaluation runs immediately (before the first sleep) so a
+        trigger missed during machine sleep or a daemon restart is caught up
+        promptly instead of waiting for its next natural occurrence.
+        """
         while self._running:
             try:
-                now = datetime.now(tz)
-                cron = croniter(cron_expr, now)
-                next_fire = cron.get_next(datetime)
-                # Convert to UTC for delay calculation
-                if next_fire.tzinfo is None:
-                    next_fire = tz.localize(next_fire)
-                now_utc = datetime.now(timezone.utc)
-                delay = (next_fire.astimezone(timezone.utc) - now_utc).total_seconds()
-                if delay < 0:
-                    delay = 0
-                logger.debug(
-                    "Trigger %s: next fire in %.0f seconds at %s (%s)",
-                    trigger_id, delay, next_fire.isoformat(), tz_name
-                )
-                await asyncio.sleep(delay)
-                await self._fire_trigger(project_id, trigger_id)
+                await self._evaluate_due_triggers()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Error evaluating due triggers")
+            try:
+                await asyncio.sleep(self.tick_interval_seconds)
             except asyncio.CancelledError:
                 break
+
+    async def _evaluate_due_triggers(self) -> None:
+        """Evaluate every registered schedule trigger and fire the due ones.
+
+        Due rule (per trigger, in the trigger's own timezone): prev_occ = the
+        most recent cron occurrence <= now. The trigger is due iff
+        prev_occ > max(last_triggered, created_at) — a missing/unparsable
+        last_triggered counts as never-fired, and a trigger created after an
+        occurrence must not catch up on that pre-creation occurrence. Firing
+        sets last_triggered = now (in _fire_trigger), which subsumes any
+        older missed occurrences into this one catch-up fire.
+
+        Firing is serialized per project (at most one fire per project per
+        tick, in prev_occ order, tie-broken by created_at then id) and
+        awaited strictly sequentially — no create_task fan-out — so there is
+        no check-then-start race between simultaneous triggers. A due
+        trigger whose project agent is already running is held (not fired,
+        last_triggered untouched) and re-checked next tick; "trigger.held" is
+        broadcast only on the first held tick of a streak.
+        """
+        import pytz
+
+        now = self._now_fn()
+        due: list[tuple[datetime, str, str, str, dict]] = []
+
+        for trigger_id in list(self._schedule_ids):
+            project_id = self._trigger_project.get(trigger_id)
+            if project_id is None:
+                continue
+            project = self._project_store.get_project(project_id)
+            if project is None:
+                continue
+            trigger = next(
+                (t for t in project.get("triggers", []) if t.get("id") == trigger_id),
+                None,
+            )
+            if trigger is None or not trigger.get("enabled", True):
+                continue
+            schedule = trigger.get("schedule", {})
+            cron_expr = schedule.get("cron")
+            if not cron_expr or not croniter.is_valid(cron_expr):
+                continue
+
+            tz_name = schedule.get("timezone", "UTC")
+            try:
+                tz = pytz.timezone(tz_name)
+            except pytz.UnknownTimeZoneError:
+                logger.warning(
+                    "Trigger %s: unknown timezone '%s', falling back to UTC",
+                    trigger_id, tz_name,
+                )
+                tz = pytz.UTC
+
+            try:
+                prev_occ = croniter(cron_expr, now.astimezone(tz)).get_prev(datetime)
             except Exception:
-                logger.exception("Error in timer loop for trigger %s", trigger_id)
-                await asyncio.sleep(60)  # Back off on error
+                logger.exception(
+                    "Trigger %s: failed computing previous occurrence", trigger_id
+                )
+                continue
+            if prev_occ.tzinfo is None:
+                prev_occ = tz.localize(prev_occ)
+
+            baseline = self._trigger_baseline(trigger)
+            if prev_occ <= baseline:
+                # Not due (or no longer due) — clear any held-streak tracking.
+                self._held.discard(trigger_id)
+                continue
+
+            due.append((prev_occ, trigger.get("created_at") or "", trigger_id, project_id, trigger))
+
+        # Deterministic order: earliest missed occurrence first, tie-broken
+        # by creation time then id.
+        due.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        fired_projects: set[str] = set()
+        for prev_occ, _created_at, trigger_id, project_id, trigger in due:
+            if project_id in fired_projects:
+                # Another trigger already used this project's one-fire-per-tick
+                # slot; this one stays due and is picked up next tick.
+                logger.debug(
+                    "Trigger %s: deferring to next tick (project %s already fired this tick)",
+                    trigger_id, project_id,
+                )
+                continue
+            if self._agent_manager.is_running(project_id):
+                if trigger_id not in self._held:
+                    self._held.add(trigger_id)
+                    self._broadcast(project_id, {
+                        "type": "trigger.held",
+                        "project_id": project_id,
+                        "trigger_id": trigger_id,
+                        "trigger_name": trigger.get("name", trigger_id),
+                        "reason": "agent_busy",
+                        "timestamp": now.isoformat(),
+                    })
+                else:
+                    logger.debug("Trigger %s: still held (agent busy)", trigger_id)
+                continue
+            self._held.discard(trigger_id)
+            await self._fire_trigger(project_id, trigger_id)
+            fired_projects.add(project_id)
+
+    @staticmethod
+    def _parse_iso(value) -> datetime | None:
+        """Parse an ISO-8601 timestamp string; return None if missing/unparsable."""
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _trigger_baseline(self, trigger: dict) -> datetime:
+        """The due-rule baseline: max(last_triggered, created_at).
+
+        Missing/unparsable last_triggered is treated as never-fired (falls
+        back to created_at). If both are missing/unparsable, the baseline is
+        the epoch, so the trigger is due as soon as it has any occurrence.
+        A last_triggered in the future (clock skew) is honored as-is — it
+        simply raises the bar so nothing looks due.
+        """
+        candidates = [
+            parsed for parsed in (
+                self._parse_iso(trigger.get("last_triggered")),
+                self._parse_iso(trigger.get("created_at")),
+            )
+            if parsed is not None
+        ]
+        if not candidates:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        return max(candidates)
 
     async def _fire_trigger(self, project_id: str, trigger_id: str,
                              changed_files: list[str] | None = None) -> None:
@@ -365,7 +489,7 @@ class TriggerManager:
                 "trigger_id": trigger_id,
                 "trigger_name": trigger_name,
                 "reason": "agent_busy",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": self._now_fn().isoformat(),
             })
             return
 
@@ -389,7 +513,7 @@ class TriggerManager:
             )
 
         # Update trigger state only when we will actually fire
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = self._now_fn().isoformat()
         trigger["last_triggered"] = now_iso
         trigger["trigger_count"] = trigger.get("trigger_count", 0) + 1
         self._project_store.update_project(project_id, {"triggers": triggers})
@@ -500,7 +624,7 @@ class TriggerManager:
                 "source": "trigger",
                 "trigger_id": trigger_id,
                 "trigger_name": trigger_name,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": self._now_fn().isoformat(),
             })
 
     def _broadcast(self, project_id: str, event: dict) -> None:
