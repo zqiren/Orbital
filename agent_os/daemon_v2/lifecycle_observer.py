@@ -91,12 +91,25 @@ class LifecycleObserver:
         script both still rely on its exact shape. Omitted only by callers
         that predate the id; such a marker renders no bubble on read (its
         one-line text still shows).
+
+        ``initiator == "user_mention"`` is a NO-OP (backlog #24 D3): the
+        @mention API route fires this notification itself, in ADDITION to
+        the one ``SubAgentManager.send()`` already fires internally (via
+        ``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — for
+        an immediate dispatch AND for a later-drained queued one, since
+        ``_on_prompt_turn_closed`` re-enters ``_dispatch_prompt_locked`` the
+        same way. That second, redundant call used to write its own "User
+        sent @{handle}" marker, double-announcing one physical dispatch.
+        Since ``send()``'s own notification is unconditional and already
+        covers every dispatch, the @mention route's copy is dropped here
+        (its call site is unaffected either way) rather than requiring a
+        change there, keeping the single surviving marker on the
+        "Message sent to …" shape the chat renderer already whitelists.
         """
-        preview = message_preview[:100]
         if initiator == "user_mention":
-            content = f'[Sub-agent] User sent @{handle}: "{preview}". Transcript: {transcript_path}'
-        else:
-            content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
+            return
+        preview = message_preview[:100]
+        content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
         meta = None
         if dispatch_id:
             meta = {"dispatch_id": dispatch_id, "handle": handle,
@@ -169,6 +182,14 @@ class LifecycleObserver:
                            *, session_id: str | None = None) -> None:
         """Sub-agent finished its current task."""
         summary_text = summary[:500] if summary else "(no output)"
+        # Display split (backend _meta contract, mirrors commit 967237d's
+        # fanout join-summary split): display_content is the clean,
+        # user-visible marker; the steering guidance below is agent-facing
+        # only and must never render in the chat timeline.
+        display_content = (
+            f"[Sub-agent] {handle} completed. Summary: {summary_text}. "
+            f"Transcript: {transcript_path}."
+        )
         if summary and summary.strip():
             # The sub-agent's full final message is already shown to the user as
             # its own chat bubble (subagent-last-message-display). Re-summarizing
@@ -186,16 +207,14 @@ class LifecycleObserver:
                 " The sub-agent produced no final message, so nothing was shown to "
                 "the user — briefly tell the user the outcome yourself."
             )
-        content = (
-            f"[Sub-agent] {handle} completed. Summary: {summary_text}. "
-            f"Transcript: {transcript_path}.{guidance}"
-        )
+        content = display_content + guidance
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="completed",
             summary=summary_text, transcript_path=transcript_path,
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id)
+            await self._inject(project_id, content, session_id=session_id,
+                               meta={"display_content": display_content})
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,

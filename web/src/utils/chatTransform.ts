@@ -554,19 +554,21 @@ export function transformChatHistory(
       const startedAtMs = tsToMs(msg.timestamp);
       const toolRows = msg.sub_agent_tool_rows ?? [];
 
-      // 1. Agent header (avatar + "<handle> · HH:MM"), no body.
-      items.push({
-        type: 'agent_message',
-        content: '',
-        source: handle,
-        timestamp: msg.timestamp,
-        isHeaderOnly: true,
-      });
-
-      // 2. Tool capsule — identical shape to a management `agent_run` so the
-      //    existing capsule renderer (chevron, expand/collapse, tool rows,
-      //    summary) works unchanged. Collapsed by default.
+      // 1 & 2. Header + tool capsule, emitted together: the header only
+      // exists to anchor the capsule that follows, so no capsule means no
+      // header either (D1 — an empty header-only anchor with the response
+      // bubble's own identical header right after it was rendering as two
+      // adjacent headers for the same turn). The response bubble (step 3)
+      // always carries its own header regardless.
       if (toolRows.length > 0) {
+        items.push({
+          type: 'agent_message',
+          content: '',
+          source: handle,
+          timestamp: msg.timestamp,
+          isHeaderOnly: true,
+        });
+
         const counts: Record<string, number> = {};
         const capsuleItems: CapsuleChild[] = [];
         for (let r = 0; r < toolRows.length; r++) {
@@ -684,7 +686,17 @@ export function transformChatHistory(
       // Finalize the open capsule first so the marker appears AFTER the
       // capsule that contains the originating dispatch tool call (chronologic
       // JSONL order), not inside or before it.
-      const activity = parseSubAgentSystemMessage(msg.content ?? '', msg.timestamp);
+      // Display split (backend _meta contract, same mechanism as the fanout
+      // join summary above): on_completed's full content carries agent-facing
+      // steering guidance for the LLM; _meta.display_content, when present,
+      // is the clean marker text and is what SUB_AGENT_COMPLETED_RE parses
+      // (its capture group is greedy to end-of-string, so parsing the full
+      // content would leak the guidance into the rendered summary).
+      const activityContent =
+        typeof msg._meta?.display_content === 'string'
+          ? (msg._meta.display_content as string)
+          : (msg.content ?? '');
+      const activity = parseSubAgentSystemMessage(activityContent, msg.timestamp);
       if (activity) {
         finalizeCapsule();
         items.push(activity);

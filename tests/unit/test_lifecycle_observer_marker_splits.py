@@ -1,0 +1,263 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Tests for LifecycleObserver marker-content fixes (backlog #24, Task 1: D2 + D3).
+
+D2: ``on_completed``'s injected content mixes a user-relevant fact ("[Sub-agent]
+{handle} completed. Summary: ...") with agent-facing steering guidance ("do NOT
+repeat or re-summarize it..."). The guidance must stay in the LLM-facing
+content but never render in the chat timeline. Fix mirrors commit 967237d's
+fanout join-summary ``_meta.display_content`` split.
+
+D3: the @mention API route (``agent_os/api/routes/agents_v2.py``) fires its
+own ``on_message_routed(initiator="user_mention", ...)`` notification in
+ADDITION to the one ``SubAgentManager.send()`` already fires internally (via
+``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — one physical
+dispatch, two markers. ``send()``'s internal notification fires
+unconditionally for every dispatch, immediate or queued-then-drained
+(``_on_prompt_turn_closed`` re-enters ``_dispatch_prompt_locked`` for a
+drained queue head), so the @mention route's copy is always redundant. Fix:
+the "user_mention" flavor is a no-op in ``on_message_routed`` — this keeps
+the single surviving marker on the renderer-whitelisted "Message sent to …"
+shape without needing a change at the (out-of-task-scope) route call site.
+"""
+
+from types import SimpleNamespace
+
+import pytest
+
+from agent_os.daemon_v2.lifecycle_observer import LifecycleObserver
+from agent_os.daemon_v2.models import make_session_key
+from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
+
+
+class _AgentManager:
+    def __init__(self):
+        self.injections = []
+
+    async def inject_system_message(self, project_id, content, **kwargs):
+        self.injections.append((project_id, content, kwargs))
+
+
+class _WS:
+    def __init__(self):
+        self.events = []
+
+    def broadcast(self, project_id, payload):
+        self.events.append(payload)
+
+
+class _ProcessManager:
+    """Minimal double matching test_sub_agent_prompt_queue_fifo.py's — just
+    enough surface for SubAgentManager.send() to dispatch without a real
+    provider."""
+
+    def set_turn_closed_callback(self, callback):
+        pass
+
+    def set_permission_request_callback(self, callback):
+        pass
+
+    def set_active_dispatch(self, *args, **kwargs):
+        pass
+
+    def clear_dispatch(self, *args, **kwargs):
+        pass
+
+
+class _Transport:
+    def __init__(self):
+        self.messages = []
+
+    async def dispatch(self, message):
+        self.messages.append(message)
+
+
+def _manager_with_adapter(observer, project_id="p1", session_id="s1", handle="cursor"):
+    manager = SubAgentManager(_ProcessManager(), lifecycle_observer=observer)
+    transport = _Transport()
+    manager._adapters[make_session_key(project_id, session_id)] = {
+        handle: SimpleNamespace(_transport=transport, _broken=False),
+    }
+    return manager, transport
+
+
+# ---------------------------------------------------------------------------
+# D2 — completion marker display split
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_on_completed_display_content_excludes_guidance_with_summary():
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+
+    await observer.on_completed(
+        "p1", "claude-code", "2, 3, 5, 7", "/x/y.jsonl", session_id="s1")
+
+    _, content, kwargs = agent_manager.injections[0]
+    display = kwargs["meta"]["display_content"]
+    assert display == (
+        "[Sub-agent] claude-code completed. Summary: 2, 3, 5, 7. "
+        "Transcript: /x/y.jsonl."
+    )
+    assert "do NOT repeat" not in display
+    assert "Verify the work" not in display
+    # The split is real, not a deletion — the full LLM-facing content still
+    # carries the steering guidance, and starts with the same display text.
+    assert "do NOT repeat" in content
+    assert content.startswith(display)
+
+
+@pytest.mark.asyncio
+async def test_on_completed_display_content_excludes_guidance_no_output_variant():
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+
+    await observer.on_completed(
+        "p1", "claude-code", "", "/x/y.jsonl", session_id="s1")
+
+    _, content, kwargs = agent_manager.injections[0]
+    display = kwargs["meta"]["display_content"]
+    assert display == (
+        "[Sub-agent] claude-code completed. Summary: (no output). "
+        "Transcript: /x/y.jsonl."
+    )
+    assert "nothing was shown to" not in display
+    assert "nothing was shown to" in content
+    assert content.startswith(display)
+
+
+@pytest.mark.asyncio
+async def test_on_completed_absorbed_by_fanout_skips_injection_entirely():
+    """When a fanout registry absorbs the terminal event, on_completed must
+    not ALSO inject its own per-worker marker — the fanout join summary
+    (already _meta-split as of commit 967237d) is the one user-visible
+    marker for the whole group."""
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+
+    class _AbsorbingRegistry:
+        def absorb_terminal(self, *args, **kwargs):
+            return True
+
+    observer.fanout_registry = _AbsorbingRegistry()
+
+    await observer.on_completed(
+        "p1", "worker:f-0", "ok", "/x/y.jsonl", session_id="s1")
+
+    assert agent_manager.injections == []
+
+
+# ---------------------------------------------------------------------------
+# D3 — @mention double dispatch marker
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_user_mention_initiator_is_a_noop():
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+
+    await observer.on_message_routed(
+        "p1", "cursor", initiator="user_mention",
+        message_preview="hi", transcript_path="/x/y.jsonl",
+        session_id="s1", dispatch_id="s1:abc123")
+
+    assert agent_manager.injections == []
+
+
+@pytest.mark.asyncio
+async def test_management_agent_initiator_still_writes_message_sent_marker():
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+
+    await observer.on_message_routed(
+        "p1", "cursor", initiator="management_agent",
+        message_preview="hi", transcript_path="/x/y.jsonl",
+        session_id="s1", dispatch_id="s1:abc123")
+
+    assert len(agent_manager.injections) == 1
+    _, content, kwargs = agent_manager.injections[0]
+    assert content.startswith('[Sub-agent] Message sent to cursor: "hi"')
+    assert kwargs["meta"]["dispatch_id"] == "s1:abc123"
+
+
+@pytest.mark.asyncio
+async def test_mention_dispatch_writes_exactly_one_marker_end_to_end():
+    """Mirrors agent_os/api/routes/agents_v2.py's @mention handler: mint a
+    dispatch_id, call SubAgentManager.send() (which fires the internal
+    "Message sent to" notification), then fire the route's own direct
+    "User sent @" notification for the SAME dispatch_id. Exactly one marker
+    must land in the session."""
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+    manager, transport = _manager_with_adapter(observer)
+
+    dispatch_id = "s1:deadbeef"
+    result = await manager.send(
+        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id)
+    await observer.on_message_routed(
+        "p1", "cursor", initiator="user_mention",
+        message_preview="hi @cursor", transcript_path="unknown",
+        session_id="s1", dispatch_id=dispatch_id)
+
+    assert result.startswith("Message sent")
+    assert transport.messages == ["hi @cursor"]
+    assert len(agent_manager.injections) == 1
+    content = agent_manager.injections[0][1]
+    assert content.startswith("[Sub-agent] Message sent to cursor")
+    assert "User sent @" not in content
+
+
+@pytest.mark.asyncio
+async def test_mention_dispatch_writes_exactly_one_marker_when_queued():
+    """Same double-notification sequence, but the target is already busy so
+    send() defers to the FIFO instead of dispatching immediately — the
+    route's own "user_mention" notification (a no-op) fires BEFORE send()'s
+    internal one this time (which only fires once the queue drains). Order
+    must not matter: still exactly one marker."""
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+    manager, transport = _manager_with_adapter(observer)
+    manager._prompt_active.add(("p1", "s1", "cursor"))
+
+    dispatch_id = "s1:queued01"
+    result = await manager.send(
+        "p1", "cursor", "hi @cursor", session_id="s1", dispatch_id=dispatch_id)
+    assert "queued" in result.lower()
+    # The route's own notification arrives immediately, before the queued
+    # prompt ever drains.
+    await observer.on_message_routed(
+        "p1", "cursor", initiator="user_mention",
+        message_preview="hi @cursor", transcript_path="unknown",
+        session_id="s1", dispatch_id=dispatch_id)
+    assert agent_manager.injections == []
+
+    # Draining the FIFO now fires send()'s own internal notification.
+    manager._prompt_active.discard(("p1", "s1", "cursor"))
+    await manager._on_prompt_turn_closed("p1", "cursor", session_id="s1", cause="success")
+
+    assert transport.messages == ["hi @cursor"]
+    assert len(agent_manager.injections) == 1
+    content = agent_manager.injections[0][1]
+    assert content.startswith("[Sub-agent] Message sent to cursor")
+    assert "User sent @" not in content
+
+
+@pytest.mark.asyncio
+async def test_two_management_agent_dispatches_each_write_their_own_marker():
+    """Regression guard: the D3 fix must not suppress markers for ordinary
+    (non-@mention) dispatches — each gets a fresh dispatch_id and its own
+    marker, unaffected by the user_mention no-op."""
+    agent_manager = _AgentManager()
+    observer = LifecycleObserver(agent_manager, _WS())
+    manager, transport = _manager_with_adapter(observer)
+
+    first = await manager.send("p1", "cursor", "first", session_id="s1")
+    manager._prompt_active.discard(("p1", "s1", "cursor"))
+    second = await manager.send("p1", "cursor", "second", session_id="s1")
+
+    assert first.startswith("Message sent")
+    assert second.startswith("Message sent")
+    assert transport.messages == ["first", "second"]
+    assert len(agent_manager.injections) == 2

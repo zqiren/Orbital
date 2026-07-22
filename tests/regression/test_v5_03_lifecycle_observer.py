@@ -30,7 +30,14 @@ class TestLifecycleObserver:
         assert "/path/transcript.jsonl" in content
 
     @pytest.mark.asyncio
-    async def test_on_message_routed_user_mention(self):
+    async def test_on_message_routed_user_mention_is_a_noop(self):
+        """Backlog #24 D3: the @mention API route fires this notification
+        itself, in ADDITION to the "Message sent to" one SubAgentManager.send()
+        already fires internally for the very same dispatch_id — one physical
+        dispatch was double-announced. send()'s own notification covers every
+        dispatch (immediate or queued-then-drained), so the "user_mention"
+        flavor is now a no-op rather than writing a second "User sent @"
+        marker."""
         am = MagicMock()
         am.inject_system_message = AsyncMock(return_value="delivered")
         ws = MagicMock()
@@ -39,10 +46,7 @@ class TestLifecycleObserver:
         await observer.on_message_routed("proj1", "claude-code", "user_mention",
                                           "refactor the auth module", "/path/t.jsonl")
 
-        content = am.inject_system_message.call_args[0][1]
-        assert "User sent @claude-code" in content
-        assert "refactor the auth module" in content
-        assert "/path/t.jsonl" in content
+        am.inject_system_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_on_message_routed_management_agent(self):

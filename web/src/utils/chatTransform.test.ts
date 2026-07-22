@@ -691,6 +691,37 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
     const types = items.map(i => i.type);
     expect(types).toEqual(['agent_message', 'agent_run', 'sub_agent_activity']);
   });
+
+  it('D2: completed marker uses _meta.display_content — agent-facing guidance never reaches the summary field', () => {
+    const full =
+      "[Sub-agent] claude-code completed. Summary: done. Transcript: /x/y.jsonl. The user can " +
+      "already see this summary in chat as the sub-agent's own message — do NOT repeat or " +
+      're-summarize it. Verify the work if needed, then continue or reply only with what\'s new.';
+    const display = '[Sub-agent] claude-code completed. Summary: done. Transcript: /x/y.jsonl.';
+    const messages: ChatMessage[] = [
+      { ...sys(full, TS), _meta: { display_content: display } },
+    ];
+    const items = transformChatHistory(messages);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('completed');
+      expect(a.summary).not.toContain('do NOT repeat');
+      expect(a.summary).not.toContain('Verify the work');
+    }
+  });
+
+  it('D2: completed marker without _meta (legacy) falls back to full content', () => {
+    const full = '[Sub-agent] claude-code completed. Summary: done. Transcript: /x/y.jsonl.';
+    const messages: ChatMessage[] = [sys(full, TS)];
+    const items = transformChatHistory(messages);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.summary).toContain('done. Transcript: /x/y.jsonl.');
+    }
+  });
 });
 
 describe('transformChatHistory — FE-A3 agent header for content-null turns', () => {
@@ -880,7 +911,9 @@ describe('transformChatHistory — sub-agent renders as a peer agent (capsule + 
     expect(emptyResponse).toBeUndefined();
   });
 
-  it('a sub-agent with no tools emits header + response but no capsule', () => {
+  it('D1: a sub-agent turn with no tool rows emits exactly ONE agent_message (no header-only anchor, no capsule)', () => {
+    // Regression for the duplicate-header bug: an anchor with no capsule to
+    // anchor is not a header, it's a second identical bubble.
     const messages: ChatMessage[] = [
       {
         role: 'assistant', content: 'just text', source: 'sub_agent', timestamp: TS,
@@ -888,10 +921,25 @@ describe('transformChatHistory — sub-agent renders as a peer agent (capsule + 
       },
     ];
     const items = transformChatHistory(messages, '/workspace');
+    expect(items.length).toBe(1);
     expect(items.some((i) => i.type === 'agent_run')).toBe(false);
+    expect(
+      items.some((i) => i.type === 'agent_message' && (i as { isHeaderOnly?: boolean }).isHeaderOnly),
+    ).toBe(false);
     const resp = items.find((i) => i.type === 'agent_message' && i.content === 'just text');
     expect(resp).toBeDefined();
     if (resp && resp.type === 'agent_message') expect(resp.source).toBe('gemini-cli');
+  });
+
+  it('D1: a sub-agent turn with no tool rows and no content emits nothing', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant', content: '', source: 'sub_agent', timestamp: TS,
+        sub_agent_handle: 'codex', sub_agent_tool_rows: [], sub_agent_duration: 0,
+      },
+    ];
+    const items = transformChatHistory(messages, '/workspace');
+    expect(items.length).toBe(0);
   });
 
   it('does not treat a normal management assistant message as a sub-agent', () => {
