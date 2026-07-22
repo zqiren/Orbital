@@ -15,7 +15,6 @@ These tests drive `TriggerManager._evaluate_due_triggers()` directly with an
 injected `now_fn`, so no real sleeping is involved.
 """
 
-import copy
 import tempfile
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
@@ -407,38 +406,35 @@ class TestFireExceptionIsolation:
 
     @pytest.mark.asyncio
     async def test_one_trigger_exception_does_not_starve_others_same_tick(self):
+        """Runs against the REAL ProjectStore's live-reference semantics —
+        get_project() returns the actual backing dict, not a copy, and
+        _fire_trigger mutates trigger["last_triggered"]/["trigger_count"] in
+        place *before* calling update_project(). A fix that merely swallows
+        the exception (without rolling back that in-place stamp) would still
+        leave the trigger looking "already fired" in memory even though
+        update_project — and therefore start_agent — never completed. The
+        fix under test is _fire_trigger's rollback of that stamp when
+        update_project raises (see the try/except around the update_project
+        call in _fire_trigger)."""
         trigger_a = _trigger("trg_fail", "0 7 * * *", last_triggered=None, task="Task A")
         trigger_b = _trigger("trg_ok", "0 11 * * *", last_triggered=None, task="Task B")
         store, pid_a, pid_b = _make_two_project_store([trigger_a], [trigger_b])
 
         # trg_fail has the earlier prev_occ, so it sorts first — without the
-        # fix, an unhandled exception here would prevent trg_ok (sorted
-        # after it) from ever being attempted this tick.
-        #
-        # The real ProjectStore.get_project() returns a live reference into
-        # its backing dict (not a copy), and _fire_trigger mutates
-        # trigger["last_triggered"] in place *before* calling
-        # update_project() — so wrapping only update_project would leave the
-        # in-memory state stamped even though the "persisted" write failed,
-        # masking exactly the bug this test exists to catch. Wrapping
-        # get_project() to hand back a deep copy makes update_project() the
-        # single point where a change actually commits, matching how a real
-        # durable store behaves (a failed write does not commit).
-        real_get_project = store.get_project
+        # per-item try/except (fix pass 1), an unhandled exception here would
+        # prevent trg_ok (sorted after it) from ever being attempted this
+        # tick. The failure is transient: it raises only on trg_fail's first
+        # write attempt, then clears — modeling a one-off disk hiccup rather
+        # than a permanently broken project.
         real_update_project = store.update_project
-        call_count = {"n": 0}
-
-        def copying_get_project(project_id):
-            project = real_get_project(project_id)
-            return copy.deepcopy(project) if project is not None else None
+        raised_once = {"done": False}
 
         def flaky_update_project(project_id, updates):
-            if project_id == pid_a:
-                call_count["n"] += 1
-                raise RuntimeError("simulated project_store write failure")
+            if project_id == pid_a and not raised_once["done"]:
+                raised_once["done"] = True
+                raise RuntimeError("simulated transient project_store write failure")
             return real_update_project(project_id, updates)
 
-        store.get_project = copying_get_project
         store.update_project = flaky_update_project
 
         mgr = _make_agent_mgr(is_running=False)
@@ -452,11 +448,14 @@ class TestFireExceptionIsolation:
         assert mgr.start_agent.call_count == 1
         assert mgr.start_agent.call_args.args[0] == pid_b
         assert _last_triggered(store, pid_b, "trg_ok") is not None
-        # A's failed fire must not be recorded as fired.
-        assert _last_triggered(store, pid_a, "trg_fail") is None
-        assert call_count["n"] == 1
 
-        # Next tick: A is retried (still due — not silently dropped).
-        await tm._evaluate_due_triggers()
-        assert call_count["n"] == 2
+        # A's failed fire must be fully rolled back on the LIVE trigger
+        # object — not just "no crash," but genuinely still due, not stuck
+        # showing "fired" until the next natural cron occurrence.
         assert _last_triggered(store, pid_a, "trg_fail") is None
+
+        # Next tick: the transient failure has cleared, so A actually fires.
+        await tm._evaluate_due_triggers()
+        assert mgr.start_agent.call_count == 2
+        assert mgr.start_agent.call_args.args[0] == pid_a
+        assert _last_triggered(store, pid_a, "trg_fail") is not None

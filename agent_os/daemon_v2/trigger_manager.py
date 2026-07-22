@@ -446,9 +446,10 @@ class TriggerManager:
             except Exception:
                 # _fire_trigger's own try/except only wraps start_agent —
                 # the project_store.update_project stamping above it can
-                # still raise. Don't let one trigger's failure starve every
-                # trigger sorted after it this tick; it stays due and is
-                # retried next tick since last_triggered was never stamped.
+                # still raise, and _fire_trigger rolls that stamp back on
+                # its own live trigger object before re-raising. Don't let
+                # one trigger's failure starve every trigger sorted after it
+                # this tick; it stays genuinely due and is retried next tick.
                 logger.exception(
                     "Trigger %s: unhandled error firing for project %s",
                     trigger_id, project_id,
@@ -543,11 +544,27 @@ class TriggerManager:
                 + f"]\n\n{task_content}"
             )
 
-        # Update trigger state only when we will actually fire
+        # Update trigger state only when we will actually fire. trigger is a
+        # live reference into project_store's backing dict (get_project()
+        # does not return a copy), so this stamp is visible immediately —
+        # including to the next tick's evaluation — regardless of whether
+        # update_project() below actually persists it. If it raises (e.g. a
+        # disk write failure), roll the stamp back on this same live object
+        # before re-raising: otherwise the trigger would look "already
+        # fired" in memory forever, even though nothing was persisted and
+        # the agent below was never started, starving it until its next
+        # natural cron occurrence instead of being retried next tick.
+        old_last_triggered = trigger.get("last_triggered")
+        old_trigger_count = trigger.get("trigger_count", 0)
         now_iso = self._now_fn().isoformat()
         trigger["last_triggered"] = now_iso
-        trigger["trigger_count"] = trigger.get("trigger_count", 0) + 1
-        self._project_store.update_project(project_id, {"triggers": triggers})
+        trigger["trigger_count"] = old_trigger_count + 1
+        try:
+            self._project_store.update_project(project_id, {"triggers": triggers})
+        except Exception:
+            trigger["last_triggered"] = old_last_triggered
+            trigger["trigger_count"] = old_trigger_count
+            raise
 
         # Start the agent
         try:
