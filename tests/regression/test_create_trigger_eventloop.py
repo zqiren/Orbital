@@ -25,9 +25,11 @@ duplicate/stale state.
 """
 
 import asyncio
+import tempfile
 import pytest
 from unittest.mock import MagicMock
 
+from agent_os.daemon_v2.project_store import ProjectStore
 from agent_os.daemon_v2.trigger_manager import TriggerManager
 
 
@@ -42,19 +44,56 @@ def _make_trigger(trigger_id="trg_test0001", cron="0 7 * * *", enabled=True):
         "autonomy": None,
         "last_triggered": None,
         "trigger_count": 0,
+        "created_at": "2020-01-01T00:00:00+00:00",
     }
 
 
 @pytest.fixture
-def trigger_manager():
-    """TriggerManager with stubbed dependencies."""
-    project_store = MagicMock()
+def project_store():
+    """Real ProjectStore (not a bare MagicMock).
+
+    A bare MagicMock used to stand in here, but TriggerManager's tick loop
+    now runs concurrently the moment start() is awaited, and its
+    orphan-cleanup pass (see _evaluate_due_triggers) unregisters any schedule
+    trigger it can't find inside its project's stored trigger list — correct
+    behavior for an actually-deleted trigger, but a MagicMock's
+    `.get("triggers", [])` iterates as empty, so it made every registered
+    trigger look orphaned and the concurrently-running tick loop unregistered
+    it mid-test. A real store, seeded the same order CreateTriggerTool
+    actually persists a trigger (project_store write, then
+    trigger_manager.register_trigger — see agent_os/agent/tools/triggers.py),
+    avoids that false-orphan race entirely.
+    """
+    return ProjectStore(data_dir=tempfile.mkdtemp())
+
+
+@pytest.fixture
+def project_id(project_store):
+    return project_store.create_project({
+        "name": "Test Project",
+        "workspace": tempfile.mkdtemp(),
+        "model": "gpt-4",
+        "api_key": "sk-test",
+    })
+
+
+@pytest.fixture
+def trigger_manager(project_store):
+    """TriggerManager wired to the real project_store fixture above."""
     agent_manager = MagicMock()
     return TriggerManager(project_store, agent_manager)
 
 
+def _persist(project_store, project_id, trigger):
+    """Seed project_store with a trigger the way CreateTriggerTool does:
+    persist first, so a concurrently-running tick evaluation finds it."""
+    project_store.update_project(project_id, {"triggers": [trigger]})
+
+
 @pytest.mark.asyncio
-async def test_register_trigger_from_thread_no_runtime_error(trigger_manager):
+async def test_register_trigger_from_thread_no_runtime_error(
+    project_store, project_id, trigger_manager
+):
     """register_trigger() called from a thread pool worker must not raise.
 
     Historically, asyncio.create_task() inside _register_timer() raised
@@ -65,11 +104,12 @@ async def test_register_trigger_from_thread_no_runtime_error(trigger_manager):
     await trigger_manager.start()
 
     trigger = _make_trigger()
+    _persist(project_store, project_id, trigger)
 
     # Simulate what asyncio.to_thread does: run in a thread pool executor
     # This is exactly the code path when CreateTriggerTool.execute() is called
     await asyncio.to_thread(
-        trigger_manager.register_trigger, "proj_test", trigger
+        trigger_manager.register_trigger, project_id, trigger
     )
 
     # Trigger should actually be registered in the tick loop's evaluated set
@@ -79,12 +119,15 @@ async def test_register_trigger_from_thread_no_runtime_error(trigger_manager):
 
 
 @pytest.mark.asyncio
-async def test_register_trigger_from_event_loop_thread(trigger_manager):
+async def test_register_trigger_from_event_loop_thread(
+    project_store, project_id, trigger_manager
+):
     """register_trigger() called directly from the event loop thread still works."""
     await trigger_manager.start()
 
     trigger = _make_trigger(trigger_id="trg_test0002")
-    trigger_manager.register_trigger("proj_test", trigger)
+    _persist(project_store, project_id, trigger)
+    trigger_manager.register_trigger(project_id, trigger)
 
     assert "trg_test0002" in trigger_manager._schedule_ids
 
@@ -92,21 +135,24 @@ async def test_register_trigger_from_event_loop_thread(trigger_manager):
 
 
 @pytest.mark.asyncio
-async def test_rapid_toggle_no_duplicate_timers(trigger_manager):
+async def test_rapid_toggle_no_duplicate_timers(
+    project_store, project_id, trigger_manager
+):
     """Rapid register -> unregister -> register must leave exactly one registration."""
     await trigger_manager.start()
 
     trigger = _make_trigger(trigger_id="trg_toggle")
+    _persist(project_store, project_id, trigger)
 
     # Simulate rapid toggling from a thread (like the UI toggle button)
     await asyncio.to_thread(
-        trigger_manager.register_trigger, "proj_test", trigger
+        trigger_manager.register_trigger, project_id, trigger
     )
     await asyncio.to_thread(
         trigger_manager.unregister_trigger, "trg_toggle"
     )
     await asyncio.to_thread(
-        trigger_manager.register_trigger, "proj_test", trigger
+        trigger_manager.register_trigger, project_id, trigger
     )
 
     assert "trg_toggle" in trigger_manager._schedule_ids
@@ -117,13 +163,16 @@ async def test_rapid_toggle_no_duplicate_timers(trigger_manager):
 
 
 @pytest.mark.asyncio
-async def test_unregister_cancels_timer(trigger_manager):
+async def test_unregister_cancels_timer(
+    project_store, project_id, trigger_manager
+):
     """unregister_trigger() must remove it from the tick loop's evaluated set."""
     await trigger_manager.start()
 
     trigger = _make_trigger(trigger_id="trg_cancel")
+    _persist(project_store, project_id, trigger)
     await asyncio.to_thread(
-        trigger_manager.register_trigger, "proj_test", trigger
+        trigger_manager.register_trigger, project_id, trigger
     )
     assert "trg_cancel" in trigger_manager._schedule_ids
 
@@ -136,19 +185,22 @@ async def test_unregister_cancels_timer(trigger_manager):
 
 
 @pytest.mark.asyncio
-async def test_register_idempotent_replaces_existing(trigger_manager):
+async def test_register_idempotent_replaces_existing(
+    project_store, project_id, trigger_manager
+):
     """Calling register_trigger twice for the same trigger_id must not duplicate
     its registration (and must keep the project mapping correct)."""
     await trigger_manager.start()
 
     trigger = _make_trigger(trigger_id="trg_idem")
-    trigger_manager.register_trigger("proj_test", trigger)
+    _persist(project_store, project_id, trigger)
+    trigger_manager.register_trigger(project_id, trigger)
     assert trigger_manager._schedule_ids == {"trg_idem"}
-    assert trigger_manager._trigger_project["trg_idem"] == "proj_test"
+    assert trigger_manager._trigger_project["trg_idem"] == project_id
 
     # Register again — should replace, not duplicate
-    trigger_manager.register_trigger("proj_test", trigger)
+    trigger_manager.register_trigger(project_id, trigger)
     assert trigger_manager._schedule_ids == {"trg_idem"}
-    assert trigger_manager._trigger_project["trg_idem"] == "proj_test"
+    assert trigger_manager._trigger_project["trg_idem"] == project_id
 
     await trigger_manager.stop()

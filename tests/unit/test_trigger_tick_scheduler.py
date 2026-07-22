@@ -15,6 +15,7 @@ These tests drive `TriggerManager._evaluate_due_triggers()` directly with an
 injected `now_fn`, so no real sleeping is involved.
 """
 
+import copy
 import tempfile
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
@@ -318,3 +319,144 @@ class TestPerProjectSerialization:
         assert fired_project_ids == {pid_a, pid_b}
         assert _last_triggered(store, pid_a, "trg_pa") is not None
         assert _last_triggered(store, pid_b, "trg_pb") is not None
+
+
+# ===========================================================================
+# Orphan cleanup (review finding 1) — evaluation must self-clean schedule
+# triggers whose project or trigger record disappeared out from under it,
+# instead of re-checking a dead trigger_id forever.
+# ===========================================================================
+
+class TestOrphanCleanup:
+
+    @pytest.mark.asyncio
+    async def test_project_deleted_unregisters_trigger(self):
+        """delete_project never calls unregister_trigger, so evaluation is
+        the only janitor for a schedule trigger whose project is gone."""
+        trigger = _trigger("trg_orphan_proj", "0 11 * * *", last_triggered=None)
+        store, pid = _make_project_store(triggers=[trigger])
+        mgr = _make_agent_mgr(is_running=False)
+        tm = TriggerManager(store, mgr, now_fn=lambda: FIXED_NOW)
+        tm.register_trigger(pid, trigger)
+        assert "trg_orphan_proj" in tm._schedule_ids
+
+        store.delete_project(pid)
+
+        await tm._evaluate_due_triggers()  # must not raise/crash
+
+        assert "trg_orphan_proj" not in tm._schedule_ids
+        assert "trg_orphan_proj" not in tm._trigger_project
+        mgr.start_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trigger_removed_from_project_unregisters(self):
+        """A trigger dropped from its project's triggers list by some path
+        other than DeleteTriggerTool (which calls unregister_trigger itself)
+        must still be cleaned up by evaluation, without disturbing sibling
+        triggers on the same project."""
+        trigger = _trigger("trg_removed", "0 11 * * *", last_triggered=None)
+        other = _trigger("trg_other", "0 12 * * *", last_triggered=None)
+        store, pid = _make_project_store(triggers=[trigger, other])
+        mgr = _make_agent_mgr(is_running=False)
+        tm = TriggerManager(store, mgr, now_fn=lambda: FIXED_NOW)
+        tm.register_trigger(pid, trigger)
+        tm.register_trigger(pid, other)
+
+        # Simulate the trigger vanishing from the project's trigger list via
+        # a path that bypasses unregister_trigger.
+        store.update_project(pid, {"triggers": [other]})
+
+        await tm._evaluate_due_triggers()  # must not raise/crash
+
+        assert "trg_removed" not in tm._schedule_ids
+        assert "trg_removed" not in tm._trigger_project
+        # The sibling trigger is unaffected and still fires.
+        assert mgr.start_agent.call_count == 1
+        assert mgr.start_agent.call_args.args[0] == pid
+
+    @pytest.mark.asyncio
+    async def test_disabled_trigger_stays_registered_not_unregistered(self):
+        """A trigger toggled to disabled by a path that bypasses
+        unregister_trigger must NOT be dropped from the evaluated set —
+        re-enabling it later must not require a fresh register_trigger call —
+        it just must not fire while disabled."""
+        trigger = _trigger("trg_toggle_off", "0 11 * * *", last_triggered=None)
+        store, pid = _make_project_store(triggers=[trigger])
+        mgr = _make_agent_mgr(is_running=False)
+        tm = TriggerManager(store, mgr, now_fn=lambda: FIXED_NOW)
+        tm.register_trigger(pid, trigger)
+        assert "trg_toggle_off" in tm._schedule_ids
+
+        disabled = dict(trigger, enabled=False)
+        store.update_project(pid, {"triggers": [disabled]})
+
+        await tm._evaluate_due_triggers()
+
+        assert "trg_toggle_off" in tm._schedule_ids  # still registered
+        mgr.start_agent.assert_not_called()
+
+
+# ===========================================================================
+# One bad trigger must not starve others (review finding 2) — a per-item
+# exception during firing (e.g. a project_store write failure, which sits
+# outside _fire_trigger's own try/except around start_agent) must not abort
+# the rest of the tick's due list.
+# ===========================================================================
+
+class TestFireExceptionIsolation:
+
+    @pytest.mark.asyncio
+    async def test_one_trigger_exception_does_not_starve_others_same_tick(self):
+        trigger_a = _trigger("trg_fail", "0 7 * * *", last_triggered=None, task="Task A")
+        trigger_b = _trigger("trg_ok", "0 11 * * *", last_triggered=None, task="Task B")
+        store, pid_a, pid_b = _make_two_project_store([trigger_a], [trigger_b])
+
+        # trg_fail has the earlier prev_occ, so it sorts first — without the
+        # fix, an unhandled exception here would prevent trg_ok (sorted
+        # after it) from ever being attempted this tick.
+        #
+        # The real ProjectStore.get_project() returns a live reference into
+        # its backing dict (not a copy), and _fire_trigger mutates
+        # trigger["last_triggered"] in place *before* calling
+        # update_project() — so wrapping only update_project would leave the
+        # in-memory state stamped even though the "persisted" write failed,
+        # masking exactly the bug this test exists to catch. Wrapping
+        # get_project() to hand back a deep copy makes update_project() the
+        # single point where a change actually commits, matching how a real
+        # durable store behaves (a failed write does not commit).
+        real_get_project = store.get_project
+        real_update_project = store.update_project
+        call_count = {"n": 0}
+
+        def copying_get_project(project_id):
+            project = real_get_project(project_id)
+            return copy.deepcopy(project) if project is not None else None
+
+        def flaky_update_project(project_id, updates):
+            if project_id == pid_a:
+                call_count["n"] += 1
+                raise RuntimeError("simulated project_store write failure")
+            return real_update_project(project_id, updates)
+
+        store.get_project = copying_get_project
+        store.update_project = flaky_update_project
+
+        mgr = _make_agent_mgr(is_running=False)
+        tm = TriggerManager(store, mgr, now_fn=lambda: FIXED_NOW)
+        tm.register_trigger(pid_a, trigger_a)
+        tm.register_trigger(pid_b, trigger_b)
+
+        await tm._evaluate_due_triggers()  # must not raise/crash
+
+        # B still fires despite A's failure earlier in the sort order.
+        assert mgr.start_agent.call_count == 1
+        assert mgr.start_agent.call_args.args[0] == pid_b
+        assert _last_triggered(store, pid_b, "trg_ok") is not None
+        # A's failed fire must not be recorded as fired.
+        assert _last_triggered(store, pid_a, "trg_fail") is None
+        assert call_count["n"] == 1
+
+        # Next tick: A is retried (still due — not silently dropped).
+        await tm._evaluate_due_triggers()
+        assert call_count["n"] == 2
+        assert _last_triggered(store, pid_a, "trg_fail") is None

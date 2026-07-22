@@ -326,8 +326,8 @@ class TriggerManager:
         """Evaluate every registered schedule trigger and fire the due ones.
 
         Due rule (per trigger, in the trigger's own timezone): prev_occ = the
-        most recent cron occurrence <= now. The trigger is due iff
-        prev_occ > max(last_triggered, created_at) — a missing/unparsable
+        most recent cron occurrence strictly before now. The trigger is due
+        iff prev_occ > max(last_triggered, created_at) — a missing/unparsable
         last_triggered counts as never-fired, and a trigger created after an
         occurrence must not catch up on that pre-creation occurrence. Firing
         sets last_triggered = now (in _fire_trigger), which subsumes any
@@ -340,6 +340,14 @@ class TriggerManager:
         trigger whose project agent is already running is held (not fired,
         last_triggered untouched) and re-checked next tick; "trigger.held" is
         broadcast only on the first held tick of a streak.
+
+        A schedule trigger whose project (or whose trigger record within
+        that project) no longer exists is unregistered on the spot — neither
+        the delete-project API path nor a direct project_store edit that
+        drops a trigger ever calls unregister_trigger, so this evaluation is
+        the only janitor for that state. A disabled trigger is left
+        registered (just skipped) so re-enabling it later needs no fresh
+        register_trigger call.
         """
         import pytz
 
@@ -352,12 +360,24 @@ class TriggerManager:
                 continue
             project = self._project_store.get_project(project_id)
             if project is None:
+                logger.info(
+                    "Trigger %s: project %s no longer exists, unregistering",
+                    trigger_id, project_id,
+                )
+                self.unregister_trigger(trigger_id)
                 continue
             trigger = next(
                 (t for t in project.get("triggers", []) if t.get("id") == trigger_id),
                 None,
             )
-            if trigger is None or not trigger.get("enabled", True):
+            if trigger is None:
+                logger.info(
+                    "Trigger %s: no longer present in project %s, unregistering",
+                    trigger_id, project_id,
+                )
+                self.unregister_trigger(trigger_id)
+                continue
+            if not trigger.get("enabled", True):
                 continue
             schedule = trigger.get("schedule", {})
             cron_expr = schedule.get("cron")
@@ -421,7 +441,18 @@ class TriggerManager:
                     logger.debug("Trigger %s: still held (agent busy)", trigger_id)
                 continue
             self._held.discard(trigger_id)
-            await self._fire_trigger(project_id, trigger_id)
+            try:
+                await self._fire_trigger(project_id, trigger_id)
+            except Exception:
+                # _fire_trigger's own try/except only wraps start_agent —
+                # the project_store.update_project stamping above it can
+                # still raise. Don't let one trigger's failure starve every
+                # trigger sorted after it this tick; it stays due and is
+                # retried next tick since last_triggered was never stamped.
+                logger.exception(
+                    "Trigger %s: unhandled error firing for project %s",
+                    trigger_id, project_id,
+                )
             fired_projects.add(project_id)
 
     @staticmethod
