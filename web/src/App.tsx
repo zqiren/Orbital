@@ -637,9 +637,13 @@ export default function App() {
         )}
       </main>
 
-      {/* New Project is a modal overlay (backlog #25), not page content — kept
-          as a sibling of <main> rather than one of its route branches so it
-          renders on top of whatever the user was looking at. */}
+      {/* New Project is a modal overlay (backlog #25), not page content —
+          kept as a sibling of <main> rather than one of its route branches.
+          'create' has no matching branch inside <main> above, so navigating
+          here leaves <main> empty (none of the 'settings'/'calendar'/
+          'project'/'list'/'blocked' conditions match 'create'); the modal's
+          backdrop sits over that empty <main>, not over the previous route's
+          content. Cancel routes back to 'list'. */}
       {route.name === 'create' && (
         <CreateProject
           onSubmit={handleCreateProject}

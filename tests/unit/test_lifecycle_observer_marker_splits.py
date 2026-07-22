@@ -10,17 +10,22 @@ repeat or re-summarize it..."). The guidance must stay in the LLM-facing
 content but never render in the chat timeline. Fix mirrors commit 967237d's
 fanout join-summary ``_meta.display_content`` split.
 
-D3: the @mention API route (``agent_os/api/routes/agents_v2.py``) fires its
+D3 (backlog #23, supersedes an intermediate backlog #24 D3 no-op): the
+@mention API route (``agent_os/api/routes/agents_v2.py``) used to fire its
 own ``on_message_routed(initiator="user_mention", ...)`` notification in
 ADDITION to the one ``SubAgentManager.send()`` already fires internally (via
 ``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — one physical
-dispatch, two markers. ``send()``'s internal notification fires
-unconditionally for every dispatch, immediate or queued-then-drained
-(``_on_prompt_turn_closed`` re-enters ``_dispatch_prompt_locked`` for a
-drained queue head), so the @mention route's copy is always redundant. Fix:
-the "user_mention" flavor is a no-op in ``on_message_routed`` — this keeps
-the single surviving marker on the renderer-whitelisted "Message sent to …"
-shape without needing a change at the (out-of-task-scope) route call site.
+dispatch, two markers. Current contract: ``send()`` now threads the caller's
+``initiator`` through ``_QueuedPrompt`` to that one internal notification
+(fired immediately or, for a queued prompt, when ``_on_prompt_turn_closed``
+drains it), and the @mention route passes ``initiator="user_mention"`` into
+``send()`` instead of firing a direct call of its own. Since this is the
+ONLY marker a mention dispatch ever gets, ``on_message_routed`` injects
+exactly one marker whose agent-facing ``content`` carries a supervise/relay
+guidance line (the user addressed the sub-agent directly; don't answer on
+its behalf), while ``_meta.display_content`` holds the clean "Message sent
+to …" text the renderer actually shows — the guidance never reaches the
+chat timeline.
 """
 
 from types import SimpleNamespace

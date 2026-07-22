@@ -6,8 +6,13 @@
 #23 D2).
 
 ``web/src/utils/subAgentMarkerFixtures.json`` is the one source of truth for
-every sub-agent system-marker shape the backend writes AND the chat renderer
-must whitelist. It is read by two independent tests:
+the sub-agent system-marker shapes covered by this guard: started / sent /
+sent_user_mention / completed / failed / stopped-with-error. (Three other
+[Sub-agent] markers — on_user_stopped, on_turn_interrupted, and
+on_background_work_lost — have no fixture row and no renderer rule either;
+that gap predates this task and is out of scope here, tracked as a backlog
+follow-up rather than fixed opportunistically.) The covered set is read by
+two independent tests:
 
 - This file: drives the REAL ``LifecycleObserver`` producer methods with
   fixed sample args and asserts the rendered text (``_meta.display_content``

@@ -745,13 +745,17 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
 
 // --------------------------------------------------------------------------
 // Producer↔renderer marker parity (backlog #23 D2). The fixture at
-// subAgentMarkerFixtures.json is the one source of truth for every
-// sub-agent system-marker shape the backend writes; the paired pytest
-// (tests/unit/test_sub_agent_marker_parity.py) drives the REAL
-// LifecycleObserver producer methods and asserts their rendered output
-// matches this same fixture exactly. Together: a producer shape that
-// changes without updating the fixture fails the pytest; a fixture shape
-// with no renderer rule (or that stops parsing) fails HERE.
+// subAgentMarkerFixtures.json is the one source of truth for the covered
+// sub-agent system-marker shapes: started / sent / sent_user_mention /
+// completed / failed / stopped-with-error. (on_user_stopped,
+// on_turn_interrupted, and on_background_work_lost write [Sub-agent]
+// markers of their own with no fixture row and no renderer rule — a
+// pre-existing gap out of scope here, tracked as a backlog follow-up.) The
+// paired pytest (tests/unit/test_sub_agent_marker_parity.py) drives the
+// REAL LifecycleObserver producer methods and asserts their rendered
+// output matches this same fixture exactly. Together: a producer shape
+// that changes without updating the fixture fails the pytest; a fixture
+// shape with no renderer rule (or that stops parsing) fails HERE.
 // --------------------------------------------------------------------------
 
 interface SubAgentMarkerFixture {
