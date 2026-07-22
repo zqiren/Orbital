@@ -10,10 +10,10 @@ on the user's workspace; they only mutate session state and surface a
 structured marker so the dispatcher and the UI can show what happened.
 
 Detection happens earlier in the loop (loop.py) at response-parsing time,
-which short-circuits any other tools the model emits in the same response.
-These ToolResult-producing classes exist mostly so the LLM sees them in
-the schema and so they can also execute defensively if the early detection
-path is ever bypassed.
+which defers the signal until every co-emitted tool in the same response
+has executed, then honors it and exits. These ToolResult-producing classes
+exist so the LLM sees them in the schema and because the loop executes the
+deferred signal through the registry to give its call id a real result row.
 """
 
 from .base import Tool, ToolResult
@@ -29,9 +29,10 @@ class MarkTaskCompleteTool(Tool):
         self.description = (
             "Call this tool to mark the current queued task as complete. "
             "After calling this, the loop will exit and the dispatcher will "
-            "advance to the next queued item. IMPORTANT: any other tools "
-            "you emit in the same response are discarded — finish all of "
-            "your work FIRST, then call this signal on its own."
+            "advance to the next queued item. Any other tools you emit in "
+            "the same response are executed FIRST, then the loop exits — "
+            "still, prefer finishing your work and calling this signal on "
+            "its own as the final action."
         )
         self.parameters = {
             "type": "object",
@@ -71,9 +72,9 @@ class MarkTaskBlockedTool(Tool):
             "Call this tool when the current queued task cannot be completed "
             "(missing credentials, ambiguous requirements, blocked by another "
             "task, etc.). The loop will exit and the dispatcher will bypass "
-            "this item and move on. IMPORTANT: any other tools you emit in "
-            "the same response are discarded — write the reason CLEARLY and "
-            "call this signal on its own."
+            "this item and move on. Any other tools you emit in the same "
+            "response are executed first, then the loop exits — write the "
+            "reason CLEARLY."
         )
         self.parameters = {
             "type": "object",

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Regression: AgentLoop detects mark_task_complete / mark_task_blocked
-and exits with the right exit_reason. Short-circuits any co-emitted tools.
+and exits with the right exit_reason. Co-emitted sibling tool calls in the
+same response are executed (not discarded) before the signal is honored.
 """
 
 from __future__ import annotations
@@ -130,35 +131,37 @@ async def test_mark_task_blocked_alone_sets_exit_reason(tmp_path):
     assert loop._exit_block_reason == "need API key"
 
 
+def _multi_tool_call_chunk(*calls: tuple[str, dict, str]):
+    """Build one StreamChunk carrying several tool_calls_delta entries.
+
+    Each entry in ``calls`` is (name, args, call_id); index is the position
+    in ``calls``, matching emission order.
+    """
+    return StreamChunk(
+        tool_calls_delta=[
+            {
+                "index": i,
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+            for i, (name, args, call_id) in enumerate(calls)
+        ],
+    )
+
+
 @pytest.mark.asyncio
-async def test_signal_short_circuits_coemitted_tools(tmp_path):
+async def test_signal_executes_coemitted_tools_then_exits(tmp_path):
     """If the model emits write_file AND mark_task_complete in the same
-    response, write_file MUST NOT execute. This is the contract that lets
-    us promise the agent: "your other tools are discarded."""
+    response, write_file MUST still execute — through the normal tool path
+    — before the signal is honored. This replaces the old discard contract:
+    a batched response no longer silently drops sibling work."""
     session = _make_session(tmp_path)
     registry = _RecordingRegistry()
     provider = _OneShotProvider([
-        StreamChunk(
-            tool_calls_delta=[
-                {
-                    "index": 0,
-                    "id": "call_write",
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": json.dumps({"path": "x.txt", "content": "y"}),
-                    },
-                },
-                {
-                    "index": 1,
-                    "id": "call_complete",
-                    "type": "function",
-                    "function": {
-                        "name": "mark_task_complete",
-                        "arguments": json.dumps({"summary": "done"}),
-                    },
-                },
-            ],
+        _multi_tool_call_chunk(
+            ("write_file", {"path": "x.txt", "content": "y"}, "call_write"),
+            ("mark_task_complete", {"summary": "done"}, "call_complete"),
         ),
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
@@ -167,8 +170,180 @@ async def test_signal_short_circuits_coemitted_tools(tmp_path):
 
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "done"
-    # Crucial: write_file was discarded — the registry never saw it
+    # Both siblings ran, in emission order, through the real registry.
+    assert registry.executions == [
+        ("write_file", {"path": "x.txt", "content": "y"}),
+        ("mark_task_complete", {"summary": "done"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_signal_batch_executes_siblings_no_cancelled(tmp_path):
+    """Production repro: notify + checkpoint_state + mark_task_complete
+    batched in one response. All three must execute in order, the run
+    exits complete, and no CANCELLED row appears anywhere in the session —
+    the original bug dropped the notify/checkpoint work silently."""
+    session = _make_session(tmp_path)
+    registry = _RecordingRegistry()
+    provider = _OneShotProvider([
+        _multi_tool_call_chunk(
+            ("notify", {"message": "hi"}, "call_notify"),
+            ("checkpoint_state", {"note": "chk"}, "call_checkpoint"),
+            ("mark_task_complete", {"summary": "batch done"}, "call_complete"),
+        ),
+        StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
+    ])
+    loop = _make_loop(session, provider, registry=registry)
+    await loop.run("notify, checkpoint, then complete")
+
+    assert loop._exit_reason == "complete"
+    assert loop._exit_summary == "batch done"
+    assert registry.executions == [
+        ("notify", {"message": "hi"}),
+        ("checkpoint_state", {"note": "chk"}),
+        ("mark_task_complete", {"summary": "batch done"}),
+    ]
+
+    messages = list(session.get_messages())
+    markers = [
+        m for m in messages
+        if m.get("source") == "queue_signal" and m.get("signal") == "complete"
+    ]
+    assert len(markers) == 1
+    assert not any("CANCELLED" in str(m) for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_signal_first_then_sibling_still_executes(tmp_path):
+    """Signal emitted FIRST, sibling AFTER it: the sibling still executes
+    (siblings positioned after the signal are not skipped), and the signal
+    is only honored once it — and every other sibling — has run."""
+    session = _make_session(tmp_path)
+    registry = _RecordingRegistry()
+    provider = _OneShotProvider([
+        _multi_tool_call_chunk(
+            ("mark_task_complete", {"summary": "done early"}, "call_complete"),
+            ("write_file", {"path": "x.txt", "content": "y"}, "call_write"),
+        ),
+        StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
+    ])
+    loop = _make_loop(session, provider, registry=registry)
+    await loop.run("complete then do work")
+
+    assert loop._exit_reason == "complete"
+    assert loop._exit_summary == "done early"
+    # write_file (the sibling) executes; the signal is deferred and
+    # executed last regardless of its position in the emitted batch.
+    assert registry.executions == [
+        ("write_file", {"path": "x.txt", "content": "y"}),
+        ("mark_task_complete", {"summary": "done early"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_signal_blocked_executes_coemitted_tools_then_exits(tmp_path):
+    """Symmetric case for mark_task_blocked: write_file executes, then the
+    run exits blocked with the registry having seen both calls."""
+    session = _make_session(tmp_path)
+    registry = _RecordingRegistry()
+    provider = _OneShotProvider([
+        _multi_tool_call_chunk(
+            ("write_file", {"path": "x.txt", "content": "y"}, "call_write"),
+            ("mark_task_blocked", {"reason": "need API key"}, "call_blocked"),
+        ),
+        StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
+    ])
+    loop = _make_loop(session, provider, registry=registry)
+    await loop.run("do work then block")
+
+    assert loop._exit_reason == "blocked"
+    assert loop._exit_block_reason == "need API key"
+    assert registry.executions == [
+        ("write_file", {"path": "x.txt", "content": "y"}),
+        ("mark_task_blocked", {"reason": "need API key"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extra_signal_call_left_pending_for_cancel_machinery(tmp_path):
+    """Two signal calls in one response: the FIRST wins (emission order);
+    the second is never executed by the registry — it's left pending and
+    picked up by the existing resolve_pending_tool_calls CANCEL path."""
+    session = _make_session(tmp_path)
+    registry = _RecordingRegistry()
+    provider = _OneShotProvider([
+        _multi_tool_call_chunk(
+            ("mark_task_complete", {"summary": "first wins"}, "call_first"),
+            ("mark_task_blocked", {"reason": "should not run"}, "call_second"),
+        ),
+        StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
+    ])
+    loop = _make_loop(session, provider, registry=registry)
+    await loop.run("two signals in one batch")
+
+    assert loop._exit_reason == "complete"
+    assert loop._exit_summary == "first wins"
+    # The second signal call was never dispatched to the registry.
+    assert registry.executions == [("mark_task_complete", {"summary": "first wins"})]
+
+    messages = list(session.get_messages())
+    second_row = next(
+        (m for m in messages if m.get("tool_call_id") == "call_second"), None,
+    )
+    assert second_row is not None
+    assert "CANCELLED" in second_row["content"]
+
+
+class _FakeInterceptor:
+    """Minimal interceptor: intercepts a fixed set of tool names, records
+    on_intercept calls, and otherwise does nothing (mirrors the shape of
+    MockInterceptor in tests/unit/test_component_a.py)."""
+
+    def __init__(self, intercept_names):
+        self._intercept_names = set(intercept_names)
+        self.intercepted_calls: list[dict] = []
+
+    def should_intercept(self, tool_call: dict) -> bool:
+        return tool_call.get("name", "") in self._intercept_names
+
+    def on_intercept(self, tool_call: dict, recent_context: list[dict], reasoning=None) -> None:
+        self.intercepted_calls.append(tool_call)
+
+
+@pytest.mark.asyncio
+async def test_signal_deferred_when_sibling_requires_approval(tmp_path):
+    """If a sibling in the batch requires approval, the run must pause
+    there — the signal is NOT honored this iteration (the work isn't done).
+    The signal's tool call is left pending and gets CANCELLED by the
+    existing resolve_pending_tool_calls machinery."""
+    session = _make_session(tmp_path)
+    registry = _RecordingRegistry()
+    provider = _OneShotProvider([
+        _multi_tool_call_chunk(
+            ("write_file", {"path": "x.txt", "content": "y"}, "call_write"),
+            ("mark_task_complete", {"summary": "done"}, "call_complete"),
+        ),
+        StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
+    ])
+    loop = _make_loop(session, provider, registry=registry)
+    loop._interceptor = _FakeInterceptor(intercept_names={"write_file"})
+    await loop.run("do work then complete")
+
+    # The run paused for approval — it did not complete.
+    assert loop._exit_reason != "complete"
+    messages = list(session.get_messages())
+    assert not any(
+        m.get("source") == "queue_signal" and m.get("signal") == "complete"
+        for m in messages
+    )
+    # write_file was never executed (it's the intercepted call, awaiting approval).
     assert registry.executions == []
+    # The signal call was left pending and got CANCELLED.
+    signal_row = next(
+        (m for m in messages if m.get("tool_call_id") == "call_complete"), None,
+    )
+    assert signal_row is not None
+    assert "CANCELLED" in signal_row["content"]
 
 
 @pytest.mark.asyncio

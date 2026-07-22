@@ -104,13 +104,14 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "mark_task_complete": (
         "Signal that the current queued task is finished. Exits the loop "
         "and tells the dispatcher to advance to the next item. Other tools "
-        "in the same response are DISCARDED — do all work first, then call this."
+        "in the same response run first, then the loop exits — prefer "
+        "finishing all work before calling this."
     ),
     "mark_task_blocked": (
         "Signal that the current queued task cannot proceed (missing "
         "credentials, ambiguous spec, blocked by another task, etc.). Exits "
         "the loop and bypasses this item. Other tools in the same response "
-        "are DISCARDED — call this on its own with a clear reason."
+        "run first, then the loop exits — call this with a clear reason."
     ),
 }
 

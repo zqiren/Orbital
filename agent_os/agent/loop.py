@@ -1012,57 +1012,33 @@ class AgentLoop:
                     self._session, response.text, iteration,
                 )
 
-                # ── Queue signal short-circuit ────────────────────────────
-                # If the response contains mark_task_complete or
-                # mark_task_blocked, exit the loop immediately with the
-                # corresponding _exit_reason. Other tool calls in the same
-                # response are discarded (the finally block's
-                # resolve_pending_tool_calls will write CANCELLED results
-                # for them so the JSONL stays valid).
-                _queue_signal_exit = False
-                for _tc_raw in response.tool_calls:
-                    _tc = normalize_tool_call(_tc_raw)
-                    if _tc["name"] == "mark_task_complete":
-                        summary = (_tc["arguments"] or {}).get("summary", "")
-                        if isinstance(summary, str):
-                            summary = summary.strip()
-                        else:
-                            summary = ""
-                        self._exit_reason = "complete"
-                        self._exit_summary = summary
-                        self._session.append({
-                            "role": "system",
-                            "content": f"Task completed: {summary}" if summary else "Task completed.",
-                            "source": "queue_signal",
-                            "signal": "complete",
-                            "payload": {"summary": summary},
-                        })
-                        self._note_exit("task_complete", iteration)
-                        _queue_signal_exit = True
-                        break
-                    if _tc["name"] == "mark_task_blocked":
-                        reason = (_tc["arguments"] or {}).get("reason", "")
-                        if isinstance(reason, str):
-                            reason = reason.strip()
-                        else:
-                            reason = ""
-                        self._exit_reason = "blocked"
-                        self._exit_block_reason = reason
-                        self._session.append({
-                            "role": "system",
-                            "content": f"Task blocked: {reason}" if reason else "Task blocked.",
-                            "source": "queue_signal",
-                            "signal": "blocked",
-                            "payload": {"reason": reason},
-                        })
-                        self._note_exit("task_blocked", iteration)
-                        _queue_signal_exit = True
-                        break
-                if _queue_signal_exit:
-                    break
-
-                # Normalize and execute tool calls
+                # ── Queue signal detection ────────────────────────────────
+                # Normalize tool calls, then scan for every terminal queue
+                # signal (mark_task_complete / mark_task_blocked) in the
+                # response. The FIRST one by emission order (`_signal_tc`) is
+                # deferred and honored below, after its siblings run. Any
+                # EXTRA signal calls are excluded from the per-tool loop the
+                # same way but never executed — they're left pending for the
+                # existing resolve_pending_tool_calls/CANCEL machinery, same
+                # as any other orphaned tool call. Every non-signal tool call
+                # — sibling calls before OR after the signal — still executes
+                # through the normal per-tool path below. This replaces the
+                # old short-circuit, which discarded co-emitted tools
+                # outright and silently dropped batched work like notify +
+                # checkpoint_state alongside mark_task_complete. The signal
+                # itself is only honored once every sibling has run without
+                # pausing or aborting the batch.
                 tool_calls = [normalize_tool_call(tc) for tc in response.tool_calls]
+                _signal_tc = None
+                _signal_tc_ids: set[str] = set()
+                for _tc in tool_calls:
+                    if _tc["name"] in ("mark_task_complete", "mark_task_blocked"):
+                        if not _tc["id"]:
+                            _tc["id"] = uuid4().hex
+                        _signal_tc_ids.add(_tc["id"])
+                        if _signal_tc is None:
+                            _signal_tc = _tc
+
                 exit_outer = False
                 intercepted_tc_id = None
 
@@ -1071,6 +1047,18 @@ class AgentLoop:
                     # during tool execution, skip remaining tool calls.
                     if self._turn_cancelled:
                         break
+
+                    # Defer every signal call out of the normal tool path.
+                    # The first (`_signal_tc`) is handled after this for-loop
+                    # so it can be skipped cleanly if a sibling pauses or
+                    # aborts the run first (see queue signal handling below).
+                    # Any extras are simply left pending — the CANCEL
+                    # machinery picks them up like any orphaned tool call.
+                    # Id-based skip assumes ids are unique within a batch
+                    # (provider contract); a non-signal call reusing a signal
+                    # call's id would be skipped with it.
+                    if tc["id"] in _signal_tc_ids:
+                        continue
 
                     # Post-normalization validation
                     if not tc["id"]:
@@ -1326,6 +1314,67 @@ class AgentLoop:
 
                 # Check if we need to exit the outer loop
                 if exit_outer:
+                    break
+
+                # Honor the deferred queue signal now that every sibling in
+                # this batch has executed. Reaching here means neither of the
+                # two unconditional breaks above fired, so the run neither
+                # paused (approval intercept) nor aborted (turn_cancelled) —
+                # exactly the "not exit_outer and not self._turn_cancelled"
+                # condition. Run the signal through the registry so its
+                # tool_call_id gets a real result row (queue_signals.py's
+                # execute()) instead of falling through to the CANCELLED-
+                # pending path, then append the marker and exit as before.
+                if _signal_tc is not None:
+                    try:
+                        if self._tool_registry.is_async(_signal_tc["name"]):
+                            _sig_result: ToolResult = await self._tool_registry.execute_async(
+                                _signal_tc["name"], _signal_tc["arguments"],
+                            )
+                        else:
+                            _sig_result: ToolResult = await asyncio.to_thread(
+                                self._tool_registry.execute,
+                                _signal_tc["name"], _signal_tc["arguments"],
+                            )
+                        _sig_content = dispatch_prefilter(
+                            _signal_tc["name"], _signal_tc["arguments"],
+                            _sig_result.content,
+                        )
+                        self._session.append_tool_result(
+                            _signal_tc["id"], _sig_content, meta=_sig_result.meta,
+                            context_limit=self._context_manager.model_context_limit,
+                        )
+                    except Exception as e:
+                        self._session.append_tool_result(
+                            _signal_tc["id"], f"Error executing tool: {e}",
+                        )
+
+                    if _signal_tc["name"] == "mark_task_complete":
+                        summary = (_signal_tc["arguments"] or {}).get("summary", "")
+                        summary = summary.strip() if isinstance(summary, str) else ""
+                        self._exit_reason = "complete"
+                        self._exit_summary = summary
+                        self._session.append({
+                            "role": "system",
+                            "content": f"Task completed: {summary}" if summary else "Task completed.",
+                            "source": "queue_signal",
+                            "signal": "complete",
+                            "payload": {"summary": summary},
+                        })
+                        self._note_exit("task_complete", iteration)
+                    else:  # mark_task_blocked
+                        reason = (_signal_tc["arguments"] or {}).get("reason", "")
+                        reason = reason.strip() if isinstance(reason, str) else ""
+                        self._exit_reason = "blocked"
+                        self._exit_block_reason = reason
+                        self._session.append({
+                            "role": "system",
+                            "content": f"Task blocked: {reason}" if reason else "Task blocked.",
+                            "source": "queue_signal",
+                            "signal": "blocked",
+                            "payload": {"reason": reason},
+                        })
+                        self._note_exit("task_blocked", iteration)
                     break
 
                 # Check stopped
