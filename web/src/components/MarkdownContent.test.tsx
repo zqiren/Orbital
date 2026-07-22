@@ -123,3 +123,137 @@ describe('MarkdownContent — kind-aware clickable paths (spec 002)', () => {
     expect(container.querySelector('code')).not.toBeNull();
   });
 });
+
+describe('MarkdownContent — external links open outside the app window (task 3)', () => {
+  it('adds target=_blank and rel=noopener noreferrer to an http link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="See [the site](http://example.com/page)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const link = container.querySelector('a[href="http://example.com/page"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+    expect(link?.getAttribute('rel')).toContain('noreferrer');
+  });
+
+  it('adds target=_blank to an uppercase-scheme HTTP link (case-insensitive match)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="See [the site](HTTP://EXAMPLE.COM/page)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const link = container.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('adds target=_blank and rel=noopener noreferrer to an https link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="See [the site](https://example.com/page)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const link = container.querySelector('a[href="https://example.com/page"]');
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+    expect(link?.getAttribute('rel')).toContain('noreferrer');
+  });
+
+  it('adds target=_blank to a protocol-relative link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="See [the site](//example.com/page)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const link = container.querySelector('a[href="//example.com/page"]');
+    expect(link?.getAttribute('target')).toBe('_blank');
+  });
+
+  it('does NOT add target to a same-page fragment link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent content="See [section](#intro)." workspace={WS} onOpenPath={onOpenPath} />,
+    );
+    const link = container.querySelector('a[href="#intro"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBeNull();
+  });
+
+  it('does NOT add target to a mailto link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="Email [me](mailto:a@b.com)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const link = container.querySelector('a[href="mailto:a@b.com"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBeNull();
+  });
+
+  it('does NOT add target to a non-workspace relative link (kind-aware mode)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent content="See [it](just-a-word)." workspace={WS} onOpenPath={onOpenPath} />,
+    );
+    const link = container.querySelector('a[href="just-a-word"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBeNull();
+  });
+
+  it('still renders a workspace-path link as a card, unaffected by the external-link change', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <MarkdownContent
+        content="See the [Q3 Dashboard](reports/q3.html) for details."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Open reports/q3.html in the preview panel' }),
+    ).not.toBeNull();
+  });
+
+  it('adds target=_blank and rel=noopener noreferrer to an https link when workspace/onOpenPath are omitted', () => {
+    const { container } = render(
+      <MarkdownContent content="See [the site](https://example.com/page)." />,
+    );
+    const link = container.querySelector('a[href="https://example.com/page"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+    expect(link?.getAttribute('rel')).toContain('noreferrer');
+  });
+
+  it('does NOT add target to a fragment link when workspace/onOpenPath are omitted', () => {
+    const { container } = render(<MarkdownContent content="See [section](#intro)." />);
+    const link = container.querySelector('a[href="#intro"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBeNull();
+  });
+
+  it('does NOT add target to a relative link when workspace/onOpenPath are omitted', () => {
+    const { container } = render(<MarkdownContent content="See [it](just-a-word)." />);
+    const link = container.querySelector('a[href="just-a-word"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBeNull();
+  });
+});

@@ -23,6 +23,28 @@ interface MarkdownContentProps {
   onOpenPath?: (path: string) => void;
 }
 
+/** http(s):// or protocol-relative `//` — anything that would leave the app. */
+const EXTERNAL_HREF_RE = /^(?:https?:)?\/\//i;
+
+/**
+ * Render a plain anchor, externalizing http(s)/protocol-relative links so they
+ * open in the system browser instead of navigating the desktop shell's single
+ * webview frame (no back button — see agent_os/desktop/main.py's origin guard
+ * for the defense-in-depth backstop on anything that slips past this).
+ * In-page `#` anchors, relative hrefs, `mailto:`, and other schemes pass
+ * through unchanged.
+ */
+function renderAnchor(href: string | undefined, children: ReactNode) {
+  if (href && EXTERNAL_HREF_RE.test(href)) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    );
+  }
+  return <a href={href}>{children}</a>;
+}
+
 /** Inline clickable chip for a workspace path (source files + inline-code spans). */
 function PathChip({
   path,
@@ -80,19 +102,28 @@ function PathCard({
 }
 
 export default function MarkdownContent({ content, workspace, onOpenPath }: MarkdownContentProps) {
-  // Kind-aware renderers are installed ONLY when a workspace + open handler are
-  // supplied (i.e. in chat). Without them, react-markdown renders bare — the
-  // original behavior — so reused surfaces (Files-tab preview) are untouched.
-  const components = useMemo<Components | undefined>(() => {
-    if (!workspace || !onOpenPath) return undefined;
+  // Kind-aware path renderers are installed ONLY when a workspace + open
+  // handler are supplied (i.e. in chat) — without them, react-markdown falls
+  // back to the original bare behavior for paths, so reused surfaces
+  // (Files-tab preview) are untouched. The external-link anchor renderer,
+  // however, is installed in BOTH modes: external links must open outside the
+  // app regardless of whether workspace linkification is active.
+  const components = useMemo<Components>(() => {
+    if (!workspace || !onOpenPath) {
+      return {
+        a({ href, children }) {
+          return renderAnchor(href, children);
+        },
+      };
+    }
     const open = onOpenPath;
     const ws = workspace;
     return {
       a({ href, children }) {
         const detected = href ? detectWorkspacePath(href, ws) : null;
         if (!detected) {
-          // Non-workspace link → plain anchor (unchanged default behavior).
-          return <a href={href}>{children}</a>;
+          // Non-workspace link → plain anchor, externalized if external.
+          return renderAnchor(href, children);
         }
         // The markdown link text is the label (always present); the card also
         // shows the filename as a subtitle, so an empty label degrades cleanly.

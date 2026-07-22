@@ -346,6 +346,42 @@ def _set_window_icon():
         pass
 
 
+def _is_foreign_url(url: str | None, port: int) -> bool:
+    """Return True iff `url` is an http(s) URL whose origin is not this app's.
+
+    Used by open_window()'s `loaded` guard to detect a same-frame navigation
+    that escaped the SPA (pywebview only routes NEW-WINDOW navigations to the
+    system browser; same-frame navigations sail through unchecked). None,
+    empty, `about:blank`, `data:`, `file:`, and the app's own origin
+    (127.0.0.1 or localhost, defensively, at `port`) are all "not foreign" —
+    only a navigation that would actually leave the SPA counts.
+
+    Origin comparison is a real URL parse (scheme/host/port), not a
+    startswith — a lookalike host like `127.0.0.1:{port}.evil.com` must count
+    as foreign rather than matching a naive prefix check.
+    """
+    import urllib.parse
+
+    if not url:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return True
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if parsed.hostname not in ("127.0.0.1", "localhost"):
+        return True
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        # e.g. "127.0.0.1:8000.evil.com" — host matches but the port segment
+        # isn't a real port, so this is not actually our app origin.
+        return True
+    app_port = parsed_port if parsed_port is not None else (443 if parsed.scheme == "https" else 80)
+    return app_port != port
+
+
 _window = None
 
 
@@ -416,6 +452,37 @@ def open_window(port: int):
             pass
         return False
 
+    def _on_loaded():
+        """Origin guard: catch a same-frame navigation that escaped the SPA.
+
+        Fix A (MarkdownContent.tsx) already externalizes known external links
+        via target="_blank", which pywebview routes to the system browser. This
+        is defense-in-depth for anything that slips past it (a stray anchor
+        without target=_blank, a window.location script, a future component) —
+        the desktop shell has no browser chrome, so an in-place navigation away
+        from the SPA would otherwise strand the user with no way back short of
+        quit + reopen. Reloading the SPA below re-fires `loaded`, but at the
+        app's own origin, which is a no-op — no re-entry loop.
+        """
+        import webbrowser
+
+        try:
+            current = window.get_current_url()
+            if not _is_foreign_url(current, port):
+                return
+        except Exception:
+            # Never let the guard crash pywebview's event dispatch — an
+            # unclassifiable URL just means we leave the window alone.
+            return
+        try:
+            webbrowser.open(current)
+        except Exception:
+            pass
+        try:
+            window.load_url(f"http://127.0.0.1:{port}")
+        except Exception:
+            pass
+
     _window = webview.create_window(
         title="Orbital",
         url=f"http://127.0.0.1:{port}",
@@ -427,6 +494,7 @@ def open_window(port: int):
     )
     window = _window
     window.events.closing += _on_closing
+    window.events.loaded += _on_loaded
     webview.start(icon=resolve_window_icon_path(), func=_activate_macos)
 
 
