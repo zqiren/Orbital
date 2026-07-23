@@ -175,43 +175,69 @@ def reconcile_flags(
     prev_by_id = {e.id: e for e in prev_entries if e.id}
     norm_retractions = [_norm_for_match(t) for t in retraction_titles if t]
 
-    # Greedy 1:1 re-association — a previous entry is consumed by its first
-    # match so two new bullets can't both claim the same id.
-    used_prev: set[int] = set()
-
-    def _find_match(entry):
-        if entry.id and entry.id in prev_by_id and id(prev_by_id[entry.id]) not in used_prev:
-            return prev_by_id[entry.id]
-        target = _norm_for_match(entry.text)
-        best, best_ratio = None, 0.0
-        for pe in prev_entries:
-            if id(pe) in used_prev:
-                continue
-            r = _ratio(target, _norm_for_match(pe.text))
-            if r > best_ratio:
-                best_ratio, best = r, pe
-        return best if best is not None and best_ratio >= _FUZZY_THRESHOLD else None
-
-    # Decide each new entry: "drop" (retracted), "keep_raw" (unstamped fact),
-    # or "emit" with reconciled comment fields.
-    decisions: dict[int, tuple[str, dict[str, str] | None]] = {}
+    # Classify each new entry in file order: "drop" (retracted), "keep_raw"
+    # (unstamped dated fact), or "flag" (a flagged entry that needs a match).
+    kinds: dict[int, str] = {}
+    flagged_new: list = []
     for e in new_entries:
         norm_title = _norm_for_match(e.text)
         if any(nr and _ratio(norm_title, nr) >= _FUZZY_THRESHOLD for nr in norm_retractions):
-            decisions[e.line_start] = ("drop", None)
+            kinds[e.line_start] = "drop"
             warnings.append(
                 f"RETRACTED: dropped re-added entry \"{e.text[:60]}\" — the user "
                 f"retracted this; it may return only by explicit user request."
             )
             continue
         if not e.flagged:
-            # Dated facts stay unstamped (spec §5.2) — emit verbatim.
-            decisions[e.line_start] = ("keep_raw", None)
+            kinds[e.line_start] = "keep_raw"  # dated fact (spec §5.2)
             continue
-        match = _find_match(e)
-        if match is not None:
-            used_prev.add(id(match))
-        decisions[e.line_start] = ("emit", _merge_fields(e, match, today))
+        kinds[e.line_start] = "flag"
+        flagged_new.append(e)
+
+    # Re-associate flagged entries to previous entries. Exact-id matches take
+    # precedence; the remainder are assigned best-ratio-first GLOBALLY (not
+    # greedy by file order) so the highest-similarity bullet wins the id +
+    # lifecycle fields when several clear the threshold — a weaker decoy that
+    # happens to appear first in the file must not steal a better match.
+    match_for: dict[int, object] = {}          # id(new Entry) -> prev Entry
+    claimed_prev: set[int] = set()
+    unmatched: list = []
+    for e in flagged_new:
+        pe = prev_by_id.get(e.id) if e.id else None
+        if pe is not None and id(pe) not in claimed_prev:
+            match_for[id(e)] = pe
+            claimed_prev.add(id(pe))
+        else:
+            unmatched.append(e)
+
+    candidates: list[tuple[float, int, int, object, object]] = []
+    for ni, e in enumerate(unmatched):
+        target = _norm_for_match(e.text)
+        for pi, pe in enumerate(prev_entries):
+            if id(pe) in claimed_prev:
+                continue
+            r = _ratio(target, _norm_for_match(pe.text))
+            if r >= _FUZZY_THRESHOLD:
+                candidates.append((r, ni, pi, e, pe))
+    # Highest ratio first; ties broken by file order for determinism.
+    candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+    claimed_new: set[int] = set()
+    for _r, _ni, _pi, e, pe in candidates:
+        if id(e) in claimed_new or id(pe) in claimed_prev:
+            continue
+        match_for[id(e)] = pe
+        claimed_new.add(id(e))
+        claimed_prev.add(id(pe))
+
+    # Build the per-entry decision (retracted entries drop, facts pass through,
+    # flagged entries emit with reconciled comment fields).
+    decisions: dict[int, tuple[str, dict[str, str] | None]] = {}
+    for e in new_entries:
+        kind = kinds[e.line_start]
+        if kind == "flag":
+            decisions[e.line_start] = ("emit", _merge_fields(e, match_for.get(id(e)), today))
+        else:
+            decisions[e.line_start] = (kind, None)
 
     # Rebuild content using `new` as the skeleton; only entry lines change.
     entry_at = {e.line_start: e for e in new_entries}

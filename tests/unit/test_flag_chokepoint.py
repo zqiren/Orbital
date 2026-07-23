@@ -146,6 +146,33 @@ class TestLifecycleFieldsWin:
         merged, warns = reconcile_flags(prev, new, TODAY)
         assert _entry(merged).resolved == "2026-07-20"
 
+    def test_best_ratio_bullet_wins_id_when_two_clear_threshold(self):
+        # Two new bullets both clear 0.75 against ONE previous entry. The
+        # continuation (ratio 1.0) must win the id + lifecycle fields even
+        # though a weaker decoy (ratio ~0.86) appears FIRST in the file.
+        prev = (
+            "- [user] Send the DM drafts to 宝玉 and Simon today.\n"
+            "  <!--mem id:old111 from:s1 evidence:\"发 draft\" "
+            "confidence:stated created:2026-07-10 touched:2026-07-10 "
+            "resolved:2026-07-20-->\n"
+        )
+        new = (
+            "- [user] Send the DM drafts to 宝玉 today.\n"          # decoy, first
+            "- [user] Send the DM drafts to 宝玉 and Simon today.\n"  # verbatim, second
+        )
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        entries = user_flags.parse_entries(merged)
+        by_text = {e.text: e for e in entries}
+        verbatim = by_text["Send the DM drafts to 宝玉 and Simon today."]
+        decoy = by_text["Send the DM drafts to 宝玉 today."]
+        assert verbatim.id == "old111"
+        assert verbatim.resolved == "2026-07-20"
+        assert verbatim.confidence == "stated"
+        # The decoy is a genuinely new bullet — fresh id, no inherited lifecycle.
+        assert decoy.id != "old111"
+        assert re.fullmatch(r"[0-9a-f]{6}", decoy.id)
+        assert decoy.resolved is None
+
     def test_confidence_stated_wins_over_reverted_unconfirmed(self):
         prev = (
             "- [user] Cancel the old subscription.\n"
