@@ -418,10 +418,11 @@ class WorkspaceFileManager:
             # Daemon-side PROJECT_STATE writes (session-end merge, checkpoint)
             # run through the same flag chokepoint as the agent tool path so
             # ids + user lifecycle fields survive a comment-less system rewrite.
-            from agent_os.agent import flag_chokepoint
+            from agent_os.agent import flag_chokepoint, retractions
             prev = self.read("state")
+            retraction_titles = [r.title for r in retractions.list_retractions(self._dir)]
             content, _reconcile_warns = flag_chokepoint.reconcile_flags(
-                prev, content, date.today().isoformat()
+                prev, content, date.today().isoformat(), retraction_titles
             )
             for _w in _reconcile_warns:
                 logger.info("reconcile_flags(state): %s", _w)

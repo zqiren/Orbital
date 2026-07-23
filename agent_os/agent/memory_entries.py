@@ -690,13 +690,17 @@ def process_on_write(workspace: str, resolved_path: str, content: str, *, today:
         # lifecycle decisions across the agent's (comment-less) rewrite by
         # diffing against the previous on-disk content. Lazy import avoids a
         # module-load cycle.
-        from agent_os.agent import flag_chokepoint
+        from agent_os.agent import flag_chokepoint, retractions
         try:
             with open(resolved_path, "r", encoding="utf-8") as f:
                 prev = f.read()
         except OSError:
             prev = None
-        return flag_chokepoint.reconcile_flags(prev, content, today or _today())
+        orbital_dir = os.path.join(workspace, "orbital")
+        retraction_titles = [r.title for r in retractions.list_retractions(orbital_dir)]
+        return flag_chokepoint.reconcile_flags(
+            prev, content, today or _today(), retraction_titles
+        )
     if key not in ENTRY_MARKERS:
         # Other volatile files (index): header only, no entry stamping.
         return content, []

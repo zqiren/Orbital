@@ -275,6 +275,21 @@ class ContextManager:
                 if flag:
                     soft_flags.append(flag)
 
+        # Retracted-by-user hard constraints (spec §3, §5.2): a permanent
+        # record of "the user said no to this", injected every turn so the
+        # agent never re-proposes, re-infers, or re-adds something already
+        # declined — not gated on whether PROJECT_STATE happens to mention
+        # it this turn.
+        from agent_os.agent import retractions as _retractions
+        retraction_block = _retractions.render_constraints(
+            _retractions.list_retractions(pp.orbital_dir)
+        )
+        if retraction_block:
+            layer_messages.append({
+                "role": "system",
+                "content": retraction_block,
+            })
+
         # Layer 3: instructions/*.md
         instructions_dir = pp.instructions_dir
         instructions_content = self._read_instructions(instructions_dir)
