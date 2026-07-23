@@ -18,9 +18,14 @@ from dataclasses import dataclass, field
 class NormalizedEvent:
     """One calendar event, source-agnostic.
 
-    ``project_id`` is Orbital metadata stamped by ``CalendarHub`` from the
-    linkage store at read time (never comes from the external calendar), so it
-    is left ``None`` by sources.
+    ``project_id`` is Orbital metadata. For an ordinary externally-sourced
+    event (never comes from the external calendar itself) it is left ``None``
+    by the source and stamped by ``CalendarHub`` from the linkage store on
+    every read (see ``CalendarHub.list_events``). A native,
+    computed-from-Orbital-data source (e.g. the ``memory`` / ``automation``
+    calendar sources, Task 6) sets it directly and declares
+    ``linked_by_hub = False`` on the source class so the hub leaves it alone
+    — those events are BORN linked to a project rather than manually linked.
     """
 
     source: str                       # source registry id, e.g. "eventkit"

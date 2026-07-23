@@ -101,7 +101,8 @@ class AgentManager:
                  activity_translator, process_manager, platform_provider=None,
                  registry=None, setup_engine=None, settings_store=None,
                  credential_store=None, browser_manager=None, user_credential_store=None,
-                 trigger_manager=None, provider_registry=None, connector_manager=None):
+                 trigger_manager=None, provider_registry=None, connector_manager=None,
+                 calendar_hub=None):
         self._project_store = project_store
         self._ws = ws_manager
         self._sub_agent_manager = sub_agent_manager
@@ -117,6 +118,7 @@ class AgentManager:
         self._trigger_manager = None  # set after TriggerManager is created
         self._provider_registry = provider_registry or ProviderRegistry()
         self._connector_manager = connector_manager
+        self._calendar_hub = calendar_hub
         # ``_handles`` is keyed by ``SessionKey == (project_id, session_id)``
         # so multiple chat sessions within the same project can each own a
         # distinct loop / session / context-manager bundle. Single-loop
@@ -1241,6 +1243,15 @@ class AgentManager:
                 project_store=self._project_store,
                 trigger_manager=self._trigger_manager,
             ))
+        except ImportError:
+            pass
+        try:
+            from agent_os.agent.tools.calendar_read import CalendarReadTool
+            if self._calendar_hub is not None:
+                registry.register(CalendarReadTool(
+                    calendar_hub=self._calendar_hub,
+                    project_id=project_id,
+                ))
         except ImportError:
             pass
 

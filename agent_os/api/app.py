@@ -310,11 +310,18 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # here) and degrade to unavailable/empty; the hub never raises.
     from agent_os.calendar_hub import CalendarHub, Linkage
     from agent_os.calendar_hub.sources import EventKitSource, McpCalendarSource
+    from agent_os.calendar_hub.sources.automation_source import AutomationSource
+    from agent_os.calendar_hub.sources.memory_source import MemorySource
 
     calendar_hub = CalendarHub(
         sources=[
             EventKitSource(),
             McpCalendarSource(connector_manager, "google-calendar"),
+            # Native, standalone-calendar sources (spec §7.2, Task 6) — every
+            # project's due-dated PROJECT_STATE entries and enabled schedule
+            # triggers, computed at request time with no connector required.
+            MemorySource(project_store),
+            AutomationSource(project_store),
         ],
         linkage=Linkage(store_dir),
     )
@@ -335,6 +342,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         browser_manager=browser_manager,
         user_credential_store=user_credential_store,
         provider_registry=provider_registry,
+        calendar_hub=calendar_hub,
     )
 
     # 6a. Lifecycle observer (wired after agent_manager exists)

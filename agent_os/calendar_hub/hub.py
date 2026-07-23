@@ -48,11 +48,23 @@ class CalendarHub:
     ) -> list[NormalizedEvent]:
         events: list[NormalizedEvent] = []
         for source in self._sources:
-            events.extend(await self._source_events(source, start, end))
-        # Stamp project linkage fresh every call (idempotent) so a link/unlink
-        # takes effect without touching the event cache.
-        for ev in events:
-            ev.project_id = self._linkage.get(ev.id)
+            src_events = await self._source_events(source, start, end)
+            # Stamp project linkage fresh every call (idempotent) so a
+            # link/unlink takes effect without touching the event cache.
+            # Skipped for a source that opts out via `linked_by_hub = False`
+            # (the native `memory`/`automation` sources — Task 6 — are BORN
+            # linked to a project and set `project_id` themselves; they are
+            # never manually linked, and re-stamping from the — necessarily
+            # empty — linkage store would null them back out). Every other
+            # source is re-stamped unconditionally on each call, same as
+            # before: events are cached (see `_source_events`), so a cached
+            # object's `project_id` must be overwritten every time rather
+            # than only when still `None`, or an unlink would never be
+            # observed on an already-linked cached event.
+            if getattr(source, "linked_by_hub", True):
+                for ev in src_events:
+                    ev.project_id = self._linkage.get(ev.id)
+            events.extend(src_events)
         if project_id is not None:
             events = [ev for ev in events if ev.project_id == project_id]
         return events
