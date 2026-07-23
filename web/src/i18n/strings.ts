@@ -855,6 +855,37 @@ export const STRINGS = {
   "calendar.detail.linkNone": { en: "Not linked", zh: "未关联" },
   "calendar.detail.linkedTo": { en: "Linked to {name}", zh: "已关联到 {name}" },
   "calendar.detail.linkError": { en: "Couldn't update the link", zh: "无法更新关联" },
+
+  // Workbench surface (spec 2026-07-23 §5.3/§5.4/§6) — flagged [user] entries
+  // + computed cards, global tab + per-project lens.
+  "workspace.workbench.nav": { en: "Workbench", zh: "工作台" },
+  "projectDetail.tab.workbench": { en: "Workbench", zh: "工作台" },
+  "workbench.title": { en: "Workbench", zh: "工作台" },
+  "workbench.loading": { en: "Loading Workbench…", zh: "正在加载工作台…" },
+  "workbench.error.load": { en: "Couldn't load the Workbench", zh: "无法加载工作台" },
+  "workbench.retry": { en: "Retry", zh: "重试" },
+  "workbench.overdue": { en: "Overdue", zh: "已逾期" },
+  "workbench.receipt.title": { en: "Why I believe this", zh: "为什么我这么认为" },
+  "workbench.receipt.from": { en: "from", zh: "来自" },
+  "workbench.receipt.due": { en: "due {due}", zh: "截止 {due}" },
+  "workbench.exit.fulfilled": { en: "Done", zh: "已完成" },
+  "workbench.exit.irrelevant": { en: "Not relevant", zh: "不相关" },
+  "workbench.dismiss": { en: "Dismiss", zh: "忽略" },
+  "workbench.age.waiting.one": { en: "Waiting {n} day", zh: "已等待 {n} 天" },
+  "workbench.age.waiting.other": { en: "Waiting {n} days", zh: "已等待 {n} 天" },
+  "workbench.age.late.one": { en: "{n} day late", zh: "已逾期 {n} 天" },
+  "workbench.age.late.other": { en: "{n} days late", zh: "已逾期 {n} 天" },
+  "workbench.empty.title": { en: "Nothing needs you right now", zh: "目前没有需要你处理的事项" },
+  "workbench.empty.body": { en: "As agents work, anything that needs your input, a decision, or your awareness will show up here.", zh: "在 Agent 工作过程中，任何需要你输入、决策或知晓的事项都会显示在这里。" },
+  "workbench.empty.migrateCta": { en: "Review & label what's already here", zh: "查看并标记已有内容" },
+  "workbench.conflict.notice": { en: "That entry changed — refreshed the list.", zh: "该条目已发生变化——列表已刷新。" },
+  "workbench.thisWeek.title": { en: "This week", zh: "本周" },
+  "workbench.thisWeek.openCalendar": { en: "Open Calendar →", zh: "打开日历 →" },
+  "workbench.badge.aria.one": { en: "{n} item needs you", zh: "有 {n} 项需要你处理" },
+  "workbench.badge.aria.other": { en: "{n} items need you", zh: "有 {n} 项需要你处理" },
+  "settings.workbench.label": { en: "Workbench", zh: "工作台" },
+  "settings.workbench.excludeGlobal.label": { en: "Exclude from global Workbench", zh: "从全局工作台中排除" },
+  "settings.workbench.excludeGlobal.hint": { en: "The global Workbench shows verbatim quotes across projects — useful to turn off before screen-sharing or if this project is reachable from a shared mobile link.", zh: "全局工作台会显示跨项目的原文引用——在屏幕共享前，或此项目空间可通过共享的移动端链接访问时，你可能希望关闭它。" },
 } as const satisfies Record<string, StringEntry>;
 
 export type StringKey = keyof typeof STRINGS;

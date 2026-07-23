@@ -85,6 +85,7 @@ describe('Sidebar routing', () => {
         connectionState="connected"
         onSelectProject={onSelectProject}
         onSelectCalendar={vi.fn()}
+        onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -110,6 +111,7 @@ describe('Sidebar routing', () => {
         connectionState="connected"
         onSelectProject={onSelectProject}
         onSelectCalendar={vi.fn()}
+        onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -133,6 +135,7 @@ describe('Sidebar routing', () => {
         connectionState="connected"
         onSelectProject={vi.fn()}
         onSelectCalendar={vi.fn()}
+        onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -176,6 +179,7 @@ describe('Sidebar mobile select-project regression', () => {
         connectionState="connected"
         onSelectProject={handleSelectProject}
         onSelectCalendar={vi.fn()}
+        onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
       />
@@ -370,6 +374,7 @@ describe('Global settings nav (settings in Route union)', () => {
           connectionState="connected"
           onSelectProject={handleSelectProject}
           onSelectCalendar={vi.fn()}
+          onSelectWorkbench={vi.fn()}
           onNewProject={handleNewProject}
           onSettings={() => setRoute({ name: 'settings' })}
         />

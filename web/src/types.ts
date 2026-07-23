@@ -71,6 +71,11 @@ export interface Project {
   /** TOFU asks awaiting a decision — auto-denied under hands-off autonomy
    *  (Plan 2 Task 5) rather than lost; surfaced in Settings → Network access. */
   pending_domain_requests?: PendingDomainRequest[];
+  /** Workbench privacy toggle (spec §6 "Aggregation & privacy"): when true,
+   *  this project's flagged entries/computed cards are omitted from the
+   *  GLOBAL Workbench view. The per-project lens (?project_id=) still shows
+   *  them regardless — this only affects aggregation across projects. */
+  workbench_exclude_global?: boolean;
 }
 
 /** One TOFU network-access ask (Plan 2), as carried by
@@ -133,6 +138,8 @@ export interface ProjectUpdateRequest {
   /** TOFU pending requests (Plan 2) — see Project.pending_domain_requests.
    *  Dismissals persist through this same PUT. */
   pending_domain_requests?: PendingDomainRequest[];
+  /** Workbench privacy toggle — see Project.workbench_exclude_global. */
+  workbench_exclude_global?: boolean;
 }
 
 /** PUT /projects response field carrying the reset outcome (codes only). */

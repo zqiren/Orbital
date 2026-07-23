@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Calendar } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Calendar, Inbox } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
+import { api } from '../config';
 import BlockedBadge from './BlockedBadge';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
@@ -20,8 +22,31 @@ interface SidebarProps {
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
   onSelectCalendar: () => void;
+  onSelectWorkbench: () => void;
   onNewProject: () => void;
   onSettings: () => void;
+}
+
+/** Nav-row count badge: total flagged entries + computed cards across the
+ *  (privacy-filtered) global Workbench. Fetched once on mount — the surface
+ *  itself refetches live; the sidebar count is a light, best-effort signal,
+ *  not required to stay millisecond-fresh (no WS event exists for it). */
+function useWorkbenchCount(): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    api<{ entries?: unknown[]; computed?: unknown[] }>('/api/v2/workbench')
+      .then((d) => {
+        if (!cancelled) setCount((d?.entries?.length ?? 0) + (d?.computed?.length ?? 0));
+      })
+      .catch(() => {
+        if (!cancelled) setCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return count;
 }
 
 function getProjectDotColor(
@@ -58,11 +83,13 @@ export default function Sidebar({
   connectionState,
   onSelectProject,
   onSelectCalendar,
+  onSelectWorkbench,
   onNewProject,
   onSettings,
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
+  const workbenchCount = useWorkbenchCount();
 
   // Quick Tasks (is_scratch) is promoted into the Workspace zone; the Projects
   // zone below lists only non-scratch projects so it is never duplicated.
@@ -133,6 +160,28 @@ export default function Sidebar({
             {t('workspace.calendar.nav')}
           </span>
           <BetaBadge />
+        </button>
+        <button
+          onClick={onSelectWorkbench}
+          aria-current={route.name === 'workbench' ? 'page' : undefined}
+          aria-label={t(workbenchCount === 1 ? 'workbench.badge.aria.one' : 'workbench.badge.aria.other', { n: workbenchCount })}
+          className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+            route.name === 'workbench' ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+          }`}
+        >
+          <Inbox size={14} className="shrink-0 text-secondary" aria-hidden="true" />
+          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+            {t('workspace.workbench.nav')}
+          </span>
+          <BetaBadge />
+          {workbenchCount > 0 && (
+            <span
+              data-testid="workbench-badge-count"
+              className="ml-auto font-mono text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-sidebar"
+            >
+              {workbenchCount}
+            </span>
+          )}
         </button>
         {scratchProjects.map(renderProjectRow)}
       </div>

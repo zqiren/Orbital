@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import type { Project } from '../types';
 
 afterEach(() => cleanup());
@@ -19,6 +19,13 @@ const mockUseBlockedCount = vi.fn();
 vi.mock('../hooks/useBlockedCount', () => ({
   useBlockedCount: () => mockUseBlockedCount(),
 }));
+
+// Sidebar's Workbench badge count fetches GET /api/v2/workbench directly
+// (no dedicated hook module to mock) — stub the api client. Defaults to an
+// empty response (count 0) so pre-existing tests that don't care about the
+// Workbench badge are unaffected; individual tests override with mockResolvedValueOnce.
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock('../config', () => ({ api: apiMock }));
 
 import Sidebar from './Sidebar';
 
@@ -42,9 +49,15 @@ const defaultProps = {
   connectionState: 'connected' as const,
   onSelectProject: vi.fn(),
   onSelectCalendar: vi.fn(),
+  onSelectWorkbench: vi.fn(),
   onNewProject: vi.fn(),
   onSettings: vi.fn(),
 };
+
+beforeEach(() => {
+  apiMock.mockReset();
+  apiMock.mockResolvedValue({ entries: [], computed: [] });
+});
 
 describe('Sidebar — BlockedBadge integration (count 0)', () => {
   beforeEach(() => {
@@ -153,5 +166,47 @@ describe('Sidebar — Workspace zone (two-zone IA)', () => {
     // Two projects total, one scratch → Projects header count is 1.
     const header = screen.getByText('Projects').parentElement as HTMLElement;
     expect(within(header).getByText('1')).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — Workbench nav item', () => {
+  beforeEach(() => {
+    mockUseBlockedCount.mockReturnValue({ blockedCount: 0, blockedSessions: [], loading: false });
+  });
+
+  it('renders a Workbench item in the Workspace zone', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.getByText('Workbench')).toBeInTheDocument();
+  });
+
+  it('clicking Workbench calls onSelectWorkbench', () => {
+    const onSelectWorkbench = vi.fn();
+    render(<Sidebar {...defaultProps} onSelectWorkbench={onSelectWorkbench} />);
+    fireEvent.click(screen.getByText('Workbench'));
+    expect(onSelectWorkbench).toHaveBeenCalledOnce();
+  });
+
+  it('marks the Workbench item active (aria-current) when route.name is workbench', () => {
+    render(<Sidebar {...defaultProps} route={{ name: 'workbench' }} />);
+    const btn = screen.getByText('Workbench').closest('button');
+    expect(btn).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('does not show a count pill when the Workbench is empty', async () => {
+    apiMock.mockResolvedValue({ entries: [], computed: [] });
+    render(<Sidebar {...defaultProps} />);
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench'));
+    expect(screen.queryByTestId('workbench-badge-count')).toBeNull();
+  });
+
+  it('shows entries.length + computed.length as the badge count', async () => {
+    apiMock.mockResolvedValue({
+      entries: [{ id: 'e1' }, { id: 'e2' }],
+      computed: [{ key: 'c1' }],
+    });
+    render(<Sidebar {...defaultProps} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('3'),
+    );
   });
 });

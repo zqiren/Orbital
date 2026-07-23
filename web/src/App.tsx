@@ -33,6 +33,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import FileExplorer from './components/FileExplorer';
 import GlobalSettings from './components/GlobalSettings';
 import CalendarPage from './components/CalendarPage';
+import WorkbenchPage from './components/WorkbenchPage';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
 
@@ -407,6 +408,13 @@ export default function App() {
     setMobileView('content');
   }
 
+  // Workbench — a top-level Workspace-zone surface, sibling of Calendar
+  // (spec 2026-07-23 §6). Same mobile behavior as a project/calendar tap.
+  function handleSelectWorkbench() {
+    setRoute({ name: 'workbench' });
+    setMobileView('content');
+  }
+
   function handleNewProject() {
     setRoute({ name: 'create' });
     setMobileView('content');
@@ -485,6 +493,7 @@ export default function App() {
           connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
           onSelectProject={handleSelectProject}
           onSelectCalendar={handleSelectCalendar}
+          onSelectWorkbench={handleSelectWorkbench}
           onNewProject={handleNewProject}
           onSettings={() => {
             setRoute({ name: 'settings' });
@@ -536,6 +545,11 @@ export default function App() {
         {/* Global calendar surface (spec 011 §0.4). Placeholder body until
             Wave 3; the component is kept so that swap is body-only. */}
         {route.name === 'calendar' && <CalendarPage />}
+
+        {/* Global Workbench surface (spec 2026-07-23 §6) — sibling of
+            Calendar in the Workspace zone. Same mount pattern: one component,
+            no projectId here vs. the per-project lens below. */}
+        {route.name === 'workbench' && <WorkbenchPage setRoute={setRoute} />}
 
         {route.name === 'project' && selectedProject && (
           // Scoped to the project view: a render crash here shows a recoverable
@@ -606,6 +620,13 @@ export default function App() {
                   <CalendarPage
                     key={`calendar-${selectedProject.project_id}`}
                     projectId={selectedProject.project_id}
+                  />
+                )}
+                {route.tab === 'workbench' && (
+                  <WorkbenchPage
+                    key={`workbench-${selectedProject.project_id}`}
+                    projectId={selectedProject.project_id}
+                    setRoute={setRoute}
                   />
                 )}
               </ProjectDetail>

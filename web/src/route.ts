@@ -15,10 +15,11 @@ export type Route =
   | { name: 'blocked' }
   | { name: 'settings' }
   | { name: 'calendar' }
+  | { name: 'workbench' }
   | {
       name: 'project';
       projectId: string;
-      tab: 'queue' | 'chat' | 'files' | 'calendar';
+      tab: 'queue' | 'chat' | 'files' | 'calendar' | 'workbench';
       sessionId?: string;
       settings?: boolean;
       /**

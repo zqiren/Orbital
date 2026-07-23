@@ -43,12 +43,13 @@ interface ProjectDetailProps {
   children?: React.ReactNode;
 }
 
-type TabKey = 'queue' | 'chat' | 'files' | 'calendar';
+type TabKey = 'queue' | 'chat' | 'files' | 'calendar' | 'workbench';
 
 const BASE_TABS: { key: TabKey; labelKey: StringKey }[] = [
   { key: 'chat', labelKey: 'projectDetail.tab.chat' },
   { key: 'queue', labelKey: 'projectDetail.tab.queue' },
   { key: 'files', labelKey: 'projectDetail.tab.files' },
+  { key: 'workbench', labelKey: 'projectDetail.tab.workbench' },
 ];
 
 export default function ProjectDetail({
@@ -238,7 +239,9 @@ export default function ProjectDetail({
               }`}
             >
               {t(tab.labelKey)}
-              {tab.key === 'calendar' && <BetaBadge className="ml-1.5 align-middle" />}
+              {(tab.key === 'calendar' || tab.key === 'workbench') && (
+                <BetaBadge className="ml-1.5 align-middle" />
+              )}
               {count > 0 && (
                 <span className="text-[10.5px] font-mono text-secondary">
                   {count}

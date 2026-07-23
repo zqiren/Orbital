@@ -73,6 +73,7 @@ export const PROJECT_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'budget', labelKey: 'settings.budget.label' },
   { id: 'network', labelKey: 'settingsRail.network' },
   { id: 'connectors', labelKey: 'settingsRail.connectors' },
+  { id: 'workbench', labelKey: 'settings.workbench.label' },
   { id: 'danger', labelKey: 'settings.danger.title' },
 ];
 
@@ -128,6 +129,13 @@ export default function SettingsView({
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(
     project.notification_prefs || {},
+  );
+
+  // Workbench privacy toggle (spec §6 "Aggregation & privacy") — excludes this
+  // project's flagged entries/computed cards from the GLOBAL Workbench view.
+  // The per-project lens is unaffected.
+  const [workbenchExcludeGlobal, setWorkbenchExcludeGlobal] = useState(
+    project.workbench_exclude_global ?? false,
   );
 
   // Skills state
@@ -384,6 +392,7 @@ export default function SettingsView({
       enabled_connectors: enabledConnectors,
       approved_domains: approvedDomains,
       pending_domain_requests: pendingDomainRequests,
+      workbench_exclude_global: workbenchExcludeGlobal,
     };
     if (llm.api_key) {
       data.api_key = llm.api_key;
@@ -743,6 +752,30 @@ export default function SettingsView({
             enabledConnectors={enabledConnectors}
             onChange={setEnabledConnectors}
           />
+        </div>
+
+        {/* Workbench privacy toggle (spec 2026-07-23 §6). Per-project — the
+            per-project Workbench lens is unaffected; this only controls
+            whether the project's flagged entries/computed cards are
+            aggregated into the GLOBAL Workbench view. */}
+        <div data-settings-section="workbench" className="scroll-mt-4">
+          <label className="block text-sm font-medium text-primary mb-1.5">
+            {t('settings.workbench.label')}
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer max-md:min-h-[44px]">
+            <input
+              type="checkbox"
+              checked={workbenchExcludeGlobal}
+              onChange={(e) => setWorkbenchExcludeGlobal(e.target.checked)}
+              className="rounded border-border accent-accent"
+            />
+            <span className="text-sm text-primary">
+              {t('settings.workbench.excludeGlobal.label')}
+            </span>
+          </label>
+          <p className="text-xs text-secondary mt-1.5">
+            {t('settings.workbench.excludeGlobal.hint')}
+          </p>
         </div>
 
         {/* Save */}
