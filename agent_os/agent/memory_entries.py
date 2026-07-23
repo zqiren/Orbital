@@ -110,7 +110,29 @@ FORMAT_HEADERS: dict[str, str] = {
     "state": (
         "<!--format PROJECT_STATE is what is true NOW: current focus, "
         "in-progress work, blockers, next steps. Overwrite stale lines; never "
-        "append a dated history.-->"
+        "append a dated history. "
+        "[user] flag — one judgment per entry: does this need the user? If yes, "
+        "tag the bullet `- [user] <sentence>`; a dated commitment needing no "
+        "decision is `- [due:YYYY-MM-DD] <text>` (a fact that also shows on the "
+        "calendar, not addressed to the user); an untagged bullet is a plain "
+        "fact. Machine attributes (id, from, evidence, confidence, due, created, "
+        "touched, resolved) live in a daemon-managed mem-comment on the next "
+        "line — never hand-write or edit ids. "
+        "Rails: (1) Attention test — flag what a competent assistant would "
+        "raise: awaiting the user's decision or action, a mid-flight plan they "
+        "may want to continue, or something they'd be unpleasantly surprised to "
+        "have missed. (2) Assignment, not capability — what the user took on is "
+        "theirs even if you could do it. (3) Never auto-decide — spending money, "
+        "sending external messages as the user, or irreversible or destructive "
+        "acts are always surfaced, whatever the autonomy setting. (4) Decompose "
+        "compounds — split agent-work + user-decision + user-action into "
+        "separate entries. (5) Register — a flagged entry is one plain sentence "
+        "addressed to the user, in their language, written timeless (\"due Jul "
+        "28\", never \"tomorrow\"); unflagged entries stay dense shorthand. "
+        "(6) Laundering guard — a flag must anchor to user-visible evidence "
+        "(their own words or acts); if the only basis is your own wording, mark "
+        "confidence:unconfirmed and phrase it as an ask-to-confirm, never a "
+        "settled commitment.-->"
     ),
     "decisions": (
         "<!--format DECISIONS entries: '## <slug>' then Chose / Reason / "
@@ -663,8 +685,20 @@ def process_on_write(workspace: str, resolved_path: str, content: str, *, today:
     if key is None:
         return content, []
     content = ensure_format_header(content, key)
+    if key == "state":
+        # PROJECT_STATE runs through the flag chokepoint: preserve ids + user
+        # lifecycle decisions across the agent's (comment-less) rewrite by
+        # diffing against the previous on-disk content. Lazy import avoids a
+        # module-load cycle.
+        from agent_os.agent import flag_chokepoint
+        try:
+            with open(resolved_path, "r", encoding="utf-8") as f:
+                prev = f.read()
+        except OSError:
+            prev = None
+        return flag_chokepoint.reconcile_flags(prev, content, today or _today())
     if key not in ENTRY_MARKERS:
-        # Volatile files (state/index): header only, no entry stamping.
+        # Other volatile files (index): header only, no entry stamping.
         return content, []
     old = None
     try:

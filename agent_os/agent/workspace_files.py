@@ -414,6 +414,17 @@ class WorkspaceFileManager:
         # keep their own header convention and are skipped.
         if file_key in _mem.FORMAT_HEADERS:
             content = _mem.ensure_format_header(content, file_key)
+        if file_key == "state":
+            # Daemon-side PROJECT_STATE writes (session-end merge, checkpoint)
+            # run through the same flag chokepoint as the agent tool path so
+            # ids + user lifecycle fields survive a comment-less system rewrite.
+            from agent_os.agent import flag_chokepoint
+            prev = self.read("state")
+            content, _reconcile_warns = flag_chokepoint.reconcile_flags(
+                prev, content, date.today().isoformat()
+            )
+            for _w in _reconcile_warns:
+                logger.info("reconcile_flags(state): %s", _w)
         self.ensure_dir()
         filepath = self._file_path(file_key)
         tmp_path = filepath + ".tmp"
@@ -529,7 +540,7 @@ class WorkspaceFileManager:
 
 Produce a JSON object with these fields. Return "" for any field that needs no change (preserve the existing file unchanged).
 
-1. "project_state" (string): The COMPLETE current-state snapshot — what is true NOW: current focus, in-progress work, blockers, next steps. OVERWRITE intent — this is a living scratchpad, NOT a changelog. Replace stale status with current status; do not append a dated history.
+1. "project_state" (string): The COMPLETE current-state snapshot — what is true NOW: current focus, in-progress work, blockers, next steps. OVERWRITE intent — this is a living scratchpad, NOT a changelog. Replace stale status with current status; do not append a dated history. Flagging discipline (see the file's <!--format--> header for the full grammar): flag unlabeled user-facing content with `[user]` — anything awaiting the user's decision/action, a mid-flight plan they may want to continue, or something they'd be surprised to have missed. Preserve every `<!--mem-->` comment and its id verbatim; the daemon manages ids, so never invent, drop, or rewrite them. Never resurrect an entry the user retracted (removed as "not relevant"); it returns only by explicit user request.
 
 2. "decisions" (string): The COMPLETE updated DECISIONS.md. MERGE AND SUPERSEDE — never append a contradiction. When a new decision changes an old one, REPLACE the old entry or mark it superseded; do not leave both. Keep currently-true decisions; drop genuinely obsolete ones. Each entry:
      ## YYYY-MM-DD: Title

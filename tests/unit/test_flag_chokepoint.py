@@ -1,0 +1,319 @@
+# Orbital — An operating system for AI agents
+# Copyright (C) 2026 Orbital Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Write-chokepoint reconciliation (spec §5, §5.2, §5.5, §8).
+
+The chokepoint keeps machine identity (ids, created/from/evidence) and user
+lifecycle decisions (resolved, confidence:stated, retractions) stable while
+agents freely rewrite PROJECT_STATE.md — agents never see the ``<!--mem-->``
+comments, so every write is diffed against the previous on-disk content.
+"""
+import os
+import re
+
+import pytest
+
+from agent_os.agent import user_flags
+from agent_os.agent.flag_chokepoint import reconcile_flags
+
+
+TODAY = "2026-07-23"
+
+
+def _entry(content, idx=0):
+    entries = user_flags.parse_entries(content)
+    return entries[idx]
+
+
+# ---------------------------------------------------------------------------
+# id-preserving merge
+# ---------------------------------------------------------------------------
+
+class TestIdPreservation:
+    def test_exact_text_rewrite_without_comments_keeps_id(self):
+        prev = (
+            "# State\n\n"
+            "- [user] Send drafts to the client.\n"
+            "  <!--mem id:abc123 from:sess_1 evidence:\"send the drafts\" "
+            "confidence:unconfirmed created:2026-07-19 touched:2026-07-19-->\n"
+        )
+        # Agent rewrite: same sentence, comment stripped (never seen by agent).
+        new = "# State\n\n- [user] Send drafts to the client.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "abc123"
+        assert e.created == "2026-07-19"
+        # text unchanged → touched preserved, not bumped to today
+        assert e.touched == "2026-07-19"
+        assert e.evidence == "send the drafts"
+        assert e.from_session == "sess_1"
+        assert e.confidence == "unconfirmed"
+
+    def test_fuzzy_reassociation_of_rephrased_bullet(self):
+        prev = (
+            "- [user] Send the DM drafts to 宝玉 and Simon.\n"
+            "  <!--mem id:x7f3a2 from:s1 evidence:\"发 draft\" "
+            "created:2026-07-19 touched:2026-07-19-->\n"
+        )
+        # Rephrased (normalized ratio >= 0.75) and comment-less.
+        new = "- [user] Send DM drafts to 宝玉 and Simon.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "x7f3a2"                 # re-associated by fuzzy title
+        assert e.created == "2026-07-19"        # created preserved
+        assert e.touched == TODAY               # body changed → touched bumped
+
+    def test_unrelated_new_bullet_does_not_steal_id(self):
+        prev = (
+            "- [user] Book the venue for the offsite.\n"
+            "  <!--mem id:aaa000 from:s1 evidence:\"book it\" "
+            "created:2026-07-10 touched:2026-07-10-->\n"
+        )
+        new = "- [user] Buy a birthday cake for the team.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id != "aaa000"                 # < 0.75 ratio → fresh id
+        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
+
+
+class TestNewEntries:
+    def test_new_flagged_bullet_gets_id_and_created_today(self):
+        new = "# State\n\n- [user] Review the vendor contract.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        e = _entry(merged)
+        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
+        assert e.created == TODAY
+        assert e.touched == TODAY
+
+    def test_new_flagged_bullet_with_explicit_id_is_preserved(self):
+        # A writer that already stamped an id (e.g. a system write) keeps it.
+        new = (
+            "- [user] Ship the release.\n"
+            "  <!--mem id:keep99 from:s1 evidence:\"ship it\" "
+            "created:2026-07-01 touched:2026-07-01-->\n"
+        )
+        merged, warns = reconcile_flags(None, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "keep99"
+        assert e.created == "2026-07-01"
+
+    def test_dated_fact_passes_through_unstamped(self):
+        new = "- [due:2026-07-28] Quarterly report auto-generates.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        e = _entry(merged)
+        assert e.id is None                     # facts stay unstamped
+        assert e.due == "2026-07-28"
+        assert not e.flagged
+        assert "<!--mem" not in merged
+
+
+class TestTouchedStamp:
+    def test_text_change_stamps_touched_today(self):
+        prev = (
+            "- [user] Approve Q3 budget.\n"
+            "  <!--mem id:def456 from:s1 evidence:\"approve\" "
+            "created:2026-07-01 touched:2026-07-01-->\n"
+        )
+        new = "- [user] Approve the Q3 budget now.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        assert _entry(merged).touched == TODAY
+
+    def test_no_text_change_keeps_touched(self):
+        prev = (
+            "- [user] Approve Q3 budget.\n"
+            "  <!--mem id:def456 from:s1 evidence:\"approve\" "
+            "created:2026-07-01 touched:2026-07-01-->\n"
+        )
+        new = "- [user] Approve Q3 budget.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        assert _entry(merged).touched == "2026-07-01"
+
+
+# ---------------------------------------------------------------------------
+# lifecycle-fields-win (spec §5.5)
+# ---------------------------------------------------------------------------
+
+class TestLifecycleFieldsWin:
+    def test_resolved_survives_agent_rewrite(self):
+        prev = (
+            "- [user] Confirm the flight booking.\n"
+            "  <!--mem id:res111 from:s1 evidence:\"confirm\" "
+            "created:2026-07-10 touched:2026-07-20 resolved:2026-07-20-->\n"
+        )
+        # Agent rewrites the bullet and drops the resolved stamp.
+        new = "- [user] Confirm the flight booking.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        assert _entry(merged).resolved == "2026-07-20"
+
+    def test_confidence_stated_wins_over_reverted_unconfirmed(self):
+        prev = (
+            "- [user] Cancel the old subscription.\n"
+            "  <!--mem id:con222 from:s1 evidence:\"cancel it\" "
+            "confidence:stated created:2026-07-10 touched:2026-07-10-->\n"
+        )
+        # Agent's stale copy re-asserts unconfirmed; user's 'stated' must win.
+        new = (
+            "- [user] Cancel the old subscription.\n"
+            "  <!--mem confidence:unconfirmed-->\n"
+        )
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        assert _entry(merged).confidence == "stated"
+
+
+# ---------------------------------------------------------------------------
+# retraction resurrection guard (spec §5.2)
+# ---------------------------------------------------------------------------
+
+class TestRetractionGuard:
+    def test_retracted_title_match_keeps_entry_out_and_warns_loudly(self):
+        new = (
+            "# State\n\n"
+            "- [user] Send 宝玉 + Simon the DM drafts.\n"
+            "- [user] Draft the Q3 report.\n"
+        )
+        retractions = ["Send 宝玉 and Simon the DM drafts"]
+        merged, warns = reconcile_flags(None, new, TODAY, retraction_titles=retractions)
+        titles = [e.text for e in user_flags.parse_entries(merged)]
+        assert not any("宝玉" in t for t in titles)       # retracted one dropped
+        assert any("Q3 report" in t for t in titles)     # the other survives
+        assert any("RETRACT" in w.upper() for w in warns)  # loud warning
+
+    def test_no_retraction_titles_keeps_everything(self):
+        new = "- [user] Send 宝玉 + Simon the DM drafts.\n"
+        merged, warns = reconcile_flags(None, new, TODAY, retraction_titles=None)
+        assert len(user_flags.parse_entries(merged)) == 1
+
+
+# ---------------------------------------------------------------------------
+# omission heuristic lint (spec §8) — warns, never blocks
+# ---------------------------------------------------------------------------
+
+class TestOmissionHeuristic:
+    def test_unflagged_bullet_under_blocker_heading_warns(self):
+        new = (
+            "# State\n\n"
+            "## Blockers\n"
+            "- Waiting on the client to approve the vendor.\n"
+        )
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
+        # Never blocks: the line is still present in the output.
+        assert "Waiting on the client" in merged
+
+    def test_you_must_phrasing_warns(self):
+        new = "## Notes\n- You must sign the release form before Friday.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
+
+    def test_cjk_user_phrasing_warns(self):
+        new = "## 进度\n- 用户需要确认预算。\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
+
+    def test_flagged_bullet_under_blocker_heading_does_not_warn(self):
+        new = (
+            "## Blockers\n"
+            "- [user] Approve the vendor contract.\n"
+            "  <!--mem id:zzz999 from:s1 evidence:\"approve\" "
+            "created:2026-07-01 touched:2026-07-01-->\n"
+        )
+        merged, warns = reconcile_flags(new, new, TODAY)
+        assert not any("user-facing" in w.lower() for w in warns)
+
+    def test_plain_bullet_without_triggers_does_not_warn(self):
+        new = "## Progress\n- Refactored the exporter module.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert warns == []
+
+
+# ---------------------------------------------------------------------------
+# round-trip / idempotency / non-adopting files
+# ---------------------------------------------------------------------------
+
+class TestRoundTrip:
+    def test_plain_state_file_is_byte_identical(self):
+        plain = (
+            "# State\n\n"
+            "Current focus: shipping the installer.\n"
+            "Blockers: none.\n\n\n"          # 3 blank lines must NOT collapse
+            "Next: verify the DMG on a clean machine.\n"
+        )
+        merged, warns = reconcile_flags(None, plain, TODAY)
+        assert merged == plain
+        assert warns == []
+
+    def test_reconcile_is_idempotent(self):
+        prev = (
+            "- [user] Send drafts to the client.\n"
+            "  <!--mem id:abc123 from:sess_1 evidence:\"send the drafts\" "
+            "confidence:unconfirmed created:2026-07-19 touched:2026-07-19-->\n"
+        )
+        new = "- [user] Send drafts to the client.\n"
+        merged1, _ = reconcile_flags(prev, new, TODAY)
+        merged2, _ = reconcile_flags(merged1, merged1, TODAY)
+        assert merged2 == merged1
+
+    def test_no_prev_no_flags_returns_new(self):
+        new = "just some freeform prose\nwith no bullets at all\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert merged == new
+        assert warns == []
+
+
+# ---------------------------------------------------------------------------
+# wiring: both write paths run reconcile for PROJECT_STATE.md
+# ---------------------------------------------------------------------------
+
+class TestWiring:
+    def test_process_on_write_reconciles_state(self, tmp_path):
+        from agent_os.agent import memory_entries
+        orbital = tmp_path / "orbital"
+        orbital.mkdir()
+        state_path = orbital / "PROJECT_STATE.md"
+        state_path.write_text(
+            "- [user] Send drafts to the client.\n"
+            "  <!--mem id:abc123 from:s1 evidence:\"send it\" "
+            "created:2026-07-19 touched:2026-07-19-->\n",
+            encoding="utf-8",
+        )
+        new = "- [user] Send drafts to the client.\n"
+        out, warns = memory_entries.process_on_write(
+            str(tmp_path), str(state_path), new, today=TODAY
+        )
+        assert _entry(out).id == "abc123"
+
+    def test_process_on_write_index_unchanged_behavior(self, tmp_path):
+        # Non-state volatile file keeps header-only behavior (no reconcile).
+        from agent_os.agent import memory_entries
+        orbital = tmp_path / "orbital"
+        orbital.mkdir()
+        target = orbital / "INDEX.md"
+        out, warns = memory_entries.process_on_write(
+            str(tmp_path), str(target), "# INDEX\n- a.py — thing\n"
+        )
+        assert out.startswith(memory_entries.FORMAT_HEADERS["index"])
+        assert "<!--mem" not in out
+
+    def test_manager_write_reconciles_state(self, tmp_path):
+        from agent_os.agent.workspace_files import WorkspaceFileManager
+        wf = WorkspaceFileManager(str(tmp_path))
+        wf.write(
+            "state",
+            "- [user] Ship the release.\n"
+            "  <!--mem id:ship01 from:s1 evidence:\"ship it\" "
+            "created:2026-07-01 touched:2026-07-01-->\n",
+        )
+        assert _entry(wf.read("state")).id == "ship01"
+        # Agent rewrite with the comment stripped: id must survive.
+        wf.write("state", "# State\n\n- [user] Ship the release.\n")
+        assert _entry(wf.read("state")).id == "ship01"
+
+    def test_manager_write_plain_state_byte_identical(self, tmp_path):
+        # A non-adopting state file still round-trips to header + content.
+        from agent_os.agent import memory_entries as mem
+        from agent_os.agent.workspace_files import WorkspaceFileManager
+        wf = WorkspaceFileManager(str(tmp_path))
+        content = "# State\nDoing well.\n"
+        wf.write("state", content)
+        assert wf.read("state") == mem.FORMAT_HEADERS["state"] + "\n" + content
