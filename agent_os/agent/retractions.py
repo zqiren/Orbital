@@ -32,17 +32,28 @@ em dashes inside a reason round-trip untouched.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 RETRACTIONS_FILENAME = "retractions.md"
 
 # Fuzzy title-match threshold — same tier the write chokepoint uses for
 # re-association (spec §5.2 / flag_chokepoint._FUZZY_THRESHOLD).
 _FUZZY_THRESHOLD = 0.75
+
+# render_constraints hard cap (code review finding): an unbounded block was
+# observed at ~98.6KB / 24.6K tokens for 500 retractions, rendered every turn
+# inside the budget accounting — starving the sliding window and risking
+# context overflow. The cap applies ONLY to what gets injected; matching
+# (normalized_title_match) and every chokepoint consumer always sees the
+# full on-disk list via list_retractions.
+_MAX_CONSTRAINT_CHARS = 6000
 
 _LINE_RE = re.compile(
     r'^-\s+\[(?P<id>[^\]]+)\]\s+"(?P<title>(?:[^"\\]|\\.)*)"\s+—\s+'
@@ -66,12 +77,24 @@ def _escape(val: str) -> str:
     return val.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sanitize_reason(reason: str) -> str:
+    """Collapse any embedded newline/CR into a single space.
+
+    The reason is free text to end of line with no escaping, so a caller
+    passing multi-line text would otherwise break the one-line-per-retraction
+    file invariant (and make it unparseable). Enforced at render time so
+    every reason is guaranteed single-line on disk regardless of input.
+    """
+    return re.sub(r"[\r\n]+", " ", reason)
+
+
 def _path(orbital_dir: Path | str) -> Path:
     return Path(orbital_dir) / RETRACTIONS_FILENAME
 
 
 def _render_line(r: Retraction) -> str:
-    return f'- [{r.id}] "{_escape(r.title)}" — retracted by user {r.date}: {r.reason}'
+    reason = _sanitize_reason(r.reason)
+    return f'- [{r.id}] "{_escape(r.title)}" — retracted by user {r.date}: {reason}'
 
 
 def add_retraction(orbital_dir: Path | str, r: Retraction) -> None:
@@ -95,8 +118,11 @@ def list_retractions(orbital_dir: Path | str) -> list[Retraction]:
         return []
     out: list[Retraction] = []
     for line in content.split("\n"):
+        if line.strip() == "":
+            continue
         m = _LINE_RE.match(line)
         if not m:
+            logger.warning("retractions.md: skipping unparseable line: %r", line)
             continue
         out.append(Retraction(
             id=m.group("id"),
@@ -108,10 +134,19 @@ def list_retractions(orbital_dir: Path | str) -> list[Retraction]:
 
 
 def render_constraints(rs: list[Retraction]) -> str:
-    """Render ``rs`` as a hard-constraint block for session context. `""` if empty."""
+    """Render ``rs`` as a hard-constraint block for session context. `""` if empty.
+
+    Newest-first (most recent retractions are the most relevant), capped at
+    ``_MAX_CONSTRAINT_CHARS`` (6000) so an unbounded list can't starve the
+    context window. Once the cap would be exceeded, rendering stops and a
+    final line reports the exact count of omitted (older) retractions — the
+    full list always remains on disk and is what ``normalized_title_match``
+    and every chokepoint consumer actually match against; only injection is
+    capped.
+    """
     if not rs:
         return ""
-    lines = [
+    header = [
         "## Retracted by user — hard constraints",
         "",
         "The user explicitly said no to each item below. Do not re-propose, "
@@ -119,9 +154,22 @@ def render_constraints(rs: list[Retraction]) -> str:
         "return by explicit user request.",
         "",
     ]
-    for r in rs:
-        lines.append(f'- "{r.title}" (retracted {r.date}: {r.reason})')
-    return "\n".join(lines)
+    newest_first = list(reversed(rs))
+    entry_lines: list[str] = []
+    omitted = 0
+    for i, r in enumerate(newest_first):
+        candidate_line = f'- "{r.title}" (retracted {r.date}: {r.reason})'
+        candidate_block = "\n".join(header + entry_lines + [candidate_line])
+        if entry_lines and len(candidate_block) > _MAX_CONSTRAINT_CHARS:
+            omitted = len(newest_first) - i
+            break
+        entry_lines.append(candidate_line)
+    if omitted:
+        entry_lines.append(
+            f"(+{omitted} earlier retractions omitted — "
+            "full list in orbital/retractions.md)"
+        )
+    return "\n".join(header + entry_lines)
 
 
 def _normalize(text: str) -> str:

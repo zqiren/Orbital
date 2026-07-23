@@ -252,3 +252,115 @@ class TestContextInjection:
             if "Retracted by user" in m.get("content", "")
         ]
         assert len(constraint_msgs) == 0
+
+
+# ---------------------------------------------------------------------------
+# render_constraints — size cap (unbounded injection was starving the
+# sliding window / risking context overflow — code review finding)
+# ---------------------------------------------------------------------------
+
+def _sized_retraction(i: int) -> Retraction:
+    return Retraction(
+        id=f"{i:06x}",
+        title=f"Retraction number {i:04d} about a moderately long task description",
+        reason=f"user reason text explaining why item {i:04d} was retracted in more detail",
+        date=f"2026-01-{(i % 28) + 1:02d}",
+    )
+
+
+class TestRenderConstraintsCap:
+    def test_large_store_caps_block_and_reports_exact_omitted_count(self):
+        rs = [_sized_retraction(i) for i in range(500)]
+
+        block = render_constraints(rs)
+
+        assert len(block) <= 6200
+        rendered_count = block.count('- "Retraction number')
+        expected_omitted = 500 - rendered_count
+        assert expected_omitted > 0, "500 sized retractions must not all fit under the cap"
+        assert (
+            f"(+{expected_omitted} earlier retractions omitted — "
+            "full list in orbital/retractions.md)" in block
+        )
+
+    def test_small_store_under_cap_has_no_marker_all_present(self):
+        rs = [_sized_retraction(i) for i in range(3)]
+
+        block = render_constraints(rs)
+
+        assert "omitted" not in block
+        for i in range(3):
+            assert f"Retraction number {i:04d}" in block
+
+    def test_order_within_block_is_newest_first(self):
+        rs = [_sized_retraction(i) for i in range(3)]
+
+        block = render_constraints(rs)
+
+        pos_newest = block.index("Retraction number 0002")
+        pos_oldest = block.index("Retraction number 0000")
+        assert pos_newest < pos_oldest
+
+    def test_normalized_title_match_still_finds_an_omitted_retraction(self):
+        """The cap applies ONLY to rendering — matching consults the full list."""
+        rs = [_sized_retraction(i) for i in range(500)]
+
+        block = render_constraints(rs)
+        assert "omitted" in block
+        # The oldest retraction renders last (newest-first) and is the most
+        # likely to be pushed past the cap.
+        assert "Retraction number 0000 about" not in block
+
+        match = normalized_title_match(
+            "retraction number 0000 about a moderately long task description!!",
+            rs,
+        )
+
+        assert match is not None
+        assert match.id == rs[0].id
+
+
+# ---------------------------------------------------------------------------
+# Minor: corrupted lines are logged, not silently dropped
+# ---------------------------------------------------------------------------
+
+class TestCorruptedLineLogging:
+    def test_unparseable_line_logs_a_warning(self, tmp_path, caplog):
+        (tmp_path / "retractions.md").write_text(
+            "- [x7f3a2] this line is not in the expected format\n"
+            '- [abc123] "A real retraction" — retracted by user 2026-07-24: ok\n',
+            encoding="utf-8",
+        )
+
+        with caplog.at_level("WARNING", logger="agent_os.agent.retractions"):
+            got = list_retractions(tmp_path)
+
+        assert len(got) == 1
+        assert got[0].id == "abc123"
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelname == "WARNING"
+        assert "retractions.md" in caplog.records[0].getMessage()
+        assert "x7f3a2" in caplog.records[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Minor: reason newlines are sanitized so one-line-per-retraction holds
+# ---------------------------------------------------------------------------
+
+class TestReasonNewlineSanitization:
+    def test_reason_with_embedded_newline_round_trips_single_spaced(self, tmp_path):
+        r = Retraction(
+            id="abc123",
+            title="Some title",
+            reason="changed my mind\nafter thinking it over",
+            date="2026-07-24",
+        )
+        add_retraction(tmp_path, r)
+
+        content = (tmp_path / "retractions.md").read_text(encoding="utf-8")
+        # File keeps its one-line-per-retraction invariant: exactly one
+        # newline in the whole file (the trailing line terminator).
+        assert content.count("\n") == 1
+
+        got = list_retractions(tmp_path)
+        assert got[0].reason == "changed my mind after thinking it over"
