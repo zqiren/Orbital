@@ -805,6 +805,7 @@ class AgentManager:
         # 6-7. Observers
         session.on_append = self._on_message(project_id, session_id)
         session.on_stream = self._on_stream(project_id, session_id)
+        session.on_queue_drained = self._on_queue_drained(project_id, session_id)
 
         # 8. Workspace files
         workspace_files = WorkspaceFileManager(config.workspace)
@@ -1898,12 +1899,12 @@ class AgentManager:
             }
             if nonce:
                 user_msg["nonce"] = nonce
+            # ``session.append`` fires ``on_append`` → ActivityTranslator →
+            # the canonical ``chat.user_message`` echo (with nonce + timestamp
+            # + session_id). That single broadcast is the FE's echo; a second
+            # hand-rolled broadcast here (no nonce) used to render a duplicate
+            # bubble because the FE only dedups on nonce (D1).
             handle.session.append(user_msg)
-            self._broadcast(project_id, {
-                "type": "chat.user_message",
-                "project_id": project_id,
-                "content": content,
-            }, session_id=session_id)
             logger.info(
                 "inject_message(%s): queued user message during waiting state",
                 project_id,
@@ -2223,7 +2224,6 @@ class AgentManager:
             inflight.append(p)
 
         async def _fire():
-            delivered = False
             try:
                 for idx, p in enumerate(batch):
                     if p.id in self._pending_tombstoned:
@@ -2241,10 +2241,11 @@ class AgentManager:
                         # 1st inject → start_agent (Case 2/3) starts B's loop;
                         # subsequent injects hit Case 1 (same-session queue)
                         # since B's task is now alive → in-order delivery.
-                        delivered = True
                     except ValueError:
                         # Lost the slot race (atomic guard). Re-enqueue the
                         # not-yet-delivered, not-tombstoned remainder at HEAD.
+                        # Entries injected before this point were already
+                        # dispatched (and broadcast) above.
                         remainder = [
                             q for q in batch[idx:]
                             if q.id not in self._pending_tombstoned
@@ -2253,13 +2254,17 @@ class AgentManager:
                             remainder
                         )
                         return
-                if delivered:
-                    self._broadcast(project_id, {
-                        "type": "chat.pending_dispatched",
-                        "project_id": project_id,
-                        "session_id": sid,
-                        "nonce": batch[0].nonce,
-                    }, session_id=sid)
+                    # Delivered: clear THIS entry's FE "Waiting…" line. One
+                    # broadcast per delivered nonce — the old code only cleared
+                    # batch[0], so entries 2..N never got their line cleared
+                    # (D1 secondary gap). Skip None/empty nonces (no FE bubble).
+                    if p.nonce:
+                        self._broadcast(project_id, {
+                            "type": "chat.pending_dispatched",
+                            "project_id": project_id,
+                            "session_id": sid,
+                            "nonce": p.nonce,
+                        }, session_id=sid)
             finally:
                 for p in batch:
                     self._pending_dispatching.discard(p.id)
@@ -4079,6 +4084,29 @@ class AgentManager:
         """
         def callback(msg):
             self._activity_translator.on_message(msg, project_id, session_id=session_id)
+        return callback
+
+    def _on_queue_drained(self, project_id: str, session_id: str):
+        """Returns callback for session.on_queue_drained.
+
+        The loop's mid-run queue drain invokes it with the list of non-empty
+        nonces it just appended to the session. Broadcasts one
+        ``chat.pending_dispatched`` per nonce so the FE clears its same-session
+        "Waiting…" line — the same payload shape as the ``_on_loop_done`` drain
+        (agent_manager) and the cross-session ``_fire`` dispatch. The loop
+        already fault-isolates this callback, so a raise here can't break the
+        drain; guard None/empty nonces defensively regardless.
+        """
+        def callback(nonces):
+            for nonce in nonces:
+                if not nonce:
+                    continue
+                self._broadcast(project_id, {
+                    "type": "chat.pending_dispatched",
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "nonce": nonce,
+                }, session_id=session_id)
         return callback
 
     def _on_stream(self, project_id: str, session_id: str):

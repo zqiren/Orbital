@@ -245,6 +245,46 @@ class AgentLoop:
             extra={"diag": payload},
         )
 
+    def _drain_queued_user_messages(self) -> list:
+        """Pop queued user messages, append each to the session, and notify the
+        manager of the drained nonces so it can clear the FE "Waiting…" lines.
+
+        Returns the drained items (empty list when the queue was empty), so the
+        caller can gate its per-turn resets on ``if queued:`` exactly as before.
+
+        The notification goes through the optional ``session.on_queue_drained``
+        observer (mirrors ``on_append``/``on_stream``; wired by the manager).
+        It is fault-isolated: a raising observer must NEVER break the drain, and
+        an unset observer is a no-op so existing behavior is unchanged. Only
+        non-empty nonces are reported (no FE bubble exists for a None nonce).
+        """
+        queued = self._session.pop_queued_messages()
+        if not queued:
+            return queued
+        drained_nonces: list[str] = []
+        for q_item in queued:
+            if isinstance(q_item, tuple):
+                q_content, q_nonce = q_item
+            else:
+                q_content, q_nonce = q_item, None
+            q_msg: dict = {
+                "role": "user",
+                "content": q_content,
+                "source": "user",
+            }
+            if q_nonce:
+                q_msg["nonce"] = q_nonce
+                drained_nonces.append(q_nonce)
+            self._session.append(q_msg)
+        if drained_nonces:
+            cb = getattr(self._session, "on_queue_drained", None)
+            if cb is not None:
+                try:
+                    cb(drained_nonces)
+                except Exception:
+                    logger.exception("on_queue_drained callback failed")
+        return queued
+
     def _note_exit(self, name: str, iteration: int) -> None:
         """Record the named loop-exit/continue path taken this iteration."""
         self._loop_exit_path = name
@@ -664,25 +704,14 @@ class AgentLoop:
 
             while True:
                 # Drain queued user messages before preparing context
-                queued = self._session.pop_queued_messages()
+                queued = self._drain_queued_user_messages()
                 if queued:
                     # New user input ⇒ a brand new "turn" begins. Reset the
                     # cancellation marker flag so subsequent cancel_turn()
-                    # calls write a fresh marker.
+                    # calls write a fresh marker. (Safe to reset after the
+                    # synchronous drain above — no cancel_turn can interleave
+                    # without an await, and the appends never read this flag.)
                     self._cancellation_marker_appended_this_turn = False
-                    for q_item in queued:
-                        if isinstance(q_item, tuple):
-                            q_content, q_nonce = q_item
-                        else:
-                            q_content, q_nonce = q_item, None
-                        q_msg: dict = {
-                            "role": "user",
-                            "content": q_content,
-                            "source": "user",
-                        }
-                        if q_nonce:
-                            q_msg["nonce"] = q_nonce
-                        self._session.append(q_msg)
                     # Reset circuit breaker on new user messages
                     error_tracker.clear()
                     blocked_tools.clear()

@@ -904,6 +904,85 @@ class TestAgentManager:
             assert result == "delivered"
 
     @pytest.mark.asyncio
+    async def test_inject_during_waiting_state_single_user_echo(self, tmp_path):
+        """D1: a user message injected while the session is in the wait-state
+        (sub-agent dispatched, idle-poll alive) must emit EXACTLY ONE
+        chat.user_message broadcast — the canonical session.append echo —
+        carrying the nonce. The old hand-rolled second broadcast produced a
+        duplicate bubble on the frontend."""
+        from agent_os.agent.session import Session
+        from agent_os.daemon_v2.activity_translator import ActivityTranslator
+        from agent_os.daemon_v2.models import make_session_key
+
+        mgr, ws, _, _, _ = self._make_manager()
+        # Real translator so the canonical append→on_append echo actually
+        # broadcasts (the MagicMock translator in _make_manager would not).
+        mgr._activity_translator = ActivityTranslator(ws)
+
+        session = Session.new(SID, str(tmp_path))
+        session.on_append = mgr._on_message("proj_1", SID)
+
+        # Loop yielded its turn (task done); wait-state is signalled by the
+        # alive idle-poll task, not the loop task.
+        task = MagicMock()
+        task.done.return_value = True
+        handle = MagicMock(session=session, task=task, loop=MagicMock(),
+                           interceptor=MagicMock())
+        mgr._handles[("proj_1", SID)] = handle
+
+        poll = MagicMock()
+        poll.done.return_value = False
+        mgr._idle_poll_tasks[make_session_key("proj_1", SID)] = poll
+
+        result = await mgr.inject_message(
+            "proj_1", "hello there", nonce="n-123", session_id=SID)
+        assert result == {"status": "queued", "session_id": SID}
+
+        user_echoes = [
+            c[0][1] for c in ws.broadcast.call_args_list
+            if c[0][1].get("type") == "chat.user_message"
+        ]
+        assert len(user_echoes) == 1
+        assert user_echoes[0]["nonce"] == "n-123"
+        assert user_echoes[0]["content"] == "hello there"
+
+    @pytest.mark.asyncio
+    async def test_fire_broadcasts_pending_dispatched_per_delivered_nonce(self):
+        """D1 secondary gap: a cross-session pending batch with N nonces must
+        clear the FE 'Waiting…' line for EVERY delivered entry — one
+        chat.pending_dispatched per nonce — not just batch[0]."""
+        from agent_os.daemon_v2.agent_manager import PendingInject
+
+        mgr, ws, _, _, _ = self._make_manager()
+
+        sid = "sess_b0001"
+        now = time.time()
+        entries = [
+            PendingInject(id="e1", session_id=sid, content="m1", nonce="n1",
+                          attachments=None, enqueued_at=now),
+            PendingInject(id="e2", session_id=sid, content="m2", nonce="n2",
+                          attachments=None, enqueued_at=now),
+            PendingInject(id="e3", session_id=sid, content="m3", nonce="n3",
+                          attachments=None, enqueued_at=now),
+        ]
+        mgr._pending_inject["proj_1"] = list(entries)
+
+        with patch.object(mgr, "inject_message",
+                          new_callable=AsyncMock) as inj:
+            mgr._maybe_dispatch_pending("proj_1")
+            # Let the scheduled _fire task run to completion.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        assert inj.await_count == 3
+        dispatched = [
+            c[0][1] for c in ws.broadcast.call_args_list
+            if c[0][1].get("type") == "chat.pending_dispatched"
+        ]
+        nonces = sorted(d["nonce"] for d in dispatched)
+        assert nonces == ["n1", "n2", "n3"]
+
+    @pytest.mark.asyncio
     async def test_stop_agent_stops_session(self):
         mgr, ws, sub_mgr, _, _ = self._make_manager()
 

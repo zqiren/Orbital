@@ -173,6 +173,11 @@ class Session:
         # Observer callbacks (sync only)
         self.on_append = None
         self.on_stream = None
+        # Fired by the loop's mid-run queue drain with the list of non-empty
+        # nonces just appended, so the manager can clear the FE "Waiting…"
+        # lines (mirrors on_append/on_stream; wired at agent_manager alongside
+        # them). Fault-isolated at the call site; None → no-op.
+        self.on_queue_drained = None
 
         # Deferred session_start meta record. A session is a file on disk; the
         # file is not created until the first message. ``Session.new`` stashes

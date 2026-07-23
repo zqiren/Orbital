@@ -539,6 +539,70 @@ class TestLoopTextOnly:
 
 
 # ===========================================================================
+# D1 secondary gap: the mid-run queue drain must notify the manager (via the
+# fault-isolated session.on_queue_drained observer) of drained nonces so the
+# FE "Waiting…" lines clear, and must never let a raising callback break the
+# drain. See loop._drain_queued_user_messages.
+# ===========================================================================
+
+class TestLoopQueueDrain:
+
+    def _make_drain_loop(self, tmp_path, name):
+        session = Session.new(name, str(tmp_path))
+        provider = MockProvider(responses=[])
+        registry = MockToolRegistry()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, MockPromptBuilder(), ctx)
+        loop = AgentLoop(session, provider, registry, context_mgr)
+        return loop, session
+
+    def test_drain_appends_and_reports_nonces(self, tmp_path):
+        loop, session = self._make_drain_loop(tmp_path, "drain_report")
+
+        seen = []
+        session.on_queue_drained = lambda nonces: seen.append(list(nonces))
+
+        session.queue_message("first", nonce="n1")
+        session.queue_message("second", nonce="n2")
+        session.queue_message("no-nonce", nonce=None)
+
+        loop._drain_queued_user_messages()
+
+        # All three appended to the session in order.
+        contents = [m["content"] for m in session.get_messages()
+                    if m["role"] == "user"]
+        assert contents == ["first", "second", "no-nonce"]
+        # Callback received EXACTLY the non-empty nonces, once.
+        assert seen == [["n1", "n2"]]
+
+    def test_drain_survives_raising_callback(self, tmp_path):
+        loop, session = self._make_drain_loop(tmp_path, "drain_raise")
+
+        def boom(nonces):
+            raise RuntimeError("observer blew up")
+        session.on_queue_drained = boom
+
+        session.queue_message("stays", nonce="n1")
+        # Must NOT raise even though the callback raises.
+        loop._drain_queued_user_messages()
+
+        contents = [m["content"] for m in session.get_messages()
+                    if m["role"] == "user"]
+        assert contents == ["stays"]
+
+    def test_drain_no_callback_is_noop(self, tmp_path):
+        loop, session = self._make_drain_loop(tmp_path, "drain_noop")
+
+        # No on_queue_drained set (default None) → drain works as today.
+        session.queue_message("solo", nonce="n1")
+        loop._drain_queued_user_messages()
+
+        contents = [m["content"] for m in session.get_messages()
+                    if m["role"] == "user"]
+        assert contents == ["solo"]
+
+
+# ===========================================================================
 # AC-8: Loop with MockProvider (tool_call response) -> calls execute() ->
 #        appends ToolResult -> loops.
 # ===========================================================================
