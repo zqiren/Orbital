@@ -168,6 +168,35 @@ class TestRenderCommentRoundTrip:
         assert "from:" not in comment
 
 
+class TestTagLessCommentCarryingBullets:
+    """A fulfilled Workbench exit rewrites a retired entry as a tag-less
+    bullet + adjacent mem-comment (id + resolved:<date>, spec §5.3). The
+    entry must keep surfacing through parse_entries so the chokepoint can
+    keep re-associating/preserving that comment across agent rewrites —
+    the resolved stamp is the anti-resurrection trace."""
+
+    def test_tagless_bullet_with_comment_is_returned(self):
+        content = (
+            "- Send the drafts.\n"
+            "  <!--mem id:x7f3a2 resolved:2026-07-24 created:2026-07-19-->\n"
+        )
+        entries = uf.parse_entries(content)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.flagged is False
+        assert e.due is None
+        assert e.text == "Send the drafts."
+        assert e.id == "x7f3a2"
+        assert e.resolved == "2026-07-24"
+        assert e.created == "2026-07-19"
+        assert e.line_start == 0
+        assert e.line_end == 1
+
+    def test_tagless_bullet_without_comment_still_absent(self):
+        content = "- Send the drafts.\n"
+        assert uf.parse_entries(content) == []
+
+
 class TestNewEntryId:
     def test_six_hex_chars(self):
         eid = uf.new_entry_id()

@@ -23,6 +23,8 @@ so its 60s cache never serves pre-edit state).
 import json
 import logging
 import os
+import sys
+import time
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -82,19 +84,44 @@ def _load_state(path: str) -> tuple[int | None, str | None]:
     The OCC baseline (mtime) is captured here, alongside the read, so the exit
     path has a single seam. Tests monkeypatch this to simulate a concurrent
     writer between the baseline capture and the guarded write.
+
+    Decode-safe: read with ``errors="replace"`` so invalid UTF-8 bytes in a
+    project's PROJECT_STATE.md yield replacement chars instead of a
+    ``UnicodeDecodeError`` that would 500 the whole (esp. global) GET.
     """
     mtime = _stat_mtime_ns(path)
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             return mtime, f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return mtime, None
 
 
-def _write_state(path: str, content: str) -> None:
+_IS_WINDOWS = sys.platform.startswith("win")
+
+
+def _atomic_write(path: str, content: str) -> None:
+    """Atomic text write: tmp file in the same dir + ``os.replace``.
+
+    The layer-1 memory convention (workspace_files.py) — a reader never sees a
+    half-written file, and a crash mid-write cannot truncate the original.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(content)
+    for attempt in range(5):  # Windows: target may be briefly open
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if not _IS_WINDOWS or attempt == 4:
+                raise
+            time.sleep(0.05)
+
+
+def _write_state(path: str, content: str) -> None:
+    _atomic_write(path, content)
 
 
 def _state_path(workspace: str) -> str:
@@ -211,8 +238,13 @@ def _collect_project(project: dict, now: datetime) -> tuple[list[dict], list[dic
     # Overdue computed cards cover UNFLAGGED dated facts only — a flagged entry
     # that is overdue already appears in ``entry_rows`` carrying ``overdue:true``
     # (spec §3 overdue emphasis), so surfacing it again here would double it.
+    # ``not e.resolved`` skips a retired entry: since the parse_entries
+    # amendment now surfaces tag-less resolved facts (flagged=False), a dated
+    # fact that carries a ``resolved:`` stamp must NOT resurrect as an overdue
+    # card off its now-stale ``due:`` — the resolved stamp is a closed state.
     for e in parsed:
-        if not e.flagged and e.due and workbench_cards.is_overdue(e.due, tz, now):
+        if (not e.flagged and e.due and not e.resolved
+                and workbench_cards.is_overdue(e.due, tz, now)):
             computed.append({
                 "type": "overdue",
                 "project_id": project_id,
@@ -248,7 +280,18 @@ async def get_workbench(project_id: str | None = Query(None)):
     all_entries: list[dict] = []
     all_computed: list[dict] = []
     for project in projects:
-        entries, computed = _collect_project(project, now)
+        # Per-project isolation: one project failing to collect (corrupt state,
+        # I/O error) must never sink the whole global view. Failed projects are
+        # skipped and logged — chosen over a degraded in-band marker to keep the
+        # {entries, computed} response contract stable for the frontend.
+        try:
+            entries, computed = _collect_project(project, now)
+        except Exception:
+            logger.warning(
+                "workbench: skipping project %s — collection failed",
+                project.get("project_id"), exc_info=True,
+            )
+            continue
         all_entries.extend(entries)
         all_computed.extend(computed)
 
@@ -377,9 +420,10 @@ async def dismiss_computed(project_id: str, card_type: str, key: str):
     if not any(d.get("type") == card_type and d.get("key") == key
                for d in data if isinstance(d, dict)):
         data.append({"type": card_type, "key": key, "date": _today_iso()})
-        os.makedirs(_orbital_dir(workspace), exist_ok=True)
-        with open(_dismissals_path(workspace), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write(
+            _dismissals_path(workspace),
+            json.dumps(data, ensure_ascii=False, indent=2),
+        )
     return {"status": "ok"}
 
 

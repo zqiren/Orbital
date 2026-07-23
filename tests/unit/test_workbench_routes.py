@@ -163,6 +163,21 @@ async def test_get_sort_overdue_first_then_oldest(tmp_path):
     assert order == ["ovrd", "oldr", "newr"]
 
 
+async def test_global_get_survives_invalid_utf8_project(tmp_path):
+    """A single project with invalid UTF-8 in PROJECT_STATE.md must not 500 the
+    whole global GET — the healthy project's entries still come back."""
+    healthy = _seed_project(tmp_path, pid="proj_ok")
+    bad = _seed_project(tmp_path, pid="proj_bad", state="placeholder")
+    with open(_state_path(bad), "wb") as f:
+        f.write(b"\xff\xfe not valid utf-8 \x80\x81\n- [user] garbled\n")
+    client, *_ = _make_client(tmp_path, [healthy, bad])
+    async with client:
+        r = await client.get("/api/v2/workbench")
+        assert r.status_code == 200, r.text
+        body = r.json()
+    assert {"x7f3a2", "a1b2c3"} <= {e["id"] for e in body["entries"]}
+
+
 async def test_privacy_toggle_skips_project_in_global_view(tmp_path):
     a = _seed_project(tmp_path, pid="proj_a")
     b = _seed_project(tmp_path, pid="proj_b",
@@ -190,19 +205,92 @@ async def test_fulfilled_exit_rewrites_file_exactly(tmp_path):
             json={"kind": "fulfilled", "reason": "sent them this morning"},
         )
         assert r.status_code == 200, r.text
+        # The fulfilled item leaves the Workbench (a done item is no longer
+        # surfaced). Asserted at the GET level so it holds regardless of the
+        # parser's internal treatment of the tag-less resolved fact.
+        body = (await client.get("/api/v2/workbench")).json()
+        surfaced = {e["id"] for e in body["entries"]}
+        assert "x7f3a2" not in surfaced
+        assert "a1b2c3" in surfaced          # the other flagged entry stays
 
     content = open(_state_path(project), encoding="utf-8").read()
-    entries = user_flags.parse_entries(content)
-    ids = {e.id for e in entries}
-    # x7f3a2 unflagged (tag dropped) -> no longer a parsed entry; others intact.
-    assert "x7f3a2" not in ids
-    assert {"a1b2c3", "d4e5f6"} <= ids
     # The resolved stamp is written into the (now plain-fact) bullet's comment.
     assert "resolved:2026-07-24" in content
     # The sentence survives as a plain fact.
     assert "Send 宝玉 + Simon DM drafts" in content
-    # The other flagged entry is byte-for-byte unchanged.
+    # The other flagged entry is byte-for-byte unchanged; the dated fact intact.
     assert "- [user] Approve the Q3 budget before Friday." in content
+    assert "- [due:2026-07-20] Ship the marketing site." in content
+
+
+async def test_fulfilled_exit_keeps_comment_adjacent_and_preserves_id(tmp_path):
+    """Design guard (Task 3 review): the fulfilled bullet drops its ``[user]``
+    tag but keeps its mem-comment PHYSICALLY ADJACENT — the bullet line is
+    immediately followed by its comment line — so the id + resolved stamp stay
+    re-associable and the comment never orphans into plain prose."""
+    project = _seed_project(tmp_path)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.post(
+            "/api/v2/workbench/proj_a/entries/x7f3a2/exit",
+            json={"kind": "fulfilled", "reason": "done"},
+        )
+        assert r.status_code == 200, r.text
+
+    lines = open(_state_path(project), encoding="utf-8").read().split("\n")
+    idx = next(i for i, ln in enumerate(lines) if ln.startswith("- Send 宝玉"))
+    bullet, comment = lines[idx], lines[idx + 1]
+    assert "[user" not in bullet                     # bracket tag dropped
+    assert comment.lstrip().startswith("<!--mem")    # comment immediately follows
+    assert "id:x7f3a2" in comment                    # id preserved
+    assert "resolved:2026-07-24" in comment          # resolved stamp present
+
+
+async def test_fulfilled_exit_leaves_parseable_resolved_trace(tmp_path):
+    """Post-fulfilled, the retired entry re-parses via the (amended)
+    parse_entries as a present, UNFLAGGED entry with its resolved stamp and id
+    intact — the anti-resurrection trace the chokepoint re-associates on the
+    next agent rewrite (spec §5.3)."""
+    project = _seed_project(tmp_path)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.post(
+            "/api/v2/workbench/proj_a/entries/x7f3a2/exit",
+            json={"kind": "fulfilled", "reason": "sent this morning"},
+        )
+        assert r.status_code == 200, r.text
+
+    content = open(_state_path(project), encoding="utf-8").read()
+    entry = next((e for e in user_flags.parse_entries(content) if e.id == "x7f3a2"), None)
+    assert entry is not None            # present
+    assert entry.flagged is False       # unflagged (tag dropped)
+    assert entry.resolved == "2026-07-24"  # resolved stamp set
+    assert entry.id == "x7f3a2"         # id preserved
+
+
+async def test_resolved_dated_fact_never_produces_overdue_card(tmp_path):
+    """(c) guard: a dated fact carrying a resolved stamp must not resurrect as
+    an overdue computed card off its now-stale due — while a normal (unresolved)
+    past-due dated fact still does."""
+    state = "\n".join([
+        FORMAT_LINE,
+        # resolved dated fact with a stale past due -> must be silent
+        "- [due:2026-07-01] Already-finished shipment.",
+        "  <!--mem id:done1 created:2026-06-01 resolved:2026-07-10-->",
+        # unresolved past-due dated fact -> positive control (still overdue)
+        "- [due:2026-07-02] Live overdue item.",
+        "  <!--mem id:live1 created:2026-06-01-->",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench")).json()
+    overdue_keys = {c["key"] for c in body["computed"] if c["type"] == "overdue"}
+    assert "done1" not in overdue_keys   # resolved -> skipped
+    assert "live1" in overdue_keys       # unresolved -> still fires
+    # And a retired/dated fact is never a flagged entry row either.
+    assert {e["id"] for e in body["entries"]} == set()
 
 
 async def test_fulfilled_exit_survives_concurrent_write(tmp_path, monkeypatch):
@@ -230,10 +318,17 @@ async def test_fulfilled_exit_survives_concurrent_write(tmp_path, monkeypatch):
             json={"kind": "fulfilled", "reason": "done"},
         )
         assert r.status_code == 200, r.text
+        # GET-level exclusion: the retired item is no longer surfaced.
+        body = (await client.get("/api/v2/workbench")).json()
+        assert "x7f3a2" not in {e["id"] for e in body["entries"]}
     assert calls["n"] == 1  # exactly one simulated conflict, one retry
     content = open(_state_path(project), encoding="utf-8").read()
     assert "resolved:2026-07-24" in content
-    assert "x7f3a2" not in {e.id for e in user_flags.parse_entries(content)}
+    # The retired entry stays parse-visible as the anti-resurrection trace:
+    # present, unflagged, resolved stamped (per the parse_entries amendment).
+    retired = next(e for e in user_flags.parse_entries(content) if e.id == "x7f3a2")
+    assert retired.flagged is False
+    assert retired.resolved == "2026-07-24"
 
 
 async def test_irrelevant_exit_removes_entry_and_writes_retraction(tmp_path):

@@ -48,6 +48,13 @@ import re
 # "not a tag entry" rather than be misparsed.
 _BULLET_TAG_RE = re.compile(r"^-\s+\[(?P<tag>[^\]]*)\]\s*(?P<text>.*)$")
 
+# Any bullet, tagged or not. Used (a) as the fallback for tag-less bullets
+# that carry an adjacent mem-comment (a fulfilled Workbench exit rewrites the
+# retired entry this way — spec §5.3 — dropping the whole `[user ...]` tag
+# but keeping id/resolved in the comment) and (b) to recognize "a new bullet
+# starts here" so a comment lookahead never bleeds into the next entry.
+_BULLET_RE = re.compile(r"^-\s+(?P<text>.*)$")
+
 # A mem-comment block, possibly wrapped across multiple lines (DOTALL lets
 # "." span the embedded newlines of a wrapped comment).
 _COMMENT_RE = re.compile(r"<!--\s*mem\s+(?P<body>.*?)-->", re.DOTALL)
@@ -116,11 +123,16 @@ def _parse_comment_fields(body: str) -> dict[str, str]:
 
 
 def parse_entries(content: str) -> list[Entry]:
-    """Parse every bracket-tagged bullet (flagged and/or dated) in ``content``.
+    """Parse every bullet that has a bracket tag OR an adjacent mem-comment.
 
-    Plain bullets — no ``[user]``/``[due:...]`` bracket tag at all, including
-    markdown checkbox syntax (``- [ ]``, ``- [x]``) — are not entries and are
-    not returned.
+    A bracket-tagged bullet (``[user]``/``[due:...]``) is always an entry,
+    comment or not. A tag-less bullet — no ``[...]`` at all, including
+    markdown checkbox syntax (``- [ ]``, ``- [x]``) — is an entry only when
+    immediately followed by a ``<!--mem ...-->`` comment (this is how a
+    fulfilled Workbench exit leaves a retired entry: the whole tag dropped,
+    but id/``resolved:`` kept in the comment as the anti-resurrection trace —
+    spec §5.3). A plain bullet with neither a tag nor a comment is not
+    returned.
     """
     if not content:
         return []
@@ -129,26 +141,34 @@ def parse_entries(content: str) -> list[Entry]:
     entries: list[Entry] = []
     i = 0
     while i < n:
-        m = _BULLET_TAG_RE.match(lines[i])
-        if not m:
-            i += 1
-            continue
-        flagged, raw_due = _parse_tag_tokens(m.group("tag"))
-        if not flagged and raw_due is None:
-            i += 1
-            continue  # empty/checkbox bracket — not a tag entry
+        tag_m = _BULLET_TAG_RE.match(lines[i])
+        if tag_m:
+            flagged, raw_due = _parse_tag_tokens(tag_m.group("tag"))
+            has_tag = flagged or raw_due is not None
+            text = tag_m.group("text")
+            text_pos = tag_m.start("text")
+        else:
+            plain_m = _BULLET_RE.match(lines[i])
+            if not plain_m:
+                i += 1
+                continue
+            flagged, raw_due, has_tag = False, None, False
+            text = plain_m.group("text")
+            text_pos = plain_m.start("text")
 
-        text = m.group("text").strip()
         line_start = i
         line_end = i
         fields: dict[str, str] = {}
+        comment_found = False
 
         # Same-line trailing comment (fully closed on the bullet's own line).
         same_line_cm = _COMMENT_RE.search(lines[i])
         if same_line_cm:
-            text = lines[i][m.start("text"):same_line_cm.start()].strip()
+            text = lines[i][text_pos:same_line_cm.start()].strip()
             fields = _parse_comment_fields(same_line_cm.group("body"))
+            comment_found = True
         else:
+            text = text.strip()
             # Look ahead for a comment starting on the immediate next line,
             # possibly wrapped across several indented lines.
             j = i + 1
@@ -157,16 +177,21 @@ def parse_entries(content: str) -> list[Entry]:
                 cand = lines[j]
                 if cand.strip() == "":
                     break
-                if not collected and _BULLET_TAG_RE.match(cand):
-                    break  # next entry starts immediately — no comment here
+                if not collected and _BULLET_RE.match(cand):
+                    break  # next bullet starts immediately — no comment here
                 collected.append(cand)
                 joined = "\n".join(collected)
                 cm = _COMMENT_RE.search(joined)
                 if cm and "-->" in joined:
                     fields = _parse_comment_fields(cm.group("body"))
                     line_end = j
+                    comment_found = True
                     break
                 j += 1
+
+        if not has_tag and not comment_found:
+            i += 1
+            continue  # plain bullet, no tag, no comment — not an entry
 
         due = raw_due if raw_due and _DUE_RE.match(raw_due) else None
         entries.append(Entry(
