@@ -62,7 +62,7 @@ def test_idle_poll_tasks_declared_session_keyed():
     project. The current_holder_session_id docstring explicitly describes
     condition 3 as session-scoped — the runtime type must match.
     """
-    text = (DAEMON_DIR / "agent_manager.py").read_text()
+    text = (DAEMON_DIR / "agent_manager.py").read_text(encoding="utf-8")
     match = re.search(r"self\._idle_poll_tasks\s*:\s*dict\[(.+?)\s*,", text)
     assert match is not None, "Could not find _idle_poll_tasks declaration"
     key_type = match.group(1).strip()
@@ -78,7 +78,7 @@ def test_idle_poll_tasks_reads_use_session_key():
     Catches a future regression to ``_idle_poll_tasks.get(project_id)`` or
     ``_idle_poll_tasks[project_id] = ...`` (bare string key).
     """
-    text = (DAEMON_DIR / "agent_manager.py").read_text()
+    text = (DAEMON_DIR / "agent_manager.py").read_text(encoding="utf-8")
     # Strip docstrings: triple-quoted blocks contain example syntax we don't
     # want to lint. Crude but sufficient for this file.
     text_no_docs = re.sub(r'"""[\s\S]*?"""', '', text)
@@ -138,7 +138,7 @@ def test_session_scoped_broadcasts_include_session_id():
     violations: list[str] = []
     for path in _python_sources(DAEMON_DIR, API_DIR):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
         for node, payload, type_value in _find_broadcast_calls(tree):
@@ -174,7 +174,7 @@ def test_lifecycle_observer_calls_pass_session_id():
     violations: list[str] = []
     for path in _python_sources(DAEMON_DIR, API_DIR):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
         for node in ast.walk(tree):
@@ -236,7 +236,7 @@ def test_sub_agent_manager_callers_pass_session_id():
     violations: list[str] = []
     for path in _python_sources(API_DIR, REPO_ROOT / "agent_os" / "agent"):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
         for node in ast.walk(tree):
