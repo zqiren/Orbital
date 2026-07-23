@@ -56,7 +56,7 @@ Swap agents as often as you like — your work and your progress are always your
 - **Persistent project context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md, and artifacts remain available to the manager across sessions
 - **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
 - **Interchangeable workers** — the manager dispatches Claude Code, Codex, Gemini CLI, or any CLI agent against the same project context
-- **Self-improving skills** — agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
+- **Self-improving skills** — the agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
 - **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
 - **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
 - **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
