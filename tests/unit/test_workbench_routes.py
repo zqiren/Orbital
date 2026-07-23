@@ -524,3 +524,54 @@ def test_paused_thread_detector_on_unanswered_question():
     assert cards[0]["type"] == "paused_thread"
     assert cards[0]["key"] == "u1"          # resume key = session uuid
     assert cards[0]["text"].endswith("?")
+
+
+async def test_workbench_exclude_global_persists_via_project_update(tmp_path):
+    """The privacy toggle PATCHes ``workbench_exclude_global`` through the
+    project-update route; the field must be declared on ProjectUpdate so it
+    persists (extra fields are silently dropped otherwise). End-to-end: PUT →
+    re-GET shows it → global Workbench excludes the project."""
+    from agent_os.daemon_v2.project_store import ProjectStore
+    from agent_os.api.routes import agents_v2
+
+    store = ProjectStore(data_dir=str(tmp_path / "store"))
+
+    def mk(name):
+        ws = tmp_path / name
+        (ws / "orbital").mkdir(parents=True)
+        (ws / "orbital" / "PROJECT_STATE.md").write_text(SEEDED_STATE, encoding="utf-8")
+        return store.create_project({"name": name, "workspace": str(ws),
+                                     "timezone": "UTC"})
+
+    pid_excl = mk("projexcl")
+    pid_keep = mk("projkeep")
+
+    app = FastAPI()
+    agents_v2.configure(store, None, None)   # minimal PUT touches only the store
+    app.include_router(agents_v2.router)
+    hub = CalendarHub(sources=[], linkage=Linkage(str(tmp_path / "_lk")))
+    workbench_routes.configure(store, FakeAgentManager(), hub, now_fn=lambda: NOW)
+    app.include_router(workbench_routes.router)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+    async with client:
+        # Before: both projects surface in the global Workbench.
+        before = (await client.get("/api/v2/workbench")).json()
+        assert {pid_excl, pid_keep} <= {e["project_id"] for e in before["entries"]}
+
+        # PATCH the toggle through the existing project-update route.
+        r = await client.put(f"/api/v2/projects/{pid_excl}",
+                             json={"workbench_exclude_global": True})
+        assert r.status_code == 200, r.text
+        assert r.json().get("workbench_exclude_global") is True
+
+        # Re-GET the project: the field is persisted.
+        got = (await client.get(f"/api/v2/projects/{pid_excl}")).json()
+        assert got.get("workbench_exclude_global") is True
+
+        # Global Workbench now excludes it; the other project remains.
+        after = (await client.get("/api/v2/workbench")).json()
+        pids = {e["project_id"] for e in after["entries"]}
+        assert pid_excl not in pids
+        assert pid_keep in pids

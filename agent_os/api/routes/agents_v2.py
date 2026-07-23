@@ -124,6 +124,10 @@ class ProjectUpdate(BaseModel):
     # persist dismissals (and any other pending-list edit) through this same
     # PUT rather than a dedicated route.
     pending_domain_requests: list[dict] | None = None
+    # Workbench privacy toggle (Task 5): exclude this project from the global
+    # Workbench view (its verbatim user quotes stay off the aggregated, relay-
+    # served surface). Persists automatically via the generic ``updates`` merge.
+    workbench_exclude_global: bool | None = None
 
     @field_validator("sub_agent_deployment_instructions", mode="before")
     @classmethod
