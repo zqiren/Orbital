@@ -506,6 +506,12 @@ class WorkspaceFileManager:
         message_count = session_summary.get("message_count", 0)
         tool_calls_count = session_summary.get("tool_calls_count", 0)
 
+        # Token targets for the archive instruction (field 5), read from the
+        # shared budgets so the numbers never drift from the enforced caps.
+        today = date.today().isoformat()
+        dec_budget = _mem.FILE_BUDGETS["decisions"]["soft"]
+        les_budget = _mem.FILE_BUDGETS["lessons"]["soft"]
+
         # Ride-along shape tidy: report-only lint on the volatile files. This
         # is the ONLY consumer of shape_report — formatting is fixed inside a
         # pass that runs anyway, never via a new hygiene flag or checkpoint.
@@ -535,6 +541,8 @@ Produce a JSON object with these fields. Return "" for any field that needs no c
 3. "lessons" (string): The COMPLETE updated LESSONS.md (numbered entries). Merge near-duplicate lessons into one. KEEP detailed technical playbooks intact — do NOT shorten a real lesson to save space. Drop only genuinely obsolete lessons.
 
 4. "index" (string): The COMPLETE updated INDEX.md — NAVIGATION ONLY. A short map: important files/dirs, ONE sentence each ("path — what it is"). NOT a place for decisions, status, or lessons (those live in their own files). If older entries were archived, point to DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md.
+
+5. "archive" (OPTIONAL object — omit unless needed): DECISIONS targets ~{dec_budget} tokens and LESSONS ~{les_budget} tokens (~4 chars/token). If either still exceeds its target after you have merged and deduplicated, move its COMPLETED or DORMANT entries — NEVER an entry tagged `pinned` — OUT of the kept file and return them here VERBATIM under the key "decisions" and/or "lessons" (include only the file(s) you trimmed). For each block you move, leave ONE pointer line in the kept file noting what left and when it is worth re-reading, e.g. `[archived {today}] v0.6 release/signing decisions → DECISIONS_ARCHIVE.md — read before installer work`. Archiving is a last resort — prefer merging and superseding.
 
 RULES:
 - A non-empty field MUST be the COMPLETE updated file. "" preserves the existing file.
@@ -685,6 +693,36 @@ async def run_session_end_routine(
                 workspace_files, "index", result["index"],
                 _occ_baselines["index"], project_id=project_id,
             )
+        # LLM-driven archive: entries the merge could not condense within budget
+        # get MOVED into the read-on-demand archive file (same filename
+        # convention as the deterministic hard-cap demotion in _apply_hard_caps),
+        # under a date-stamped section, with an INDEX pointer. Never fatal.
+        archive = result.get("archive")
+        if isinstance(archive, dict):
+            for key in ("decisions", "lessons"):
+                moved = archive.get(key)
+                if not isinstance(moved, str) or not moved.strip():
+                    continue
+                archive_key = _mem.ARCHIVE_OF[key]
+                archive_filename = FILE_NAMES[archive_key]
+                section = f"## [archived {today}]\n\n{moved.strip()}\n"
+                try:
+                    existing_archive = workspace_files.read(archive_key) or ""
+                    if existing_archive.strip():
+                        new_archive = existing_archive.rstrip() + "\n\n" + section
+                    else:
+                        new_archive = (
+                            f"# {archive_filename} (demoted entries, read-on-demand)\n\n"
+                            + section
+                        )
+                    workspace_files.write(archive_key, new_archive)
+                    _ensure_index_archive_pointer(workspace_files, archive_filename)
+                except OSError as e:
+                    logger.warning(
+                        "session_end: could not archive %s entries (%s); skipping",
+                        key, e,
+                    )
+                    continue
 
     # ---- Part B: deterministic hard cap (ALWAYS runs; NEVER an LLM call) ----
     _apply_hard_caps(workspace_files)
@@ -881,6 +919,12 @@ def _parse_session_end_response(text: str | None) -> dict | None:
     try:
         result = json.loads(cleaned)
         if isinstance(result, dict):
+            # Optional top-level "archive": LLM-moved entries destined for the
+            # read-on-demand archive files. Accept it only as a dict; drop any
+            # other type so run_session_end_routine can call archive.get(...)
+            # without a wrong-typed value leaking a crash into the cleanup loop.
+            if "archive" in result and not isinstance(result["archive"], dict):
+                result.pop("archive", None)
             return result
         logger.warning("Session-end LLM response was not a JSON object: %s", type(result).__name__)
         return None
