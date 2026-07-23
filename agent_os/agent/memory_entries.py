@@ -37,6 +37,8 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+from agent_os.agent import user_flags
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,10 @@ logger = logging.getLogger(__name__)
 FILE_BUDGETS: dict[str, dict[str, int]] = {
     "decisions": {"soft": 7000, "hard": 9000},
     "lessons": {"soft": 5000, "hard": 6000},
-    "state": {"soft": 1500, "hard": 2000},
+    # state soft bumped 1500 -> 1800 (spec §4.1 resolution 3): headroom for the
+    # [user] register rule's sentence overhead, measured against the flagship
+    # over-soft project. Hard cap unchanged.
+    "state": {"soft": 1800, "hard": 2000},
     "index": {"soft": 1500, "hard": 2000},
 }
 
@@ -222,6 +227,24 @@ def shape_report(content: str | None, key: str) -> str | None:
 def est_tokens(text: str | None) -> float:
     """len/4 token estimate — matches ``token_utils`` / ``context.py``."""
     return len(text) / 4 if text else 0.0
+
+
+def _budget_text(content: str, key: str) -> str:
+    """Content used for budget counting/injection (spec §4.1 resolution 1).
+
+    ``<!--mem ...-->`` comments are daemon-managed machine metadata (id,
+    evidence, confidence, timestamps) on PROJECT_STATE bullets — they never
+    compete with agent-visible context for budget, and are never shown to the
+    agent at all. Only ``state`` carries this comment grammar; every other
+    key (including DECISIONS/LESSONS, whose own ``<!--mem id:...-->`` stamp
+    is a *different*, always-injected metadata convention) passes through
+    unchanged so their budget/injection behavior stays byte-identical.
+    Content with no mem-comments round-trips unchanged (no grammar adopted
+    yet), so this is a no-op for the common case.
+    """
+    if key != "state":
+        return content
+    return user_flags.strip_mem_comments(content)
 
 
 def _today() -> str:
@@ -457,9 +480,16 @@ def inject_view(content: str | None, key: str, hard_budget: int) -> str | None:
     the oldest ``PROTECT_OLDEST`` foundational entries. Volatile files
     (state/index): head-trim. Returns the SAME object unchanged when everything
     fits, so a healthy project injects everything and the prefix cache is kept.
+
+    PROJECT_STATE's ``<!--mem ...-->`` comments are daemon-managed machine
+    metadata (spec §4.1) — stripped here before anything else, so the agent
+    never sees them and they never count against (or get counted toward
+    filling) the budget. A no-op for content without the grammar.
     """
     if not content:
         return content
+    if key == "state":
+        content = user_flags.strip_mem_comments(content)
     if key in VOLATILE_KEYS or key not in ENTRY_MARKERS:
         return _head_within(content, hard_budget)
 
@@ -544,7 +574,10 @@ def soft_flag(
     budgets = FILE_BUDGETS.get(key)
     if not content or not budgets:
         return None
-    toks = est_tokens(content)
+    # Mem-comments never count against the state file's budget (spec §4.1
+    # resolution 1) — a comment-heavy PROJECT_STATE that fits once its
+    # machine metadata is excluded must not trip the soft-budget nudge.
+    toks = est_tokens(_budget_text(content, key))
     soft = budgets["soft"]
     hard = budgets["hard"]
     if toks <= soft:
@@ -648,8 +681,65 @@ def trim_volatile(content: str, hard_budget: int) -> str:
 
     Volatile = disposable; no archive. Head-keep mirrors ``_head_within`` so the
     current status/overview survives.
+
+    Overflow never deletes a ``[user]``-flagged entry (spec §4.1 resolution
+    2): every line belonging to a flagged bullet (its comment line included)
+    is protected. Unflagged prose is dropped tail-first — oldest first, same
+    direction as the legacy head-keep/tail-drop shape — until the file fits.
+    Budget fitting is measured on the comment-stripped length (resolution 1:
+    mem-comments never count against the cap), so a comment-heavy file that
+    already fits once its machine metadata is excluded is left untouched.
+    If flagged entries alone still exceed the cap after every unflagged line
+    is gone, the content is returned COMPLETELY UNCHANGED — no partial or
+    silent deletion of a user-facing obligation — and the existing soft-cap
+    hygiene nudge (``soft_flag``) keeps signalling that a manual/checkpoint
+    pass is needed, exactly as it does today.
+
+    A file with no ``[user]``-flagged entries (including any file that
+    hasn't adopted the grammar at all, e.g. INDEX.md) falls back to the
+    original head-trim behavior unchanged.
     """
-    return _head_within(content, hard_budget)
+    if not content:
+        return content
+
+    def _fits(text: str) -> bool:
+        return len(user_flags.strip_mem_comments(text)) <= hard_budget * 4
+
+    if _fits(content):
+        return content
+
+    flagged_lines: set[int] = set()
+    for e in user_flags.parse_entries(content):
+        if e.flagged:
+            flagged_lines.update(range(e.line_start, e.line_end + 1))
+
+    if not flagged_lines:
+        return _head_within(content, hard_budget)
+
+    lines = content.split("\n")
+    n = len(lines)
+    keep = [True] * n
+
+    def _cur_fits() -> bool:
+        return _fits("\n".join(lines[j] for j in range(n) if keep[j]))
+
+    i = n - 1
+    while i >= 0 and not _cur_fits():
+        if i not in flagged_lines:
+            keep[i] = False
+        i -= 1
+
+    if not _cur_fits():
+        # Flagged entries alone exceed the cap even with every unflagged
+        # line removed — leave the file untouched.
+        return content
+
+    trimmed = "\n".join(lines[j] for j in range(n) if keep[j])
+    note = (
+        "\n[... older content trimmed from this view — read the file on disk "
+        "for the full text ...]"
+    )
+    return trimmed + note
 
 
 # ---------------------------------------------------------------------------
