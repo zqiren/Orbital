@@ -35,40 +35,49 @@ export interface WorkbenchCardProps {
   onDismiss?: () => void;
 }
 
+/** Local day-diff — ONLY for the computed-card "waiting" fallback (broken
+ *  automation / paused thread), which the backend has no age_days-equivalent
+ *  for. Never used for a "late" count — that's always server-authoritative
+ *  `days_late` (spec §7.3: browser tz can disagree with project tz). */
 function daysBetween(fromISO: string, to: Date): number {
   const from = new Date(fromISO);
   if (Number.isNaN(from.getTime())) return 0;
   return Math.floor((to.getTime() - from.getTime()) / 86_400_000);
 }
 
-/** Age badge text: "N days late" when overdue, else "waiting N days". Returns
- *  null when there's no usable date to compute from. */
+function lateLabel(t: ReturnType<typeof useT>, n: number): string {
+  return t(n === 1 ? 'workbench.age.late.one' : 'workbench.age.late.other', { n });
+}
+
+function waitingLabel(t: ReturnType<typeof useT>, n: number): string {
+  return t(n === 1 ? 'workbench.age.waiting.one' : 'workbench.age.waiting.other', { n });
+}
+
+/** Age badge text: "N days late" when overdue, else "waiting N days". The
+ *  late count always comes from the server's `days_late` — never recomputed
+ *  from `due`/`since` client-side. Returns null when there's nothing to show. */
 function ageLabel(
   t: ReturnType<typeof useT>,
   item: WorkbenchListItem,
   now: Date,
 ): string | null {
   if (item.kind === 'entry') {
-    const { overdue, due, age_days } = item.data;
-    if (overdue && due) {
-      const n = Math.max(1, daysBetween(due, now));
-      return t(n === 1 ? 'workbench.age.late.one' : 'workbench.age.late.other', { n });
+    const { overdue, age_days, days_late } = item.data;
+    if (overdue && days_late != null) {
+      return lateLabel(t, days_late);
     }
     if (age_days != null) {
-      return t(age_days === 1 ? 'workbench.age.waiting.one' : 'workbench.age.waiting.other', {
-        n: age_days,
-      });
+      return waitingLabel(t, age_days);
     }
     return null;
   }
-  const { type, since } = item.data;
-  if (!since) return null;
-  if (type === 'overdue') {
-    const n = Math.max(1, daysBetween(since, now));
-    return t(n === 1 ? 'workbench.age.late.one' : 'workbench.age.late.other', { n });
+  const { type, since, days_late } = item.data;
+  if (type === 'overdue' && days_late != null) {
+    return lateLabel(t, days_late);
   }
+  if (!since) return null;
   const n = Math.max(0, daysBetween(since, now));
-  return t(n === 1 ? 'workbench.age.waiting.one' : 'workbench.age.waiting.other', { n });
+  return waitingLabel(t, n);
 }
 
 export default function WorkbenchCard({

@@ -878,6 +878,7 @@ export const STRINGS = {
   "workbench.empty.title": { en: "Nothing needs you right now", zh: "目前没有需要你处理的事项" },
   "workbench.empty.body": { en: "As agents work, anything that needs your input, a decision, or your awareness will show up here.", zh: "在 Agent 工作过程中，任何需要你输入、决策或知晓的事项都会显示在这里。" },
   "workbench.empty.migrateCta": { en: "Review & label what's already here", zh: "查看并标记已有内容" },
+  "workbench.empty.migrateCtaFor": { en: "Review & label what's already here — {name}", zh: "查看并标记 {name} 的已有内容" },
   "workbench.conflict.notice": { en: "That entry changed — refreshed the list.", zh: "该条目已发生变化——列表已刷新。" },
   "workbench.thisWeek.title": { en: "This week", zh: "本周" },
   "workbench.thisWeek.openCalendar": { en: "Open Calendar →", zh: "打开日历 →" },

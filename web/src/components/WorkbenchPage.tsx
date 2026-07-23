@@ -251,7 +251,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                     data-testid={`workbench-migrate-cta-${p.project_id}`}
                     className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-primary hover:bg-card-hover"
                   >
-                    {t('workbench.empty.migrateCta')} — {p.name}
+                    {t('workbench.empty.migrateCtaFor', { name: p.name })}
                   </button>
                 ))}
             </div>

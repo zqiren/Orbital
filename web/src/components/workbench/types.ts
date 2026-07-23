@@ -23,6 +23,10 @@ export interface WorkbenchEntry {
   age_days: number | null;
   /** Server-computed (project tz) — `due` has passed. */
   overdue: boolean;
+  /** Server-computed (project tz) — whole days `due` is past; null unless
+   *  `overdue` is true. Never recompute this client-side (spec §7.3) — the
+   *  browser's local clock/tz can disagree with the project tz. */
+  days_late: number | null;
 }
 
 export type WorkbenchComputedType = 'overdue' | 'broken_automation' | 'paused_thread';
@@ -37,6 +41,11 @@ export interface WorkbenchComputedCard {
   key: string;
   text: string;
   since: string | null;
+  /** Server-computed (project tz) days past due — present ONLY on
+   *  `overdue`-type cards (they alone have a due-derived date; broken
+   *  automation / paused thread cards have no due, so the field is absent
+   *  rather than null). Never recompute this client-side (spec §7.3). */
+  days_late?: number | null;
 }
 
 /** Response of `GET /api/v2/workbench`. */

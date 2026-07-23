@@ -43,6 +43,7 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     touched: null,
     age_days: 5,
     overdue: false,
+    days_late: null,
     ...overrides,
   };
 }

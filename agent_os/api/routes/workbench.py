@@ -169,6 +169,9 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
         "touched": e.touched,
         "age_days": workbench_cards.age_days(e.created, tz, now),
         "overdue": workbench_cards.is_overdue(e.due, tz, now),
+        # Project-tz days-past-due (null unless overdue) — server-authoritative
+        # so the frontend never recomputes "N days late" in browser tz (§7.3).
+        "days_late": workbench_cards.days_late(e.due, tz, now),
     }
 
 
@@ -251,6 +254,10 @@ def _collect_project(project: dict, now: datetime) -> tuple[list[dict], list[dic
                 "key": e.id,
                 "text": e.text,
                 "since": e.due,
+                # Same project-tz days-late as entry rows. Only overdue cards
+                # carry it (they alone have a due-derived date); broken/paused
+                # cards have no due, so no days_late field.
+                "days_late": workbench_cards.days_late(e.due, tz, now),
             })
 
     computed.extend(_paused_cards(project, project_id))

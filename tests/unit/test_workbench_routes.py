@@ -94,12 +94,13 @@ def _seed_project(tmp_path, pid="proj_a", *, state=SEEDED_STATE, extra=None):
     return project
 
 
-def _make_client(tmp_path, projects, *, agent_manager=None, hub=None):
+def _make_client(tmp_path, projects, *, agent_manager=None, hub=None, now=None):
     store = FakeProjectStore({p["project_id"]: p for p in projects})
     am = agent_manager or FakeAgentManager()
     h = hub or CalendarHub(sources=[], linkage=Linkage(str(tmp_path / "_linkage")))
+    frozen = now or NOW
     app = FastAPI()
-    workbench_routes.configure(store, am, h, now_fn=lambda: NOW)
+    workbench_routes.configure(store, am, h, now_fn=lambda: frozen)
     app.include_router(workbench_routes.router)
     transport = httpx.ASGITransport(app=app)
     client = httpx.AsyncClient(transport=transport, base_url="http://test")
@@ -444,6 +445,49 @@ def test_overdue_boundary_uses_project_tz_not_utc():
     # yesterday in Shanghai (overdue).
     assert workbench_cards.is_overdue("2026-07-23", "UTC", now=now) is False
     assert workbench_cards.is_overdue("2026-07-23", "Asia/Shanghai", now=now) is True
+
+
+def test_days_late_uses_project_tz_not_utc():
+    # UTC 2026-07-23T20:00 == 2026-07-24T04:00 in Shanghai (UTC+8).
+    now = datetime(2026, 7, 23, 20, 0, tzinfo=timezone.utc)
+    d = "2026-07-23"
+    assert workbench_cards.days_late(d, "UTC", now=now) is None          # today in UTC
+    assert workbench_cards.days_late(d, "Asia/Shanghai", now=now) == 1   # yesterday there
+    # Non-overdue / unknown due -> None.
+    assert workbench_cards.days_late("2026-08-01", "Asia/Shanghai", now=now) is None
+    assert workbench_cards.days_late(None, "UTC", now=now) is None
+
+
+async def test_entry_row_days_late_computed_in_project_tz(tmp_path):
+    """days_late on the entry row is project-tz, not browser/UTC: an item due
+    2026-07-23 with 'now' at UTC 20:00 (already past midnight in Shanghai) is
+    1 day late in an Asia/Shanghai project."""
+    state = "\n".join([
+        FORMAT_LINE,
+        "- [user due:2026-07-23] Confirm the venue booking.",
+        "  <!--mem id:late1 created:2026-07-20-->",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state,
+                            extra={"timezone": "Asia/Shanghai"})
+    now = datetime(2026, 7, 23, 20, 0, tzinfo=timezone.utc)
+    client, *_ = _make_client(tmp_path, [project], now=now)
+    async with client:
+        body = (await client.get("/api/v2/workbench")).json()
+    row = next(e for e in body["entries"] if e["id"] == "late1")
+    assert row["overdue"] is True
+    assert row["days_late"] == 1     # project tz (Shanghai), not UTC (which is 0/None)
+
+
+async def test_days_late_null_when_not_overdue(tmp_path):
+    """A flagged entry that is not past due carries days_late = null."""
+    project = _seed_project(tmp_path)  # x7f3a2 due 2026-07-28, now 2026-07-24
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench")).json()
+    row = next(e for e in body["entries"] if e["id"] == "x7f3a2")
+    assert row["overdue"] is False
+    assert row["days_late"] is None
 
 
 def test_project_timezone_precedence():

@@ -138,6 +138,20 @@ def age_days(created: str | None, tz_name: str, now: datetime | None = None) -> 
     return max(0, (today_in_tz(tz_name, now) - c).days)
 
 
+def days_late(due: str | None, tz_name: str, now: datetime | None = None) -> int | None:
+    """Whole days ``due`` is past, computed in the project tz; None if not late.
+
+    Non-None exactly when ``is_overdue`` is True (same date-only, project-tz
+    boundary) — so the frontend renders "N days late" server-authoritatively
+    instead of recomputing in browser tz (spec §7.3).
+    """
+    d = _due_date(due)
+    if d is None:
+        return None
+    delta = (today_in_tz(tz_name, now) - d).days
+    return delta if delta > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # Broken-automation detector
 # ---------------------------------------------------------------------------

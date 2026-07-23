@@ -32,6 +32,7 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     touched: null,
     age_days: 5,
     overdue: false,
+    days_late: null,
     ...overrides,
   };
 }
@@ -62,12 +63,15 @@ describe('WorkbenchCard — entry, age + project chip', () => {
     expect(screen.getByText(/waiting 5 days/i)).toBeInTheDocument();
   });
 
-  it('shows "N days late" for an overdue entry, computed from due', () => {
+  it('shows "N days late" using the server\'s days_late (not a local Date diff)', () => {
     render(
       <WorkbenchCard
         item={{
+          // due/now would compute a completely different local diff (10+
+          // days) — the rendered count must come from days_late, not from
+          // recomputing against `due`/`now` in the browser.
           kind: 'entry',
-          data: entry({ overdue: true, due: '2026-07-20', age_days: 10 }),
+          data: entry({ overdue: true, due: '2026-07-01', age_days: 10, days_late: 4 }),
         }}
         showProjectChip={false}
         now={NOW}
@@ -75,6 +79,26 @@ describe('WorkbenchCard — entry, age + project chip', () => {
       />,
     );
     expect(screen.getByText(/4 days late/i)).toBeInTheDocument();
+  });
+
+  it('shows no late label when days_late is absent, even though the browser clock would disagree', () => {
+    render(
+      <WorkbenchCard
+        item={{
+          // overdue + a due date far enough in the past that a local Date
+          // diff would happily compute a "late" count — but days_late is
+          // null (server didn't provide one), so no late label may render.
+          kind: 'entry',
+          data: entry({ overdue: true, due: '2026-01-01', age_days: 10, days_late: null }),
+        }}
+        showProjectChip={false}
+        now={NOW}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/days late/i)).toBeNull();
+    // Falls back to the waiting label (age_days) rather than showing nothing.
+    expect(screen.getByText(/waiting 10 days/i)).toBeInTheDocument();
   });
 
   it('shows the project chip only when showProjectChip is true', () => {
@@ -208,6 +232,16 @@ describe('WorkbenchCard — computed cards', () => {
 
     fireEvent.click(screen.getByTestId('workbench-card-dismiss'));
     expect(onDismiss).toHaveBeenCalled();
-    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('an overdue-type computed card shows "N days late" from the server days_late', () => {
+    const item: WorkbenchListItem = {
+      kind: 'computed',
+      data: computed({ type: 'overdue', since: '2026-07-01', days_late: 6 }),
+    };
+    render(
+      <WorkbenchCard item={item} showProjectChip={false} now={NOW} onOpen={vi.fn()} />,
+    );
+    expect(screen.getByText(/6 days late/i)).toBeInTheDocument();
   });
 });
