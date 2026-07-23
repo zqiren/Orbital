@@ -211,4 +211,41 @@ describe('WorkbenchPage — computed cards + This week', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
     expect(screen.queryByTestId('workbench-this-week')).toBeNull();
   });
+
+  it('global This week strip filters events from workbench-excluded projects (privacy toggle)', async () => {
+    // Spec §6.5: the global surface must not leak excluded projects' entry
+    // sentences through the calendar strip (final-review F2).
+    mockApi({
+      entries: [entry()],
+      projects: [
+        { project_id: 'proj-a', name: 'Marketing', workspace: '/ws/a' },
+        { project_id: 'proj-x', name: 'Secret', workspace: '/ws/x', workbench_exclude_global: true },
+      ],
+      calendarAvailable: true,
+      calendarEvents: [
+        { id: 'memory:proj-a/e9', title: 'Public deadline', start: '2026-07-25', all_day: true, project_id: 'proj-a' },
+        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-26', all_day: true, project_id: 'proj-x' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    expect(screen.getByText('Public deadline')).toBeInTheDocument();
+    expect(screen.queryByText('Secret obligation sentence')).toBeNull();
+  });
+
+  it('per-project lens This week strip still shows that project own events even when excluded globally', async () => {
+    mockApi({
+      entries: [entry({ project_id: 'proj-x' })],
+      projects: [
+        { project_id: 'proj-x', name: 'Secret', workspace: '/ws/x', workbench_exclude_global: true },
+      ],
+      calendarAvailable: true,
+      calendarEvents: [
+        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-26', all_day: true, project_id: 'proj-x' },
+      ],
+    });
+    render(<WorkbenchPage projectId="proj-x" setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    expect(screen.getByText('Secret obligation sentence')).toBeInTheDocument();
+  });
 });

@@ -129,6 +129,37 @@ def _strip_inline_comment(line: str) -> str:
     return _INLINE_COMMENT_RE.sub("", line).rstrip()
 
 
+# A top-level plain bullet the trace pass may re-attach a comment to. Bodies
+# starting with "[" are excluded: valid tags are already entries, and markdown
+# checkboxes ("- [ ]", "- [x]") must never inherit a trace.
+_PLAIN_BULLET_RE = re.compile(r"^- (?!\[)(?P<text>\S.*)$")
+
+
+def _trace_fields(pe, new_text: str, today: str) -> dict[str, str]:
+    """Comment fields for a re-attached tag-less trace (prev entry ``pe``).
+
+    The sentence is the agent's (overwrite discipline); the machine metadata —
+    id, provenance, and the ``resolved`` anti-resurrection stamp — is the
+    trace's. ``touched`` bumps only when the sentence actually changed.
+    """
+    text_changed = _norm_for_match(new_text) != _norm_for_match(pe.text)
+    fields: dict[str, str] = {"id": pe.id}
+    if pe.from_session:
+        fields["from"] = pe.from_session
+    if pe.evidence:
+        fields["evidence"] = pe.evidence
+    if pe.confidence:
+        fields["confidence"] = pe.confidence
+    if pe.created:
+        fields["created"] = pe.created
+    touched = today if text_changed else (pe.touched or today)
+    if touched:
+        fields["touched"] = touched
+    if pe.resolved:
+        fields["resolved"] = pe.resolved
+    return fields
+
+
 def _omission_warnings(lines: list[str], entry_starts: set[int]) -> list[str]:
     """Warn on unflagged bullets that read as user-facing (spec §8).
 
@@ -229,6 +260,43 @@ def reconcile_flags(
         claimed_new.add(id(e))
         claimed_prev.add(id(pe))
 
+    # Second pass (spec §5.3 anti-resurfacing): re-attach UNCLAIMED tag-less
+    # traces — retired entries whose comment still carries id/resolved — to
+    # plain bullets the agent re-emitted from its comment-stripped view.
+    # Without this, one agent rewrite silently destroys the fulfilled trace
+    # and, with it, the anti-resurrection record. Flagged matching above runs
+    # first, so a trace already claimed by a flagged bullet is never stolen.
+    lines = new.split("\n")
+    reattach_at: dict[int, object] = {}        # line index in `new` -> prev Entry
+    trace_prev = [
+        pe for pe in prev_entries
+        if id(pe) not in claimed_prev and not pe.flagged and pe.id
+    ]
+    if trace_prev:
+        entry_lines: set[int] = set()
+        for e in new_entries:
+            entry_lines.update(range(e.line_start, e.line_end + 1))
+        plain_bullets = [
+            (i, m.group("text").strip())
+            for i, ln in enumerate(lines)
+            if i not in entry_lines and (m := _PLAIN_BULLET_RE.match(ln))
+        ]
+        t_candidates: list[tuple[float, int, int, int, object, str]] = []
+        for pi, pe in enumerate(trace_prev):
+            p_norm = _norm_for_match(pe.text)
+            for bi, (li, text) in enumerate(plain_bullets):
+                r = _ratio(_norm_for_match(text), p_norm)
+                if r >= _FUZZY_THRESHOLD:
+                    t_candidates.append((r, bi, pi, li, pe, text))
+        t_candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+        used_lines: set[int] = set()
+        for _r, _bi, _pi, li, pe, text in t_candidates:
+            if li in used_lines or id(pe) in claimed_prev:
+                continue
+            used_lines.add(li)
+            claimed_prev.add(id(pe))
+            reattach_at[li] = pe
+
     # Build the per-entry decision (retracted entries drop, facts pass through,
     # flagged entries emit with reconciled comment fields).
     decisions: dict[int, tuple[str, dict[str, str] | None]] = {}
@@ -241,7 +309,6 @@ def reconcile_flags(
 
     # Rebuild content using `new` as the skeleton; only entry lines change.
     entry_at = {e.line_start: e for e in new_entries}
-    lines = new.split("\n")
     out: list[str] = []
     i = 0
     n = len(lines)
@@ -249,6 +316,13 @@ def reconcile_flags(
         e = entry_at.get(i)
         if e is None:
             out.append(lines[i])
+            pe = reattach_at.get(i)
+            if pe is not None:
+                text = _PLAIN_BULLET_RE.match(lines[i]).group("text").strip()
+                out.append(
+                    _COMMENT_INDENT
+                    + user_flags.render_comment(_trace_fields(pe, text, today))
+                )
             i += 1
             continue
         kind, fields = decisions[e.line_start]

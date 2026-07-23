@@ -189,6 +189,104 @@ class TestLifecycleFieldsWin:
 
 
 # ---------------------------------------------------------------------------
+# resolved-trace re-attachment (F1) — a fulfilled entry's tag-less trace
+# (id + resolved in a comment) must survive an agent rewrite that strips the
+# comment and re-emits the sentence as a plain bullet.
+# ---------------------------------------------------------------------------
+
+class TestResolvedTraceReattach:
+    def _trace(self, eid, resolved="2026-07-20"):
+        return (
+            f"- Send the DM drafts to 宝玉 and Simon.\n"
+            f"  <!--mem id:{eid} from:s1 evidence:\"发 draft\" "
+            f"created:2026-07-19 touched:2026-07-20 resolved:{resolved}-->\n"
+        )
+
+    def test_verbatim_plain_bullet_reattaches_resolved_trace(self):
+        # (1) prev = tag-less bullet + comment (id+resolved); new = the SAME
+        # sentence as a plain bullet with no comment (the comment-stripped
+        # agent view, re-emitted). The comment must re-attach, resolved intact.
+        prev = self._trace("trc001")
+        new = "- Send the DM drafts to 宝玉 and Simon.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc001"
+        assert e.resolved == "2026-07-20"
+        assert e.created == "2026-07-19"
+        assert e.flagged is False               # stays a retired, tag-less trace
+
+    def test_rephrased_plain_bullet_reattaches_resolved_trace(self):
+        # (2) rephrased-but->=0.75 plain bullet re-associates the same way.
+        prev = self._trace("trc002")
+        new = "- Send DM drafts to 宝玉 and Simon.\n"     # dropped "the", >=0.75
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc002"
+        assert e.resolved == "2026-07-20"
+
+    def test_deleted_sentence_lets_trace_die_without_warning(self):
+        # (3) the sentence is absent from new (agent deleted it) → the trace
+        # legitimately dies; no id/resolved lingers and nothing warns loudly.
+        prev = self._trace("trc003")
+        new = "- Book the venue for the offsite.\n"      # unrelated, < 0.75
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        assert "trc003" not in merged
+        assert "resolved" not in merged
+        assert user_flags.parse_entries(merged) == []    # the plain bullet is untouched
+        assert not any("trc003" in w for w in warns)
+
+    def test_flagged_bullet_wins_trace_over_plain_duplicate(self):
+        # (4) both a flagged bullet AND a plain bullet match the same prev
+        # trace. Flagged matching takes precedence (existing semantics): the
+        # flagged entry inherits the id + resolved; the plain duplicate does
+        # NOT also steal it (one-to-one), so it stays a plain, untracked bullet.
+        prev = self._trace("trc004")
+        new = (
+            "- [user] Send the DM drafts to 宝玉 and Simon.\n"   # flagged
+            "- Send the DM drafts to 宝玉 and Simon.\n"           # plain duplicate
+        )
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        entries = user_flags.parse_entries(merged)
+        assert [e.id for e in entries if e.id == "trc004"] == ["trc004"]  # exactly one
+        flagged = [e for e in entries if e.flagged]
+        assert len(flagged) == 1
+        assert flagged[0].id == "trc004"
+        assert flagged[0].resolved == "2026-07-20"
+
+    def test_round_trip_fulfilled_exit_survives_agent_rewrite(self):
+        # (5) end-to-end: a fulfilled exit's on-disk output → the agent's
+        # comment-stripped view → an identical re-emit → reconcile. The entry
+        # is still resolved, still carries its original id.
+        fulfilled_exit = (
+            "# State\n\n"
+            "## Done\n"
+            "- Send the DM drafts to 宝玉 and Simon.\n"
+            "  <!--mem id:trc005 from:s1 evidence:\"发 draft\" "
+            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
+        )
+        agent_view = user_flags.strip_mem_comments(fulfilled_exit)
+        assert "<!--mem" not in agent_view          # the agent never sees the comment
+        merged, warns = reconcile_flags(fulfilled_exit, agent_view, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc005"
+        assert e.resolved == "2026-07-20"
+        assert e.flagged is False
+
+    def test_new_flagged_bullet_matching_resolved_trace_inherits_lifecycle(self):
+        # m17 baseline (pins CURRENT behavior for the backlogged m17 decision):
+        # a NEW [user]-tagged bullet whose sentence matches a resolved trace
+        # inherits the trace's id + resolved via lifecycle-wins. If m17 later
+        # changes this, THIS assertion is the deliberate line to revisit.
+        prev = self._trace("trc017")
+        new = "- [user] Send the DM drafts to 宝玉 and Simon.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc017"
+        assert e.resolved == "2026-07-20"
+        assert e.flagged is True
+
+
+# ---------------------------------------------------------------------------
 # retraction resurrection guard (spec §5.2)
 # ---------------------------------------------------------------------------
 

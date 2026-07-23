@@ -182,6 +182,16 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           <ul className="space-y-1">
             {weekEvents
               .slice()
+              // Privacy toggle (spec §6.5): in GLOBAL mode the strip must not
+              // surface events from projects excluded from the global Workbench.
+              .filter(
+                (ev) =>
+                  projectId != null ||
+                  !ev.project_id ||
+                  !projects.find(
+                    (p) => p.project_id === ev.project_id && p.workbench_exclude_global,
+                  ),
+              )
               .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
               .slice(0, 5)
               .map((ev) => (

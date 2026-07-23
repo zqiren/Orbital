@@ -160,17 +160,14 @@ export default function WorkbenchCard({
               {entry!.from_session && (
                 <p>
                   {t('workbench.receipt.from')}{' '}
-                  <button
-                    type="button"
+                  {/* Inert reference: no transcript viewer exists yet, and a
+                      "source" link must not side-effect a session spawn. */}
+                  <span
                     data-testid="workbench-card-from-session"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpen();
-                    }}
-                    className="underline hover:text-primary"
+                    className="font-mono"
                   >
                     {entry!.from_session}
-                  </button>
+                  </span>
                 </p>
               )}
               {entry!.due && <p>{t('workbench.receipt.due', { due: entry!.due })}</p>}

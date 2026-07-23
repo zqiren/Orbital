@@ -161,6 +161,25 @@ describe('WorkbenchCard — receipt expansion', () => {
     fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
     expect(screen.getByText(/I said I would send it Friday/)).toBeInTheDocument();
   });
+
+  it('renders the from-session reference as inert text, not a link with its own handler', () => {
+    // Final-review m14: a "source" reference must not present as a link with
+    // a side-effecting handler of its own. Plain text participates in the
+    // normal whole-card tap (bubbles once) like any other receipt text.
+    const onOpen = vi.fn();
+    render(
+      <WorkbenchCard
+        item={{ kind: 'entry', data: entry({ confidence: 'unconfirmed' }) }}
+        showProjectChip={false}
+        now={NOW}
+        onOpen={onOpen}
+      />,
+    );
+    const ref = screen.getByTestId('workbench-card-from-session');
+    expect(ref.tagName).not.toBe('BUTTON');
+    fireEvent.click(ref);
+    expect(onOpen).toHaveBeenCalledTimes(1); // bubbled card tap, no double-fire
+  });
 });
 
 describe('WorkbenchCard — entry exits', () => {
