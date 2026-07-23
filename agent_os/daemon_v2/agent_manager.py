@@ -1247,9 +1247,10 @@ class AgentManager:
             pass
         try:
             from agent_os.agent.tools.calendar_read import CalendarReadTool
-            if self._calendar_hub is not None:
+            calendar_hub = getattr(self, "_calendar_hub", None)
+            if calendar_hub is not None:
                 registry.register(CalendarReadTool(
-                    calendar_hub=self._calendar_hub,
+                    calendar_hub=calendar_hub,
                     project_id=project_id,
                 ))
         except ImportError:
