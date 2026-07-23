@@ -165,6 +165,34 @@ def ensure_format_header(content: str | None, key: str) -> str:
     return header + "\n" + text
 
 
+def force_format_header(content: str | None, key: str) -> str:
+    """Replace an existing ``<!--format-->`` header with the current template.
+
+    Unlike ``ensure_format_header`` (self-heal only — leaves any existing
+    header untouched), this REWRITES a stale/legacy header line to the current
+    ``FORMAT_HEADERS[key]``. The Workbench migration endpoint uses it so a
+    legacy project that already has an old PROJECT_STATE header actually
+    receives the new ``[user]`` grammar rails (which ``ensure_format_header``
+    would otherwise never apply, seeing a header already present). Content
+    after the header is preserved byte-for-byte; a file with no header gets one
+    prepended.
+    """
+    header = FORMAT_HEADERS.get(key)
+    text = content or ""
+    if header is None:
+        return text
+    if text.lstrip().startswith("<!--format"):
+        start = text.find("<!--format")
+        end = text.find("-->", start)
+        if end != -1:
+            prefix = text[:start]
+            after = text[end + 3:]
+            if after.startswith("\n"):
+                after = after[1:]
+            return prefix + header + "\n" + after
+    return header + "\n" + text
+
+
 # --- Report-only shape lint (v1: volatile files only) -----------------------
 # NEVER a hygiene-flag trigger: consumed exclusively by the session-end merge
 # prompt ("FORMATTING TO FIX") so formatting tidy-up rides along a pass that
@@ -473,6 +501,92 @@ def _head_within(content: str, budget_tokens: int) -> str:
     return "\n".join(kept) + note
 
 
+_TRIM_NOTE = (
+    "\n[... older content trimmed from this view — read the file on disk "
+    "for the full text ...]"
+)
+
+
+def _fits_stripped(text: str, hard_budget: int) -> bool:
+    """True if ``text`` fits ``hard_budget`` once mem-comments are excluded
+    (spec §4.1 resolution 1). A no-op length check for text with no
+    comments (e.g. content ``inject_view`` has already stripped)."""
+    return len(user_flags.strip_mem_comments(text)) <= hard_budget * 4
+
+
+def _flagged_lines(content: str) -> set[int]:
+    """0-based line indices spanned by every ``[user]``-flagged entry in
+    ``content`` (its bullet line through a trailing mem-comment line, if
+    present) — the set overflow trimming must never drop (spec §4.1
+    resolution 2)."""
+    lines: set[int] = set()
+    for e in user_flags.parse_entries(content):
+        if e.flagged:
+            lines.update(range(e.line_start, e.line_end + 1))
+    return lines
+
+
+def _drop_unflagged_tail_first(
+    content: str, hard_budget: int, flagged_lines: set[int]
+) -> tuple[str, bool]:
+    """Drop lines NOT in ``flagged_lines``, tail-first, until ``content``
+    fits ``hard_budget`` (comment-stripped) or no droppable line remains.
+
+    Shared by ``trim_volatile`` (the on-disk hard-cap backstop) and
+    ``_state_injected_view`` (the per-turn injected view) — both protect
+    flagged entries and drop unflagged prose first, tail-first, mirroring
+    the legacy head-keep/tail-drop direction; they differ only in what
+    happens when flagged content ALONE still exceeds the budget, which is
+    the caller's call, not this helper's. Returns ``(result, fits)``.
+    """
+    lines = content.split("\n")
+    n = len(lines)
+    keep = [True] * n
+
+    def _cur_fits() -> bool:
+        return _fits_stripped(
+            "\n".join(lines[j] for j in range(n) if keep[j]), hard_budget
+        )
+
+    i = n - 1
+    while i >= 0 and not _cur_fits():
+        if i not in flagged_lines:
+            keep[i] = False
+        i -= 1
+
+    return "\n".join(lines[j] for j in range(n) if keep[j]), _cur_fits()
+
+
+def _state_injected_view(content: str, hard_budget: int) -> str:
+    """PROJECT_STATE's flag-aware ``inject_view`` overflow fallback.
+
+    ``content`` here has ALREADY had its mem-comments stripped by the
+    caller. Mirrors ``trim_volatile``'s protect-flagged/drop-unflagged-first
+    policy — but unlike the on-disk hard-cap trim, this is what the agent
+    sees THIS TURN, so it must always return something within budget: if
+    flagged-only content still exceeds it, the flagged lines themselves are
+    head-trimmed as a last resort (showing the newest flagged content beats
+    showing none, and this only ever loses the OLDEST flagged material, on a
+    view that refreshes every turn). Content with no flagged entries at all
+    falls back to the exact legacy ``_head_within`` behavior, byte-identical.
+    """
+    if _fits_stripped(content, hard_budget):
+        return content
+
+    flagged_lines = _flagged_lines(content)
+    if not flagged_lines:
+        return _head_within(content, hard_budget)
+
+    trimmed, fits = _drop_unflagged_tail_first(content, hard_budget, flagged_lines)
+    if fits:
+        return trimmed + _TRIM_NOTE
+
+    # Flagged-only content alone still exceeds the budget — deterministic
+    # last resort: head-trim the flagged remainder itself rather than crash
+    # or return nothing useful.
+    return _head_within(trimmed, hard_budget)
+
+
 def inject_view(content: str | None, key: str, hard_budget: int) -> str | None:
     """Return the injected view of a Layer-1 file: newest-within-budget.
 
@@ -485,11 +599,18 @@ def inject_view(content: str | None, key: str, hard_budget: int) -> str | None:
     metadata (spec §4.1) — stripped here before anything else, so the agent
     never sees them and they never count against (or get counted toward
     filling) the budget. A no-op for content without the grammar.
+
+    The state overflow fallback is flag-aware (spec §4.1 resolution 2):
+    ``trim_volatile`` only runs at the session-end hard-cap pass, so without
+    this a state file temporarily over hard budget mid-session could still
+    have a ``[user]``-flagged entry cut out of THIS turn's agent-visible
+    context by a plain head-trim. See ``_state_injected_view``.
     """
     if not content:
         return content
     if key == "state":
         content = user_flags.strip_mem_comments(content)
+        return _state_injected_view(content, hard_budget)
     if key in VOLATILE_KEYS or key not in ENTRY_MARKERS:
         return _head_within(content, hard_budget)
 
@@ -702,44 +823,20 @@ def trim_volatile(content: str, hard_budget: int) -> str:
     if not content:
         return content
 
-    def _fits(text: str) -> bool:
-        return len(user_flags.strip_mem_comments(text)) <= hard_budget * 4
-
-    if _fits(content):
+    if _fits_stripped(content, hard_budget):
         return content
 
-    flagged_lines: set[int] = set()
-    for e in user_flags.parse_entries(content):
-        if e.flagged:
-            flagged_lines.update(range(e.line_start, e.line_end + 1))
-
+    flagged_lines = _flagged_lines(content)
     if not flagged_lines:
         return _head_within(content, hard_budget)
 
-    lines = content.split("\n")
-    n = len(lines)
-    keep = [True] * n
-
-    def _cur_fits() -> bool:
-        return _fits("\n".join(lines[j] for j in range(n) if keep[j]))
-
-    i = n - 1
-    while i >= 0 and not _cur_fits():
-        if i not in flagged_lines:
-            keep[i] = False
-        i -= 1
-
-    if not _cur_fits():
+    trimmed, fits = _drop_unflagged_tail_first(content, hard_budget, flagged_lines)
+    if not fits:
         # Flagged entries alone exceed the cap even with every unflagged
         # line removed — leave the file untouched.
         return content
 
-    trimmed = "\n".join(lines[j] for j in range(n) if keep[j])
-    note = (
-        "\n[... older content trimmed from this view — read the file on disk "
-        "for the full text ...]"
-    )
-    return trimmed + note
+    return trimmed + _TRIM_NOTE
 
 
 # ---------------------------------------------------------------------------

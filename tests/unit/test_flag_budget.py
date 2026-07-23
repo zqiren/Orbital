@@ -196,3 +196,62 @@ def test_trim_volatile_fits_already_returns_unchanged():
     content = "- [user] short\n  <!--mem id:z created:2026-07-01 touched:2026-07-01-->\n"
     result = M.trim_volatile(content, 1000)
     assert result == content
+
+
+# ---------------------------------------------------------------------------
+# Follow-up finding: inject_view's state overflow fallback must ALSO be
+# flag-aware (memory_entries.py:493-494 previously routed straight to the
+# non-flag-aware `_head_within`) — trim_volatile only runs at the
+# session-end hard-cap pass, so a state file temporarily over hard budget
+# mid-session could still have a flagged entry tail-cut out of THIS turn's
+# agent-visible context even with trim_volatile fixed above.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_view_state_protects_flagged_entry_beyond_head_trim_horizon():
+    hard = 50  # tokens -> 200-char budget
+    flagged_text = "Send the report to the client."
+    content = (
+        _filler_lines(7) + "\n"
+        f"- [user] {flagged_text}\n"
+        '  <!--mem id:abc123 created:2026-07-01 touched:2026-07-01-->\n'
+    )
+
+    # Prove the bug: stripping comments then handing off to the plain
+    # head-trim (the pre-fix code path) cuts the tail — where the flagged
+    # entry sits — right off.
+    stripped = user_flags.strip_mem_comments(content)
+    legacy = M._head_within(stripped, hard)
+    assert flagged_text not in legacy
+
+    view = M.inject_view(content, "state", hard)
+    assert view is not None
+    assert flagged_text in view
+    assert "<!--mem" not in view
+    # Unflagged filler was dropped first — not every filler line survives.
+    surviving_filler = sum(1 for i in range(1, 8) if f"filler line {i}" in view)
+    assert surviving_filler < 7
+
+
+def test_inject_view_state_no_flagged_entries_matches_legacy_head_trim():
+    hard = 20  # tokens -> 80-char budget
+    content = "\n".join(f"- note {i} " + "y" * 10 for i in range(1, 20))
+    view = M.inject_view(content, "state", hard)
+    assert view == M._head_within(content, hard)
+
+
+def test_inject_view_state_flagged_only_overflow_head_trims_deterministically():
+    hard = 10  # tokens -> 40-char budget; too small even for one flagged entry
+    content = (
+        "- [user] First obligation that is quite long indeed.\n"
+        "  <!--mem id:a1 created:2026-07-01 touched:2026-07-01-->\n"
+        "- [user] Second obligation that is also rather long.\n"
+        "  <!--mem id:a2 created:2026-07-02 touched:2026-07-02-->\n"
+    )
+    view = M.inject_view(content, "state", hard)
+    assert view is not None
+    assert "<!--mem" not in view
+    # Deterministic: same input, same output, no crash.
+    assert M.inject_view(content, "state", hard) == view
+    # Bounded: the note text is the only allowed overshoot beyond budget.
+    assert len(view) <= hard * 4 + 120
