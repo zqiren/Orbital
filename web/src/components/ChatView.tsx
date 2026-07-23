@@ -586,6 +586,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // updater (React 19 batching) — read this committed ref instead.
   const pendingInputsRef = useRef<Map<string, PendingInputEntry>>(pendingInputs);
   pendingInputsRef.current = pendingInputs;
+  // Bug29 D2: committed mirrors read by the seed effect, which stays keyed ONLY
+  // on [historyItems]. Adding status/holder/items as effect deps would reseed on
+  // every flip and re-wipe the very overlay the skip protects — so these values
+  // are read from refs, never effect-closure state (React-19 batching rule,
+  // CLAUDE.md "React Anti-Patterns"). `itemsSessionRef` records which session the
+  // current `items` overlay belongs to, so the mid-turn skip protects ONLY the
+  // viewed session's in-flight overlay and never strands a tab-switch on the
+  // prior session's content.
+  const agentStatusRef = useRef(agentStatus);
+  agentStatusRef.current = agentStatus;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const itemsSessionRef = useRef<string | undefined>(undefined);
   // Seam 3 / Phase 3: live WS events are routed STRICTLY by session_id. Every
   // live event now carries the canonical session_id (Phases 1+2), so a handler
   // renders an event into the viewed conversation iff
@@ -641,6 +654,34 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // flashes collapsed for a frame before a follow-up effect expands it.
   useEffect(() => {
     if (historyItems.length === 0) return;
+    // Bug29 D2: an in-flight turn's intermediate content — live capsule tool
+    // rows, streamed reasoning, sub-agent bubbles, and any final JUST finalized
+    // by handleSend — lives ONLY in `items`; it is never mirrored into
+    // rawMessages. A mid-turn send pushes the optimistic user bubble into
+    // rawMessages, which recomputes historyItems and would trigger the wholesale
+    // reseed below, wiping that overlay. Skip the reseed while the VIEWED
+    // session's turn is in flight and there is rendered content to protect.
+    //
+    // All gates read committed refs, not effect-closure state (deps stay
+    // [historyItems]). The "content to protect" gate is `items` non-empty — NOT
+    // "a live capsule exists": handleSend finalizes the live capsule to
+    // 'completed' BEFORE the rawMessages push that triggers this reseed, so a
+    // live-only gate would fail to protect the just-finalized capsule. A fresh
+    // mount has items === [] so it still seeds; `itemsSessionRef` makes a
+    // TAB-SWITCH to the running holder reseed the NEW session's history instead
+    // of stranding the prior session's stale overlay. On idle the catch-up
+    // (refreshRawMessages → historyItems change) re-runs this with the turn no
+    // longer in flight, restoring canonical server history.
+    const viewedIsHolder =
+      sessionIdRef.current !== undefined &&
+      sessionIdRef.current === holderSessionIdRef.current;
+    const turnInFlight =
+      agentStatusRef.current === 'running' || agentStatusRef.current === 'waiting';
+    const itemsAreForViewedSession = itemsSessionRef.current === sessionIdRef.current;
+    if (viewedIsHolder && turnInFlight && itemsAreForViewedSession && itemsRef.current.length > 0) {
+      return;
+    }
+    itemsSessionRef.current = sessionIdRef.current;
     setItems(historyItems);
     setExpandedCapsules((prev) => {
       let changed = false;

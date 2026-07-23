@@ -1422,6 +1422,135 @@ describe('ChatView: pending-input queue (spec 006)', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Bug29 D2: a message sent WHILE the agent is mid-turn pushes the optimistic
+// user bubble into rawMessages. That recomputes historyItems and (before this
+// fix) triggered the seed effect's wholesale setItems(historyItems) reseed,
+// which wiped every in-flight overlay item not backed by rawMessages — the live
+// capsule's tool rows, streamed reasoning, sub-agent bubbles, and any final that
+// was just finalized by handleSend. The seed effect now skips the reseed while
+// the viewed session's turn is in flight and there is rendered content to keep.
+// ─────────────────────────────────────────────────────────────────────────
+describe('Bug29 D2: mid-turn send preserves the live overlay', () => {
+  function findQueueButton(): HTMLButtonElement {
+    return (
+      (container.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null) ??
+      ([...container.querySelectorAll('button')].find(
+        (b) => (b.textContent ?? '').trim() === 'Queue',
+      ) as HTMLButtonElement)
+    );
+  }
+
+  // Seed s1 with one history line, view it as the running/waiting HOLDER, then
+  // emit a tool activity so a live capsule renders. Asserts the pre-send state
+  // (capsule + its tool row visible) as the baseline the send must preserve.
+  async function seedHistoryAndLiveCapsule(status: string) {
+    runStatusHolder = 's1';
+    chatInitialResponse = {
+      data: [
+        {
+          role: 'user',
+          content: 'earlier question',
+          source: 'user',
+          timestamp: '2026-07-23T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+    };
+    await renderChat({ agentStatus: status, sessionId: 's1' });
+    await flushEffects();
+    await act(async () => {
+      emitWs('agent.activity', {
+        type: 'agent.activity',
+        project_id: 'p1',
+        session_id: 's1',
+        category: 'file_read',
+        tool_name: 'Read',
+        description: 'reading live-tool-file.txt',
+        id: 'act-d2',
+        timestamp: new Date().toISOString(),
+      });
+    });
+    expect(container.querySelector('[data-testid="agent_run"]')).toBeTruthy();
+    expect(container.textContent ?? '').toContain('live-tool-file.txt');
+  }
+
+  async function sendMidTurn(text: string) {
+    await act(async () => {
+      typeInComposer(text);
+    });
+    const btn = findQueueButton();
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  // The capsule collapses when handleSend finalizes it (it is no longer the
+  // last/running item), so surface its preserved tool row by expanding it.
+  async function expandCapsuleAndAssertToolRow(capsule: HTMLElement) {
+    await act(async () => {
+      (capsule.querySelector('button') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(container.textContent ?? '').toContain('live-tool-file.txt');
+  }
+
+  it('keeps the live capsule tool rows on a queued_same_session send', async () => {
+    injectMessageMock = async () => ({ status: 'queued_same_session' });
+    await seedHistoryAndLiveCapsule('running');
+    await sendMidTurn('mid-turn message');
+
+    // a. the optimistic user bubble renders.
+    expect(container.textContent ?? '').toContain('mid-turn message');
+    // b. the live capsule survived the rawMessages-push reseed (the bug wiped
+    //    the whole capsule element).
+    const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
+    expect(capsule).toBeTruthy();
+    await expandCapsuleAndAssertToolRow(capsule!);
+    // earlier persisted history is intact too.
+    expect(container.textContent ?? '').toContain('earlier question');
+  });
+
+  it('keeps the live capsule tool rows on a wait-state {"status":"queued"} send', async () => {
+    injectMessageMock = async () => ({ status: 'queued' });
+    await seedHistoryAndLiveCapsule('waiting');
+    await sendMidTurn('wait-state message');
+
+    expect(container.textContent ?? '').toContain('wait-state message');
+    const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement | null;
+    expect(capsule).toBeTruthy();
+    await expandCapsuleAndAssertToolRow(capsule!);
+  });
+
+  it('tab-switch mid-turn to the running holder renders the NEW session history (criterion c)', async () => {
+    // View s1 (holder, running) with history + a live capsule overlay.
+    await seedHistoryAndLiveCapsule('running');
+    // Switch to s2, itself the running holder, with its own distinct history.
+    runStatusHolder = 's2';
+    chatInitialResponse = {
+      data: [
+        {
+          role: 'user',
+          content: 's2-only-history',
+          source: 'user',
+          timestamp: '2026-07-23T01:00:00.000Z',
+        },
+      ],
+      total: 1,
+    };
+    await renderChat({ agentStatus: 'running', sessionId: 's2' });
+    await flushEffects();
+
+    // The new session's history replaced s1's stale overlay — the skip must not
+    // strand the prior session's content when the viewed session changes.
+    expect(container.textContent ?? '').toContain('s2-only-history');
+    expect(container.textContent ?? '').not.toContain('earlier question');
+    expect(container.textContent ?? '').not.toContain('live-tool-file.txt');
+  });
+});
+
 describe('T5 ChatView: opening a project never auto-starts an agent', () => {
   it('does not call startAgent on open, regardless of session/agent state', async () => {
     // Supervisor model: opening a project is pure navigation. The agent only
