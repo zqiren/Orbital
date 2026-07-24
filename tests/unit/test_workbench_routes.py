@@ -413,6 +413,54 @@ async def test_open_spawns_seeded_session(tmp_path):
     assert "Let's handle this." in content
 
 
+async def test_computed_open_overdue_seeds_do_it_now(tmp_path):
+    """Spec §6 alignment (2026-07-24): an overdue card's doorway spawns a
+    session told to DO the late item, not a bare chat visit."""
+    project = _seed_project(tmp_path)
+    client, _, am, _ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.post(
+            "/api/v2/workbench/proj_a/computed/overdue/d4e5f6/open")
+        assert r.status_code == 200, r.text
+        assert r.json()["session_id"] == "minted_1"
+    msg = am.injected[0][1]
+    assert "Ship the marketing site." in msg
+    assert "Do it now" in msg
+    assert "2026-07-20" in msg          # the due date is named
+
+
+async def test_computed_open_broken_automation_seeds_repair(tmp_path):
+    project = _seed_project(tmp_path, extra={"triggers": [{
+        "id": "trg_x", "name": "Nightly sync", "enabled": True,
+        "type": "schedule", "last_triggered": "2026-06-28T01:00:00+00:00",
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "schedule": {"cron": "0 1 * * *", "timezone": "UTC"},
+    }]})
+    client, _, am, _ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.post(
+            "/api/v2/workbench/proj_a/computed/broken_automation/trg_x/open")
+        assert r.status_code == 200, r.text
+    msg = am.injected[0][1]
+    assert "Nightly sync" in msg and "repair" in msg.lower()
+    assert "2026-06-28" in msg
+
+
+async def test_computed_open_rejects_unknown_type_and_key(tmp_path):
+    project = _seed_project(tmp_path)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        assert (await client.post(
+            "/api/v2/workbench/proj_a/computed/paused_thread/u1/open"
+        )).status_code == 404
+        assert (await client.post(
+            "/api/v2/workbench/proj_a/computed/overdue/nope/open"
+        )).status_code == 404
+        assert (await client.post(
+            "/api/v2/workbench/proj_a/computed/broken_automation/nope/open"
+        )).status_code == 404
+
+
 async def test_migrate_refreshes_header_and_spawns(tmp_path):
     from agent_os.agent.memory_entries import FORMAT_HEADERS
     project = _seed_project(tmp_path)

@@ -52,6 +52,10 @@ export interface UseWorkbenchResult {
   dismissComputed: (projectId: string, type: string, key: string) => Promise<void>;
   /** Returns the new session id (for navigation to the project chat). */
   openEntry: (projectId: string, memId: string) => Promise<string>;
+  /** Seeded doorway for overdue / broken_automation computed cards. */
+  openComputed: (projectId: string, type: string, key: string) => Promise<string>;
+  /** Disable a broken automation (PATCH trigger enabled=false) + refetch. */
+  disableTrigger: (projectId: string, triggerId: string) => Promise<void>;
   /** Returns the new session id (for navigation to the project chat). */
   migrate: (projectId: string) => Promise<string>;
 }
@@ -176,6 +180,28 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
     return res.session_id;
   }, []);
 
+  const openComputed = useCallback(
+    async (pid: string, type: string, key: string): Promise<string> => {
+      const res = await api<{ session_id: string }>(
+        `/api/v2/workbench/${encodeURIComponent(pid)}/computed/${encodeURIComponent(type)}/${encodeURIComponent(key)}/open`,
+        { method: 'POST' },
+      );
+      return res.session_id;
+    },
+    [],
+  );
+
+  const disableTrigger = useCallback(
+    async (pid: string, triggerId: string): Promise<void> => {
+      await api(
+        `/api/v2/projects/${encodeURIComponent(pid)}/triggers/${encodeURIComponent(triggerId)}`,
+        { method: 'PATCH', body: JSON.stringify({ enabled: false }) },
+      );
+      await fetchAll(); // the detector skips disabled triggers — card clears
+    },
+    [fetchAll],
+  );
+
   const migrate = useCallback(async (pid: string): Promise<string> => {
     const res = await api<{ session_id: string }>(
       `/api/v2/workbench/${encodeURIComponent(pid)}/migrate`,
@@ -195,6 +221,8 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
     exitEntry,
     dismissComputed,
     openEntry,
+    openComputed,
+    disableTrigger,
     migrate,
   };
 }

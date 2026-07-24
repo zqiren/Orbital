@@ -54,7 +54,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const [projects, setProjects] = useState<Project[]>([]);
   const [openError, setOpenError] = useState<string | null>(null);
 
-  const { items, entries, computed, loading, error, conflict, refetch, exitEntry, dismissComputed, openEntry, migrate } =
+  const { items, entries, computed, loading, error, conflict, refetch, exitEntry, dismissComputed, openEntry, openComputed, disableTrigger, migrate } =
     useWorkbench({ projectId });
 
   const { start, end } = useMemo(() => sevenDayRangeISO(), []);
@@ -92,16 +92,29 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
     }
   }
 
-  // No backend doorway exists for overdue/broken_automation computed cards
-  // (only /dismiss). paused_thread is the one computed case where the
-  // original session exists (spec §6) — its `key` IS the session uuid, so
-  // tapping resumes it directly; the others navigate to the project's chat
-  // with no session preselected.
-  function handleOpenComputed(card: WorkbenchComputedCard) {
+  // Spec §6 doorways per computed type: paused_thread resumes ITS session
+  // (key = session uuid); overdue/broken_automation spawn a seeded session
+  // ("do it now" / "diagnose and repair") via the computed open endpoint.
+  async function handleOpenComputed(card: WorkbenchComputedCard) {
     if (card.type === 'paused_thread') {
       navigateToChat(card.project_id, card.key);
-    } else {
-      navigateToChat(card.project_id);
+      return;
+    }
+    setOpenError(null);
+    try {
+      const sessionId = await openComputed(card.project_id, card.type, card.key);
+      navigateToChat(card.project_id, sessionId);
+    } catch {
+      setOpenError(t('workbench.error.load'));
+    }
+  }
+
+  async function handleDisable(card: WorkbenchComputedCard) {
+    setOpenError(null);
+    try {
+      await disableTrigger(card.project_id, card.key);
+    } catch {
+      setOpenError(t('workbench.error.load'));
     }
   }
 
@@ -346,6 +359,11 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                     onDismiss={
                       item.kind === 'computed'
                         ? () => dismissComputed(item.data.project_id, item.data.type, item.data.key)
+                        : undefined
+                    }
+                    onDisable={
+                      item.kind === 'computed' && item.data.type === 'broken_automation'
+                        ? () => handleDisable(item.data)
                         : undefined
                     }
                   />

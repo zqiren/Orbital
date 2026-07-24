@@ -182,6 +182,51 @@ describe('WorkbenchCard — receipt expansion', () => {
   });
 });
 
+describe('WorkbenchCard — computed primary verbs (spec §6 alignment)', () => {
+  const cases = [
+    { type: 'overdue', label: 'Do it now' },
+    { type: 'broken_automation', label: 'Repair' },
+    { type: 'paused_thread', label: 'Resume' },
+  ] as const;
+  for (const { type, label } of cases) {
+    it(`${type} card leads with "${label}" and it fires the doorway`, () => {
+      const onOpen = vi.fn();
+      render(
+        <WorkbenchCard
+          item={{ kind: 'computed', data: { type, project_id: 'p', key: 'k', text: 'x', since: '2026-07-23' } }}
+          showProjectChip={false}
+          now={NOW}
+          onOpen={onOpen}
+          onDismiss={vi.fn()}
+          onDisable={type === 'broken_automation' ? vi.fn() : undefined}
+        />,
+      );
+      fireEvent.click(screen.getByTestId('workbench-card-computed-primary'));
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('workbench-card-computed-primary')).toHaveTextContent(label);
+      expect(screen.getByTestId('workbench-card-dismiss')).toBeInTheDocument();
+    });
+  }
+
+  it('Disable appears only on broken_automation and fires without the doorway', () => {
+    const onOpen = vi.fn();
+    const onDisable = vi.fn();
+    render(
+      <WorkbenchCard
+        item={{ kind: 'computed', data: { type: 'broken_automation', project_id: 'p', key: 'trg', text: 'x', since: '2026-07-23' } }}
+        showProjectChip={false}
+        now={NOW}
+        onOpen={onOpen}
+        onDismiss={vi.fn()}
+        onDisable={onDisable}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('workbench-card-disable'));
+    expect(onDisable).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
 describe('WorkbenchCard — entry exits', () => {
   it('Done fires onExit("fulfilled") and does NOT trigger the doorway open', () => {
     const onExit = vi.fn();

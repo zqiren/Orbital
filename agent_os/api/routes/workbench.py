@@ -492,6 +492,46 @@ async def open_entry(project_id: str, mem_id: str):
     return {"session_id": session_id}
 
 
+@router.post("/{project_id}/computed/{card_type}/{key}/open")
+async def open_computed(project_id: str, card_type: str, key: str):
+    """Seeded doorway for computed cards (spec §6 alignment, 2026-07-24):
+    ``overdue`` → a session told to DO the late item now; ``broken_automation``
+    → a session told to diagnose/repair the silent trigger. ``paused_thread``
+    resumes client-side (its session still exists) and never calls this."""
+    project = _require_project(project_id)
+    if card_type == "overdue":
+        _, content = _load_state(_state_path(project.get("workspace", "")))
+        entry = _find_entry(content or "", key)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"No entry with id {key}")
+        late = f" It was due {entry.due}." if entry.due else ""
+        content_msg = (
+            f'Workbench: "{entry.text}" is overdue.{late} Do it now — this '
+            "message is the go-ahead; when it is done, update the entry per "
+            "the state file's format header."
+        )
+    elif card_type == "broken_automation":
+        trig = next(
+            (tr for tr in (project.get("triggers") or [])
+             if isinstance(tr, dict) and tr.get("id") == key),
+            None,
+        )
+        if trig is None:
+            raise HTTPException(status_code=404, detail=f"No trigger {key}")
+        name = trig.get("name") or key
+        cron = (trig.get("schedule") or {}).get("cron", "?")
+        last = trig.get("last_triggered") or "never"
+        content_msg = (
+            f'Workbench: the automation "{name}" (cron {cron}) has not fired '
+            f"since {last}. Diagnose why and repair it if you can; if it is "
+            "obsolete, say so and I will disable it."
+        )
+    else:
+        raise HTTPException(status_code=404, detail=f"No doorway for {card_type}")
+    session_id = await _spawn_seeded(project_id, content_msg)
+    return {"session_id": session_id}
+
+
 @router.post("/{project_id}/migrate")
 async def migrate_project(project_id: str):
     """Empty-state day-0 flow (spec §5.4): force-refresh the PROJECT_STATE

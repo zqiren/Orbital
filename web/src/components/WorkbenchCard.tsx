@@ -36,6 +36,8 @@ export interface WorkbenchCardProps {
   onExit?: (kind: 'fulfilled' | 'irrelevant') => void;
   /** Computed-only. */
   onDismiss?: () => void;
+  /** broken_automation only: disable the silent trigger. */
+  onDisable?: () => void;
 }
 
 /** Local day-diff — ONLY for the computed-card "waiting" fallback (broken
@@ -83,12 +85,18 @@ function ageLabel(
   return waitingLabel(t, n);
 }
 
-/** Quiet pill button (Not relevant / Dismiss). */
-const GHOST_BTN =
-  'rounded-full border border-border/70 px-3.5 py-1.5 text-[12.5px] font-medium ' +
-  'text-secondary transition-[transform,background-color,color] duration-100 ease-out ' +
-  'hover:bg-card-hover hover:text-primary active:scale-[0.96] motion-reduce:transition-none ' +
-  'motion-reduce:active:scale-100';
+/** Filled primary pill — the card's ONE emphasized action. */
+const PRIMARY_BTN =
+  'rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white ' +
+  'transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 ' +
+  'active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100';
+
+/** Quiet text action (secondary: Not relevant / Dismiss / Disable). */
+const QUIET_BTN =
+  'rounded-full px-2.5 py-1.5 text-[12.5px] font-medium text-secondary ' +
+  'transition-[transform,background-color,color] duration-100 ease-out ' +
+  'hover:bg-card-hover hover:text-primary active:scale-[0.96] ' +
+  'motion-reduce:transition-none motion-reduce:active:scale-100';
 
 export default function WorkbenchCard({
   item,
@@ -98,6 +106,7 @@ export default function WorkbenchCard({
   onOpen,
   onExit,
   onDismiss,
+  onDisable,
 }: WorkbenchCardProps) {
   const t = useT();
   const isEntry = item.kind === 'entry';
@@ -206,7 +215,7 @@ export default function WorkbenchCard({
                 e.stopPropagation();
                 onExit?.('fulfilled');
               }}
-              className="rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+              className={PRIMARY_BTN}
             >
               {t('workbench.exit.fulfilled')}
             </button>
@@ -217,23 +226,55 @@ export default function WorkbenchCard({
                 e.stopPropagation();
                 onExit?.('irrelevant');
               }}
-              className={GHOST_BTN}
+              className={QUIET_BTN}
             >
               {t('workbench.exit.irrelevant')}
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            data-testid="workbench-card-dismiss"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss?.();
-            }}
-            className={GHOST_BTN}
-          >
-            {t('workbench.dismiss')}
-          </button>
+          <>
+            {/* Spec §6: each computed type leads with its OWN doorway verb —
+                the primary button and the whole-card tap do the same thing. */}
+            <button
+              type="button"
+              data-testid="workbench-card-computed-primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen();
+              }}
+              className={PRIMARY_BTN}
+            >
+              {computed!.type === 'overdue'
+                ? t('workbench.doItNow')
+                : computed!.type === 'broken_automation'
+                  ? t('workbench.repair')
+                  : t('workbench.resume')}
+            </button>
+            {computed!.type === 'broken_automation' && onDisable && (
+              <button
+                type="button"
+                data-testid="workbench-card-disable"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDisable();
+                }}
+                className={QUIET_BTN}
+              >
+                {t('workbench.disable')}
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="workbench-card-dismiss"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss?.();
+              }}
+              className={QUIET_BTN}
+            >
+              {t('workbench.dismiss')}
+            </button>
+          </>
         )}
       </div>
     </div>
