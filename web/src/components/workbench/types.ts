@@ -4,8 +4,9 @@
 
 /**
  * Frontend mirror of the Workbench surface's wire shapes (spec §5.3, §5.4,
- * §8). These match `GET /api/v2/workbench` and the exit/open/migrate routes
- * byte-for-byte — see `agent_os/api/routes/workbench.py`.
+ * §8). These match `GET /api/v2/workbench` and the exit/migrate routes
+ * byte-for-byte — see `agent_os/api/routes/workbench.py`. Card tap is a
+ * client-side prefill (no doorway POST) — see WorkbenchPage.tsx.
  */
 
 /** One flagged `[user]` entry, lensed to a project. */
@@ -14,9 +15,6 @@ export interface WorkbenchEntry {
   id: string;
   text: string;
   due: string | null;
-  evidence: string | null;
-  from_session: string | null;
-  confidence: 'stated' | 'unconfirmed' | null;
   created: string | null;
   touched: string | null;
   /** Server-computed (project tz) — age since `created`. */
@@ -32,19 +30,7 @@ export interface WorkbenchEntry {
   section: string | null;
 }
 
-/** Per-project "what's in flight" summary — global (unlensed) view only. */
-export interface WorkbenchDigest {
-  project_id: string;
-  /** Raw markdown lines, or null when there's nothing to show. */
-  in_progress: string | null;
-  /** Raw markdown lines, or null when there's nothing to show. */
-  next_steps: string | null;
-}
-
 /** Response of `GET /api/v2/workbench`. */
 export interface WorkbenchResponse {
   entries: WorkbenchEntry[];
-  /** Only projects where at least one side is non-null; server-filtered for
-   *  privacy already (no need to re-check workbench_exclude_global here). */
-  digests?: WorkbenchDigest[];
 }

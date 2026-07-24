@@ -22,6 +22,12 @@
  *     3. else (no sessions) leave it undefined → ChatView renders empty state.
  *   The resolved id is reflected back into the route via setRoute so the
  *   route and UI agree.
+ *
+ * Composer prefill (Workbench card-tap doorway, spec 2026-07-24 §5.3):
+ *   `route.draft`, when set, is threaded to ChatView as `initialDraft` — a
+ *   one-shot text to load into the composer (never auto-sent, never a
+ *   session spawn). `handleDraftConsumed` clears it back to undefined once
+ *   ChatView reports the draft applied.
  */
 
 import { useEffect } from 'react';
@@ -143,6 +149,18 @@ export default function ChatTab({
     setActiveSessionId(nextId ?? null);
   }
 
+  // Workbench card-tap doorway (spec 2026-07-24 §5.3): route.draft is a
+  // one-shot composer prefill. ChatView applies it once and calls this back
+  // so the consumed copy is cleared from the route — otherwise it would
+  // reapply on a later remount (e.g. switching to the Queue tab and back).
+  function handleDraftConsumed() {
+    setRoute((prev) =>
+      prev.name === 'project' && prev.projectId === projectId
+        ? { ...prev, draft: undefined }
+        : prev,
+    );
+  }
+
   // "+ new session": mint a genuinely BLANK session on the backend and
   // navigate to it. We must NOT clear route.sessionId to undefined — that
   // would let the resolution effect re-open the most-recent existing session
@@ -209,6 +227,8 @@ export default function ChatTab({
             statusTick={statusTick}
             mentionAgents={mentionAgents}
             sessionId={routeSessionId}
+            initialDraft={route.draft}
+            onDraftConsumed={handleDraftConsumed}
             onRefreshProject={onRefreshProject}
           />
         </div>

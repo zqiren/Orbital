@@ -113,38 +113,7 @@ FORMAT_HEADERS: dict[str, str] = {
         "LESSONS.md.-->"
     ),
     "state": (
-        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress '
-        'work, blockers, next steps. Overwrite stale lines; never append a dated '
-        'history. ONE VOICE: this file is read by the user and by future sessions '
-        'equally — every line, flagged or not, must be understandable without '
-        "this session's context: concrete names, no unexplained shorthand, no "
-        'cross-references by list number (numbers shift; name the thing instead). '
-        '[user] flag — one judgment per line: does this need the user (their '
-        'decision, their action, or something they would be sorry to miss)? If '
-        'yes, insert `[user]` after the list marker of the line where the fact '
-        'already lives: `- [user] <text>` or `3. [user] <text>`. Flagging marks a '
-        'line, it never creates one: no duplicating a fact into another section, '
-        'no rewriting the list around it — one fact, one entry. A dated '
-        'commitment needing no decision is `[due:YYYY-MM-DD]` (projects to the '
-        'calendar; not addressed to the user). Machine attributes (id, from, '
-        'evidence, confidence, due, created, touched, resolved) live in a '
-        'daemon-managed mem-comment on the next line — never hand-write or edit '
-        'ids; keep comments minimal: evidence:"<verbatim quote of the user\'s '
-        'words or of the source line>" only when a real quote exists, never a '
-        'description of your reasoning; confidence:unconfirmed when the basis is '
-        'your own inference (it renders as ask-to-confirm). Rails: (1) Attention '
-        "test — flag what a competent assistant would raise: awaiting the user's "
-        'decision or action, a mid-flight plan they may want to continue, or '
-        'something they would be unpleasantly surprised to have missed. (2) '
-        'Assignment, not capability — what the user took on is theirs even if you '
-        'could do it. (3) Never auto-decide — spending money, sending external '
-        'messages as the user, or irreversible/destructive acts are always '
-        'surfaced, whatever the autonomy setting. (4) Decompose compounds — split '
-        'agent-work + user-decision + user-action into separate entries, each '
-        'written where it belongs, never copied. (5) Timeless — "due Jul 28", '
-        'never "tomorrow". (6) A line whose mem-comment carries resolved:<date> '
-        'is settled — on consolidation rewrite the imperative as the completed '
-        'fact or drop it when stale; never re-open it.-->'
+        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress work, blockers, next steps. Overwrite stale lines; never append dated history. Every line must be understandable without this session\'s context: concrete names, no unexplained shorthand, no cross-references by list number. [user] flag — one judgment per line: does this need the user (their decision, their action, or something they\'d be sorry to miss — including things they assigned to themselves)? If yes, insert [user] after the list marker of the line where the fact already lives: `- [user] <text>` or `3. [user] <text>`. Flagging marks a line, never creates one: one fact = one entry, never duplicated into another section. A dated commitment needing no decision is `[due:YYYY-MM-DD]` (shows on the calendar). Machine attributes (id, created, touched, resolved) live in a daemon-managed mem-comment on the next line — never write or edit these comments; leave them exactly where they are. Never auto-decide: spending money, sending external messages as the user, or irreversible/destructive acts are always surfaced, whatever the autonomy setting. Write timeless ("due Jul 28", never "tomorrow"). A line whose mem-comment carries resolved:<date> is settled — on consolidation rewrite it as the completed fact or drop it; never re-open or re-flag it.-->'
     ),
     "decisions": (
         "<!--format DECISIONS entries: '## <slug>' then Chose / Reason / "

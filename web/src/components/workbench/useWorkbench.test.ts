@@ -36,9 +36,6 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     id: 'e1',
     text: 'Ping Simon about the invoice',
     due: null,
-    evidence: 'quote',
-    from_session: 'sess-1',
-    confidence: 'stated',
     created: '2026-07-01',
     touched: null,
     age_days: 5,
@@ -119,24 +116,14 @@ describe('useWorkbench — exitEntry', () => {
   });
 });
 
-describe('useWorkbench — digests', () => {
-  it('exposes digests from the response', async () => {
-    apiMock.mockResolvedValueOnce({
-      entries: [],
-      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
-    });
-    const { result } = renderHook(() => useWorkbench({}));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.digests).toEqual([
-      { project_id: 'proj-a', in_progress: 'Working on X', next_steps: null },
-    ]);
-  });
-
-  it('defaults digests to [] when the response omits it', async () => {
+describe('useWorkbench — hook surface (spec 2026-07-24 revision)', () => {
+  it('exposes exactly the current field set — nothing from the pre-revision surface leaked back in', async () => {
     apiMock.mockResolvedValueOnce({ entries: [] });
     const { result } = renderHook(() => useWorkbench({}));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.digests).toEqual([]);
+    expect(Object.keys(result.current).sort()).toEqual(
+      ['conflict', 'entries', 'error', 'exitEntry', 'loading', 'migrate', 'refetch'].sort(),
+    );
   });
 });
 
@@ -208,39 +195,9 @@ describe('useWorkbench — live badge event (orbital:workbench-changed)', () => 
     window.removeEventListener('orbital:workbench-changed', handler);
   });
 
-  it('does NOT dispatch the event on openEntry (does not change entry count)', async () => {
-    apiMock.mockResolvedValueOnce({ entries: [] });
-    const { result } = renderHook(() => useWorkbench({}));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    const handler = vi.fn();
-    window.addEventListener('orbital:workbench-changed', handler);
-    apiMock.mockResolvedValueOnce({ session_id: 'sess-new' });
-    await act(async () => {
-      await result.current.openEntry('proj-a', 'e1');
-    });
-    expect(handler).not.toHaveBeenCalled();
-    window.removeEventListener('orbital:workbench-changed', handler);
-  });
 });
 
 describe('useWorkbench — doorway', () => {
-  it('openEntry POSTs /open and returns the session id', async () => {
-    apiMock.mockResolvedValueOnce({ entries: [] });
-    const { result } = renderHook(() => useWorkbench({}));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    apiMock.mockResolvedValueOnce({ session_id: 'sess-new' });
-    let sessionId = '';
-    await act(async () => {
-      sessionId = await result.current.openEntry('proj-a', 'e1');
-    });
-    expect(sessionId).toBe('sess-new');
-    expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench/proj-a/entries/e1/open', {
-      method: 'POST',
-    });
-  });
-
   it('migrate POSTs /migrate and returns the session id', async () => {
     apiMock.mockResolvedValueOnce({ entries: [] });
     const { result } = renderHook(() => useWorkbench({}));

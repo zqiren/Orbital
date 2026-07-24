@@ -359,6 +359,82 @@ describe('ChatTab — controlled sidebar handoff (onSessionSelect)', () => {
   });
 });
 
+describe('ChatTab — composer prefill (route.draft → ChatView, spec 2026-07-24)', () => {
+  beforeEach(() => resetMocks());
+
+  it('threads route.draft to ChatView as initialDraft', async () => {
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    const route = makeRoute({ sessionId: 'sess-x', draft: 'Workbench · "do the thing"\n\n' });
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={vi.fn()}
+        />,
+      );
+    });
+
+    expect(lastChatViewProps.initialDraft).toBe('Workbench · "do the thing"\n\n');
+  });
+
+  it('passes undefined initialDraft when route.draft is unset', async () => {
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    const route = makeRoute({ sessionId: 'sess-x' });
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={vi.fn()}
+        />,
+      );
+    });
+
+    expect(lastChatViewProps.initialDraft).toBeUndefined();
+  });
+
+  it('onDraftConsumed clears route.draft back to undefined via setRoute, preserving the rest of the route', async () => {
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    const setRoute = vi.fn();
+    const route = makeRoute({ sessionId: 'sess-x', draft: 'Workbench · "do the thing"\n\n' });
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={setRoute}
+        />,
+      );
+    });
+
+    const onDraftConsumed = lastChatViewProps.onDraftConsumed as () => void;
+    act(() => {
+      onDraftConsumed();
+    });
+
+    expect(setRoute).toHaveBeenCalled();
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    const updated = updater(route);
+    expect(updated).toMatchObject({
+      name: 'project',
+      projectId: 'proj-1',
+      tab: 'chat',
+      sessionId: 'sess-x',
+    });
+    expect((updated as Extract<Route, { name: 'project' }>).draft).toBeUndefined();
+  });
+});
+
 describe('ChatTab — empty project (no sessions)', () => {
   beforeEach(() => resetMocks());
 

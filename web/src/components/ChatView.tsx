@@ -399,6 +399,21 @@ interface ChatViewProps {
    */
   sessionId?: string;
   /**
+   * One-shot composer prefill (Workbench card-tap doorway, spec 2026-07-24
+   * §5.3 — route.draft, threaded down by ChatTab). Applied at most once:
+   * seeded directly into the composer's initial state (visible immediately,
+   * even before `sessionId` resolves), and re-asserted by the per-session
+   * draft-swap effect the first time `sessionId` transitions away from
+   * `undefined` — otherwise that effect's per-session draft map (which has
+   * no entry for a session never visited before) would blank it out from
+   * under the seeded value. Never auto-sent; never spawns a session by
+   * itself. `onDraftConsumed` fires once, immediately on mount, so the
+   * caller can clear its copy (route.draft) and the prefill won't reappear
+   * on a later remount (e.g. tab switch away and back).
+   */
+  initialDraft?: string;
+  onDraftConsumed?: () => void;
+  /**
    * Re-fetch this project's runtime fields and merge
    * them into the App-level projects list. Called on the running→idle
    * transition so the header's budget/cost reflects the just-finished turn.
@@ -442,7 +457,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, onRefreshProject }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Spec 002: open a clicked workspace path in the FilePreviewDrawer. Provided
@@ -481,7 +496,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [stream, setStream] = useState<StreamState | null>(null);
   const [approvals, setApprovals] = useState<Map<string, PendingApproval>>(new Map());
   const [expandedCapsules, setExpandedCapsules] = useState<Set<string>>(new Set());
-  const [inputText, setInputText] = useState('');
+  // Seeded from initialDraft (Workbench prefill doorway) so it's visible on
+  // the very first paint — useState's initializer runs once, at mount, so
+  // this cannot re-apply on a later re-render with a changed prop.
+  const [inputText, setInputText] = useState(initialDraft ?? '');
   // Slot holder: the F1 session_id currently holding the project's
   // active-loop slot (from run-status `current_holder_session_id`), or null
   // if no session is running. Single-slot model — only ONE session runs at a
@@ -1197,6 +1215,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // persist-on-switch from this mirror.
   inputTextRef.current = inputText;
 
+  // Workbench (or other) one-shot prefill (§ initialDraft prop doc). Only
+  // captured when sessionId is UNRESOLVED at mount — the scenario the
+  // doorway actually produces (route.draft navigates without a sessionId;
+  // ChatTab resolves one a tick later). Read once by the swap effect below,
+  // the first time sessionId transitions away from undefined, so that
+  // transition's normal "load this session's draft from the map" (empty, for
+  // a session never visited) doesn't blank the seeded initial text out from
+  // under it. If sessionId is already resolved at mount, the useState
+  // initializer above already has it right and this stays unused.
+  const pendingPrefillRef = useRef(sessionId === undefined ? initialDraft : undefined);
+
   const prevSessionForDraftRef = useRef<string | undefined>(sessionId);
   useEffect(() => {
     const prev = prevSessionForDraftRef.current;
@@ -1204,6 +1233,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // Save the outgoing session's draft from the live mirror.
     if (prev !== undefined) {
       draftsRef.current.set(prev, inputTextRef.current);
+    }
+    // The pending-prefill transition (undefined → resolved, first time only):
+    // the composer is ALREADY correct — either still showing the seeded
+    // draft, or holding whatever the user typed into it in the meantime (the
+    // resolution can take a while: session-list fetch, etc.) — so this must
+    // NOT call setInputText at all here. Doing so with pendingPrefillRef's
+    // (now possibly stale) captured string would silently clobber a user
+    // edit made during that window — the bug this comment used to gloss
+    // over. Just consume the ref and adopt the session id; leave inputText
+    // untouched.
+    if (sessionId !== undefined && pendingPrefillRef.current !== undefined) {
+      pendingPrefillRef.current = undefined; // consumed — never re-applied
+      prevSessionForDraftRef.current = sessionId;
+      return;
     }
     // Load the incoming session's draft (default to empty).
     const incoming = sessionId !== undefined ? (draftsRef.current.get(sessionId) ?? '') : '';
@@ -1214,6 +1257,26 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const raf = requestAnimationFrame(() => adjustTextareaHeight());
     return () => cancelAnimationFrame(raf);
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mount-only half of the prefill: adjusts height, focuses the textarea
+  // with the cursor at the end (spec 2026-07-24 §5.3 — "cursor lands at the
+  // end, textarea focused"), and tells the caller the draft was consumed so
+  // it can clear its copy (route.draft) — otherwise the prefill would
+  // reappear on a later remount (e.g. switching tabs away from Chat and
+  // back). Runs exactly once regardless of whether sessionId is resolved yet
+  // ([] deps — must not re-fire on prop churn).
+  useEffect(() => {
+    if (initialDraft === undefined) return;
+    const ta = textareaRef.current;
+    if (ta) {
+      adjustTextareaHeight();
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    }
+    onDraftConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fix 3C: Show "Thinking..." indicator when agent starts running.
   // Live machinery rows accumulate inside an open agent_run capsule; on

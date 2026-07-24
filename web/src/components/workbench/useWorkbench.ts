@@ -12,8 +12,10 @@
  * Exits are optimistic (removed from local state immediately) and revert on
  * a non-2xx response; a 409 on exit (concurrent PROJECT_STATE.md write)
  * additionally triggers a refetch and a brief conflict flag so the page can
- * show a notice. `openEntry`/`migrate` spawn a seeded session through the
- * doorway routes and return the new session id for navigation.
+ * show a notice. `migrate` spawns a seeded session through the migrate route
+ * and returns the new session id for navigation. Card tap (the entry
+ * doorway) is NOT in this hook — it's a client-side composer prefill with no
+ * network call, handled entirely in WorkbenchPage (spec 2026-07-24).
  *
  * This hook dispatches a global `orbital:workbench-changed` event so the
  * sidebar's nav badge (fetched independently, see Sidebar.tsx's
@@ -28,7 +30,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../config';
-import type { WorkbenchDigest, WorkbenchEntry, WorkbenchResponse } from './types';
+import type { WorkbenchEntry, WorkbenchResponse } from './types';
 
 export interface UseWorkbenchArgs {
   /** Project lens: fetch only this project's entries (omit for the global,
@@ -38,10 +40,6 @@ export interface UseWorkbenchArgs {
 
 export interface UseWorkbenchResult {
   entries: WorkbenchEntry[];
-  /** Per-project "in flight" summaries, passed through as-is from the
-   *  response (default []). Callers decide whether to render them — the
-   *  page only shows this UI on the global (unlensed) surface. */
-  digests: WorkbenchDigest[];
   loading: boolean;
   error: string | null;
   /** True briefly after a 409 exit conflict (auto-clears). */
@@ -54,8 +52,6 @@ export interface UseWorkbenchResult {
     reason?: string,
   ) => Promise<void>;
   /** Returns the new session id (for navigation to the project chat). */
-  openEntry: (projectId: string, memId: string) => Promise<string>;
-  /** Returns the new session id (for navigation to the project chat). */
   migrate: (projectId: string) => Promise<string>;
 }
 
@@ -67,7 +63,6 @@ function workbenchUrl(projectId?: string): string {
 
 export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResult {
   const [entries, setEntries] = useState<WorkbenchEntry[]>([]);
-  const [digests, setDigests] = useState<WorkbenchDigest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -84,13 +79,11 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
       const res = await api<WorkbenchResponse>(workbenchUrl(projectId));
       if (epochRef.current === epoch) {
         setEntries(res?.entries ?? []);
-        setDigests(res?.digests ?? []);
       }
     } catch (e) {
       if (epochRef.current === epoch) {
         setError(e instanceof Error ? e.message : 'error');
         setEntries([]);
-        setDigests([]);
       }
     } finally {
       if (epochRef.current === epoch) setLoading(false);
@@ -124,14 +117,6 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
     [entries, fetchAll],
   );
 
-  const openEntry = useCallback(async (pid: string, memId: string): Promise<string> => {
-    const res = await api<{ session_id: string }>(
-      `/api/v2/workbench/${encodeURIComponent(pid)}/entries/${encodeURIComponent(memId)}/open`,
-      { method: 'POST' },
-    );
-    return res.session_id;
-  }, []);
-
   const migrate = useCallback(async (pid: string): Promise<string> => {
     const res = await api<{ session_id: string }>(
       `/api/v2/workbench/${encodeURIComponent(pid)}/migrate`,
@@ -143,13 +128,11 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
 
   return {
     entries,
-    digests,
     loading,
     error,
     conflict,
     refetch: fetchAll,
     exitEntry,
-    openEntry,
     migrate,
   };
 }

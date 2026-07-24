@@ -5,11 +5,13 @@
 // @vitest-environment jsdom
 
 /**
- * WorkbenchPage integration tests (Task 7). Covers the plan's Vitest list:
- * sort order rendering, an unconfirmed card auto-expanding its receipt, a
- * "Done" click issuing the right exit POST with optimistic removal, and
- * the empty state showing the migrate CTA (per-project and global). The api
- * client is mocked — no network.
+ * WorkbenchPage integration tests (Task 7 + F3 2026-07-24 revision, incl. the
+ * mid-task amendment that removed the receipt). Covers sort order rendering,
+ * a "Done" click issuing the right exit POST with optimistic removal, the
+ * empty state showing the migrate CTA (per-project and global), the prefill
+ * doorway (navigate + composer draft, NO network call, NO session spawn, NO
+ * Evidence line), and the Today strip (formerly "This week"). The api client
+ * is mocked — no network. The In-flight digest strip is gone entirely.
  */
 
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
@@ -32,21 +34,19 @@ const PROJECTS = [
 
 function mockApi(opts: {
   entries?: unknown[];
-  digests?: unknown[];
   projects?: unknown[];
   calendarAvailable?: boolean;
   calendarEvents?: unknown[];
 } = {}) {
   const {
     entries = [],
-    digests = [],
     projects = PROJECTS,
     calendarAvailable = false,
     calendarEvents = [],
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v2/workbench') && (!init || init.method === undefined)) {
-      return { entries, digests };
+      return { entries };
     }
     if (path === '/api/v2/projects') return projects;
     if (path.startsWith('/api/v2/calendar/availability')) {
@@ -54,7 +54,6 @@ function mockApi(opts: {
     }
     if (path.startsWith('/api/v2/calendar/events')) return { events: calendarEvents };
     if (path.includes('/exit')) return { status: 'ok' };
-    if (path.includes('/open')) return { session_id: 'sess-new' };
     if (path.includes('/migrate')) return { session_id: 'sess-migrate' };
     return {};
   });
@@ -66,13 +65,11 @@ function entry(overrides: Record<string, unknown> = {}) {
     id: 'e1',
     text: 'Send Simon the invoice draft',
     due: null,
-    evidence: 'I said I would send it Friday',
-    from_session: 'sess-123',
-    confidence: 'stated',
     created: '2026-07-01',
     touched: null,
     age_days: 5,
     overdue: false,
+    section: null,
     ...overrides,
   };
 }
@@ -105,18 +102,6 @@ describe('WorkbenchPage — sort order', () => {
   });
 });
 
-describe('WorkbenchPage — unconfirmed receipt', () => {
-  it('auto-expands the receipt for an unconfirmed entry', async () => {
-    mockApi({ entries: [entry({ confidence: 'unconfirmed' })] });
-    render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
-    expect(screen.getByTestId('workbench-card-receipt-toggle')).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
-  });
-});
-
 describe('WorkbenchPage — Done exit', () => {
   it('POSTs the fulfilled exit and optimistically removes the card', async () => {
     mockApi({ entries: [entry()] });
@@ -137,8 +122,8 @@ describe('WorkbenchPage — Done exit', () => {
   });
 });
 
-describe('WorkbenchPage — doorway navigation', () => {
-  it('tapping the card body POSTs /open and navigates to the project chat', async () => {
+describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
+  it('tapping the card body navigates to the project chat tab WITHOUT any POST and WITHOUT a sessionId (no session spawn)', async () => {
     mockApi({ entries: [entry()] });
     const setRoute = vi.fn();
     render(<WorkbenchPage setRoute={setRoute} />);
@@ -146,16 +131,74 @@ describe('WorkbenchPage — doorway navigation', () => {
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
 
-    await waitFor(() =>
-      expect(apiMock.mock.calls.some(([p]) => (p as string).includes('/open'))).toBe(true),
+    expect(setRoute).toHaveBeenCalledTimes(1);
+    const routeArg = setRoute.mock.calls[0][0];
+    expect(routeArg).toMatchObject({ name: 'project', projectId: 'proj-a', tab: 'chat' });
+    expect(routeArg.sessionId).toBeUndefined();
+    // No network call was made at all for the tap — the only calls on the
+    // mock are the initial GETs (workbench/projects/calendar), never a POST.
+    expect(apiMock.mock.calls.every(([, init]) => !init || init.method === undefined)).toBe(true);
+  });
+
+  it('the prefilled draft matches the exact spec format: section + quoted text, due suffix, two trailing newlines', async () => {
+    mockApi({
+      entries: [
+        entry({
+          text: 'Send Simon the invoice draft',
+          section: 'Blockers',
+          due: '2026-08-01',
+        }),
+      ],
+    });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+
+    const routeArg = setRoute.mock.calls[0][0];
+    expect(routeArg.draft).toBe(
+      'Workbench · Blockers: "Send Simon the invoice draft" (due 2026-08-01)\n\n',
     );
-    await waitFor(() =>
-      expect(setRoute).toHaveBeenCalledWith({
-        name: 'project',
-        projectId: 'proj-a',
-        tab: 'chat',
-        sessionId: 'sess-new',
-      }),
+  });
+
+  it('omits the "{section}: " part when section is null', async () => {
+    mockApi({ entries: [entry({ section: null, due: null })] });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+
+    const routeArg = setRoute.mock.calls[0][0];
+    expect(routeArg.draft).toBe('Workbench · "Send Simon the invoice draft"\n\n');
+  });
+
+  it('omits the due suffix when absent', async () => {
+    mockApi({ entries: [entry({ section: 'Blockers', due: null })] });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+
+    const routeArg = setRoute.mock.calls[0][0];
+    expect(routeArg.draft).toBe('Workbench · Blockers: "Send Simon the invoice draft"\n\n');
+  });
+
+  it('the prefill never contains an Evidence line (receipt/evidence removed 2026-07-24)', async () => {
+    mockApi({ entries: [entry({ section: 'Blockers', due: '2026-08-01' })] });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+
+    const routeArg = setRoute.mock.calls[0][0];
+    expect(routeArg.draft as string).not.toMatch(/Evidence/);
+    // Exactly two trailing newlines, nothing appended after the due suffix.
+    expect(routeArg.draft as string).toBe(
+      'Workbench · Blockers: "Send Simon the invoice draft" (due 2026-08-01)\n\n',
     );
   });
 });
@@ -224,75 +267,44 @@ describe('WorkbenchPage — empty state', () => {
   });
 });
 
-describe('WorkbenchPage — in-flight digest strip (global only)', () => {
-  it('renders one collapsed row per digest on the global view', async () => {
-    mockApi({
-      entries: [entry()],
-      digests: [
-        { project_id: 'proj-a', in_progress: 'Working on X', next_steps: 'Ship Y' },
-        { project_id: 'proj-b', in_progress: null, next_steps: 'Draft the RFC' },
-      ],
-    });
+describe('WorkbenchPage — per-project "what\'s in progress" strip removed (spec 2026-07-24)', () => {
+  it('never renders the removed collapsed-summary strip or its copy on the global surface', async () => {
+    mockApi({ entries: [entry()] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
-    expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument();
-    expect(screen.getByTestId('workbench-inflight-proj-b')).toBeInTheDocument();
-  });
-
-  it('does not render digest rows in the per-project lens', async () => {
-    mockApi({
-      entries: [entry()],
-      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
-    });
-    render(<WorkbenchPage projectId="proj-a" setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
-    expect(screen.queryByTestId('workbench-inflight-proj-a')).toBeNull();
-  });
-
-  it('is collapsed by default, then expanding shows in_progress/next_steps as plain text; hides a null subsection', async () => {
-    mockApi({
-      entries: [entry()],
-      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
-    });
-    render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument(),
-    );
-    expect(screen.queryByText('Working on X')).toBeNull();
-
-    fireEvent.click(screen.getByTestId('workbench-inflight-proj-a'));
-    expect(screen.getByText('In progress')).toBeInTheDocument();
-    expect(screen.getByText('Working on X')).toBeInTheDocument();
+    expect(screen.queryByText('In flight')).toBeNull();
+    expect(screen.queryByText('In progress')).toBeNull();
     expect(screen.queryByText('Next steps')).toBeNull();
-  });
-
-  it('hides the strip entirely when digests is empty', async () => {
-    mockApi({ entries: [entry()], digests: [] });
-    render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
-    expect(screen.queryAllByTestId(/^workbench-inflight-/)).toHaveLength(0);
-  });
-
-  it('is visible alongside the empty state (re-entry context matters most then)', async () => {
-    mockApi({
-      entries: [],
-      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: 'Ship Y' }],
-    });
-    render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
-    expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument();
+    // Only the known regions render: header, list. No collapsed/expandable
+    // rows anywhere — the card's own receipt toggle was also removed
+    // (2026-07-24 amendment), so there are zero aria-expanded elements.
+    expect(document.querySelectorAll('[aria-expanded]')).toHaveLength(0);
   });
 });
 
-describe('WorkbenchPage — This week', () => {
-  it('hides the This week strip when there are no events', async () => {
+describe('WorkbenchPage — Today strip', () => {
+  it('hides the Today strip when there are no events', async () => {
     mockApi({ entries: [entry()], calendarAvailable: true, calendarEvents: [] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
-    expect(screen.queryByTestId('workbench-this-week')).toBeNull();
+    expect(screen.queryByTestId('workbench-today')).toBeNull();
   });
 
-  it('global This week strip filters events from workbench-excluded projects (privacy toggle)', async () => {
+  it('renders the "Today" title and "Open Calendar →" affordance', async () => {
+    mockApi({
+      entries: [entry()],
+      calendarAvailable: true,
+      calendarEvents: [
+        { id: 'memory:proj-a/e9', title: 'Public deadline', start: '2026-07-24', all_day: true, project_id: 'proj-a' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
+    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(screen.getByTestId('workbench-open-calendar')).toHaveTextContent('Open Calendar →');
+  });
+
+  it('global Today strip filters events from workbench-excluded projects (privacy toggle)', async () => {
     // Spec §6.5: the global surface must not leak excluded projects' entry
     // sentences through the calendar strip (final-review F2).
     mockApi({
@@ -303,23 +315,21 @@ describe('WorkbenchPage — This week', () => {
       ],
       calendarAvailable: true,
       calendarEvents: [
-        { id: 'memory:proj-a/e9', title: 'Public deadline', start: '2026-07-25', all_day: true, project_id: 'proj-a' },
-        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-26', all_day: true, project_id: 'proj-x' },
+        { id: 'memory:proj-a/e9', title: 'Public deadline', start: '2026-07-24', all_day: true, project_id: 'proj-a' },
+        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-24', all_day: true, project_id: 'proj-x' },
       ],
     });
     render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
     expect(screen.getByText('Public deadline')).toBeInTheDocument();
     expect(screen.queryByText('Secret obligation sentence')).toBeNull();
   });
 
-  it('This week strip shows ONE row per automation trigger, not one per daily occurrence', async () => {
-    // Real-data regression (2026-07-24 screenshot): daily crons emitted 7
-    // occurrences each into the strip — five copies of the same two jobs.
+  it('Today strip shows ONE row per automation trigger, not one per daily occurrence, capped at 5', async () => {
     const occ = (day: number, trig: string, title: string) => ({
       id: `automation:proj-a/${trig}/2026-07-${day}T11:00:00+08:00`,
       title,
-      start: `2026-07-${day}T03:00:00Z`,
+      start: `2026-07-24T03:00:00Z`,
       all_day: false,
       project_id: 'proj-a',
     });
@@ -327,22 +337,20 @@ describe('WorkbenchPage — This week', () => {
       entries: [entry()],
       calendarAvailable: true,
       calendarEvents: [
-        occ(25, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
-        occ(26, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
-        occ(27, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
-        occ(25, 'trg_issues', 'Daily Orbital issues check'),
-        occ(26, 'trg_issues', 'Daily Orbital issues check'),
-        { id: 'memory:proj-a/e9', title: 'Ship the deadline thing', start: '2026-07-26', all_day: true, project_id: 'proj-a' },
+        occ(24, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
+        occ(24, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
+        occ(24, 'trg_issues', 'Daily Orbital issues check'),
+        { id: 'memory:proj-a/e9', title: 'Ship the deadline thing', start: '2026-07-24', all_day: true, project_id: 'proj-a' },
       ],
     });
     render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
     expect(screen.getAllByText('Daily Adjacent-Repo Issue Scan')).toHaveLength(1);
-    expect(screen.getAllByText('Daily Orbital issues check')).toHaveLength(1);
+    expect(screen.getByText('Daily Orbital issues check')).toBeInTheDocument();
     expect(screen.getByText('Ship the deadline thing')).toBeInTheDocument();
   });
 
-  it('per-project lens This week strip still shows that project own events even when excluded globally', async () => {
+  it('per-project lens Today strip still shows that project own events even when excluded globally', async () => {
     mockApi({
       entries: [entry({ project_id: 'proj-x' })],
       projects: [
@@ -350,11 +358,11 @@ describe('WorkbenchPage — This week', () => {
       ],
       calendarAvailable: true,
       calendarEvents: [
-        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-26', all_day: true, project_id: 'proj-x' },
+        { id: 'memory:proj-x/s1', title: 'Secret obligation sentence', start: '2026-07-24', all_day: true, project_id: 'proj-x' },
       ],
     });
     render(<WorkbenchPage projectId="proj-x" setRoute={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
     expect(screen.getByText('Secret obligation sentence')).toBeInTheDocument();
   });
 });

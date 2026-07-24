@@ -189,140 +189,6 @@ async def test_privacy_toggle_skips_project_in_global_view(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Digests (read-only, mechanical in-flight summary — zero LLM)
-# --------------------------------------------------------------------------
-
-DIGEST_STATE = "\n".join([
-    FORMAT_LINE,
-    "## In Progress",
-    "Refactoring the export pipeline to stream instead of buffering.",
-    "- [user] Approve the new vendor before we integrate.",
-    '  <!--mem id:dig001 from:s1 evidence:"approve the vendor" created:2026-07-19-->',
-    "- [due:2026-07-20] Cron job ships nightly backups.",
-    "  <!--mem id:dig002 created:2026-07-15-->",
-    "",
-    "## Next Steps (priority)",
-    "Write the migration doc, then cut the release branch.",
-    "",
-    "## Blockers",
-    "None currently.",
-    "",
-])
-
-
-async def test_digest_extracts_in_progress_and_next_steps(tmp_path):
-    project = _seed_project(tmp_path, state=DIGEST_STATE)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench",
-                                 params={"project_id": "proj_a"})).json()
-    assert body["digests"] == [{
-        "project_id": "proj_a",
-        "in_progress": (
-            "Refactoring the export pipeline to stream instead of buffering.\n"
-            "- [due:2026-07-20] Cron job ships nightly backups."
-        ),
-        "next_steps": "Write the migration doc, then cut the release branch.",
-    }]
-
-
-async def test_digest_excludes_flagged_lines_and_mem_comments(tmp_path):
-    project = _seed_project(tmp_path, state=DIGEST_STATE)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench",
-                                 params={"project_id": "proj_a"})).json()
-    digest = body["digests"][0]
-    # The [user]-flagged line is already a card — must not also appear here.
-    assert "Approve the new vendor" not in digest["in_progress"]
-    # Mem-comments are daemon metadata, never surfaced in the digest.
-    assert "<!--mem" not in digest["in_progress"]
-    assert "dig001" not in digest["in_progress"]
-    assert "dig002" not in digest["in_progress"]
-    # An unflagged dated fact's bullet text stays (only [user] lines drop).
-    assert "Cron job ships nightly backups" in digest["in_progress"]
-
-
-async def test_digest_case_insensitive_heading_match(tmp_path):
-    state = "\n".join([
-        FORMAT_LINE,
-        "## in progress",
-        "Lowercase heading still matches.",
-        "",
-    ])
-    project = _seed_project(tmp_path, state=state)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench",
-                                 params={"project_id": "proj_a"})).json()
-    assert body["digests"][0]["in_progress"] == "Lowercase heading still matches."
-
-
-async def test_digest_null_when_one_heading_missing(tmp_path):
-    state = "\n".join([
-        FORMAT_LINE,
-        "## Next Steps",
-        "Ship the release.",
-        "",
-    ])
-    project = _seed_project(tmp_path, state=state)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench",
-                                 params={"project_id": "proj_a"})).json()
-    digest = body["digests"][0]
-    assert digest["in_progress"] is None
-    assert digest["next_steps"] == "Ship the release."
-
-
-async def test_digest_omitted_when_both_null(tmp_path):
-    # SEEDED_STATE has no 'In Progress'/'Next Steps' headings at all.
-    project = _seed_project(tmp_path)  # default SEEDED_STATE
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench")).json()
-    assert body["digests"] == []
-
-
-async def test_digest_empty_after_exclusions_is_null(tmp_path):
-    # The 'In Progress' section has content, but it's ENTIRELY a flagged line
-    # + its comment — nothing survives the exclusions, so it must render
-    # null, not an empty string. 'Next Steps' is non-null so the digest
-    # itself isn't omitted (isolates "empty after exclusion" from "both
-    # null").
-    state = "\n".join([
-        FORMAT_LINE,
-        "## In Progress",
-        "- [user] Approve the new vendor before we integrate.",
-        '  <!--mem id:only1 from:s1 evidence:"approve" created:2026-07-19-->',
-        "",
-        "## Next Steps",
-        "Cut the release branch.",
-        "",
-    ])
-    project = _seed_project(tmp_path, state=state)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench",
-                                 params={"project_id": "proj_a"})).json()
-    assert body["digests"][0]["in_progress"] is None
-    assert body["digests"][0]["next_steps"] == "Cut the release branch."
-
-
-async def test_digest_privacy_toggle_respected_in_global(tmp_path):
-    a = _seed_project(tmp_path, pid="proj_a", state=DIGEST_STATE)
-    b = _seed_project(tmp_path, pid="proj_b", state=DIGEST_STATE,
-                      extra={"workbench_exclude_global": True})
-    client, *_ = _make_client(tmp_path, [a, b])
-    async with client:
-        glob = (await client.get("/api/v2/workbench")).json()
-        assert {d["project_id"] for d in glob["digests"]} == {"proj_a"}
-        lensed = (await client.get("/api/v2/workbench",
-                                   params={"project_id": "proj_b"})).json()
-        assert {d["project_id"] for d in lensed["digests"]} == {"proj_b"}
-
-
-# --------------------------------------------------------------------------
 # Exits
 # --------------------------------------------------------------------------
 
@@ -498,25 +364,8 @@ async def test_exit_unknown_id_is_404(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Open / Migrate (spawn seam)
+# Migrate (spawn seam)
 # --------------------------------------------------------------------------
-
-async def test_open_spawns_seeded_session(tmp_path):
-    project = _seed_project(tmp_path)
-    am = FakeAgentManager()
-    client, *_ = _make_client(tmp_path, [project], agent_manager=am)
-    async with client:
-        r = await client.post("/api/v2/workbench/proj_a/entries/x7f3a2/open")
-        assert r.status_code == 200, r.text
-        sid = r.json()["session_id"]
-    assert sid == "minted_1"
-    assert len(am.injected) == 1
-    pid, content, session_id = am.injected[0]
-    assert pid == "proj_a"
-    assert session_id == "minted_1"
-    assert 'Send 宝玉 + Simon DM drafts' in content
-    assert "Let's handle this." in content
-
 
 async def test_migrate_refreshes_header_and_spawns(tmp_path):
     from agent_os.agent.memory_entries import FORMAT_HEADERS
@@ -546,7 +395,7 @@ async def test_migrate_refreshes_header_and_spawns(tmp_path):
     assert "this message IS the confirmation" in msg
     assert "FLAG IN PLACE" in msg
     assert "ONE VOICE" in msg
-    assert "RECEIPTS" in msg
+    assert "COMMENTS" in msg
     assert "SETTLED LINES" in msg
     # Never move a line or convert a numbered item to a bullet.
     assert "never convert a numbered item to a bullet" in msg

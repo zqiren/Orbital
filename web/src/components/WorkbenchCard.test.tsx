@@ -5,9 +5,10 @@
 // @vitest-environment jsdom
 
 /**
- * WorkbenchCard tests (Task 7). Covers the plan's Vitest list at the card
- * level: unconfirmed entries show an auto-expanded receipt (stated entries
- * start collapsed), and the two exit buttons fire the right callback without
+ * WorkbenchCard tests (Task 7; receipt removed 2026-07-24 mid-task
+ * amendment). Covers the card-level Vitest list: age/late labels, the
+ * project chip, the always-visible inline section label, markdown
+ * rendering, and the two exit buttons firing the right callback without
  * triggering the whole-card doorway tap.
  */
 
@@ -24,9 +25,6 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     id: 'e1',
     text: 'Send Simon the invoice draft',
     due: null,
-    evidence: 'I said I would send it Friday',
-    from_session: 'sess-123',
-    confidence: 'stated',
     created: '2026-07-01',
     touched: null,
     age_days: 5,
@@ -102,61 +100,8 @@ describe('WorkbenchCard — entry, age + project chip', () => {
   });
 });
 
-describe('WorkbenchCard — receipt expansion', () => {
-  it('is expanded by default when confidence is unconfirmed', () => {
-    render(
-      <WorkbenchCard
-        entry={entry({ confidence: 'unconfirmed' })}
-        showProjectChip={false}
-        onOpen={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('workbench-card-receipt-toggle')).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
-    expect(screen.getByText(/I said I would send it Friday/)).toBeInTheDocument();
-  });
-
-  it('starts collapsed for a stated entry, expands on toggle click', () => {
-    render(
-      <WorkbenchCard
-        entry={entry({ confidence: 'stated' })}
-        showProjectChip={false}
-        onOpen={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('workbench-card-receipt-toggle')).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
-    expect(screen.queryByText(/I said I would send it Friday/)).toBeNull();
-
-    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
-    expect(screen.getByText(/I said I would send it Friday/)).toBeInTheDocument();
-  });
-
-  it('renders the from-session reference as inert text, not a link with its own handler', () => {
-    // Final-review m14: a "source" reference must not present as a link with
-    // a side-effecting handler of its own. Plain text participates in the
-    // normal whole-card tap (bubbles once) like any other receipt text.
-    const onOpen = vi.fn();
-    render(
-      <WorkbenchCard
-        entry={entry({ confidence: 'unconfirmed' })}
-        showProjectChip={false}
-        onOpen={onOpen}
-      />,
-    );
-    const ref = screen.getByTestId('workbench-card-from-session');
-    expect(ref.tagName).not.toBe('BUTTON');
-    fireEvent.click(ref);
-    expect(onOpen).toHaveBeenCalledTimes(1); // bubbled card tap, no double-fire
-  });
-});
-
-describe('WorkbenchCard — receipt provenance (section)', () => {
-  it('shows the PROJECT_STATE.md provenance line when section is present', () => {
+describe('WorkbenchCard — inline section label (spec 2026-07-24 amendment)', () => {
+  it('renders the section as always-visible plain text, with no toggle/expander of any kind', () => {
     render(
       <WorkbenchCard
         entry={entry({ section: 'Blockers' })}
@@ -164,11 +109,15 @@ describe('WorkbenchCard — receipt provenance (section)', () => {
         onOpen={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
-    expect(screen.getByText('In PROJECT_STATE.md › Blockers')).toBeInTheDocument();
+    // Visible immediately — no click needed.
+    expect(screen.getByTestId('workbench-card-section')).toHaveTextContent('Blockers');
+    // No expand/collapse control anywhere on the card (the section label is
+    // a plain <span>, not a <button>).
+    expect(screen.getByTestId('workbench-card-section').tagName).not.toBe('BUTTON');
+    expect(document.querySelectorAll('[aria-expanded]')).toHaveLength(0);
   });
 
-  it('hides the provenance line when section is null', () => {
+  it('hides the section label entirely when section is null', () => {
     render(
       <WorkbenchCard
         entry={entry({ section: null })}
@@ -176,32 +125,76 @@ describe('WorkbenchCard — receipt provenance (section)', () => {
         onOpen={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
-    expect(screen.queryByText(/PROJECT_STATE\.md/)).toBeNull();
+    expect(screen.queryByTestId('workbench-card-section')).toBeNull();
   });
+});
 
-  it('makes the receipt reachable when the entry has only a section (no evidence, no from_session)', () => {
+describe('WorkbenchCard — markdown rendering (spec 2026-07-24)', () => {
+  it('renders a backticked path as an inline <code> element', () => {
     render(
       <WorkbenchCard
-        entry={entry({ evidence: null, from_session: null, section: 'Blockers' })}
+        entry={entry({ text: 'Update `agent_os/api/app.py` before merging' })}
         showProjectChip={false}
         onOpen={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('workbench-card-receipt-toggle')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
-    expect(screen.getByText('In PROJECT_STATE.md › Blockers')).toBeInTheDocument();
+    const code = screen.getByText('agent_os/api/app.py');
+    expect(code.tagName).toBe('CODE');
   });
 
-  it('does not show a receipt toggle at all when evidence, from_session, and section are all absent', () => {
+  it('renders bold markdown as a <strong> element', () => {
     render(
       <WorkbenchCard
-        entry={entry({ evidence: null, from_session: null, section: null })}
+        entry={entry({ text: 'This is **urgent** work' })}
         showProjectChip={false}
         onOpen={vi.fn()}
       />,
     );
-    expect(screen.queryByTestId('workbench-card-receipt-toggle')).toBeNull();
+    const strong = screen.getByText('urgent');
+    expect(strong.tagName).toBe('STRONG');
+  });
+
+  it('a link click stops propagation — does NOT trigger the card doorway (onOpen)', () => {
+    const onOpen = vi.fn();
+    render(
+      <WorkbenchCard
+        entry={entry({ text: 'See [the doc](https://example.com/doc) for context' })}
+        showProjectChip={false}
+        onOpen={onOpen}
+      />,
+    );
+    const link = screen.getByRole('link', { name: 'the doc' });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    fireEvent.click(link);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('does not render raw HTML embedded in the entry text (react-markdown escapes it)', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ text: 'Watch out <script>window.__pwned = true</script> here' })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(document.querySelector('script')).toBeNull();
+    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+  });
+
+  it('does not introduce block-level margin around the sentence (inline rendering inside the clamp <p>)', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ text: 'Plain sentence with `a/path.ts`' })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    // The markdown-rendered paragraph must NOT produce a nested <p> (which
+    // would carry block margins per index.css's .markdown-content p rule) —
+    // only the card's own clamp <p> wrapper.
+    const testId = screen.getByTestId('workbench-card-entry-proj-a-e1');
+    expect(testId.querySelectorAll('p')).toHaveLength(1);
   });
 });
 

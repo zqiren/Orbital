@@ -32,10 +32,9 @@ Merge rules (spec §5.2 / §5.5):
   and warned about loudly.
 
 Lint (spec §8) is folded in as warnings that never block the write: the
-grammar lint from ``user_flags.lint`` (malformed ``due``, flagged entry
-missing ``evidence``/``from``) plus the omission heuristic (unflagged
-user-directed content under a blocker/waiting/next-step heading, or carrying
-``用户`` / "you must|need|should" phrasing).
+grammar lint from ``user_flags.lint`` (malformed ``due``) plus the omission
+heuristic (unflagged user-directed content under a blocker/waiting/next-step
+heading, or carrying ``用户`` / "you must|need|should" phrasing).
 """
 
 from __future__ import annotations

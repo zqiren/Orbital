@@ -5,24 +5,63 @@
 /**
  * One row of the Workbench list (spec §6): a flagged `[user]` entry.
  *
- * Entry card: sentence · project chip (global view only) · age · receipt
- * ("Why I believe this": evidence quote + from-session reference + a
- * PROJECT_STATE.md provenance line when `section` is set, expanded by
- * default when `confidence === 'unconfirmed'`) · two exits (Done,
- * Delete). The receipt is reachable whenever ANY of evidence, from_session,
- * or section is present — a section-only entry (no quote) still needs to
- * show where it came from. Tapping the card body anywhere but a button is
- * the doorway (`onOpen`) — spec §5.3.
+ * Entry card: sentence (markdown) · project chip (global view only) ·
+ * section, as a small always-visible inline label (plain text, no expander,
+ * hidden when `section` is null) · age · overdue badge · two exits (Done,
+ * Delete). Tapping the card body anywhere but a button is the doorway
+ * (`onOpen`) — spec §5.3.
+ *
+ * The "Why I believe this" receipt (evidence quote, from-session reference,
+ * expand/collapse) was removed 2026-07-24 (mid-task amendment) — the
+ * `evidence`/`from_session`/`confidence` fields it read no longer exist on
+ * `WorkbenchEntry`. `section` is now shown inline, unconditionally, instead
+ * of behind a toggle.
  *
  * Styling follows the Apple-design pass (2026-07-24): soft elevated cards,
  * feedback on press (scale, 100ms), size-specific tracking, motion respects
  * `prefers-reduced-motion` via Tailwind's `motion-reduce:` variants.
+ *
+ * The sentence renders as markdown (2026-07-24 revision — entries carry
+ * backticked paths, bold, etc.) via `react-markdown`, same engine as chat
+ * bubbles (MarkdownContent.tsx), but with a minimal, INLINE-only components
+ * config: it lives inside the card's own clamped `<p>`, so a nested `<p>`
+ * (react-markdown's default paragraph wrapper) is collapsed to a fragment
+ * rather than reusing MarkdownContent's block-styled `.markdown-content`
+ * wrapper, which would add block margins wrong for a one-line card sentence.
+ * Raw HTML is never rendered — react-markdown escapes it by default and no
+ * rehype-raw plugin is installed. Links stop propagation and open in a new
+ * tab so a link click can't also fire the card's own doorway tap.
  */
 
-import { useState } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import { useT } from '../i18n/useT';
 
 import type { WorkbenchEntry } from './workbench/types';
+
+/** Inline-only markdown components for the card sentence — see the file
+ *  docstring above. Module-scoped: none of these depend on props. */
+const CARD_MARKDOWN_COMPONENTS: Components = {
+  // Collapse the paragraph wrapper to a fragment — the entry text sits
+  // inside the card's own clamped <p>, and a nested <p> would be invalid
+  // HTML and pull in block margins.
+  p: ({ children }) => <>{children}</>,
+  code: ({ children }) => (
+    <code className="rounded bg-sidebar px-[0.3em] py-[0.1em] font-mono text-[0.9em]">
+      {children}
+    </code>
+  ),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+    >
+      {children}
+    </a>
+  ),
+};
 
 export interface WorkbenchCardProps {
   entry: WorkbenchEntry;
@@ -78,13 +117,8 @@ export default function WorkbenchCard({
   onExit,
 }: WorkbenchCardProps) {
   const t = useT();
-  const unconfirmed = entry.confidence === 'unconfirmed';
-  const [expanded, setExpanded] = useState(unconfirmed);
-
   const age = ageLabel(t, entry);
   const testId = `workbench-card-entry-${entry.project_id}-${entry.id}`;
-
-  const hasReceipt = entry.evidence || entry.from_session || entry.section;
 
   return (
     <div
@@ -99,7 +133,7 @@ export default function WorkbenchCard({
     >
       <div className="flex items-start justify-between gap-3">
         <p className="line-clamp-3 min-w-0 flex-1 text-[15px] leading-snug tracking-[-0.01em] text-primary">
-          {entry.text}
+          <ReactMarkdown components={CARD_MARKDOWN_COMPONENTS}>{entry.text}</ReactMarkdown>
         </p>
         {entry.overdue && (
           <span
@@ -120,57 +154,18 @@ export default function WorkbenchCard({
             {projectName}
           </span>
         )}
+        {entry.section && (
+          // Raw string from PROJECT_STATE.md's `## ` heading — no i18n key
+          // (not UI chrome, per the i18n convention for backend-authored
+          // strings). No expander (2026-07-24 amendment removed the receipt).
+          <span data-testid="workbench-card-section" className="font-mono text-[11px] text-muted">
+            {entry.section}
+          </span>
+        )}
         {age && (
           <span className="font-mono text-[11px] tabular-nums text-muted">{age}</span>
         )}
       </div>
-
-      {hasReceipt && (
-        <div data-testid="workbench-card-receipt">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((v) => !v);
-            }}
-            aria-expanded={expanded}
-            data-testid="workbench-card-receipt-toggle"
-            className="inline-flex items-center gap-1 text-left text-[12px] font-medium text-secondary transition-colors duration-100 hover:text-primary"
-          >
-            <span
-              aria-hidden="true"
-              className={`inline-block text-[9px] transition-transform duration-150 ease-out motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
-            >
-              ▶
-            </span>
-            {t('workbench.receipt.title')}
-          </button>
-          {expanded && (
-            <div className="mt-1.5 space-y-1 rounded-xl bg-sidebar/60 px-3 py-2 text-[12px] leading-relaxed text-secondary">
-              {entry.evidence && <p className="italic">&ldquo;{entry.evidence}&rdquo;</p>}
-              {entry.from_session && (
-                <p>
-                  {t('workbench.receipt.from')}{' '}
-                  {/* Inert reference: no transcript viewer exists yet, and a
-                      "source" link must not side-effect a session spawn. */}
-                  <span
-                    data-testid="workbench-card-from-session"
-                    className="font-mono text-[11px]"
-                  >
-                    {entry.from_session}
-                  </span>
-                </p>
-              )}
-              {entry.due && <p>{t('workbench.receipt.due', { due: entry.due })}</p>}
-              {entry.section && (
-                <p data-testid="workbench-card-receipt-section" className="text-muted">
-                  {t('workbench.receipt.section', { section: entry.section })}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="mt-0.5 flex items-center gap-2">
         <button

@@ -5,10 +5,12 @@
 """Tests for the shared `[user]` flag grammar parser (user_flags.py).
 
 Covers: parsing the spec §4 canonical entry (flagged, due, evidence w/ CJK +
-spaces, unconfirmed, multi-line wrapped comment); dated-but-unflagged facts;
-plain bullets (including markdown checkboxes) not surfaced; comment
-stripping/round-trip; id generation; and lint warnings (malformed due,
-flagged entries missing both evidence and confidence).
+spaces, unconfirmed, multi-line wrapped comment — legacy attributes the
+parser still tolerates even though the receipt machinery that wrote them is
+retired); dated-but-unflagged facts; plain bullets (including markdown
+checkboxes) not surfaced; comment stripping/round-trip; id generation; and
+lint warnings (malformed due only — the receipt-completeness check was
+retired, spec amendment 2026-07-24).
 """
 import re
 
@@ -357,42 +359,18 @@ class TestLint:
         warnings = uf.lint(content)
         assert not any("malformed due" in w for w in warnings)
 
-    def test_flagged_entry_with_neither_evidence_nor_confidence_warns(self):
-        content = "- [user] Do the thing with no comment at all.\n"
-        warnings = uf.lint(content)
-        assert any("confidence" in w for w in warnings)
-
-    def test_flagged_entry_with_confidence_unconfirmed_and_no_evidence_no_warning(self):
-        # The one-voice contract: a compliant quote-less entry carries
-        # confidence:unconfirmed instead of fabricated evidence, and that
-        # must produce zero lint warnings (spec update, commit 050e6dd).
-        content = (
-            "- [user] Do the thing.\n"
-            "  <!--mem id:abc123 confidence:unconfirmed-->\n"
-        )
-        assert uf.lint(content) == []
-
-    def test_flagged_entry_with_evidence_no_warning(self):
-        content = CANONICAL_ENTRY
-        warnings = uf.lint(content)
-        assert not any("confidence" in w for w in warnings)
-
-    def test_no_warning_ever_mentions_from(self):
-        # The missing-`from` warning is retired entirely — `from:` is no
-        # longer instructed (commit 050e6dd).
-        for content in (
-            "- [user] Do the thing with no comment at all.\n",
-            CANONICAL_ENTRY,
-            "- [user] Do the thing.\n  <!--mem id:abc123 confidence:unconfirmed-->\n",
-        ):
-            warnings = uf.lint(content)
-            assert not any("from" in w for w in warnings)
-
     def test_clean_prose_has_no_warnings(self):
         assert uf.lint(REAL_PROSE) == []
 
-    def test_dated_unflagged_fact_no_evidence_warning(self):
-        # Dated facts aren't addressed to the user, so they're exempt from
-        # the receipts completeness check.
-        content = "- [due:2026-07-23] Renew the domain.\n"
+    def test_flagged_entry_with_no_comment_at_all_warns_nothing(self):
+        # The receipt-completeness check (missing evidence/confidence) was
+        # retired with the receipt machinery (spec amendment, 2026-07-24) —
+        # a flagged entry with no mem-comment at all must lint clean now.
+        content = "- [user] Do the thing with no comment at all.\n"
         assert uf.lint(content) == []
+
+    def test_lint_tolerates_legacy_evidence_from_confidence_attrs(self):
+        # Old files that already adopted evidence/from/confidence must not
+        # warn or break — those attributes are still parseable, just no
+        # longer instructed or linted for.
+        assert uf.lint(CANONICAL_ENTRY) == []

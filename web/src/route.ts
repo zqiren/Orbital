@@ -44,4 +44,13 @@ export type Route =
        * persisted across reload), like the rest of the route model.
        */
       previewPath?: string;
+      /**
+       * One-shot composer prefill (Workbench card-tap doorway, spec
+       * 2026-07-24 §5.3). ChatTab reads this, threads it into ChatView as
+       * `initialDraft`, and clears it back to undefined via `onDraftConsumed`
+       * once ChatView has applied it — so it loads into the composer exactly
+       * once, never re-applied on a later re-render or tab revisit. Never
+       * auto-sent and never triggers a session spawn by itself.
+       */
+      draft?: string;
     };

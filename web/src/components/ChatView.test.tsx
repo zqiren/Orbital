@@ -512,7 +512,12 @@ function pressKey(key: string) {
   );
 }
 
-function renderChat(props: { agentStatus?: string; sessionId?: string }) {
+function renderChat(props: {
+  agentStatus?: string;
+  sessionId?: string;
+  initialDraft?: string;
+  onDraftConsumed?: () => void;
+}) {
   return act(async () => {
     root.render(
       <ChatView
@@ -521,6 +526,8 @@ function renderChat(props: { agentStatus?: string; sessionId?: string }) {
         agentStatus={(props.agentStatus ?? 'idle') as never}
         mentionAgents={[]}
         sessionId={props.sessionId}
+        initialDraft={props.initialDraft}
+        onDraftConsumed={props.onDraftConsumed}
       />,
     );
   });
@@ -591,6 +598,104 @@ describe('T5 ChatView: per-session composer draft', () => {
     await flushEffects();
     textarea = container.querySelector('textarea') as HTMLTextAreaElement;
     expect(textarea.value).toBe('hello from B');
+  });
+});
+
+describe('ChatView: one-shot composer prefill (route.draft / initialDraft, Workbench doorway spec 2026-07-24)', () => {
+  it('seeds the composer with initialDraft when sessionId is already resolved, focused with the cursor at the end', async () => {
+    const onDraftConsumed = vi.fn();
+    await renderChat({ sessionId: 's1', initialDraft: 'Workbench · "do the thing"\n\n', onDraftConsumed });
+    await flushEffects();
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('Workbench · "do the thing"\n\n');
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+    expect(onDraftConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives the sessionId undefined→resolved transition (ChatTab async default-session resolution) without being blanked', async () => {
+    // Mirrors the real navigation: WorkbenchPage sets route WITHOUT a
+    // sessionId, so ChatView first mounts with sessionId=undefined; ChatTab
+    // resolves a default session a tick later and the sessionId prop flips
+    // to defined. The per-session draft map has no entry for that session
+    // (never visited before) — naively that would blank the composer.
+    const draft = 'Workbench · "do the thing"\n\n';
+    await renderChat({ sessionId: undefined, initialDraft: draft });
+    await flushEffects();
+    let textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(draft);
+
+    // Session resolves (same initialDraft prop — ChatTab doesn't change it).
+    await renderChat({ sessionId: 's1', initialDraft: draft });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(draft);
+  });
+
+  it('does NOT discard a user edit made while sessionId is still resolving (critical fix: async-resolution overwrite)', async () => {
+    // Same setup as the transition test above, but the user types something
+    // ELSE into the composer during the window before ChatTab's async
+    // default-session resolution completes. The session-swap effect must not
+    // stomp that edit with the original (now stale) seeded draft when
+    // sessionId finally resolves.
+    const draft = 'Workbench · "do the thing"\n\n';
+    await renderChat({ sessionId: undefined, initialDraft: draft });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('actually, let me write something completely different');
+    });
+    let textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('actually, let me write something completely different');
+
+    // Session resolves — same initialDraft prop, exactly as ChatTab would
+    // pass (it doesn't re-derive or change it on this transition).
+    await renderChat({ sessionId: 's1', initialDraft: draft });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('actually, let me write something completely different');
+  });
+
+  it('does NOT re-apply the draft on a later re-render with the same initialDraft (applies once, preserves user edits)', async () => {
+    const draft = 'Workbench · "do the thing"\n\n';
+    await renderChat({ sessionId: 's1', initialDraft: draft });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('actually let me rewrite this');
+    });
+    let textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('actually let me rewrite this');
+
+    // Parent re-renders with the SAME initialDraft prop (e.g. unrelated
+    // App-level state change before route.draft is cleared) — must not stomp
+    // the user's edit.
+    await renderChat({ sessionId: 's1', initialDraft: draft });
+    await flushEffects();
+    textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('actually let me rewrite this');
+  });
+
+  it('does not auto-send or spawn a session when a draft is applied', async () => {
+    await renderChat({ sessionId: undefined, initialDraft: 'Workbench · "do the thing"\n\n' });
+    await flushEffects();
+    await renderChat({ sessionId: 's1', initialDraft: 'Workbench · "do the thing"\n\n' });
+    await flushEffects();
+
+    expect(injectCalls.length).toBe(0);
+    expect(startAgentCalls.length).toBe(0);
+  });
+
+  it('when no initialDraft is provided, behaves exactly as before (empty composer, no callback)', async () => {
+    const onDraftConsumed = vi.fn();
+    await renderChat({ sessionId: 's1', onDraftConsumed });
+    await flushEffects();
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('');
+    expect(onDraftConsumed).not.toHaveBeenCalled();
   });
 });
 

@@ -74,24 +74,6 @@ def _clean_heading(raw: str) -> str:
     return raw.strip().rstrip("#").strip()
 
 
-def iter_section_headings(content: str) -> list[tuple[int, str]]:
-    """``(0-based line index, cleaned heading text)`` for every ``## <text>``
-    heading in ``content``, in file order.
-
-    Exposed for consumers that need section-BODY ranges (the Workbench
-    in-flight digest — the text between one heading and the next); this same
-    detection runs inline inside ``parse_entries`` to stamp ``Entry.section``.
-    """
-    if not content:
-        return []
-    out: list[tuple[int, str]] = []
-    for i, line in enumerate(content.split("\n")):
-        m = _SECTION_HEADING_RE.match(line)
-        if m:
-            out.append((i, _clean_heading(m.group("text"))))
-    return out
-
-
 # A mem-comment block, possibly wrapped across multiple lines (DOTALL lets
 # "." span the embedded newlines of a wrapped comment).
 _COMMENT_RE = re.compile(r"<!--\s*mem\s+(?P<body>.*?)-->", re.DOTALL)
@@ -326,13 +308,13 @@ def new_entry_id() -> str:
 def lint(content: str) -> list[str]:
     """Grammar-level warnings for ``content``. Never rejects — warns only.
 
-    v1 (Task 1) scope: malformed ``due:`` values, and flagged entries with
-    no receipts at all — neither ``evidence`` (a verbatim quote) nor
-    ``confidence`` (e.g. ``confidence:unconfirmed`` when no quote exists).
-    The one-voice contract (spec §3, commit 050e6dd): evidence must be a
-    real verbatim quote or absent — never fabricated — so a compliant
-    quote-less entry carries ``confidence:unconfirmed`` instead and must
-    warn zero times. ``from:`` is no longer instructed and is never linted.
+    v1 scope: malformed ``due:`` values only. The receipt-completeness check
+    (flagged entries missing both ``evidence`` and ``confidence``) was
+    retired along with the receipt machinery (spec amendment, 2026-07-24):
+    the header no longer instructs ``evidence``/``confidence`` at all, so
+    nothing is linted against them. ``evidence``/``from``/``confidence``
+    remain parseable attributes — an old file that still carries them must
+    not warn or break, it is simply no longer instructed to write new ones.
     The omission heuristic (unflagged user-directed phrasing) is Task 2 —
     it needs section-heading context this module doesn't have.
     """
@@ -348,14 +330,5 @@ def lint(content: str) -> list[str]:
             warnings.append(
                 f"line {i + 1}: malformed due '{raw_due}' — expected "
                 "YYYY-MM-DD or YYYY-MM-DDTHH:MM"
-            )
-    for e in parse_entries(content):
-        if not e.flagged:
-            continue
-        if not e.evidence and not e.confidence:
-            warnings.append(
-                f"line {e.line_start + 1}: flagged entry missing receipts "
-                f"— add confidence:unconfirmed or a verbatim quote as "
-                f"evidence (\"{e.text[:60]}\")"
             )
     return warnings

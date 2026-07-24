@@ -10,9 +10,9 @@ derived to disk — every GET re-parses PROJECT_STATE via the one shared
 
 Two user exits mutate memory directly (fulfilled → unflag + ``resolved`` stamp;
 irrelevant → remove + a retraction record), both OCC-guarded on the state
-file's mtime. Tapping an entry (``/open``) or the empty-state migration CTA
-(``/migrate``) spawns a seeded project session through the same dispatch seam
-the chat/queue uses (``agent_manager.new_session`` + ``inject_message``).
+file's mtime. The empty-state migration CTA (``/migrate``) spawns a seeded
+project session through the same dispatch seam the chat/queue uses
+(``agent_manager.new_session`` + ``inject_message``).
 
 Injected via ``configure`` (app factory): the project store, the agent manager
 (session spawn), and the CalendarHub (``refresh()`` after every write so its
@@ -170,71 +170,11 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
     }
 
 
-# --------------------------------------------------------------------------
-# In-flight digest (§ one-voice revision): a mechanical, zero-LLM excerpt of
-# the "In Progress" / "Next Steps" sections, read-only. Every [user]-flagged
-# line is dropped (already a card) and every mem-comment line is dropped
-# (daemon metadata, never agent/user prose) — what remains is exactly what a
-# human skimming the raw file would see under that heading.
-# --------------------------------------------------------------------------
-
-def _section_body(content: str, heading_prefix: str) -> str | None:
-    """Raw text of the nearest ``## `` section whose (cleaned) heading starts
-    with ``heading_prefix`` (case-insensitive; so "Next Steps (priority)"
-    matches "next steps"). None when the heading is missing, or its body is
-    empty once flagged ``[user]`` lines and mem-comment lines are excluded
-    and leading/trailing blank lines are trimmed.
-    """
-    if not content:
-        return None
-    lines = content.split("\n")
-    headings = user_flags.iter_section_headings(content)
-    prefix_lower = heading_prefix.lower()
-    match = next((h for h in headings if h[1].lower().startswith(prefix_lower)), None)
-    if match is None:
-        return None
-    match_idx = headings.index(match)
-    body_start = match[0] + 1
-    body_end = headings[match_idx + 1][0] if match_idx + 1 < len(headings) else len(lines)
-
-    excluded: set[int] = set()
-    for e in user_flags.parse_entries(content):
-        if not e.flagged:
-            continue
-        if body_start <= e.line_start < body_end:
-            excluded.update(range(e.line_start, min(e.line_end, body_end - 1) + 1))
-
-    kept = [lines[i] for i in range(body_start, body_end) if i not in excluded]
-    body = user_flags.strip_mem_comments("\n".join(kept))
-
-    body_lines = body.split("\n")
-    start = 0
-    while start < len(body_lines) and body_lines[start].strip() == "":
-        start += 1
-    end = len(body_lines)
-    while end > start and body_lines[end - 1].strip() == "":
-        end -= 1
-    trimmed = "\n".join(body_lines[start:end])
-    return trimmed or None
-
-
-def _project_digest(project_id: str, content: str) -> dict | None:
-    in_progress = _section_body(content, "in progress")
-    next_steps = _section_body(content, "next steps")
-    if in_progress is None and next_steps is None:
-        return None
-    return {
-        "project_id": project_id,
-        "in_progress": in_progress,
-        "next_steps": next_steps,
-    }
-
-
-def _collect_project(project: dict, now: datetime) -> tuple[list[dict], dict | None]:
-    """Return ``(flagged entry rows, digest|None)`` for one project."""
+def _collect_project(project: dict, now: datetime) -> list[dict]:
+    """Return flagged entry rows for one project."""
     workspace = project.get("workspace", "")
     if not workspace:
-        return [], None
+        return []
     project_id = project.get("project_id", "")
     _, content = _load_state(_state_path(workspace))
     content = content or ""
@@ -243,9 +183,7 @@ def _collect_project(project: dict, now: datetime) -> tuple[list[dict], dict | N
     tz = workbench_cards.project_timezone(project, triggers)
 
     flagged = [e for e in parsed if e.flagged]
-    entries = [_entry_row(project_id, e, tz, now) for e in flagged]
-    digest = _project_digest(project_id, content)
-    return entries, digest
+    return [_entry_row(project_id, e, tz, now) for e in flagged]
 
 
 @router.get("")
@@ -266,14 +204,13 @@ async def get_workbench(project_id: str | None = Query(None)):
         ]
 
     all_entries: list[dict] = []
-    digests: list[dict] = []
     for project in projects:
         # Per-project isolation: one project failing to collect (corrupt state,
         # I/O error) must never sink the whole global view. Failed projects are
         # skipped and logged — chosen over a degraded in-band marker to keep the
-        # {entries, digests} response contract stable for the frontend.
+        # {entries} response contract stable for the frontend.
         try:
-            entries, digest = _collect_project(project, now)
+            entries = _collect_project(project, now)
         except Exception:
             logger.warning(
                 "workbench: skipping project %s — collection failed",
@@ -281,11 +218,9 @@ async def get_workbench(project_id: str | None = Query(None)):
             )
             continue
         all_entries.extend(entries)
-        if digest is not None:
-            digests.append(digest)
 
     all_entries.sort(key=lambda e: (not e["overdue"], e.get("created") or "9999-99-99"))
-    return {"entries": all_entries, "digests": digests}
+    return {"entries": all_entries}
 
 
 # --------------------------------------------------------------------------
@@ -388,7 +323,7 @@ async def exit_entry(project_id: str, mem_id: str, req: ExitRequest):
 
 
 # --------------------------------------------------------------------------
-# Doorway: open + migrate (session spawn seam)
+# Migrate (session spawn seam)
 # --------------------------------------------------------------------------
 
 # Imperative on purpose: weaker models otherwise ANALYZE the file and ask
@@ -412,28 +347,16 @@ _MIGRATION_MESSAGE = (
     'flagged or not — that a reader without your working memory could not '
     'understand: expand project shorthand and abbreviations, and replace '
     'list-number cross-references ("per Blocker #11") with the referenced '
-    "thing's name. Keep each line one concrete statement. (3) RECEIPTS: on "
-    'the line after a flagged entry you may add `<!--mem evidence:"<verbatim '
-    'quote of the user\'s words or of the source line>" '
-    'confidence:stated|unconfirmed-->` — evidence ONLY when you have a real '
-    'quote; NEVER a description of your own reasoning; use '
-    'confidence:unconfirmed for anything inferred rather than heard; omit '
-    'fields you do not know; never write an id (ids are daemon-assigned); '
-    'never edit existing ids. (4) SETTLED LINES: a line whose mem-comment '
+    "thing's name. Keep each line one concrete statement. (3) COMMENTS: "
+    'never write or edit mem-comments (<!--mem ...-->) — they are '
+    'daemon-managed; leave existing ones exactly where they are. (4) '
+    'SETTLED LINES: a line whose mem-comment '
     'carries `resolved:<date>` is done — rewrite it from an imperative into '
     'the completed fact (or delete it if no longer worth recording). Never '
     're-open or re-flag it. Leave every other line untouched. After saving, '
     'reply with one line: how many lines you flagged and how many you '
     'normalized.'
 )
-
-
-def _seed_open_message(entry) -> str:
-    evidence = entry.evidence or ""
-    frm = f" — from {entry.from_session}" if entry.from_session else ""
-    due = f"; due {entry.due}" if entry.due else ""
-    receipt = f"\n(evidence: {evidence}{frm}{due})" if (evidence or frm or due) else ""
-    return f'Workbench: "{entry.text}"{receipt}\nLet\'s handle this.'
 
 
 async def _spawn_seeded(project_id: str, content: str) -> str:
@@ -445,18 +368,6 @@ async def _spawn_seeded(project_id: str, content: str) -> str:
     session_id = minted["session_id"] if isinstance(minted, dict) else minted
     await _agent_manager.inject_message(project_id, content, session_id=session_id)
     return session_id
-
-
-@router.post("/{project_id}/entries/{mem_id}/open")
-async def open_entry(project_id: str, mem_id: str):
-    """Autospawn a project session seeded with the card (spec §5.3 doorway)."""
-    project = _require_project(project_id)
-    _, content = _load_state(_state_path(project.get("workspace", "")))
-    entry = _find_entry(content or "", mem_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"No entry with id {mem_id}")
-    session_id = await _spawn_seeded(project_id, _seed_open_message(entry))
-    return {"session_id": session_id}
 
 
 @router.post("/{project_id}/migrate")

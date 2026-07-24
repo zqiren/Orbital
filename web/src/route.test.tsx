@@ -429,4 +429,12 @@ describe('Route type', () => {
     const route: Route = { name: 'project', projectId: 'p1', tab: 'queue' };
     expect((route as Extract<Route, { name: 'project' }>).sessionId).toBeUndefined();
   });
+
+  it('project route accepts an optional draft (Workbench prefill doorway) and defaults to undefined', () => {
+    const withDraft: Route = { name: 'project', projectId: 'p1', tab: 'chat', draft: 'hello' };
+    expect((withDraft as Extract<Route, { name: 'project' }>).draft).toBe('hello');
+
+    const withoutDraft: Route = { name: 'project', projectId: 'p1', tab: 'chat' };
+    expect((withoutDraft as Extract<Route, { name: 'project' }>).draft).toBeUndefined();
+  });
 });

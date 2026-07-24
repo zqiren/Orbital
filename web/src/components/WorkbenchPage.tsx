@@ -3,16 +3,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Workbench surface (spec 2026-07-23 §5.3/§5.4/§6). Mounted TWICE with the
- * SAME component, mirroring CalendarPage's mount pattern (spec-011 §0.4):
+ * Workbench surface (spec 2026-07-23 §5.3/§5.4/§6; prefill doorway + Today
+ * strip revision 2026-07-24). Mounted TWICE with the SAME component,
+ * mirroring CalendarPage's mount pattern (spec-011 §0.4):
  *   - no `projectId`  → the global Workbench (privacy-filtered aggregate);
  *   - with `projectId` → the per-project lens (server-filtered to one project,
  *     and — unlike the global view — shown regardless of the project's
  *     "exclude from global Workbench" toggle).
  *
  * Flagged `[user]` entries render in server order (spec §6) — overdue first,
- * then oldest first. Tapping a card's body is the doorway (spec §5.3): it
- * spawns a session and navigates there via the route model.
+ * then oldest first. Tapping a card's body is the doorway (spec §5.3, revised
+ * 2026-07-24): it does NOT spawn a session or call the network — it navigates
+ * to the project's chat tab (its normal default-session state) with the
+ * card's context prefilled into the composer draft, for the user to edit and
+ * send themselves. See `buildPrefillDraft` below for the exact format, and
+ * ChatTab.tsx/ChatView.tsx for how `route.draft` is consumed.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -26,7 +31,7 @@ import { useWorkbench } from './workbench/useWorkbench';
 import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
 import WorkbenchCard from './WorkbenchCard';
-import type { WorkbenchDigest, WorkbenchEntry } from './workbench/types';
+import type { WorkbenchEntry } from './workbench/types';
 
 export interface WorkbenchPageProps {
   /**
@@ -37,80 +42,32 @@ export interface WorkbenchPageProps {
   setRoute: Dispatch<SetStateAction<Route>>;
 }
 
-/** [start, end) ISO instants for the next 7 days from local midnight today —
- *  a rolling window, unlike the calendar's Monday-aligned week. */
-function sevenDayRangeISO(): { start: string; end: string } {
+/** [start, end) ISO instants for today: local midnight today to local
+ *  midnight tomorrow. Narrowed from a 7-day rolling window per the
+ *  2026-07-24 user decision (the strip is titled "Today", not "This week"). */
+function todayRangeISO(): { start: string; end: string } {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = new Date(start);
-  end.setDate(end.getDate() + 7);
+  end.setDate(end.getDate() + 1);
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
-/** One collapsed "in flight" digest row on the global surface — a per-project
- *  summary of PROJECT_STATE.md's In progress / Next steps sections, rendered
- *  as read-only plain text (no markdown engine, spec constraint C4). Expand
- *  state is local to the row so multiple digests can be open independently. */
-function InFlightRow({
-  digest,
-  projectName,
-}: {
-  digest: WorkbenchDigest;
-  projectName: string | null;
-}) {
-  const t = useT();
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="rounded-2xl border border-border/60 bg-card px-3.5 py-2.5">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-        data-testid={`workbench-inflight-${digest.project_id}`}
-        className="flex w-full items-center gap-2 text-left"
-      >
-        <span
-          aria-hidden="true"
-          className={`inline-block shrink-0 text-[9px] transition-transform duration-150 ease-out motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
-        >
-          ▶
-        </span>
-        {projectName && (
-          <span className="rounded-full bg-sidebar px-2 py-0.5 text-[11px] font-medium text-secondary">
-            {projectName}
-          </span>
-        )}
-        <span className="text-[12.5px] font-medium text-secondary">
-          {t('workbench.inflight.title')}
-        </span>
-      </button>
-      {expanded && (
-        <div className="mt-1.5 space-y-2 rounded-xl bg-sidebar/60 px-3 py-2">
-          {digest.in_progress && (
-            <div>
-              <h3 className="mb-1 text-[11px] font-semibold text-secondary">
-                {t('workbench.inflight.inProgress')}
-              </h3>
-              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
-                {digest.in_progress}
-              </p>
-            </div>
-          )}
-          {digest.next_steps && (
-            <div>
-              <h3 className="mb-1 text-[11px] font-semibold text-secondary">
-                {t('workbench.inflight.nextSteps')}
-              </h3>
-              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
-                {digest.next_steps}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+/**
+ * Composer prefill text for the card-tap doorway (spec 2026-07-24 §5.3,
+ * design-pinned format — do not reflow; Evidence line dropped in the
+ * mid-task amendment that removed the receipt, since `evidence` no longer
+ * exists on `WorkbenchEntry`):
+ *   `Workbench · {section}: "{text}"` — `{section}: ` omitted when
+ *   `section` is null — then ` (due {due})` when `due` is set, then two
+ *   trailing newlines (cursor lands on the blank line after, composer
+ *   focused).
+ */
+function buildPrefillDraft(entry: WorkbenchEntry): string {
+  const sectionPart = entry.section ? `${entry.section}: ` : '';
+  let line = `Workbench · ${sectionPart}"${entry.text}"`;
+  if (entry.due) line += ` (due ${entry.due})`;
+  return line + '\n\n';
 }
 
 export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProps) {
@@ -120,11 +77,11 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   // Global empty state: project chosen in the migrate dropdown ('' = none).
   const [migrateTarget, setMigrateTarget] = useState('');
 
-  const { entries, digests, loading, error, conflict, refetch, exitEntry, openEntry, migrate } =
+  const { entries, loading, error, conflict, refetch, exitEntry, migrate } =
     useWorkbench({ projectId });
 
-  const { start, end } = useMemo(() => sevenDayRangeISO(), []);
-  const { availability: weekAvailability, events: weekEvents } = useCalendar({ projectId, start, end });
+  const { start, end } = useMemo(() => todayRangeISO(), []);
+  const { availability: todayAvailability, events: todayEvents } = useCalendar({ projectId, start, end });
 
   useEffect(() => {
     let cancelled = false;
@@ -148,14 +105,17 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
     setRoute({ name: 'project', projectId: pid, tab: 'chat', sessionId });
   }
 
-  async function handleOpenEntry(entry: WorkbenchEntry) {
-    setOpenError(null);
-    try {
-      const sessionId = await openEntry(entry.project_id, entry.id);
-      navigateToChat(entry.project_id, sessionId);
-    } catch {
-      setOpenError(t('workbench.error.load'));
-    }
+  // Card tap doorway (spec 2026-07-24): no network call, no session spawn —
+  // navigate to the project's chat tab in its normal default-session state,
+  // carrying the prefill text on the route for ChatTab/ChatView to load into
+  // the composer once. See buildPrefillDraft's docstring for the exact format.
+  function handleCardTap(entry: WorkbenchEntry) {
+    setRoute({
+      name: 'project',
+      projectId: entry.project_id,
+      tab: 'chat',
+      draft: buildPrefillDraft(entry),
+    });
   }
 
   async function handleMigrate(pid: string) {
@@ -173,15 +133,15 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   }
 
   const isEmpty = !loading && !error && entries.length === 0;
-  const showThisWeek = weekAvailability?.available === true && weekEvents.length > 0;
+  const showToday = todayAvailability?.available === true && todayEvents.length > 0;
 
-  // This-week strip rows: privacy-filter (global mode), chronological, then
-  // ONE row per automation trigger (a daily cron emits 7 occurrences in the
-  // window — the strip shows the next one, not seven copies; the full series
-  // stays on the Calendar). Memory/external events are never deduped.
-  const weekRows = useMemo(() => {
+  // Today strip rows: privacy-filter (global mode), chronological, then ONE
+  // row per automation trigger (a daily cron can emit multiple occurrences in
+  // the window — the strip shows the next one, not several copies; the full
+  // series stays on the Calendar). Memory/external events are never deduped.
+  const todayRows = useMemo(() => {
     const seenTriggers = new Set<string>();
-    return weekEvents
+    return todayEvents
       .slice()
       .filter(
         (ev) =>
@@ -200,7 +160,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         return true;
       })
       .slice(0, 5);
-  }, [weekEvents, projects, projectId]);
+  }, [todayEvents, projects, projectId]);
 
   const rootProps = {
     className: 'flex flex-col flex-1 min-h-0',
@@ -240,12 +200,12 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         </div>
       )}
 
-      {showThisWeek && weekRows.length > 0 && (
-        <div data-testid="workbench-this-week" className="px-4 pt-3">
+      {showToday && todayRows.length > 0 && (
+        <div data-testid="workbench-today" className="px-4 pt-3">
           <div className="rounded-2xl bg-sidebar/50 px-3.5 py-2.5">
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-[12px] font-semibold text-secondary">
-                {t('workbench.thisWeek.title')}
+                {t('workbench.today.title')}
               </span>
               <button
                 type="button"
@@ -253,11 +213,11 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                 data-testid="workbench-open-calendar"
                 className="text-[12px] font-medium text-accent transition-colors duration-100 hover:text-accent/80"
               >
-                {t('workbench.thisWeek.openCalendar')}
+                {t('workbench.today.openCalendar')}
               </button>
             </div>
             <ul className="space-y-1">
-              {weekRows.map((ev) => (
+              {todayRows.map((ev) => (
                 <li
                   key={ev.id}
                   className="flex items-center gap-2.5 text-[12.5px] text-secondary"
@@ -270,14 +230,6 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               ))}
             </ul>
           </div>
-        </div>
-      )}
-
-      {showProjectChip && digests.length > 0 && (
-        <div data-testid="workbench-inflight-strip" className="space-y-2 px-4 pt-3">
-          {digests.map((d) => (
-            <InFlightRow key={d.project_id} digest={d} projectName={projectName(d.project_id)} />
-          ))}
         </div>
       )}
 
@@ -360,7 +312,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                   entry={e}
                   showProjectChip={showProjectChip}
                   projectName={projectName(e.project_id)}
-                  onOpen={() => handleOpenEntry(e)}
+                  onOpen={() => handleCardTap(e)}
                   onExit={(kind) => exitEntry(e.project_id, e.id, kind)}
                 />
               </li>
