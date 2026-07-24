@@ -178,13 +178,47 @@ describe('WorkbenchPage — empty state', () => {
     );
   });
 
-  it('global view: shows one migrate button per project', async () => {
-    mockApi({ entries: [] });
+  it('global view: dropdown lists non-scratch projects; CTA disabled until a selection', async () => {
+    mockApi({
+      entries: [],
+      projects: [
+        ...PROJECTS,
+        { project_id: 'proj-scratch', name: 'Quick Tasks', workspace: '/ws/s', is_scratch: true },
+      ],
+    });
     render(<WorkbenchPage setRoute={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
 
-    expect(screen.getByTestId('workbench-migrate-cta-proj-a')).toBeInTheDocument();
-    expect(screen.getByTestId('workbench-migrate-cta-proj-b')).toBeInTheDocument();
+    const picker = screen.getByTestId('workbench-migrate-picker') as HTMLSelectElement;
+    // Placeholder first, then real projects; the scratch project is excluded.
+    expect(Array.from(picker.options).map((o) => o.value)).toEqual(['', 'proj-a', 'proj-b']);
+    expect(screen.getByTestId('workbench-migrate-cta')).toBeDisabled();
+  });
+
+  it('global view: selecting a project enables the CTA; clicking migrates it and navigates', async () => {
+    mockApi({ entries: [] });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('workbench-migrate-picker'), {
+      target: { value: 'proj-b' },
+    });
+    const cta = screen.getByTestId('workbench-migrate-cta');
+    expect(cta).not.toBeDisabled();
+    fireEvent.click(cta);
+
+    await waitFor(() =>
+      expect(setRoute).toHaveBeenCalledWith({
+        name: 'project',
+        projectId: 'proj-b',
+        tab: 'chat',
+        sessionId: 'sess-migrate',
+      }),
+    );
+    expect(
+      apiMock.mock.calls.some(([path]) => path === '/api/v2/workbench/proj-b/migrate'),
+    ).toBe(true);
   });
 });
 

@@ -51,6 +51,8 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const t = useT();
   const [projects, setProjects] = useState<Project[]>([]);
   const [openError, setOpenError] = useState<string | null>(null);
+  // Global empty state: project chosen in the migrate dropdown ('' = none).
+  const [migrateTarget, setMigrateTarget] = useState('');
 
   const { entries, loading, error, conflict, refetch, exitEntry, openEntry, migrate } =
     useWorkbench({ projectId });
@@ -246,20 +248,32 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               {t('workbench.empty.migrateCta')}
             </button>
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {projects
-                .filter((p) => p.workspace)
-                .map((p) => (
-                  <button
-                    key={p.project_id}
-                    type="button"
-                    onClick={() => handleMigrate(p.project_id)}
-                    data-testid={`workbench-migrate-cta-${p.project_id}`}
-                    className="rounded-full border border-border px-4 py-2 text-sm font-medium text-primary transition-[transform,background-color] duration-100 ease-out hover:bg-card-hover active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
-                  >
-                    {t('workbench.empty.migrateCtaFor', { name: p.name })}
-                  </button>
-                ))}
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <select
+                value={migrateTarget}
+                onChange={(e) => setMigrateTarget(e.target.value)}
+                aria-label={t('workbench.empty.migratePicker')}
+                data-testid="workbench-migrate-picker"
+                className="rounded-full border border-border bg-card px-3.5 py-2 text-sm text-primary transition-all duration-150 focus:border-accent focus:outline-none"
+              >
+                <option value="">{t('workbench.empty.migratePicker')}</option>
+                {projects
+                  .filter((p) => p.workspace && !p.is_scratch)
+                  .map((p) => (
+                    <option key={p.project_id} value={p.project_id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => migrateTarget && handleMigrate(migrateTarget)}
+                disabled={!migrateTarget}
+                data-testid="workbench-migrate-cta"
+                className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
+              >
+                {t('workbench.empty.migrateCta')}
+              </button>
             </div>
           )}
         </div>
