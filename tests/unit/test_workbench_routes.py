@@ -124,9 +124,12 @@ async def test_get_parses_seeded_file(tmp_path):
     x = next(e for e in body["entries"] if e["id"] == "x7f3a2")
     assert x["text"].startswith("Send 宝玉 + Simon DM drafts")
     assert x["due"] == "2026-07-28"
-    assert x["confidence"] == "unconfirmed"
-    assert x["from_session"] == "orbital-marketing_7c045c40"
-    assert x["evidence"].startswith("EN 这边宝玉")
+    # Receipt attributes are legacy-parseable but never cross the wire (the
+    # receipt cut, rev 6): verbatim quotes must not leave the daemon when no
+    # UI renders them.
+    assert "confidence" not in x
+    assert "from_session" not in x
+    assert "evidence" not in x
     assert x["age_days"] == 5           # 07-19 -> 07-24
     assert x["overdue"] is False
     assert x["project_id"] == "proj_a"

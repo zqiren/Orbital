@@ -237,7 +237,8 @@ def _budget_text(content: str, key: str) -> str:
     """Content used for budget counting/injection (spec §4.1 resolution 1).
 
     ``<!--mem ...-->`` comments are daemon-managed machine metadata (id,
-    evidence, confidence, timestamps) on PROJECT_STATE bullets — they never
+    created/touched/resolved stamps; legacy files may still carry receipt
+    attrs) on PROJECT_STATE bullets — they never
     compete with agent-visible context for budget, and are never shown to the
     agent at all. Only ``state`` carries this comment grammar; every other
     key (including DECISIONS/LESSONS, whose own ``<!--mem id:...-->`` stamp

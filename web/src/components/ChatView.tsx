@@ -1270,7 +1270,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     const ta = textareaRef.current;
     if (ta) {
       adjustTextareaHeight();
-      ta.focus();
+      // preventScroll: WKWebView scrolls focus() targets by their VISUAL
+      // position (CLAUDE.md quirk) — invisible in Chrome/jsdom.
+      ta.focus({ preventScroll: true });
       const end = ta.value.length;
       ta.setSelectionRange(end, end);
     }

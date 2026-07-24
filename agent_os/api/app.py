@@ -449,10 +449,9 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     calendar_routes.configure(calendar_hub)
     app.include_router(calendar_routes.router)
 
-    # 7c4. Workbench routes (user-flagged memory, Task 5): flagged-entry mirror
-    # + computed cards + two exits + the autospawn doorway. Shares the agent
-    # manager's dispatch seam for /open + /migrate and refreshes the calendar
-    # hub after every write.
+    # 7c4. Workbench routes (user-flagged memory): flagged-entry mirror + two
+    # exits. Shares the agent manager's dispatch seam for /migrate and
+    # refreshes the calendar hub after every write.
     from agent_os.api.routes import workbench as workbench_routes
     workbench_routes.configure(project_store, agent_manager, calendar_hub)
     app.include_router(workbench_routes.router)
