@@ -7,8 +7,8 @@
 /**
  * WorkbenchPage integration tests (Task 7). Covers the plan's Vitest list:
  * sort order rendering, an unconfirmed card auto-expanding its receipt, a
- * "Done" click issuing the right exit POST with optimistic removal, and the
- * empty state showing the migrate CTA (per-project and global). The api
+ * "Resolved" click issuing the right exit POST with optimistic removal, and
+ * the empty state showing the migrate CTA (per-project and global). The api
  * client is mocked — no network.
  */
 
@@ -32,21 +32,19 @@ const PROJECTS = [
 
 function mockApi(opts: {
   entries?: unknown[];
-  computed?: unknown[];
   projects?: unknown[];
   calendarAvailable?: boolean;
   calendarEvents?: unknown[];
 } = {}) {
   const {
     entries = [],
-    computed = [],
     projects = PROJECTS,
     calendarAvailable = false,
     calendarEvents = [],
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v2/workbench') && (!init || init.method === undefined)) {
-      return { entries, computed };
+      return { entries };
     }
     if (path === '/api/v2/projects') return projects;
     if (path.startsWith('/api/v2/calendar/availability')) {
@@ -54,7 +52,6 @@ function mockApi(opts: {
     }
     if (path.startsWith('/api/v2/calendar/events')) return { events: calendarEvents };
     if (path.includes('/exit')) return { status: 'ok' };
-    if (path.includes('/dismiss')) return { status: 'ok' };
     if (path.includes('/open')) return { session_id: 'sess-new' };
     if (path.includes('/migrate')) return { session_id: 'sess-migrate' };
     return {};
@@ -79,12 +76,14 @@ function entry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('WorkbenchPage — sort order', () => {
-  it('renders overdue-first, then oldest-first, in one interleaved list', async () => {
+  it('renders entries in server order (overdue-first-then-oldest is the backend\'s sort, not re-applied client-side)', async () => {
+    // The backend already returns entries pre-sorted (overdue first, then
+    // oldest first); the page must render them as-is, not re-sort them.
     mockApi({
       entries: [
-        entry({ id: 'newer', created: '2026-07-20', overdue: false }),
-        entry({ id: 'older', created: '2026-06-01', overdue: false }),
         entry({ id: 'overdue-entry', created: '2026-07-15', overdue: true, due: '2026-07-10' }),
+        entry({ id: 'older', created: '2026-06-01', overdue: false }),
+        entry({ id: 'newer', created: '2026-07-20', overdue: false }),
       ],
     });
     render(<WorkbenchPage setRoute={vi.fn()} />);
@@ -113,7 +112,7 @@ describe('WorkbenchPage — unconfirmed receipt', () => {
   });
 });
 
-describe('WorkbenchPage — Done exit', () => {
+describe('WorkbenchPage — Resolved exit', () => {
   it('POSTs the fulfilled exit and optimistically removes the card', async () => {
     mockApi({ entries: [entry()] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
@@ -158,7 +157,7 @@ describe('WorkbenchPage — doorway navigation', () => {
 
 describe('WorkbenchPage — empty state', () => {
   it('per-project lens: shows a single migrate CTA that navigates on success', async () => {
-    mockApi({ entries: [], computed: [] });
+    mockApi({ entries: [] });
     const setRoute = vi.fn();
     render(<WorkbenchPage projectId="proj-a" setRoute={setRoute} />);
     await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
@@ -177,7 +176,7 @@ describe('WorkbenchPage — empty state', () => {
   });
 
   it('global view: shows one migrate button per project', async () => {
-    mockApi({ entries: [], computed: [] });
+    mockApi({ entries: [] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
 
@@ -186,25 +185,7 @@ describe('WorkbenchPage — empty state', () => {
   });
 });
 
-describe('WorkbenchPage — computed cards + This week', () => {
-  it('renders a computed card with Dismiss', async () => {
-    mockApi({
-      computed: [
-        {
-          type: 'broken_automation',
-          project_id: 'proj-a',
-          key: 'trigger-1',
-          text: 'Automation "nightly sync" has not run on schedule.',
-          since: '2026-07-10',
-        },
-      ],
-    });
-    render(<WorkbenchPage setRoute={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-card-computed-proj-a-broken_automation-trigger-1')).toBeInTheDocument(),
-    );
-  });
-
+describe('WorkbenchPage — This week', () => {
   it('hides the This week strip when there are no events', async () => {
     mockApi({ entries: [entry()], calendarAvailable: true, calendarEvents: [] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
@@ -260,32 +241,6 @@ describe('WorkbenchPage — computed cards + This week', () => {
     expect(screen.getAllByText('Daily Adjacent-Repo Issue Scan')).toHaveLength(1);
     expect(screen.getAllByText('Daily Orbital issues check')).toHaveLength(1);
     expect(screen.getByText('Ship the deadline thing')).toBeInTheDocument();
-  });
-
-  it('shows the migrate banner when only computed cards exist (no flagged entries)', async () => {
-    // Real-data regression (2026-07-24): computed noise buried the empty
-    // state, making "Review & label" unreachable on legacy projects.
-    mockApi({
-      entries: [],
-      computed: [
-        {
-          type: 'paused_thread',
-          project_id: 'proj-a',
-          key: 'sess-1',
-          text: 'Ship v1 or wait?',
-          since: '2026-07-23T10:00:00+00:00',
-        },
-      ],
-    });
-    render(<WorkbenchPage projectId="proj-a" setRoute={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getByTestId('workbench-migrate-banner')).toBeInTheDocument(),
-    );
-    expect(screen.getByTestId('workbench-migrate-cta')).toBeInTheDocument();
-    // The list still renders the computed card — banner supplements, not replaces.
-    expect(
-      screen.getByTestId('workbench-card-computed-proj-a-paused_thread-sess-1'),
-    ).toBeInTheDocument();
   });
 
   it('per-project lens This week strip still shows that project own events even when excluded globally', async () => {

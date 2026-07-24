@@ -856,8 +856,8 @@ export const STRINGS = {
   "calendar.detail.linkedTo": { en: "Linked to {name}", zh: "已关联到 {name}" },
   "calendar.detail.linkError": { en: "Couldn't update the link", zh: "无法更新关联" },
 
-  // Workbench surface (spec 2026-07-23 §5.3/§5.4/§6) — flagged [user] entries
-  // + computed cards, global tab + per-project lens.
+  // Workbench surface (spec 2026-07-23 §5.3/§5.4/§6) — flagged [user] entries,
+  // global tab + per-project lens.
   "workspace.workbench.nav": { en: "Workbench", zh: "工作台" },
   "projectDetail.tab.workbench": { en: "Workbench", zh: "工作台" },
   "workbench.title": { en: "Workbench", zh: "工作台" },
@@ -868,9 +868,8 @@ export const STRINGS = {
   "workbench.receipt.title": { en: "Why I believe this", zh: "为什么我这么认为" },
   "workbench.receipt.from": { en: "from", zh: "来自" },
   "workbench.receipt.due": { en: "due {due}", zh: "截止 {due}" },
-  "workbench.exit.fulfilled": { en: "Done", zh: "已完成" },
-  "workbench.exit.irrelevant": { en: "Not relevant", zh: "不相关" },
-  "workbench.dismiss": { en: "Dismiss", zh: "忽略" },
+  "workbench.exit.fulfilled": { en: "Resolved", zh: "已解决" },
+  "workbench.exit.irrelevant": { en: "Delete", zh: "删除" },
   "workbench.age.waiting.one": { en: "Waiting {n} day", zh: "已等待 {n} 天" },
   "workbench.age.waiting.other": { en: "Waiting {n} days", zh: "已等待 {n} 天" },
   "workbench.age.late.one": { en: "{n} day late", zh: "已逾期 {n} 天" },
@@ -879,11 +878,6 @@ export const STRINGS = {
   "workbench.empty.body": { en: "As agents work, anything that needs your input, a decision, or your awareness will show up here.", zh: "在 Agent 工作过程中，任何需要你输入、决策或知晓的事项都会显示在这里。" },
   "workbench.empty.migrateCta": { en: "Review & label what's already here", zh: "查看并标记已有内容" },
   "workbench.empty.migrateCtaFor": { en: "Review & label what's already here — {name}", zh: "查看并标记 {name} 的已有内容" },
-  "workbench.migrateBanner": { en: "Project state isn't labeled for the Workbench yet — review what's already on file.", zh: "项目状态还未为工作台标记——查看已有内容并进行标记。" },
-  "workbench.doItNow": { en: "Do it now", zh: "现在处理" },
-  "workbench.repair": { en: "Repair", zh: "修复" },
-  "workbench.disable": { en: "Disable", zh: "停用" },
-  "workbench.resume": { en: "Resume", zh: "继续对话" },
   "workbench.conflict.notice": { en: "That entry changed — refreshed the list.", zh: "该条目已发生变化——列表已刷新。" },
   "workbench.thisWeek.title": { en: "This week", zh: "本周" },
   "workbench.thisWeek.openCalendar": { en: "Open Calendar →", zh: "打开日历 →" },

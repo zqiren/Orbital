@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Tests for the /api/v2/workbench routes + computed cards (Task 5).
+"""Tests for the /api/v2/workbench routes (Task 5).
 
 Mounts only the workbench router over an in-process ASGI transport with a
 fake project_store / agent_manager and a real CalendarHub (no sources needed —
@@ -10,7 +10,6 @@ Task 5 only calls ``hub.refresh()``). Workspaces are tmp dirs seeded with a
 PROJECT_STATE.md written in the ``[user]`` grammar.
 """
 
-import json
 import os
 from datetime import datetime, timezone
 
@@ -65,7 +64,6 @@ class FakeAgentManager:
     def __init__(self):
         self.injected = []      # (project_id, content, session_id)
         self._counter = 0
-        self.sessions = {}      # pid -> list[dict]
 
     async def new_session(self, project_id, session_id=None):
         self._counter += 1
@@ -75,9 +73,6 @@ class FakeAgentManager:
     async def inject_message(self, project_id, content, *, session_id=None, nonce=None):
         self.injected.append((project_id, content, session_id))
         return "started"
-
-    def list_sessions(self, project_id):
-        return self.sessions.get(project_id, [])
 
 
 def _seed_project(tmp_path, pid="proj_a", *, state=SEEDED_STATE, extra=None):
@@ -136,12 +131,9 @@ async def test_get_parses_seeded_file(tmp_path):
     assert x["overdue"] is False
     assert x["project_id"] == "proj_a"
 
-    # The unflagged dated fact, being past-due, surfaces as an overdue computed
-    # card (never as a flagged entry).
-    overdue = [c for c in body["computed"] if c["type"] == "overdue"]
-    assert [c["key"] for c in overdue] == ["d4e5f6"]
-    assert overdue[0]["since"] == "2026-07-20"
-    assert overdue[0]["project_id"] == "proj_a"
+    # The unflagged dated fact never surfaces — not as an entry, and the
+    # computed-card system that used to promote it as "overdue" is gone.
+    assert "d4e5f6" not in ids
 
 
 async def test_get_sort_overdue_first_then_oldest(tmp_path):
@@ -269,31 +261,6 @@ async def test_fulfilled_exit_leaves_parseable_resolved_trace(tmp_path):
     assert entry.id == "x7f3a2"         # id preserved
 
 
-async def test_resolved_dated_fact_never_produces_overdue_card(tmp_path):
-    """(c) guard: a dated fact carrying a resolved stamp must not resurrect as
-    an overdue computed card off its now-stale due — while a normal (unresolved)
-    past-due dated fact still does."""
-    state = "\n".join([
-        FORMAT_LINE,
-        # resolved dated fact with a stale past due -> must be silent
-        "- [due:2026-07-01] Already-finished shipment.",
-        "  <!--mem id:done1 created:2026-06-01 resolved:2026-07-10-->",
-        # unresolved past-due dated fact -> positive control (still overdue)
-        "- [due:2026-07-02] Live overdue item.",
-        "  <!--mem id:live1 created:2026-06-01-->",
-        "",
-    ])
-    project = _seed_project(tmp_path, state=state)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench")).json()
-    overdue_keys = {c["key"] for c in body["computed"] if c["type"] == "overdue"}
-    assert "done1" not in overdue_keys   # resolved -> skipped
-    assert "live1" in overdue_keys       # unresolved -> still fires
-    # And a retired/dated fact is never a flagged entry row either.
-    assert {e["id"] for e in body["entries"]} == set()
-
-
 async def test_fulfilled_exit_survives_concurrent_write(tmp_path, monkeypatch):
     project = _seed_project(tmp_path)
     client, *_ = _make_client(tmp_path, [project])
@@ -367,32 +334,6 @@ async def test_exit_unknown_id_is_404(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Dismiss
-# --------------------------------------------------------------------------
-
-async def test_dismiss_persists_and_filters(tmp_path):
-    project = _seed_project(tmp_path)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        # d4e5f6 is an overdue computed card in the seeded file.
-        before = (await client.get("/api/v2/workbench")).json()
-        assert any(c["key"] == "d4e5f6" for c in before["computed"])
-
-        r = await client.post(
-            "/api/v2/workbench/proj_a/computed/overdue/d4e5f6/dismiss")
-        assert r.status_code == 200, r.text
-
-        after = (await client.get("/api/v2/workbench")).json()
-        assert not any(c["key"] == "d4e5f6" for c in after["computed"])
-
-    dismissals = json.load(open(
-        os.path.join(project["workspace"], "orbital", "workbench_dismissals.json"),
-        encoding="utf-8",
-    ))
-    assert any(d["type"] == "overdue" and d["key"] == "d4e5f6" for d in dismissals)
-
-
-# --------------------------------------------------------------------------
 # Open / Migrate (spawn seam)
 # --------------------------------------------------------------------------
 
@@ -411,54 +352,6 @@ async def test_open_spawns_seeded_session(tmp_path):
     assert session_id == "minted_1"
     assert 'Send 宝玉 + Simon DM drafts' in content
     assert "Let's handle this." in content
-
-
-async def test_computed_open_overdue_seeds_do_it_now(tmp_path):
-    """Spec §6 alignment (2026-07-24): an overdue card's doorway spawns a
-    session told to DO the late item, not a bare chat visit."""
-    project = _seed_project(tmp_path)
-    client, _, am, _ = _make_client(tmp_path, [project])
-    async with client:
-        r = await client.post(
-            "/api/v2/workbench/proj_a/computed/overdue/d4e5f6/open")
-        assert r.status_code == 200, r.text
-        assert r.json()["session_id"] == "minted_1"
-    msg = am.injected[0][1]
-    assert "Ship the marketing site." in msg
-    assert "Do it now" in msg
-    assert "2026-07-20" in msg          # the due date is named
-
-
-async def test_computed_open_broken_automation_seeds_repair(tmp_path):
-    project = _seed_project(tmp_path, extra={"triggers": [{
-        "id": "trg_x", "name": "Nightly sync", "enabled": True,
-        "type": "schedule", "last_triggered": "2026-06-28T01:00:00+00:00",
-        "created_at": "2026-06-01T00:00:00+00:00",
-        "schedule": {"cron": "0 1 * * *", "timezone": "UTC"},
-    }]})
-    client, _, am, _ = _make_client(tmp_path, [project])
-    async with client:
-        r = await client.post(
-            "/api/v2/workbench/proj_a/computed/broken_automation/trg_x/open")
-        assert r.status_code == 200, r.text
-    msg = am.injected[0][1]
-    assert "Nightly sync" in msg and "repair" in msg.lower()
-    assert "2026-06-28" in msg
-
-
-async def test_computed_open_rejects_unknown_type_and_key(tmp_path):
-    project = _seed_project(tmp_path)
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        assert (await client.post(
-            "/api/v2/workbench/proj_a/computed/paused_thread/u1/open"
-        )).status_code == 404
-        assert (await client.post(
-            "/api/v2/workbench/proj_a/computed/overdue/nope/open"
-        )).status_code == 404
-        assert (await client.post(
-            "/api/v2/workbench/proj_a/computed/broken_automation/nope/open"
-        )).status_code == 404
 
 
 async def test_migrate_refreshes_header_and_spawns(tmp_path):
@@ -489,7 +382,7 @@ async def test_migrate_refreshes_header_and_spawns(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Computed detectors (unit-level)
+# Timezone / overdue / age math (unit-level)
 # --------------------------------------------------------------------------
 
 def test_overdue_boundary_uses_project_tz_not_utc():
@@ -554,111 +447,6 @@ def test_project_timezone_precedence():
     assert workbench_cards.project_timezone({}, triggers) == "Europe/Paris"
     # else a resolvable daemon-local zone name
     assert workbench_cards.project_timezone({}, []) not in (None, "")
-
-
-def test_broken_automation_detector_on_synthetic_trigger():
-    now = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
-    healthy = {
-        "id": "t1", "type": "schedule", "enabled": True,
-        "schedule": {"cron": "0 9 * * *", "timezone": "UTC"},
-        "last_triggered": "2026-07-24T09:00:00+00:00",
-    }
-    broken = {
-        "id": "t2", "type": "schedule", "enabled": True,
-        "schedule": {"cron": "0 9 * * *", "timezone": "UTC"},
-        "last_triggered": "2026-07-20T09:00:00+00:00",
-    }
-    disabled = {**broken, "id": "t3", "enabled": False}
-    assert workbench_cards.is_broken_automation(healthy, now) is False
-    assert workbench_cards.is_broken_automation(broken, now) is True
-    assert workbench_cards.is_broken_automation(disabled, now) is False
-
-
-async def test_broken_automation_suppresses_matching_flagged_entry(tmp_path):
-    state = "\n".join([
-        FORMAT_LINE,
-        "- [user] The nightly-digest automation looks broken, please check.",
-        "  <!--mem id:supp created:2026-07-20-->",
-        "- [user] Unrelated question about pricing.",
-        "  <!--mem id:keep created:2026-07-20-->",
-        "",
-    ])
-    trigger = {
-        "id": "trg1", "name": "nightly-digest", "type": "schedule",
-        "enabled": True,
-        "schedule": {"cron": "0 9 * * *", "timezone": "UTC"},
-        "last_triggered": "2026-07-19T09:00:00+00:00",
-    }
-    project = _seed_project(tmp_path, state=state, extra={"triggers": [trigger]})
-    client, *_ = _make_client(tmp_path, [project])
-    async with client:
-        body = (await client.get("/api/v2/workbench")).json()
-    ids = {e["id"] for e in body["entries"]}
-    # The entry naming the broken trigger is suppressed; the computed card wins.
-    assert "supp" not in ids
-    assert "keep" in ids
-    assert any(c["type"] == "broken_automation" and c["key"] == "trg1"
-               for c in body["computed"])
-
-
-def test_paused_thread_detector_on_unanswered_question():
-    # cheapest reliable heuristic: a non-running session whose last persisted
-    # message is an assistant turn ending in '?'.
-    sessions = [
-        {"session_id": "s1", "session_uuid": "u1", "status": "waiting",
-         "last_activity_at": "2026-07-24T10:00:00+00:00"},
-        {"session_id": "s2", "session_uuid": "u2", "status": "running",
-         "last_activity_at": "2026-07-24T11:00:00+00:00"},
-    ]
-    tails = {
-        "u1": {"role": "assistant", "content": "Which vendor should I use?",
-               "timestamp": "2026-07-24T10:00:00+00:00"},
-        "u2": {"role": "assistant", "content": "Working on it now.",
-               "timestamp": "2026-07-24T11:00:00+00:00"},
-    }
-    cards = workbench_cards.paused_thread_cards(
-        "proj_a", sessions, lambda uuid: tails.get(uuid),
-        now=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc))
-    assert len(cards) == 1
-    assert cards[0]["type"] == "paused_thread"
-    assert cards[0]["key"] == "u1"          # resume key = session uuid
-    assert cards[0]["text"].endswith("?")
-
-
-def test_paused_thread_noise_guards():
-    """Real-data regression (2026-07-24 screenshot): months-old sessions must
-    not surface, only ONE card per project, and the card text is the final
-    question sentence — not the whole markdown-laden assistant turn."""
-    long_turn = (
-        "[STATUS: drafting]\n\nDone. Created `content-bank/drafts/005.md` "
-        "with both versions. **How the rigor landed:** 1. **Two-dimensional "
-        "compounding** — separated context capture drift from execution "
-        "accuracy. Voice check passed. Good to add to your weekly rotation?"
-    )
-    sessions = [
-        {"session_uuid": "old", "status": "idle",
-         "last_activity_at": "2026-04-26T10:00:00+00:00"},   # 89 days old
-        {"session_uuid": "new1", "status": "waiting",
-         "last_activity_at": "2026-07-22T10:00:00+00:00"},
-        {"session_uuid": "new2", "status": "idle",
-         "last_activity_at": "2026-07-23T10:00:00+00:00"},
-    ]
-    tails = {
-        "old": {"role": "assistant", "content": "Still want this?",
-                "timestamp": "2026-04-26T10:00:00+00:00"},
-        "new1": {"role": "assistant", "content": "Ship v1 or wait?",
-                 "timestamp": "2026-07-22T10:00:00+00:00"},
-        "new2": {"role": "assistant", "content": long_turn,
-                 "timestamp": "2026-07-23T10:00:00+00:00"},
-    }
-    cards = workbench_cards.paused_thread_cards(
-        "proj_a", sessions, lambda uuid: tails.get(uuid),
-        now=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc))
-    # 89-day-old thread skipped; one card max; newest wins.
-    assert len(cards) == 1
-    assert cards[0]["key"] == "new2"
-    # Text is the final question only, markdown/status noise stripped.
-    assert cards[0]["text"] == "Good to add to your weekly rotation?"
 
 
 async def test_workbench_exclude_global_persists_via_project_update(tmp_path):

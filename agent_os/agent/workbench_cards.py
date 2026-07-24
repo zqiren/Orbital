@@ -2,36 +2,25 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Workbench computed cards + timezone helper (spec §5.6, §6, §7.3; Task 5).
+"""Workbench timezone + overdue/age math (spec §7.3).
 
-Pure, dependency-light detectors used by the Workbench read path
-(``api/routes/workbench.py``) and — for ``project_timezone`` only — the
-calendar native sources (Task 6). Everything here is mechanical (zero LLM):
+Pure, dependency-light helpers used by the Workbench read path
+(``api/routes/workbench.py``, entry-row age/overdue/days_late) and — for
+``project_timezone`` only — the calendar native sources
+(``calendar_hub/sources/automation_source.py``, ``memory_source.py``).
 
 - ``project_timezone`` — the single effective-tz rule (explicit setting →
-  first schedule trigger's tz → daemon local). Task 6 imports this so there
-  is one implementation, not two.
-- ``is_overdue`` / ``age_days`` — display math computed in the project tz,
-  never UTC (a date-only ``due:`` is all-day; overdue rolls at local midnight).
-- ``is_broken_automation`` — an enabled schedule trigger more than one full
-  cron period behind its last successful fire (croniter, mirroring
-  ``trigger_manager``'s baseline math).
-- ``paused_thread_cards`` — a non-running session whose last persisted message
-  is an unanswered assistant question.
-- ``suppress_entries`` — spec §5.6: a computed card beats a memory entry that
-  asserts the same system-state fact.
+  first schedule trigger's tz → daemon local). The calendar sources import
+  this so there is one implementation, not two.
+- ``is_overdue`` / ``age_days`` / ``days_late`` — display math computed in the
+  project tz, never UTC (a date-only ``due:`` is all-day; overdue rolls at
+  local midnight).
 """
 
 from __future__ import annotations
 
-import logging
 import os
-import re
 from datetime import date, datetime, timezone
-
-from croniter import croniter
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -151,221 +140,3 @@ def days_late(due: str | None, tz_name: str, now: datetime | None = None) -> int
         return None
     delta = (today_in_tz(tz_name, now) - d).days
     return delta if delta > 0 else None
-
-
-# ---------------------------------------------------------------------------
-# Broken-automation detector
-# ---------------------------------------------------------------------------
-
-def _parse_iso(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def _trigger_baseline(trigger: dict) -> datetime:
-    """max(last_triggered, created_at) — mirrors ``trigger_manager``.
-
-    A missing/unparsable ``last_triggered`` falls back to ``created_at`` (so a
-    freshly-created, never-fired trigger is not spuriously "broken"); both
-    missing → epoch.
-    """
-    cands = [
-        p for p in (_parse_iso(trigger.get("last_triggered")),
-                    _parse_iso(trigger.get("created_at")))
-        if p is not None
-    ]
-    return max(cands) if cands else datetime.min.replace(tzinfo=timezone.utc)
-
-
-def is_broken_automation(trigger: dict, now: datetime | None = None) -> bool:
-    """True when an enabled schedule trigger is > 1 full cron period behind.
-
-    "Broken" = its last successful fire (baseline) predates the occurrence one
-    full period before the most recent expected fire — i.e. it has missed the
-    latest fire AND is already behind the one before it. That one-period grace
-    keeps a just-fired trigger, or a single missed tick, from being flagged.
-    Uses croniter in the trigger's own tz, the same math ``trigger_manager``
-    uses for its due rule.
-    """
-    if not trigger.get("enabled", True):
-        return False
-    if trigger.get("type", "schedule") != "schedule":
-        return False
-    schedule = trigger.get("schedule") or {}
-    cron = schedule.get("cron")
-    if not cron or not croniter.is_valid(cron):
-        return False
-    tz = _resolve_tz(schedule.get("timezone", "UTC"))
-    now_local = _now(now).astimezone(tz)
-    try:
-        itr = croniter(cron, now_local)
-        itr.get_prev(datetime)               # most recent expected fire
-        prev_prev = itr.get_prev(datetime)   # one full period earlier
-    except Exception:
-        logger.debug("broken_automation: croniter failed for %r", cron, exc_info=True)
-        return False
-    if prev_prev.tzinfo is None:
-        prev_prev = prev_prev.replace(tzinfo=tz)
-    return _trigger_baseline(trigger) < prev_prev
-
-
-def broken_automation_cards(project_id: str, triggers: list[dict],
-                            now: datetime | None = None) -> list[dict]:
-    """Computed cards for every broken enabled schedule trigger in a project."""
-    cards: list[dict] = []
-    for t in triggers or []:
-        if not is_broken_automation(t, now):
-            continue
-        name = t.get("name") or t.get("id") or "automation"
-        baseline = _trigger_baseline(t)
-        since = (baseline.date().isoformat()
-                 if baseline.year > 1 else None)
-        cards.append({
-            "type": "broken_automation",
-            "project_id": project_id,
-            "key": t.get("id") or name,
-            "text": f'Automation "{name}" has not run on schedule.',
-            "since": since,
-        })
-    return cards
-
-
-def broken_trigger_names(triggers: list[dict],
-                         now: datetime | None = None) -> list[str]:
-    """Names of broken enabled schedule triggers (for §5.6 suppression)."""
-    names: list[str] = []
-    for t in triggers or []:
-        if is_broken_automation(t, now):
-            name = t.get("name")
-            if name:
-                names.append(name)
-    return names
-
-
-# ---------------------------------------------------------------------------
-# Suppression (spec §5.6): computed truth beats remembered truth
-# ---------------------------------------------------------------------------
-
-def suppress_entries(entries: list, broken_names: list[str]) -> tuple[list, set]:
-    """Split ``entries`` into (kept, suppressed_line_starts).
-
-    A flagged entry whose text contains a broken trigger's name
-    (case-insensitive) is suppressed — the ``broken_automation`` computed card
-    asserts the same fact and wins. ``entries`` are ``user_flags.Entry``
-    objects; the returned suppressed set holds their ``line_start`` values so
-    callers can key by identity without importing the dataclass.
-    """
-    if not broken_names:
-        return list(entries), set()
-    lowered = [n.lower() for n in broken_names if n]
-    kept: list = []
-    suppressed: set = set()
-    for e in entries:
-        text = (e.text or "").lower()
-        if any(name in text for name in lowered):
-            suppressed.add(e.line_start)
-        else:
-            kept.append(e)
-    return kept, suppressed
-
-
-# ---------------------------------------------------------------------------
-# Paused-thread detector
-# ---------------------------------------------------------------------------
-
-def _message_text(msg: dict) -> str:
-    """Extract plain text from a persisted message (string or block list)."""
-    content = msg.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = [
-            b.get("text", "") for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
-        return "".join(parts)
-    return ""
-
-
-# A conversation parked longer than this is an abandoned session, not a
-# "paused thread" — surfacing 3-month-old questions is noise, not attention.
-_PAUSED_MAX_AGE_DAYS = 7
-_PAUSED_SUMMARY_CHARS = 180
-
-_STATUS_TAG_RE = re.compile(r"\[STATUS:[^\]]*\]")
-_MD_NOISE_RE = re.compile(r"[*_`#]+")
-
-
-def _question_summary(text: str) -> str:
-    """The final question sentence, cleaned of markdown — not the whole turn.
-
-    The card's job is "we stopped on this question"; the full assistant
-    message belongs in the session, not on the Workbench.
-    """
-    text = _STATUS_TAG_RE.sub(" ", text)
-    text = _MD_NOISE_RE.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    # Walk back from the trailing "?" to the previous sentence boundary.
-    cut = max(text.rfind(". ", 0, len(text) - 1),
-              text.rfind("! ", 0, len(text) - 1),
-              text.rfind("? ", 0, len(text) - 1))
-    question = text[cut + 2:] if cut != -1 else text
-    if len(question) > _PAUSED_SUMMARY_CHARS:
-        question = "…" + question[-_PAUSED_SUMMARY_CHARS:]
-    return question
-
-
-def paused_thread_cards(project_id: str, sessions: list[dict],
-                        tail_reader, now: datetime | None = None) -> list[dict]:
-    """Computed card for a session recently paused on an unanswered question.
-
-    Heuristic (documented, cheapest reliable signal): for each session that is
-    NOT actively running (status not ``running``/``pending_approval``), read
-    its last persisted message via ``tail_reader(session_uuid)``; if that
-    message is an assistant turn whose text ends in ``?`` it is a paused
-    thread. Noise guards: threads older than ``_PAUSED_MAX_AGE_DAYS`` are
-    skipped (an abandoned session is not a paused one), the card text is the
-    final question sentence only (markdown/status noise stripped), and at most
-    ONE card — the newest — is emitted per project. ``tail_reader`` returns
-    the last message dict or ``None``; any read failure yields no card (best
-    effort — a missing signal must never 500 the Workbench).
-    """
-    now_dt = _now(now)
-    cards: list[dict] = []
-    for s in sessions or []:
-        if s.get("status") in ("running", "pending_approval"):
-            continue
-        uuid = s.get("session_uuid")
-        if not uuid:
-            continue
-        try:
-            tail = tail_reader(uuid)
-        except Exception:
-            logger.debug("paused_thread: tail read failed for %s", uuid, exc_info=True)
-            continue
-        if not tail or tail.get("role") != "assistant":
-            continue
-        text = _message_text(tail).strip()
-        if not text.endswith("?"):
-            continue
-        since = tail.get("timestamp") or s.get("last_activity_at")
-        since_dt = _parse_iso(since)
-        if since_dt is not None:
-            if since_dt.tzinfo is None:
-                since_dt = since_dt.replace(tzinfo=timezone.utc)
-            if (now_dt - since_dt).days > _PAUSED_MAX_AGE_DAYS:
-                continue
-        cards.append({
-            "type": "paused_thread",
-            "project_id": project_id,
-            "key": uuid,
-            "text": _question_summary(text),
-            "since": since,
-        })
-    cards.sort(key=lambda c: c.get("since") or "", reverse=True)
-    return cards[:1]

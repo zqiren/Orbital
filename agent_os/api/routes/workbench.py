@@ -2,25 +2,23 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""REST endpoints for the Workbench surface (spec §5.3, §5.4, §5.6, §6, §8).
+"""REST endpoints for the Workbench surface (spec §5.3, §5.4, §8).
 
-A lazy mirror of the flagged ``[user]`` entries across projects plus a small
-set of daemon-computed cards (overdue dated facts, broken automations, paused
-threads). Nothing is derived to disk — every GET re-parses PROJECT_STATE via
-the one shared ``user_flags`` parser and computes ages/overdue at render time.
+A lazy mirror of the flagged ``[user]`` entries across projects. Nothing is
+derived to disk — every GET re-parses PROJECT_STATE via the one shared
+``user_flags`` parser and computes age/overdue at render time.
 
 Two user exits mutate memory directly (fulfilled → unflag + ``resolved`` stamp;
 irrelevant → remove + a retraction record), both OCC-guarded on the state
-file's mtime. Tapping a card (``/open``) or the empty-state migration CTA
+file's mtime. Tapping an entry (``/open``) or the empty-state migration CTA
 (``/migrate``) spawns a seeded project session through the same dispatch seam
 the chat/queue uses (``agent_manager.new_session`` + ``inject_message``).
 
 Injected via ``configure`` (app factory): the project store, the agent manager
-(spawn + session listing), and the CalendarHub (``refresh()`` after every write
-so its 60s cache never serves pre-edit state).
+(session spawn), and the CalendarHub (``refresh()`` after every write so its
+60s cache never serves pre-edit state).
 """
 
-import json
 import logging
 import os
 import sys
@@ -50,7 +48,7 @@ def configure(project_store, agent_manager, calendar_hub, *, now_fn=None):
     """Called by the app factory to inject dependencies.
 
     ``now_fn`` (tz-aware ``datetime``) is overridable for deterministic tests;
-    it drives age/overdue math and the ``resolved``/retraction/dismiss dates.
+    it drives age/overdue math and the ``resolved``/retraction dates.
     """
     global _project_store, _agent_manager, _calendar_hub, _now_fn
     _project_store = project_store
@@ -132,10 +130,6 @@ def _orbital_dir(workspace: str) -> str:
     return ProjectPaths(workspace).orbital_dir
 
 
-def _dismissals_path(workspace: str) -> str:
-    return os.path.join(_orbital_dir(workspace), "workbench_dismissals.json")
-
-
 def _require_project(project_id: str) -> dict:
     if _project_store is None:
         raise HTTPException(status_code=503, detail="Workbench not available")
@@ -175,104 +169,27 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
     }
 
 
-def _read_session_tail(path: str) -> dict | None:
-    """Last persisted user/assistant message of a session JSONL, or None."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return None
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except (ValueError, TypeError):
-            continue
-        if isinstance(obj, dict) and obj.get("role") in ("user", "assistant"):
-            return obj
-    return None
-
-
-def _paused_cards(project: dict, project_id: str) -> list[dict]:
-    if _agent_manager is None or not hasattr(_agent_manager, "list_sessions"):
-        return []
-    try:
-        sessions = _agent_manager.list_sessions(project_id)
-    except Exception:
-        logger.debug("workbench: list_sessions failed for %s", project_id, exc_info=True)
-        return []
-    paths = ProjectPaths(project.get("workspace", ""))
-    return workbench_cards.paused_thread_cards(
-        project_id, sessions, lambda uuid: _read_session_tail(paths.session_file(uuid))
-    )
-
-
-def _load_dismissed_keys(workspace: str) -> set:
-    try:
-        with open(_dismissals_path(workspace), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return set()
-    if not isinstance(data, list):
-        return set()
-    return {(d.get("type"), d.get("key")) for d in data if isinstance(d, dict)}
-
-
-def _collect_project(project: dict, now: datetime) -> tuple[list[dict], list[dict]]:
-    """Return ``(entry_rows, computed_cards)`` for one project."""
+def _collect_project(project: dict, now: datetime) -> list[dict]:
+    """Return the flagged ``[user]`` entry rows for one project."""
     workspace = project.get("workspace", "")
     if not workspace:
-        return [], []
+        return []
     project_id = project.get("project_id", "")
     _, content = _load_state(_state_path(workspace))
     parsed = user_flags.parse_entries(content or "")
     triggers = project.get("triggers", []) or []
     tz = workbench_cards.project_timezone(project, triggers)
 
-    computed: list[dict] = workbench_cards.broken_automation_cards(project_id, triggers, now)
-    broken_names = workbench_cards.broken_trigger_names(triggers, now)
-
     flagged = [e for e in parsed if e.flagged]
-    kept, _suppressed = workbench_cards.suppress_entries(flagged, broken_names)
-    entry_rows = [_entry_row(project_id, e, tz, now) for e in kept]
-
-    # Overdue computed cards cover UNFLAGGED dated facts only — a flagged entry
-    # that is overdue already appears in ``entry_rows`` carrying ``overdue:true``
-    # (spec §3 overdue emphasis), so surfacing it again here would double it.
-    # ``not e.resolved`` skips a retired entry: since the parse_entries
-    # amendment now surfaces tag-less resolved facts (flagged=False), a dated
-    # fact that carries a ``resolved:`` stamp must NOT resurrect as an overdue
-    # card off its now-stale ``due:`` — the resolved stamp is a closed state.
-    for e in parsed:
-        if (not e.flagged and e.due and not e.resolved
-                and workbench_cards.is_overdue(e.due, tz, now)):
-            computed.append({
-                "type": "overdue",
-                "project_id": project_id,
-                "key": e.id,
-                "text": e.text,
-                "since": e.due,
-                # Same project-tz days-late as entry rows. Only overdue cards
-                # carry it (they alone have a due-derived date); broken/paused
-                # cards have no due, so no days_late field.
-                "days_late": workbench_cards.days_late(e.due, tz, now),
-            })
-
-    computed.extend(_paused_cards(project, project_id))
-
-    dismissed = _load_dismissed_keys(workspace)
-    computed = [c for c in computed if (c["type"], c["key"]) not in dismissed]
-    return entry_rows, computed
+    return [_entry_row(project_id, e, tz, now) for e in flagged]
 
 
 @router.get("")
 async def get_workbench(project_id: str | None = Query(None)):
-    """Flagged entries + computed cards. Global view respects the privacy toggle.
+    """Flagged entries. Global view respects the privacy toggle.
 
-    Sort (entries): overdue first, then oldest ``created`` first — the forgotten
-    float up. ``project_id`` lenses to one project (and, unlike the global view,
+    Sort: overdue first, then oldest ``created`` first — the forgotten float
+    up. ``project_id`` lenses to one project (and, unlike the global view,
     surfaces a project even when it is excluded from the global Workbench).
     """
     now = _now()
@@ -285,14 +202,13 @@ async def get_workbench(project_id: str | None = Query(None)):
         ]
 
     all_entries: list[dict] = []
-    all_computed: list[dict] = []
     for project in projects:
         # Per-project isolation: one project failing to collect (corrupt state,
         # I/O error) must never sink the whole global view. Failed projects are
         # skipped and logged — chosen over a degraded in-band marker to keep the
-        # {entries, computed} response contract stable for the frontend.
+        # {entries} response contract stable for the frontend.
         try:
-            entries, computed = _collect_project(project, now)
+            entries = _collect_project(project, now)
         except Exception:
             logger.warning(
                 "workbench: skipping project %s — collection failed",
@@ -300,10 +216,9 @@ async def get_workbench(project_id: str | None = Query(None)):
             )
             continue
         all_entries.extend(entries)
-        all_computed.extend(computed)
 
     all_entries.sort(key=lambda e: (not e["overdue"], e.get("created") or "9999-99-99"))
-    return {"entries": all_entries, "computed": all_computed}
+    return {"entries": all_entries}
 
 
 # --------------------------------------------------------------------------
@@ -406,35 +321,6 @@ async def exit_entry(project_id: str, mem_id: str, req: ExitRequest):
 
 
 # --------------------------------------------------------------------------
-# Dismiss (computed cards)
-# --------------------------------------------------------------------------
-
-def _read_dismissals_list(workspace: str) -> list:
-    try:
-        with open(_dismissals_path(workspace), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return []
-    return data if isinstance(data, list) else []
-
-
-@router.post("/{project_id}/computed/{card_type}/{key}/dismiss")
-async def dismiss_computed(project_id: str, card_type: str, key: str):
-    """Persist a computed-card dismissal (spec §6); GET omits it thereafter."""
-    project = _require_project(project_id)
-    workspace = project.get("workspace", "")
-    data = _read_dismissals_list(workspace)
-    if not any(d.get("type") == card_type and d.get("key") == key
-               for d in data if isinstance(d, dict)):
-        data.append({"type": card_type, "key": key, "date": _today_iso()})
-        _atomic_write(
-            _dismissals_path(workspace),
-            json.dumps(data, ensure_ascii=False, indent=2),
-        )
-    return {"status": "ok"}
-
-
-# --------------------------------------------------------------------------
 # Doorway: open + migrate (session spawn seam)
 # --------------------------------------------------------------------------
 
@@ -489,46 +375,6 @@ async def open_entry(project_id: str, mem_id: str):
     if entry is None:
         raise HTTPException(status_code=404, detail=f"No entry with id {mem_id}")
     session_id = await _spawn_seeded(project_id, _seed_open_message(entry))
-    return {"session_id": session_id}
-
-
-@router.post("/{project_id}/computed/{card_type}/{key}/open")
-async def open_computed(project_id: str, card_type: str, key: str):
-    """Seeded doorway for computed cards (spec §6 alignment, 2026-07-24):
-    ``overdue`` → a session told to DO the late item now; ``broken_automation``
-    → a session told to diagnose/repair the silent trigger. ``paused_thread``
-    resumes client-side (its session still exists) and never calls this."""
-    project = _require_project(project_id)
-    if card_type == "overdue":
-        _, content = _load_state(_state_path(project.get("workspace", "")))
-        entry = _find_entry(content or "", key)
-        if entry is None:
-            raise HTTPException(status_code=404, detail=f"No entry with id {key}")
-        late = f" It was due {entry.due}." if entry.due else ""
-        content_msg = (
-            f'Workbench: "{entry.text}" is overdue.{late} Do it now — this '
-            "message is the go-ahead; when it is done, update the entry per "
-            "the state file's format header."
-        )
-    elif card_type == "broken_automation":
-        trig = next(
-            (tr for tr in (project.get("triggers") or [])
-             if isinstance(tr, dict) and tr.get("id") == key),
-            None,
-        )
-        if trig is None:
-            raise HTTPException(status_code=404, detail=f"No trigger {key}")
-        name = trig.get("name") or key
-        cron = (trig.get("schedule") or {}).get("cron", "?")
-        last = trig.get("last_triggered") or "never"
-        content_msg = (
-            f'Workbench: the automation "{name}" (cron {cron}) has not fired '
-            f"since {last}. Diagnose why and repair it if you can; if it is "
-            "obsolete, say so and I will disable it."
-        )
-    else:
-        raise HTTPException(status_code=404, detail=f"No doorway for {card_type}")
-    session_id = await _spawn_seeded(project_id, content_msg)
     return {"session_id": session_id}
 
 

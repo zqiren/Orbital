@@ -10,11 +10,9 @@
  *     and — unlike the global view — shown regardless of the project's
  *     "exclude from global Workbench" toggle).
  *
- * ONE list, no bands (spec §6): flagged `[user]` entries and daemon-computed
- * cards (overdue / broken automation / paused thread) interleave into a
- * single sort via `useWorkbench().items` — overdue first, then oldest first.
- * Tapping a card's body is the doorway (spec §5.3): it spawns (or, for a
- * paused thread, resumes) a session and navigates there via the route model.
+ * Flagged `[user]` entries render in server order (spec §6) — overdue first,
+ * then oldest first. Tapping a card's body is the doorway (spec §5.3): it
+ * spawns a session and navigates there via the route model.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -28,7 +26,7 @@ import { useWorkbench } from './workbench/useWorkbench';
 import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
 import WorkbenchCard from './WorkbenchCard';
-import type { WorkbenchComputedCard, WorkbenchEntry } from './workbench/types';
+import type { WorkbenchEntry } from './workbench/types';
 
 export interface WorkbenchPageProps {
   /**
@@ -54,7 +52,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const [projects, setProjects] = useState<Project[]>([]);
   const [openError, setOpenError] = useState<string | null>(null);
 
-  const { items, entries, computed, loading, error, conflict, refetch, exitEntry, dismissComputed, openEntry, openComputed, disableTrigger, migrate } =
+  const { entries, loading, error, conflict, refetch, exitEntry, openEntry, migrate } =
     useWorkbench({ projectId });
 
   const { start, end } = useMemo(() => sevenDayRangeISO(), []);
@@ -92,32 +90,6 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
     }
   }
 
-  // Spec §6 doorways per computed type: paused_thread resumes ITS session
-  // (key = session uuid); overdue/broken_automation spawn a seeded session
-  // ("do it now" / "diagnose and repair") via the computed open endpoint.
-  async function handleOpenComputed(card: WorkbenchComputedCard) {
-    if (card.type === 'paused_thread') {
-      navigateToChat(card.project_id, card.key);
-      return;
-    }
-    setOpenError(null);
-    try {
-      const sessionId = await openComputed(card.project_id, card.type, card.key);
-      navigateToChat(card.project_id, sessionId);
-    } catch {
-      setOpenError(t('workbench.error.load'));
-    }
-  }
-
-  async function handleDisable(card: WorkbenchComputedCard) {
-    setOpenError(null);
-    try {
-      await disableTrigger(card.project_id, card.key);
-    } catch {
-      setOpenError(t('workbench.error.load'));
-    }
-  }
-
   async function handleMigrate(pid: string) {
     setOpenError(null);
     try {
@@ -132,12 +104,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
     setRoute({ name: 'calendar' });
   }
 
-  const isEmpty = !loading && !error && entries.length === 0 && computed.length === 0;
-  // The migrate affordance must stay reachable when computed cards exist but
-  // no entries do (real-data regression 2026-07-24: computed noise buried the
-  // empty state, making "Review & label" undiscoverable on legacy projects).
-  const showMigrateBanner =
-    !loading && !error && entries.length === 0 && computed.length > 0;
+  const isEmpty = !loading && !error && entries.length === 0;
   const showThisWeek = weekAvailability?.available === true && weekEvents.length > 0;
 
   // This-week strip rows: privacy-filter (global mode), chronological, then
@@ -238,42 +205,6 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         </div>
       )}
 
-      {showMigrateBanner && (
-        <div data-testid="workbench-migrate-banner" className="px-4 pt-3">
-          <div className="flex flex-col gap-2 rounded-2xl border border-accent/20 bg-accent/5 px-3.5 py-2.5">
-            <p className="text-[12.5px] leading-snug text-secondary">
-              {t('workbench.migrateBanner')}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-            {projectId ? (
-              <button
-                type="button"
-                onClick={() => handleMigrate(projectId)}
-                data-testid="workbench-migrate-cta"
-                className="rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-              >
-                {t('workbench.empty.migrateCta')}
-              </button>
-            ) : (
-              projects
-                .filter((p) => p.workspace)
-                .map((p) => (
-                  <button
-                    key={p.project_id}
-                    type="button"
-                    onClick={() => handleMigrate(p.project_id)}
-                    data-testid={`workbench-migrate-cta-${p.project_id}`}
-                    className="rounded-full border border-accent/40 px-3 py-1 text-[12px] font-medium text-accent transition-[transform,background-color] duration-100 ease-out hover:bg-accent/10 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-                  >
-                    {p.name}
-                  </button>
-                ))
-            )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {loading ? (
         <div
           className="flex flex-1 items-center justify-center text-sm text-secondary"
@@ -335,41 +266,17 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
       ) : (
         <div className="flex-1 min-h-0 overflow-auto px-4 py-3" data-testid="workbench-list">
           <ul className="space-y-2.5">
-            {items.map((item) => {
-              const key =
-                item.kind === 'entry'
-                  ? `entry-${item.data.project_id}-${item.data.id}`
-                  : `computed-${item.data.project_id}-${item.data.type}-${item.data.key}`;
-              return (
-                <li key={key}>
-                  <WorkbenchCard
-                    item={item}
-                    showProjectChip={showProjectChip}
-                    projectName={projectName(item.data.project_id)}
-                    onOpen={() =>
-                      item.kind === 'entry'
-                        ? handleOpenEntry(item.data)
-                        : handleOpenComputed(item.data)
-                    }
-                    onExit={
-                      item.kind === 'entry'
-                        ? (kind) => exitEntry(item.data.project_id, item.data.id, kind)
-                        : undefined
-                    }
-                    onDismiss={
-                      item.kind === 'computed'
-                        ? () => dismissComputed(item.data.project_id, item.data.type, item.data.key)
-                        : undefined
-                    }
-                    onDisable={
-                      item.kind === 'computed' && item.data.type === 'broken_automation'
-                        ? () => handleDisable(item.data)
-                        : undefined
-                    }
-                  />
-                </li>
-              );
-            })}
+            {entries.map((e) => (
+              <li key={`entry-${e.project_id}-${e.id}`}>
+                <WorkbenchCard
+                  entry={e}
+                  showProjectChip={showProjectChip}
+                  projectName={projectName(e.project_id)}
+                  onOpen={() => handleOpenEntry(e)}
+                  onExit={(kind) => exitEntry(e.project_id, e.id, kind)}
+                />
+              </li>
+            ))}
           </ul>
         </div>
       )}

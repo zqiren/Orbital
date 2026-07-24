@@ -56,7 +56,7 @@ const defaultProps = {
 
 beforeEach(() => {
   apiMock.mockReset();
-  apiMock.mockResolvedValue({ entries: [], computed: [] });
+  apiMock.mockResolvedValue({ entries: [] });
 });
 
 describe('Sidebar — BlockedBadge integration (count 0)', () => {
@@ -193,16 +193,15 @@ describe('Sidebar — Workbench nav item', () => {
   });
 
   it('does not show a count pill when the Workbench is empty', async () => {
-    apiMock.mockResolvedValue({ entries: [], computed: [] });
+    apiMock.mockResolvedValue({ entries: [] });
     render(<Sidebar {...defaultProps} />);
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/api/v2/workbench'));
     expect(screen.queryByTestId('workbench-badge-count')).toBeNull();
   });
 
-  it('shows entries.length + computed.length as the badge count', async () => {
+  it('shows entries.length as the badge count', async () => {
     apiMock.mockResolvedValue({
-      entries: [{ id: 'e1' }, { id: 'e2' }],
-      computed: [{ key: 'c1' }],
+      entries: [{ id: 'e1' }, { id: 'e2' }, { id: 'e3' }],
     });
     render(<Sidebar {...defaultProps} />);
     await waitFor(() =>

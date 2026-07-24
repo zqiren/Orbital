@@ -8,11 +8,9 @@ Projects FUTURE occurrences of every project's enabled schedule triggers into
 the calendar — a recurring job already carries all its scheduling
 information (cron + timezone) on the trigger itself, so this source needs no
 separate store, just ``croniter`` expansion in the trigger's own timezone
-(mirrors the cron math in ``trigger_manager`` and
-``workbench_cards.is_broken_automation``). Past runs are deliberately never
-emitted (spec §7.2 — "past runs are not the calendar's job"); that history
-already belongs to ``TriggerManager`` / the Workbench's broken-automation
-detector.
+(mirrors the cron math in ``trigger_manager``). Past runs are deliberately
+never emitted (spec §7.2 — "past runs are not the calendar's job"); that
+history already belongs to ``TriggerManager``.
 
 Event identity: ``automation/{project_id}/{trigger_id}/{occurrence-iso}``
 (``source="automation"``, ``source_id="{project_id}/{trigger_id}/{occurrence

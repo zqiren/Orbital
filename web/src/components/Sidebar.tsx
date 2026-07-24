@@ -27,17 +27,17 @@ interface SidebarProps {
   onSettings: () => void;
 }
 
-/** Nav-row count badge: total flagged entries + computed cards across the
- *  (privacy-filtered) global Workbench. Fetched once on mount — the surface
- *  itself refetches live; the sidebar count is a light, best-effort signal,
- *  not required to stay millisecond-fresh (no WS event exists for it). */
+/** Nav-row count badge: total flagged entries across the (privacy-filtered)
+ *  global Workbench. Fetched once on mount — the surface itself refetches
+ *  live; the sidebar count is a light, best-effort signal, not required to
+ *  stay millisecond-fresh (no WS event exists for it). */
 function useWorkbenchCount(): number {
   const [count, setCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    api<{ entries?: unknown[]; computed?: unknown[] }>('/api/v2/workbench')
+    api<{ entries?: unknown[] }>('/api/v2/workbench')
       .then((d) => {
-        if (!cancelled) setCount((d?.entries?.length ?? 0) + (d?.computed?.length ?? 0));
+        if (!cancelled) setCount(d?.entries?.length ?? 0);
       })
       .catch(() => {
         if (!cancelled) setCount(0);
