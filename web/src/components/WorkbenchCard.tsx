@@ -21,6 +21,12 @@
  * feedback on press (scale, 100ms), size-specific tracking, motion respects
  * `prefers-reduced-motion` via Tailwind's `motion-reduce:` variants.
  *
+ * Project prominence (round 3, item 3): reuses the calendar's per-project
+ * accent hash (`eventColor`, same hue everywhere in the app) for a left
+ * accent border and a restyled, clearly-visible project chip — GLOBAL view
+ * only (`showProjectChip`). The lens view has no chip today and is
+ * unchanged.
+ *
  * The sentence renders as markdown (2026-07-24 revision — entries carry
  * backticked paths, bold, etc.) via `react-markdown`, same engine as chat
  * bubbles (MarkdownContent.tsx), but with a minimal, INLINE-only components
@@ -35,6 +41,7 @@
 
 import ReactMarkdown, { type Components } from 'react-markdown';
 import { useT } from '../i18n/useT';
+import { eventColor } from './calendar/color';
 
 import type { WorkbenchEntry } from './workbench/types';
 
@@ -119,6 +126,9 @@ export default function WorkbenchCard({
   const t = useT();
   const age = ageLabel(t, entry);
   const testId = `workbench-card-entry-${entry.project_id}-${entry.id}`;
+  // Project prominence (round 3, item 3): only on the global view — the lens
+  // view (showProjectChip false) keeps the plain card, unchanged.
+  const accent = showProjectChip ? eventColor(entry.project_id) : null;
 
   return (
     <div
@@ -129,6 +139,7 @@ export default function WorkbenchCard({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onOpen();
       }}
+      style={accent ? { borderLeftWidth: '3px', borderLeftColor: accent.border } : undefined}
       className="group flex cursor-pointer flex-col gap-2 rounded-2xl border border-border/60 bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_rgba(0,0,0,0.03)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-px hover:border-border hover:shadow-[0_2px_4px_rgba(0,0,0,0.05),0_8px_24px_rgba(0,0,0,0.05)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:transform-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent/60"
     >
       <div className="flex items-start justify-between gap-3">
@@ -149,7 +160,12 @@ export default function WorkbenchCard({
         {showProjectChip && projectName && (
           <span
             data-testid="workbench-card-project-chip"
-            className="rounded-full bg-sidebar px-2 py-0.5 text-[11px] font-medium text-secondary"
+            className="rounded-full border px-2 py-0.5 text-[11px] font-medium"
+            style={{
+              backgroundColor: accent!.bg,
+              color: accent!.text,
+              borderColor: accent!.border,
+            }}
           >
             {projectName}
           </span>

@@ -12,12 +12,21 @@
  *     "exclude from global Workbench" toggle).
  *
  * Flagged `[user]` entries render in server order (spec §6) — overdue first,
- * then oldest first. Tapping a card's body is the doorway (spec §5.3, revised
- * 2026-07-24): it does NOT spawn a session or call the network — it navigates
- * to the project's chat tab (its normal default-session state) with the
- * card's context prefilled into the composer draft, for the user to edit and
- * send themselves. See `buildPrefillDraft` below for the exact format, and
- * ChatTab.tsx/ChatView.tsx for how `route.draft` is consumed.
+ * then oldest first. Tapping a card's body is the doorway (spec §5.3, round 3
+ * revision 2026-07-24): it mints a brand-new session via the SAME
+ * `newSession()` primitive the "+ new session" sidebar button already uses
+ * (POST `/new-session`, no `session_id` — fresh-create), then navigates to
+ * the project's chat tab with that session id and the card's context
+ * prefilled into the composer draft, for the user to edit and send
+ * themselves. Two earlier iterations of this doorway tried to avoid minting
+ * at tap time (a route suppression flag; a mint deferred to the user's own
+ * send) to avoid littering an empty session on a casual card peek — both
+ * added inference machinery to answer "which session did my action affect?"
+ * and were reverted; the product decision is that a tap is a genuine "open
+ * this" action, exactly like clicking "+ new session" would be, and litter
+ * cost is an acceptable trade for zero inference. See `buildPrefillDraft`
+ * below for the exact draft format, and ChatTab.tsx/ChatView.tsx for how
+ * `route.draft` is consumed once the composer mounts.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -27,6 +36,7 @@ import { api } from '../config';
 import type { Project } from '../types';
 import type { Route } from '../route';
 import { useT } from '../i18n/useT';
+import { useAgent } from '../hooks/useAgent';
 import { useWorkbench } from './workbench/useWorkbench';
 import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
@@ -76,9 +86,12 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const [openError, setOpenError] = useState<string | null>(null);
   // Global empty state: project chosen in the migrate dropdown ('' = none).
   const [migrateTarget, setMigrateTarget] = useState('');
+  // Project filter (round 3, item 2), GLOBAL view only. '' = All projects.
+  const [filterProjectId, setFilterProjectId] = useState('');
 
   const { entries, loading, error, conflict, refetch, exitEntry, migrate } =
     useWorkbench({ projectId });
+  const { newSession } = useAgent();
 
   const { start, end } = useMemo(() => todayRangeISO(), []);
   const { availability: todayAvailability, events: todayEvents } = useCalendar({ projectId, start, end });
@@ -101,21 +114,64 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const projectName = (id: string): string | null =>
     projects.find((p) => p.project_id === id)?.name ?? null;
 
+  // Project filter (round 3, item 2), GLOBAL view only: the projects that
+  // currently have entries, deduped, in the order they first appear in
+  // `entries` (server order — never re-sorted alphabetically).
+  const filterOptions = (() => {
+    const seen = new Set<string>();
+    const opts: Array<{ id: string; name: string }> = [];
+    for (const e of entries) {
+      if (seen.has(e.project_id)) continue;
+      seen.add(e.project_id);
+      opts.push({ id: e.project_id, name: projectName(e.project_id) ?? e.project_id });
+    }
+    return opts;
+  })();
+
+  // If the selected project's entries all get exited (or its filter option
+  // otherwise disappears), fall back to "All projects" rather than showing a
+  // stuck, silently-empty list.
+  useEffect(() => {
+    if (filterProjectId && !entries.some((e) => e.project_id === filterProjectId)) {
+      setFilterProjectId('');
+    }
+  }, [entries, filterProjectId]);
+
+  const filteredEntries = filterProjectId
+    ? entries.filter((e) => e.project_id === filterProjectId)
+    : entries;
+
   function navigateToChat(pid: string, sessionId?: string) {
     setRoute({ name: 'project', projectId: pid, tab: 'chat', sessionId });
   }
 
-  // Card tap doorway (spec 2026-07-24): no network call, no session spawn —
-  // navigate to the project's chat tab in its normal default-session state,
-  // carrying the prefill text on the route for ChatTab/ChatView to load into
-  // the composer once. See buildPrefillDraft's docstring for the exact format.
-  function handleCardTap(entry: WorkbenchEntry) {
-    setRoute({
-      name: 'project',
-      projectId: entry.project_id,
-      tab: 'chat',
-      draft: buildPrefillDraft(entry),
-    });
+  // Card tap doorway (spec 2026-07-24, round 3 final revision): mint a
+  // brand-new session via the SAME `newSession()` primitive the "+ new
+  // session" sidebar button uses (POST /new-session, no session_id —
+  // fresh-create; ChatTab's handleNewSession is the other caller of this
+  // exact function), then navigate to the project's chat tab with that
+  // session id and the card's context prefilled into the composer draft. On
+  // mint failure, surface it via the existing `openError` banner and do NOT
+  // navigate — mirrors `handleMigrate`'s error handling below. See
+  // buildPrefillDraft's docstring for the exact draft format.
+  async function handleCardTap(entry: WorkbenchEntry) {
+    setOpenError(null);
+    try {
+      const minted = await newSession(entry.project_id);
+      if (!minted?.session_id) {
+        setOpenError(t('workbench.error.open'));
+        return;
+      }
+      setRoute({
+        name: 'project',
+        projectId: entry.project_id,
+        tab: 'chat',
+        sessionId: minted.session_id,
+        draft: buildPrefillDraft(entry),
+      });
+    } catch {
+      setOpenError(t('workbench.error.open'));
+    }
   }
 
   async function handleMigrate(pid: string) {
@@ -175,6 +231,22 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           {t('workbench.title')}
         </h1>
         <span className="flex-1" />
+        {showProjectChip && entries.length > 0 && (
+          <select
+            value={filterProjectId}
+            onChange={(e) => setFilterProjectId(e.target.value)}
+            aria-label={t('workbench.filter.all')}
+            data-testid="workbench-project-filter"
+            className="rounded-full border border-border bg-card px-3 py-1 text-[12.5px] text-secondary transition-all duration-150 focus:border-accent focus:outline-none"
+          >
+            <option value="">{t('workbench.filter.all')}</option>
+            {filterOptions.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           onClick={() => refetch()}
@@ -217,17 +289,27 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               </button>
             </div>
             <ul className="space-y-1">
-              {todayRows.map((ev) => (
-                <li
-                  key={ev.id}
-                  className="flex items-center gap-2.5 text-[12.5px] text-secondary"
-                >
-                  <span className="w-16 shrink-0 font-mono text-[11px] tabular-nums text-muted">
-                    {ev.all_day ? t('calendar.allDay') : formatTime(ev.start)}
-                  </span>
-                  <span className="truncate text-primary">{ev.title}</span>
-                </li>
-              ))}
+              {todayRows.map((ev) => {
+                // Round 3, item 4: the strip is a day OVERVIEW now (the
+                // backend emits today's already-fired occurrences too), so a
+                // past, non-all-day row dims rather than reading as still
+                // upcoming. All-day rows have no meaningful "past" instant
+                // within today and are never dimmed.
+                const isPast = !ev.all_day && new Date(ev.start).getTime() < Date.now();
+                return (
+                  <li
+                    key={ev.id}
+                    data-testid="workbench-today-row"
+                    data-past={isPast ? 'true' : 'false'}
+                    className={`flex items-center gap-2.5 text-[12.5px] text-secondary ${isPast ? 'opacity-50' : ''}`}
+                  >
+                    <span className="w-16 shrink-0 font-mono text-[11px] tabular-nums text-muted">
+                      {ev.all_day ? t('calendar.allDay') : formatTime(ev.start)}
+                    </span>
+                    <span className={`truncate ${isPast ? 'text-muted' : 'text-primary'}`}>{ev.title}</span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </div>
@@ -306,7 +388,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
       ) : (
         <div className="flex-1 min-h-0 overflow-auto px-4 py-3" data-testid="workbench-list">
           <ul className="space-y-2.5">
-            {entries.map((e) => (
+            {filteredEntries.map((e) => (
               <li key={`entry-${e.project_id}-${e.id}`}>
                 <WorkbenchCard
                   entry={e}

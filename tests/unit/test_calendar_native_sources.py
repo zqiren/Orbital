@@ -193,7 +193,10 @@ def _schedule_trigger(trigger_id, cron, *, tz="UTC", enabled=True, name=None):
     }
 
 
-async def test_automation_source_emits_only_future_occurrences_within_range(tmp_path):
+async def test_automation_source_emits_from_start_of_today_within_range(tmp_path):
+    """Today's already-fired slots ARE emitted (the Workbench Today overview
+    needs the full day); occurrences on EARLIER days stay out (no synthesized
+    history)."""
     frozen_now = datetime(2026, 7, 24, 10, 0, 0, tzinfo=timezone.utc)  # after today's 09:00 fire
     ws = tmp_path / "proj-a"
     src = AutomationSource(
@@ -206,7 +209,8 @@ async def test_automation_source_emits_only_future_occurrences_within_range(tmp_
     events = await src.list_events("2026-07-23T00:00:00+00:00", "2026-07-26T00:00:00+00:00")
 
     starts = sorted(ev.start for ev in events)
-    assert starts == ["2026-07-25T09:00:00+00:00"]  # NOT 07-23 or 07-24 (past relative to now)
+    # 07-24 09:00 is today-past → included; 07-23 09:00 is yesterday → excluded.
+    assert starts == ["2026-07-24T09:00:00+00:00", "2026-07-25T09:00:00+00:00"]
 
 
 async def test_automation_source_disabled_trigger_emits_nothing(tmp_path):

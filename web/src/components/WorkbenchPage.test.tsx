@@ -9,9 +9,11 @@
  * mid-task amendment that removed the receipt). Covers sort order rendering,
  * a "Done" click issuing the right exit POST with optimistic removal, the
  * empty state showing the migrate CTA (per-project and global), the prefill
- * doorway (navigate + composer draft, NO network call, NO session spawn, NO
- * Evidence line), and the Today strip (formerly "This week"). The api client
- * is mocked — no network. The In-flight digest strip is gone entirely.
+ * doorway (round 3 final revision: mints via the SAME POST /new-session "+
+ * new session" already uses, then navigates with that sessionId + composer
+ * draft; NO Evidence line), and the Today strip (formerly "This week"). The
+ * api client is mocked — no network. The In-flight digest strip is gone
+ * entirely.
  */
 
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
@@ -37,14 +39,25 @@ function mockApi(opts: {
   projects?: unknown[];
   calendarAvailable?: boolean;
   calendarEvents?: unknown[];
+  /** POST /new-session response's session_id (the card-tap doorway mint,
+   *  round 3 final revision). null simulates a malformed/empty response. */
+  newSessionId?: string | null;
+  /** Simulates the mint POST rejecting (network/server failure). */
+  newSessionFails?: boolean;
 } = {}) {
   const {
     entries = [],
     projects = PROJECTS,
     calendarAvailable = false,
     calendarEvents = [],
+    newSessionId = 'sess-tap-minted',
+    newSessionFails = false,
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path.includes('/new-session')) {
+      if (newSessionFails) throw new Error('mint failed');
+      return { status: 'ok', session_id: newSessionId };
+    }
     if (path.startsWith('/api/v2/workbench') && (!init || init.method === undefined)) {
       return { entries };
     }
@@ -122,22 +135,49 @@ describe('WorkbenchPage — Done exit', () => {
   });
 });
 
-describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
-  it('tapping the card body navigates to the project chat tab WITHOUT any POST and WITHOUT a sessionId (no session spawn)', async () => {
-    mockApi({ entries: [entry()] });
+describe('WorkbenchPage — prefill doorway (spec 2026-07-24, round 3 final revision: mint-at-tap)', () => {
+  it('tapping the card body mints a new session via the SAME POST /new-session "+ new session" uses, then navigates with that sessionId + the draft', async () => {
+    mockApi({ entries: [entry()], newSessionId: 'sess-tap-minted' });
     const setRoute = vi.fn();
     render(<WorkbenchPage setRoute={setRoute} />);
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
 
-    expect(setRoute).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
     const routeArg = setRoute.mock.calls[0][0];
-    expect(routeArg).toMatchObject({ name: 'project', projectId: 'proj-a', tab: 'chat' });
-    expect(routeArg.sessionId).toBeUndefined();
-    // No network call was made at all for the tap — the only calls on the
-    // mock are the initial GETs (workbench/projects/calendar), never a POST.
-    expect(apiMock.mock.calls.every(([, init]) => !init || init.method === undefined)).toBe(true);
+    expect(routeArg).toMatchObject({
+      name: 'project',
+      projectId: 'proj-a',
+      tab: 'chat',
+      sessionId: 'sess-tap-minted',
+    });
+    // composeNewSession (an earlier, reverted design) must not reappear.
+    expect(routeArg.composeNewSession).toBeUndefined();
+
+    // The mint POST fired exactly once, with NO session_id in the body
+    // (fresh-create) — byte-identical contract to "+ new session"
+    // (useAgent().newSession(projectId) with no second argument).
+    const mintCalls = apiMock.mock.calls.filter(
+      ([p, init]) => (p as string).includes('/new-session') && (init as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(mintCalls).toHaveLength(1);
+    expect(mintCalls[0][0]).toBe('/api/v2/agents/proj-a/new-session');
+    expect(JSON.parse((mintCalls[0][1] as { body: string }).body)).toEqual({});
+  });
+
+  it('on mint failure, surfaces an error via the existing openError banner and does NOT navigate', async () => {
+    mockApi({ entries: [entry()], newSessionFails: true });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+
+    await waitFor(() =>
+      expect(screen.getByText("Couldn't open the project — please try again.")).toBeInTheDocument(),
+    );
+    expect(setRoute).not.toHaveBeenCalled();
   });
 
   it('the prefilled draft matches the exact spec format: section + quoted text, due suffix, two trailing newlines', async () => {
@@ -155,6 +195,7 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
 
     const routeArg = setRoute.mock.calls[0][0];
     expect(routeArg.draft).toBe(
@@ -169,6 +210,7 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
 
     const routeArg = setRoute.mock.calls[0][0];
     expect(routeArg.draft).toBe('Workbench · "Send Simon the invoice draft"\n\n');
@@ -181,6 +223,7 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
 
     const routeArg = setRoute.mock.calls[0][0];
     expect(routeArg.draft).toBe('Workbench · Blockers: "Send Simon the invoice draft"\n\n');
@@ -193,6 +236,7 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
     await waitFor(() => expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('workbench-card-entry-proj-a-e1'));
+    await waitFor(() => expect(setRoute).toHaveBeenCalledTimes(1));
 
     const routeArg = setRoute.mock.calls[0][0];
     expect(routeArg.draft as string).not.toMatch(/Evidence/);
@@ -200,6 +244,124 @@ describe('WorkbenchPage — prefill doorway (spec 2026-07-24)', () => {
     expect(routeArg.draft as string).toBe(
       'Workbench · Blockers: "Send Simon the invoice draft" (due 2026-08-01)\n\n',
     );
+  });
+});
+
+describe('WorkbenchPage — project filter (round 3, item 2)', () => {
+  it('hides the filter when there are no entries at all', async () => {
+    mockApi({ entries: [] });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
+    expect(screen.queryByTestId('workbench-project-filter')).toBeNull();
+  });
+
+  it('lists "All projects" plus the projects that currently have entries, in the order they first appear', async () => {
+    mockApi({
+      entries: [
+        entry({ project_id: 'proj-b', id: 'b1' }),
+        entry({ project_id: 'proj-a', id: 'a1' }),
+        entry({ project_id: 'proj-b', id: 'b2' }),
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-project-filter')).toBeInTheDocument());
+
+    const select = screen.getByTestId('workbench-project-filter') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'All projects',
+      'Ops',
+      'Marketing',
+    ]);
+    expect(select.value).toBe('');
+  });
+
+  it('is absent on the per-project lens view even when entries exist', async () => {
+    mockApi({ entries: [entry()] });
+    render(<WorkbenchPage projectId="proj-a" setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
+    expect(screen.queryByTestId('workbench-project-filter')).toBeNull();
+  });
+
+  it('selecting a project filters the card list to that project only', async () => {
+    mockApi({
+      entries: [
+        entry({ project_id: 'proj-a', id: 'a1' }),
+        entry({ project_id: 'proj-b', id: 'b1' }),
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-project-filter')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('workbench-project-filter'), {
+      target: { value: 'proj-b' },
+    });
+
+    expect(screen.queryByTestId('workbench-card-entry-proj-a-a1')).toBeNull();
+    expect(screen.getByTestId('workbench-card-entry-proj-b-b1')).toBeInTheDocument();
+  });
+
+  it('falls back to "All projects" once the selected project has no entries left', async () => {
+    mockApi({
+      entries: [
+        entry({ project_id: 'proj-a', id: 'a1' }),
+        entry({ project_id: 'proj-b', id: 'b1' }),
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-project-filter')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('workbench-project-filter'), {
+      target: { value: 'proj-b' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('workbench-card-entry-proj-a-a1')).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByTestId('workbench-card-exit-fulfilled'));
+
+    await waitFor(() => {
+      const select = screen.getByTestId('workbench-project-filter') as HTMLSelectElement;
+      expect(select.value).toBe('');
+    });
+    expect(screen.getByTestId('workbench-card-entry-proj-a-a1')).toBeInTheDocument();
+  });
+});
+
+describe('WorkbenchPage — Today strip past-dimming (round 3, item 4)', () => {
+  it('dims a past, non-all-day event and leaves a future one undimmed', async () => {
+    const now = Date.now();
+    const past = new Date(now - 3600_000).toISOString();
+    const future = new Date(now + 3600_000).toISOString();
+    mockApi({
+      entries: [entry()],
+      calendarAvailable: true,
+      calendarEvents: [
+        { id: 'past-1', title: 'Morning standup', start: past, all_day: false, project_id: 'proj-a' },
+        { id: 'future-1', title: 'Afternoon sync', start: future, all_day: false, project_id: 'proj-a' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
+
+    const rows = screen.getAllByTestId('workbench-today-row');
+    const pastRow = rows.find((r) => r.textContent?.includes('Morning standup'));
+    const futureRow = rows.find((r) => r.textContent?.includes('Afternoon sync'));
+    expect(pastRow).toHaveAttribute('data-past', 'true');
+    expect(futureRow).toHaveAttribute('data-past', 'false');
+  });
+
+  it('does not dim an all-day event even when its instant is in the past', async () => {
+    const past = new Date(Date.now() - 3600_000).toISOString();
+    mockApi({
+      entries: [entry()],
+      calendarAvailable: true,
+      calendarEvents: [
+        { id: 'allday-1', title: 'Public deadline', start: past, all_day: true, project_id: 'proj-a' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-today')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-today-row')).toHaveAttribute('data-past', 'false');
   });
 });
 

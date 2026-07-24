@@ -8,9 +8,10 @@ Projects FUTURE occurrences of every project's enabled schedule triggers into
 the calendar — a recurring job already carries all its scheduling
 information (cron + timezone) on the trigger itself, so this source needs no
 separate store, just ``croniter`` expansion in the trigger's own timezone
-(mirrors the cron math in ``trigger_manager``). Past runs are deliberately
-never emitted (spec §7.2 — "past runs are not the calendar's job"); that
-history already belongs to ``TriggerManager``.
+(mirrors the cron math in ``trigger_manager``). Occurrences before today are
+never emitted (no synthesized history — that belongs to ``TriggerManager``),
+but today's already-fired slots ARE, so a same-day overview shows the whole
+day (rev 6 Workbench "Today" strip).
 
 Event identity: ``automation/{project_id}/{trigger_id}/{occurrence-iso}``
 (``source="automation"``, ``source_id="{project_id}/{trigger_id}/{occurrence
@@ -104,11 +105,14 @@ class AutomationSource:
         tz_name = schedule.get("timezone") or project_timezone(project, triggers)
         tz = _resolve_tz(tz_name)
 
-        # Occurrences strictly after max(range start, now) — this is what
-        # keeps past runs out even when the requested range starts in the
-        # past (an in-progress "this week" query spanning yesterday..next
-        # week must still only show the remaining future occurrences).
-        lower = max(start_dt, now).astimezone(tz)
+        # Occurrences strictly after max(range start, start of TODAY in the
+        # trigger's tz). Earlier days stay out (no synthesized history), but
+        # today's already-fired slots ARE emitted — the Workbench "Today"
+        # overview needs the whole day, not just the remainder (rev 6).
+        today_floor = now.astimezone(tz).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        lower = max(start_dt.astimezone(tz), today_floor)
         try:
             itr = croniter(cron, lower)
         except Exception:

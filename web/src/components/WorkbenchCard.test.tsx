@@ -15,6 +15,7 @@
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import WorkbenchCard from './WorkbenchCard';
+import { eventColor } from './calendar/color';
 import type { WorkbenchEntry } from './workbench/types';
 
 afterEach(cleanup);
@@ -97,6 +98,86 @@ describe('WorkbenchCard — entry, age + project chip', () => {
       />,
     );
     expect(screen.queryByTestId('workbench-card-project-chip')).toBeNull();
+  });
+});
+
+// jsdom's CSSOM normalizes any color it reads back through
+// `element.style.<prop>` into `rgb()`/`rgba()`, regardless of the hsl()
+// string that was assigned — round-trip the expected value through the same
+// normalization (via a scratch element) so the comparison isn't sensitive to
+// that serialization quirk.
+function normalizedColor(value: string): string {
+  const probe = document.createElement('div');
+  probe.style.color = value;
+  return probe.style.color;
+}
+
+describe('WorkbenchCard — project prominence (round 3, item 3): reuses the calendar eventColor hash', () => {
+  it('applies a left accent border matching eventColor(project_id).border on the global view (showProjectChip)', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-a' })}
+        showProjectChip
+        projectName="Marketing"
+        onOpen={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId('workbench-card-entry-proj-a-e1');
+    const accent = eventColor('proj-a');
+    expect(normalizedColor(card.style.borderLeftColor)).toBe(normalizedColor(accent.border));
+  });
+
+  it('does NOT apply the accent border on the lens view (showProjectChip false)', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-a' })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId('workbench-card-entry-proj-a-e1');
+    expect(card.style.borderLeftColor).toBe('');
+  });
+
+  it('styles the project chip with eventColor bg/text/border (not the plain gray classes) and font-medium', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-b' })}
+        showProjectChip
+        projectName="Ops"
+        onOpen={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId('workbench-card-project-chip');
+    const accent = eventColor('proj-b');
+    expect(normalizedColor(chip.style.backgroundColor)).toBe(normalizedColor(accent.bg));
+    expect(normalizedColor(chip.style.color)).toBe(normalizedColor(accent.text));
+    expect(chip.className).toMatch(/font-medium/);
+    expect(chip.className).not.toMatch(/text-secondary/);
+  });
+
+  it('different projects get different accent hues (hash-based, matches the calendar)', () => {
+    const { rerender } = render(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-a' })}
+        showProjectChip
+        projectName="Marketing"
+        onOpen={vi.fn()}
+      />,
+    );
+    const chipA = screen.getByTestId('workbench-card-project-chip').style.borderColor;
+
+    rerender(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-b' })}
+        showProjectChip
+        projectName="Ops"
+        onOpen={vi.fn()}
+      />,
+    );
+    const chipB = screen.getByTestId('workbench-card-project-chip').style.borderColor;
+
+    expect(chipA).not.toBe(chipB);
   });
 });
 
