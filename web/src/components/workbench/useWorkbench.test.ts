@@ -156,19 +156,25 @@ describe('useWorkbench — live badge event (orbital:workbench-changed)', () => 
     window.removeEventListener('orbital:workbench-changed', handler);
   });
 
-  it('does NOT dispatch the event on a 409 conflict', async () => {
+  it('dispatches the event on a 409 conflict, after the refetch (file provably changed)', async () => {
     apiMock.mockResolvedValueOnce({ entries: [entry()] });
     const { result } = renderHook(() => useWorkbench({}));
     await waitFor(() => expect(result.current.entries).toHaveLength(1));
 
-    const handler = vi.fn();
+    const seen: Array<'refetch' | 'event'> = [];
+    apiMock.mockImplementationOnce(() => Promise.reject(new MockApiError(409, 'conflict')));
+    apiMock.mockImplementationOnce(() => {
+      seen.push('refetch');
+      return Promise.resolve({ entries: [entry({ text: 'refetched' })] });
+    });
+    const handler = vi.fn(() => seen.push('event'));
     window.addEventListener('orbital:workbench-changed', handler);
-    apiMock.mockRejectedValueOnce(new MockApiError(409, 'conflict'));
-    apiMock.mockResolvedValueOnce({ entries: [entry({ text: 'refetched' })] });
     await act(async () => {
       await result.current.exitEntry('proj-a', 'e1', 'fulfilled');
     });
-    expect(handler).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result.current.entries[0].text).toBe('refetched');
+    expect(seen).toEqual(['refetch', 'event']); // dispatch happens after the refetch resolves
     window.removeEventListener('orbital:workbench-changed', handler);
   });
 

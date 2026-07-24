@@ -15,12 +15,15 @@
  * show a notice. `openEntry`/`migrate` spawn a seeded session through the
  * doorway routes and return the new session id for navigation.
  *
- * After every successful server write that changes entry count (`exitEntry`
- * 2xx, `migrate` 2xx), this hook dispatches a global `orbital:workbench-changed`
- * event so the sidebar's nav badge (fetched independently, see Sidebar.tsx's
- * `useWorkbenchCount`) can refetch without polling. It is never dispatched on
- * the optimistic update itself or on an error/409-revert path — only after
- * the awaited api() call resolves.
+ * This hook dispatches a global `orbital:workbench-changed` event so the
+ * sidebar's nav badge (fetched independently, see Sidebar.tsx's
+ * `useWorkbenchCount`) can refetch without polling, whenever entry count is
+ * known (or provably about) to have changed: `exitEntry` 2xx, `exitEntry` 409
+ * (the refetch proves the file changed server-side, even though this
+ * client's optimistic write lost), and `migrate` 2xx (a session spawn, not
+ * the count change itself — the agent edits PROJECT_STATE.md minutes later,
+ * so this only marks that a migration started). It is never dispatched on
+ * the optimistic update itself or on a non-409 error path.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -113,6 +116,7 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
         if (e instanceof ApiError && e.status === 409) {
           setConflict(true);
           await fetchAll();
+          window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
           setTimeout(() => setConflict(false), 4000);
         }
       }

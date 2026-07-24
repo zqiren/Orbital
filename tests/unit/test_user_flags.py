@@ -8,7 +8,7 @@ Covers: parsing the spec §4 canonical entry (flagged, due, evidence w/ CJK +
 spaces, unconfirmed, multi-line wrapped comment); dated-but-unflagged facts;
 plain bullets (including markdown checkboxes) not surfaced; comment
 stripping/round-trip; id generation; and lint warnings (malformed due,
-missing evidence/from on flagged entries).
+flagged entries missing both evidence and confidence).
 """
 import re
 
@@ -357,23 +357,42 @@ class TestLint:
         warnings = uf.lint(content)
         assert not any("malformed due" in w for w in warnings)
 
-    def test_flagged_entry_missing_evidence_and_from_warns(self):
+    def test_flagged_entry_with_neither_evidence_nor_confidence_warns(self):
         content = "- [user] Do the thing with no comment at all.\n"
         warnings = uf.lint(content)
-        assert any("evidence" in w for w in warnings)
-        assert any("from" in w for w in warnings)
+        assert any("confidence" in w for w in warnings)
 
-    def test_flagged_entry_with_evidence_and_from_no_warning(self):
+    def test_flagged_entry_with_confidence_unconfirmed_and_no_evidence_no_warning(self):
+        # The one-voice contract: a compliant quote-less entry carries
+        # confidence:unconfirmed instead of fabricated evidence, and that
+        # must produce zero lint warnings (spec update, commit 050e6dd).
+        content = (
+            "- [user] Do the thing.\n"
+            "  <!--mem id:abc123 confidence:unconfirmed-->\n"
+        )
+        assert uf.lint(content) == []
+
+    def test_flagged_entry_with_evidence_no_warning(self):
         content = CANONICAL_ENTRY
         warnings = uf.lint(content)
-        assert not any("evidence" in w for w in warnings)
-        assert not any(w for w in warnings if "from" in w and "evidence" not in w)
+        assert not any("confidence" in w for w in warnings)
+
+    def test_no_warning_ever_mentions_from(self):
+        # The missing-`from` warning is retired entirely — `from:` is no
+        # longer instructed (commit 050e6dd).
+        for content in (
+            "- [user] Do the thing with no comment at all.\n",
+            CANONICAL_ENTRY,
+            "- [user] Do the thing.\n  <!--mem id:abc123 confidence:unconfirmed-->\n",
+        ):
+            warnings = uf.lint(content)
+            assert not any("from" in w for w in warnings)
 
     def test_clean_prose_has_no_warnings(self):
         assert uf.lint(REAL_PROSE) == []
 
     def test_dated_unflagged_fact_no_evidence_warning(self):
         # Dated facts aren't addressed to the user, so they're exempt from
-        # the evidence/from completeness check.
+        # the receipts completeness check.
         content = "- [due:2026-07-23] Renew the domain.\n"
         assert uf.lint(content) == []

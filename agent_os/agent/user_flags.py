@@ -326,11 +326,15 @@ def new_entry_id() -> str:
 def lint(content: str) -> list[str]:
     """Grammar-level warnings for ``content``. Never rejects — warns only.
 
-    v1 (Task 1) scope: malformed ``due:`` values, and flagged entries missing
-    ``evidence``/``from`` (the laundering guard, spec §3 — a flagged entry
-    must anchor to user-visible evidence). The omission heuristic (unflagged
-    user-directed phrasing) is Task 2 — it needs section-heading context this
-    module doesn't have.
+    v1 (Task 1) scope: malformed ``due:`` values, and flagged entries with
+    no receipts at all — neither ``evidence`` (a verbatim quote) nor
+    ``confidence`` (e.g. ``confidence:unconfirmed`` when no quote exists).
+    The one-voice contract (spec §3, commit 050e6dd): evidence must be a
+    real verbatim quote or absent — never fabricated — so a compliant
+    quote-less entry carries ``confidence:unconfirmed`` instead and must
+    warn zero times. ``from:`` is no longer instructed and is never linted.
+    The omission heuristic (unflagged user-directed phrasing) is Task 2 —
+    it needs section-heading context this module doesn't have.
     """
     if not content:
         return []
@@ -348,14 +352,10 @@ def lint(content: str) -> list[str]:
     for e in parse_entries(content):
         if not e.flagged:
             continue
-        if not e.evidence:
+        if not e.evidence and not e.confidence:
             warnings.append(
-                f"line {e.line_start + 1}: flagged entry missing evidence "
-                f"(\"{e.text[:60]}\")"
-            )
-        if not e.from_session:
-            warnings.append(
-                f"line {e.line_start + 1}: flagged entry missing from "
-                f"(\"{e.text[:60]}\")"
+                f"line {e.line_start + 1}: flagged entry missing receipts "
+                f"— add confidence:unconfirmed or a verbatim quote as "
+                f"evidence (\"{e.text[:60]}\")"
             )
     return warnings
