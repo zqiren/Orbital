@@ -26,7 +26,7 @@ import { useWorkbench } from './workbench/useWorkbench';
 import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
 import WorkbenchCard from './WorkbenchCard';
-import type { WorkbenchEntry } from './workbench/types';
+import type { WorkbenchDigest, WorkbenchEntry } from './workbench/types';
 
 export interface WorkbenchPageProps {
   /**
@@ -47,6 +47,72 @@ function sevenDayRangeISO(): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+/** One collapsed "in flight" digest row on the global surface — a per-project
+ *  summary of PROJECT_STATE.md's In progress / Next steps sections, rendered
+ *  as read-only plain text (no markdown engine, spec constraint C4). Expand
+ *  state is local to the row so multiple digests can be open independently. */
+function InFlightRow({
+  digest,
+  projectName,
+}: {
+  digest: WorkbenchDigest;
+  projectName: string | null;
+}) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="rounded-2xl border border-border/60 bg-card px-3.5 py-2.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        data-testid={`workbench-inflight-${digest.project_id}`}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <span
+          aria-hidden="true"
+          className={`inline-block shrink-0 text-[9px] transition-transform duration-150 ease-out motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
+        >
+          ▶
+        </span>
+        {projectName && (
+          <span className="rounded-full bg-sidebar px-2 py-0.5 text-[11px] font-medium text-secondary">
+            {projectName}
+          </span>
+        )}
+        <span className="text-[12.5px] font-medium text-secondary">
+          {t('workbench.inflight.title')}
+        </span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 space-y-2 rounded-xl bg-sidebar/60 px-3 py-2">
+          {digest.in_progress && (
+            <div>
+              <h3 className="mb-1 text-[11px] font-semibold text-secondary">
+                {t('workbench.inflight.inProgress')}
+              </h3>
+              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
+                {digest.in_progress}
+              </p>
+            </div>
+          )}
+          {digest.next_steps && (
+            <div>
+              <h3 className="mb-1 text-[11px] font-semibold text-secondary">
+                {t('workbench.inflight.nextSteps')}
+              </h3>
+              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
+                {digest.next_steps}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProps) {
   const t = useT();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -54,7 +120,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   // Global empty state: project chosen in the migrate dropdown ('' = none).
   const [migrateTarget, setMigrateTarget] = useState('');
 
-  const { entries, loading, error, conflict, refetch, exitEntry, openEntry, migrate } =
+  const { entries, digests, loading, error, conflict, refetch, exitEntry, openEntry, migrate } =
     useWorkbench({ projectId });
 
   const { start, end } = useMemo(() => sevenDayRangeISO(), []);
@@ -204,6 +270,14 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               ))}
             </ul>
           </div>
+        </div>
+      )}
+
+      {showProjectChip && digests.length > 0 && (
+        <div data-testid="workbench-inflight-strip" className="space-y-2 px-4 pt-3">
+          {digests.map((d) => (
+            <InFlightRow key={d.project_id} digest={d} projectName={projectName(d.project_id)} />
+          ))}
         </div>
       )}
 

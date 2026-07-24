@@ -14,11 +14,18 @@
  * additionally triggers a refetch and a brief conflict flag so the page can
  * show a notice. `openEntry`/`migrate` spawn a seeded session through the
  * doorway routes and return the new session id for navigation.
+ *
+ * After every successful server write that changes entry count (`exitEntry`
+ * 2xx, `migrate` 2xx), this hook dispatches a global `orbital:workbench-changed`
+ * event so the sidebar's nav badge (fetched independently, see Sidebar.tsx's
+ * `useWorkbenchCount`) can refetch without polling. It is never dispatched on
+ * the optimistic update itself or on an error/409-revert path — only after
+ * the awaited api() call resolves.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../config';
-import type { WorkbenchEntry, WorkbenchResponse } from './types';
+import type { WorkbenchDigest, WorkbenchEntry, WorkbenchResponse } from './types';
 
 export interface UseWorkbenchArgs {
   /** Project lens: fetch only this project's entries (omit for the global,
@@ -28,6 +35,10 @@ export interface UseWorkbenchArgs {
 
 export interface UseWorkbenchResult {
   entries: WorkbenchEntry[];
+  /** Per-project "in flight" summaries, passed through as-is from the
+   *  response (default []). Callers decide whether to render them — the
+   *  page only shows this UI on the global (unlensed) surface. */
+  digests: WorkbenchDigest[];
   loading: boolean;
   error: string | null;
   /** True briefly after a 409 exit conflict (auto-clears). */
@@ -53,6 +64,7 @@ function workbenchUrl(projectId?: string): string {
 
 export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResult {
   const [entries, setEntries] = useState<WorkbenchEntry[]>([]);
+  const [digests, setDigests] = useState<WorkbenchDigest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -69,11 +81,13 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
       const res = await api<WorkbenchResponse>(workbenchUrl(projectId));
       if (epochRef.current === epoch) {
         setEntries(res?.entries ?? []);
+        setDigests(res?.digests ?? []);
       }
     } catch (e) {
       if (epochRef.current === epoch) {
         setError(e instanceof Error ? e.message : 'error');
         setEntries([]);
+        setDigests([]);
       }
     } finally {
       if (epochRef.current === epoch) setLoading(false);
@@ -93,6 +107,7 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
           `/api/v2/workbench/${encodeURIComponent(pid)}/entries/${encodeURIComponent(memId)}/exit`,
           { method: 'POST', body: JSON.stringify({ kind, reason }) },
         );
+        window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
       } catch (e) {
         setEntries(prevEntries); // revert the optimistic removal
         if (e instanceof ApiError && e.status === 409) {
@@ -118,11 +133,13 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
       `/api/v2/workbench/${encodeURIComponent(pid)}/migrate`,
       { method: 'POST' },
     );
+    window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
     return res.session_id;
   }, []);
 
   return {
     entries,
+    digests,
     loading,
     error,
     conflict,

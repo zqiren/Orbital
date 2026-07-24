@@ -76,6 +76,25 @@ class TestIdPreservation:
         assert e.id != "aaa000"                 # < 0.75 ratio → fresh id
         assert re.fullmatch(r"[0-9a-f]{6}", e.id)
 
+    def test_numbered_item_id_survives_comment_stripped_rewrite(self):
+        # A `3. [user] ...` item's id must survive the agent's comment-less
+        # rewrite exactly like a `- [user] ...` bullet does — the chokepoint
+        # doesn't special-case the marker, it just diffs by (id else fuzzy
+        # title) match, so this exercises the numbered grammar end-to-end.
+        prev = (
+            "## Blockers\n\n"
+            "3. [user] Approve the vendor contract.\n"
+            "  <!--mem id:num900 from:sess_1 evidence:\"approve it\" "
+            "created:2026-07-19 touched:2026-07-19-->\n"
+        )
+        new = "## Blockers\n\n3. [user] Approve the vendor contract.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "num900"
+        assert e.created == "2026-07-19"
+        assert e.prefix == "3. "
+        assert "3. [user] Approve the vendor contract." in merged
+
 
 class TestNewEntries:
     def test_new_flagged_bullet_gets_id_and_created_today(self):
@@ -106,6 +125,20 @@ class TestNewEntries:
         assert e.due == "2026-07-28"
         assert not e.flagged
         assert "<!--mem" not in merged
+
+    def test_new_numbered_flagged_item_gets_id_and_keeps_its_marker(self):
+        # Tag-in-place grammar: a `3. [user] ...` item goes through the SAME
+        # id-stamping merge as a `- [user] ...` bullet — no source change to
+        # the chokepoint itself was needed, since it operates on whatever
+        # line text/marker parse_entries handed it.
+        new = "## Blockers\n\n3. [user] Approve the numbered blocker.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        e = _entry(merged)
+        assert re.fullmatch(r"[0-9a-f]{6}", e.id)
+        assert e.created == TODAY
+        assert e.touched == TODAY
+        assert e.prefix == "3. "
+        assert "3. [user] Approve the numbered blocker." in merged
 
 
 class TestTouchedStamp:
@@ -285,6 +318,41 @@ class TestResolvedTraceReattach:
         assert e.resolved == "2026-07-20"
         assert e.flagged is True
 
+    def test_verbatim_numbered_item_reattaches_resolved_trace(self):
+        # Same as test_verbatim_plain_bullet_reattaches_resolved_trace, but
+        # the retired entry was found as a numbered item ("3. ..."), not a
+        # dash bullet. A later freeform agent rewrite drops the mem-comment
+        # and re-emits the same numbered line — the id + resolved stamp must
+        # still re-attach (review finding 1).
+        prev = (
+            "3. Approve the vendor contract.\n"
+            "  <!--mem id:trc010 from:s1 evidence:\"approve it\" "
+            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
+        )
+        new = "3. Approve the vendor contract.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc010"
+        assert e.resolved == "2026-07-20"
+        assert e.created == "2026-07-19"
+        assert e.flagged is False
+        assert e.prefix == "3. "
+
+    def test_rephrased_paren_numbered_item_reattaches_resolved_trace(self):
+        # A "12) ..." marker (the other numbered-list style) rephrased just
+        # enough to stay >= 0.75 ratio must also re-associate.
+        prev = (
+            "12) Send the DM drafts to 宝玉 and Simon.\n"
+            "  <!--mem id:trc011 from:s1 evidence:\"发 draft\" "
+            "created:2026-07-19 touched:2026-07-20 resolved:2026-07-20-->\n"
+        )
+        new = "12) Send DM drafts to 宝玉 and Simon.\n"   # dropped "the", >=0.75
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.id == "trc011"
+        assert e.resolved == "2026-07-20"
+        assert e.prefix == "12) "
+
 
 # ---------------------------------------------------------------------------
 # retraction resurrection guard (spec §5.2)
@@ -350,6 +418,25 @@ class TestOmissionHeuristic:
         new = "## Progress\n- Refactored the exporter module.\n"
         merged, warns = reconcile_flags(None, new, TODAY)
         assert warns == []
+
+    def test_unflagged_numbered_item_under_blocker_heading_warns(self):
+        # Same heuristic as test_unflagged_bullet_under_blocker_heading_warns,
+        # but the unflagged line is a numbered item ("1. ..."), not a dash
+        # bullet (review finding 2).
+        new = (
+            "# State\n\n"
+            "## Blockers\n"
+            "1. Waiting on the client to approve the vendor.\n"
+        )
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
+        # Never blocks: the line is still present in the output.
+        assert "Waiting on the client" in merged
+
+    def test_you_must_phrasing_numbered_item_warns(self):
+        new = "## Notes\n2) You must sign the release form before Friday.\n"
+        merged, warns = reconcile_flags(None, new, TODAY)
+        assert any("user-facing" in w.lower() or "flag" in w.lower() for w in warns)
 
 
 # ---------------------------------------------------------------------------

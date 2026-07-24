@@ -44,6 +44,7 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     age_days: 5,
     overdue: false,
     days_late: null,
+    section: null,
     ...overrides,
   };
 }
@@ -115,6 +116,105 @@ describe('useWorkbench — exitEntry', () => {
 
     expect(result.current.conflict).toBe(true);
     expect(result.current.entries[0].text).toBe('refetched');
+  });
+});
+
+describe('useWorkbench — digests', () => {
+  it('exposes digests from the response', async () => {
+    apiMock.mockResolvedValueOnce({
+      entries: [],
+      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
+    });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.digests).toEqual([
+      { project_id: 'proj-a', in_progress: 'Working on X', next_steps: null },
+    ]);
+  });
+
+  it('defaults digests to [] when the response omits it', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.digests).toEqual([]);
+  });
+});
+
+describe('useWorkbench — live badge event (orbital:workbench-changed)', () => {
+  it('dispatches the event after a successful exit', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [entry()] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockResolvedValueOnce({ status: 'ok' });
+    await act(async () => {
+      await result.current.exitEntry('proj-a', 'e1', 'fulfilled');
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    window.removeEventListener('orbital:workbench-changed', handler);
+  });
+
+  it('does NOT dispatch the event on a 409 conflict', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [entry()] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockRejectedValueOnce(new MockApiError(409, 'conflict'));
+    apiMock.mockResolvedValueOnce({ entries: [entry({ text: 'refetched' })] });
+    await act(async () => {
+      await result.current.exitEntry('proj-a', 'e1', 'fulfilled');
+    });
+    expect(handler).not.toHaveBeenCalled();
+    window.removeEventListener('orbital:workbench-changed', handler);
+  });
+
+  it('does NOT dispatch the event when the exit POST fails with a non-409 error', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [entry()] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockRejectedValueOnce(new MockApiError(500, 'boom'));
+    await act(async () => {
+      await result.current.exitEntry('proj-a', 'e1', 'irrelevant');
+    });
+    expect(handler).not.toHaveBeenCalled();
+    window.removeEventListener('orbital:workbench-changed', handler);
+  });
+
+  it('dispatches the event after a successful migrate', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockResolvedValueOnce({ session_id: 'sess-migrate' });
+    await act(async () => {
+      await result.current.migrate('proj-a');
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    window.removeEventListener('orbital:workbench-changed', handler);
+  });
+
+  it('does NOT dispatch the event on openEntry (does not change entry count)', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [] });
+    const { result } = renderHook(() => useWorkbench({}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const handler = vi.fn();
+    window.addEventListener('orbital:workbench-changed', handler);
+    apiMock.mockResolvedValueOnce({ session_id: 'sess-new' });
+    await act(async () => {
+      await result.current.openEntry('proj-a', 'e1');
+    });
+    expect(handler).not.toHaveBeenCalled();
+    window.removeEventListener('orbital:workbench-changed', handler);
   });
 });
 

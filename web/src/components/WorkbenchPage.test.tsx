@@ -7,7 +7,7 @@
 /**
  * WorkbenchPage integration tests (Task 7). Covers the plan's Vitest list:
  * sort order rendering, an unconfirmed card auto-expanding its receipt, a
- * "Resolved" click issuing the right exit POST with optimistic removal, and
+ * "Done" click issuing the right exit POST with optimistic removal, and
  * the empty state showing the migrate CTA (per-project and global). The api
  * client is mocked — no network.
  */
@@ -32,19 +32,21 @@ const PROJECTS = [
 
 function mockApi(opts: {
   entries?: unknown[];
+  digests?: unknown[];
   projects?: unknown[];
   calendarAvailable?: boolean;
   calendarEvents?: unknown[];
 } = {}) {
   const {
     entries = [],
+    digests = [],
     projects = PROJECTS,
     calendarAvailable = false,
     calendarEvents = [],
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v2/workbench') && (!init || init.method === undefined)) {
-      return { entries };
+      return { entries, digests };
     }
     if (path === '/api/v2/projects') return projects;
     if (path.startsWith('/api/v2/calendar/availability')) {
@@ -115,7 +117,7 @@ describe('WorkbenchPage — unconfirmed receipt', () => {
   });
 });
 
-describe('WorkbenchPage — Resolved exit', () => {
+describe('WorkbenchPage — Done exit', () => {
   it('POSTs the fulfilled exit and optimistically removes the card', async () => {
     mockApi({ entries: [entry()] });
     render(<WorkbenchPage setRoute={vi.fn()} />);
@@ -219,6 +221,66 @@ describe('WorkbenchPage — empty state', () => {
     expect(
       apiMock.mock.calls.some(([path]) => path === '/api/v2/workbench/proj-b/migrate'),
     ).toBe(true);
+  });
+});
+
+describe('WorkbenchPage — in-flight digest strip (global only)', () => {
+  it('renders one collapsed row per digest on the global view', async () => {
+    mockApi({
+      entries: [entry()],
+      digests: [
+        { project_id: 'proj-a', in_progress: 'Working on X', next_steps: 'Ship Y' },
+        { project_id: 'proj-b', in_progress: null, next_steps: 'Draft the RFC' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument();
+    expect(screen.getByTestId('workbench-inflight-proj-b')).toBeInTheDocument();
+  });
+
+  it('does not render digest rows in the per-project lens', async () => {
+    mockApi({
+      entries: [entry()],
+      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
+    });
+    render(<WorkbenchPage projectId="proj-a" setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
+    expect(screen.queryByTestId('workbench-inflight-proj-a')).toBeNull();
+  });
+
+  it('is collapsed by default, then expanding shows in_progress/next_steps as plain text; hides a null subsection', async () => {
+    mockApi({
+      entries: [entry()],
+      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: null }],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Working on X')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('workbench-inflight-proj-a'));
+    expect(screen.getByText('In progress')).toBeInTheDocument();
+    expect(screen.getByText('Working on X')).toBeInTheDocument();
+    expect(screen.queryByText('Next steps')).toBeNull();
+  });
+
+  it('hides the strip entirely when digests is empty', async () => {
+    mockApi({ entries: [entry()], digests: [] });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
+    expect(screen.queryAllByTestId(/^workbench-inflight-/)).toHaveLength(0);
+  });
+
+  it('is visible alongside the empty state (re-entry context matters most then)', async () => {
+    mockApi({
+      entries: [],
+      digests: [{ project_id: 'proj-a', in_progress: 'Working on X', next_steps: 'Ship Y' }],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-empty')).toBeInTheDocument());
+    expect(screen.getByTestId('workbench-inflight-proj-a')).toBeInTheDocument();
   });
 });
 

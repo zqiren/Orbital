@@ -32,6 +32,7 @@ function entry(overrides: Partial<WorkbenchEntry> = {}): WorkbenchEntry {
     age_days: 5,
     overdue: false,
     days_late: null,
+    section: null,
     ...overrides,
   };
 }
@@ -154,8 +155,58 @@ describe('WorkbenchCard — receipt expansion', () => {
   });
 });
 
+describe('WorkbenchCard — receipt provenance (section)', () => {
+  it('shows the PROJECT_STATE.md provenance line when section is present', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ section: 'Blockers' })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
+    expect(screen.getByText('In PROJECT_STATE.md › Blockers')).toBeInTheDocument();
+  });
+
+  it('hides the provenance line when section is null', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ section: null })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
+    expect(screen.queryByText(/PROJECT_STATE\.md/)).toBeNull();
+  });
+
+  it('makes the receipt reachable when the entry has only a section (no evidence, no from_session)', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ evidence: null, from_session: null, section: 'Blockers' })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('workbench-card-receipt-toggle')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('workbench-card-receipt-toggle'));
+    expect(screen.getByText('In PROJECT_STATE.md › Blockers')).toBeInTheDocument();
+  });
+
+  it('does not show a receipt toggle at all when evidence, from_session, and section are all absent', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ evidence: null, from_session: null, section: null })}
+        showProjectChip={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('workbench-card-receipt-toggle')).toBeNull();
+  });
+});
+
 describe('WorkbenchCard — entry exits', () => {
-  it('Resolved fires onExit("fulfilled") and does NOT trigger the doorway open', () => {
+  it('Done fires onExit("fulfilled") and does NOT trigger the doorway open', () => {
     const onExit = vi.fn();
     const onOpen = vi.fn();
     render(
@@ -169,7 +220,7 @@ describe('WorkbenchCard — entry exits', () => {
     fireEvent.click(screen.getByTestId('workbench-card-exit-fulfilled'));
     expect(onExit).toHaveBeenCalledWith('fulfilled');
     expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.getByTestId('workbench-card-exit-fulfilled')).toHaveTextContent('Resolved');
+    expect(screen.getByTestId('workbench-card-exit-fulfilled')).toHaveTextContent('Done');
   });
 
   it('Delete fires onExit("irrelevant") and does NOT trigger the doorway open', () => {

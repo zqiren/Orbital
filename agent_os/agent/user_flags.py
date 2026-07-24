@@ -42,18 +42,55 @@ from dataclasses import dataclass
 
 import re
 
-# A bracket-tagged bullet: "- [<tag tokens>] <sentence>". Deliberately does
-# NOT match on tag content here — an empty/checkbox bracket ("- [ ]", "- [x]"
-# from markdown task lists, common in plans/BACKLOG.md) must fall through to
-# "not a tag entry" rather than be misparsed.
-_BULLET_TAG_RE = re.compile(r"^-\s+\[(?P<tag>[^\]]*)\]\s*(?P<text>.*)$")
+# A list marker: a dash bullet, or a numbered item ("3." / "12)"). Captured
+# as its own group (named "prefix" in the regexes below) so a rewrite can
+# reproduce the exact marker a line was found with — flagging must never
+# convert a numbered item into a bullet (spec: tag-in-place grammar).
+# Public (no leading underscore): the write chokepoint (flag_chokepoint.py)
+# imports this so its own list-item regexes cannot drift from this grammar.
+LIST_MARKER = r"(?:-|\d+[.)])\s+"
 
-# Any bullet, tagged or not. Used (a) as the fallback for tag-less bullets
+# A bracket-tagged list item: "<marker> [<tag tokens>] <sentence>". Deliberately
+# does NOT match on tag content here — an empty/checkbox bracket ("- [ ]",
+# "- [x]" from markdown task lists, common in plans/BACKLOG.md) must fall
+# through to "not a tag entry" rather than be misparsed.
+_BULLET_TAG_RE = re.compile(rf"^(?P<prefix>{LIST_MARKER})\[(?P<tag>[^\]]*)\]\s*(?P<text>.*)$")
+
+# Any list item, tagged or not. Used (a) as the fallback for tag-less items
 # that carry an adjacent mem-comment (a fulfilled Workbench exit rewrites the
 # retired entry this way — spec §5.3 — dropping the whole `[user ...]` tag
-# but keeping id/resolved in the comment) and (b) to recognize "a new bullet
-# starts here" so a comment lookahead never bleeds into the next entry.
-_BULLET_RE = re.compile(r"^-\s+(?P<text>.*)$")
+# but keeping id/resolved in the comment, preserving whatever marker the
+# entry was found with) and (b) to recognize "a new item starts here" so a
+# comment lookahead never bleeds into the next entry.
+_BULLET_RE = re.compile(rf"^(?P<prefix>{LIST_MARKER})(?P<text>.*)$")
+
+# A "## <text>" section heading (exactly two hashes — "#"/"###+" don't count
+# as section provenance). Entry.section is the nearest preceding one of these,
+# or None above any heading.
+_SECTION_HEADING_RE = re.compile(r"^##\s+(?P<text>.*)$")
+
+
+def _clean_heading(raw: str) -> str:
+    return raw.strip().rstrip("#").strip()
+
+
+def iter_section_headings(content: str) -> list[tuple[int, str]]:
+    """``(0-based line index, cleaned heading text)`` for every ``## <text>``
+    heading in ``content``, in file order.
+
+    Exposed for consumers that need section-BODY ranges (the Workbench
+    in-flight digest — the text between one heading and the next); this same
+    detection runs inline inside ``parse_entries`` to stamp ``Entry.section``.
+    """
+    if not content:
+        return []
+    out: list[tuple[int, str]] = []
+    for i, line in enumerate(content.split("\n")):
+        m = _SECTION_HEADING_RE.match(line)
+        if m:
+            out.append((i, _clean_heading(m.group("text"))))
+    return out
+
 
 # A mem-comment block, possibly wrapped across multiple lines (DOTALL lets
 # "." span the embedded newlines of a wrapped comment).
@@ -74,6 +111,7 @@ _COMMENT_FIELD_ORDER = (
 class Entry:
     id: str | None
     text: str
+    prefix: str                    # exact list marker as found: "- ", "3. ", "12) "
     flagged: bool
     due: str | None                # raw "2026-07-28" or "2026-07-28T20:00"
     from_session: str | None
@@ -82,6 +120,7 @@ class Entry:
     created: str | None
     touched: str | None
     resolved: str | None
+    section: str | None            # nearest preceding "## " heading text, or None
     line_start: int                # 0-based, inclusive
     line_end: int                  # 0-based, inclusive; comment line included
 
@@ -140,13 +179,21 @@ def parse_entries(content: str) -> list[Entry]:
     n = len(lines)
     entries: list[Entry] = []
     i = 0
+    current_section: str | None = None
     while i < n:
+        heading_m = _SECTION_HEADING_RE.match(lines[i])
+        if heading_m:
+            current_section = _clean_heading(heading_m.group("text"))
+            i += 1
+            continue
+
         tag_m = _BULLET_TAG_RE.match(lines[i])
         if tag_m:
             flagged, raw_due = _parse_tag_tokens(tag_m.group("tag"))
             has_tag = flagged or raw_due is not None
             text = tag_m.group("text")
             text_pos = tag_m.start("text")
+            prefix = tag_m.group("prefix")
         else:
             plain_m = _BULLET_RE.match(lines[i])
             if not plain_m:
@@ -155,6 +202,7 @@ def parse_entries(content: str) -> list[Entry]:
             flagged, raw_due, has_tag = False, None, False
             text = plain_m.group("text")
             text_pos = plain_m.start("text")
+            prefix = plain_m.group("prefix")
 
         line_start = i
         line_end = i
@@ -197,6 +245,7 @@ def parse_entries(content: str) -> list[Entry]:
         entries.append(Entry(
             id=fields.get("id"),
             text=text,
+            prefix=prefix,
             flagged=flagged,
             due=due,
             from_session=fields.get("from"),
@@ -205,6 +254,7 @@ def parse_entries(content: str) -> list[Entry]:
             created=fields.get("created"),
             touched=fields.get("touched"),
             resolved=fields.get("resolved"),
+            section=current_section,
             line_start=line_start,
             line_end=line_end,
         ))

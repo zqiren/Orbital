@@ -6,10 +6,13 @@
  * One row of the Workbench list (spec §6): a flagged `[user]` entry.
  *
  * Entry card: sentence · project chip (global view only) · age · receipt
- * ("Why I believe this": evidence quote + from-session reference, expanded by
- * default when `confidence === 'unconfirmed'`) · two exits (Resolved,
- * Delete). Tapping the card body anywhere but a button is the doorway
- * (`onOpen`) — spec §5.3.
+ * ("Why I believe this": evidence quote + from-session reference + a
+ * PROJECT_STATE.md provenance line when `section` is set, expanded by
+ * default when `confidence === 'unconfirmed'`) · two exits (Done,
+ * Delete). The receipt is reachable whenever ANY of evidence, from_session,
+ * or section is present — a section-only entry (no quote) still needs to
+ * show where it came from. Tapping the card body anywhere but a button is
+ * the doorway (`onOpen`) — spec §5.3.
  *
  * Styling follows the Apple-design pass (2026-07-24): soft elevated cards,
  * feedback on press (scale, 100ms), size-specific tracking, motion respects
@@ -28,7 +31,7 @@ export interface WorkbenchCardProps {
   projectName?: string | null;
   /** Whole-card tap (doorway): spawn/resume and navigate to the project. */
   onOpen: () => void;
-  /** Fulfilled ("Resolved") or irrelevant ("Delete"). */
+  /** Fulfilled ("Done") or irrelevant ("Delete"). */
   onExit?: (kind: 'fulfilled' | 'irrelevant') => void;
 }
 
@@ -81,7 +84,7 @@ export default function WorkbenchCard({
   const age = ageLabel(t, entry);
   const testId = `workbench-card-entry-${entry.project_id}-${entry.id}`;
 
-  const hasReceipt = entry.evidence || entry.from_session;
+  const hasReceipt = entry.evidence || entry.from_session || entry.section;
 
   return (
     <div
@@ -159,6 +162,11 @@ export default function WorkbenchCard({
                 </p>
               )}
               {entry.due && <p>{t('workbench.receipt.due', { due: entry.due })}</p>}
+              {entry.section && (
+                <p data-testid="workbench-card-receipt-section" className="text-muted">
+                  {t('workbench.receipt.section', { section: entry.section })}
+                </p>
+              )}
             </div>
           )}
         </div>

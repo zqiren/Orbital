@@ -50,7 +50,12 @@ from agent_os.agent import user_flags
 _FUZZY_THRESHOLD = 0.75
 
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.*)$")
-_BULLET_LINE_RE = re.compile(r"^\s*[-*+]\s+\S")
+# Markdown bullet markers (-*+) plus numbered items ("3." / "12)") — the
+# omission heuristic below must warn on an unflagged numbered item exactly
+# like it does on an unflagged dash bullet.
+_BULLET_LINE_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+# Strips whatever marker `_BULLET_LINE_RE` matched, for the warning text.
+_BULLET_MARKER_STRIP_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 # Headings that make an unflagged bullet suspicious (spec §8 omission list).
 _OMISSION_HEADING_RE = re.compile(r"blocker|waiting|needs|next\s*step", re.IGNORECASE)
 # User-directed phrasing an unflagged bullet should probably have flagged.
@@ -129,10 +134,12 @@ def _strip_inline_comment(line: str) -> str:
     return _INLINE_COMMENT_RE.sub("", line).rstrip()
 
 
-# A top-level plain bullet the trace pass may re-attach a comment to. Bodies
-# starting with "[" are excluded: valid tags are already entries, and markdown
-# checkboxes ("- [ ]", "- [x]") must never inherit a trace.
-_PLAIN_BULLET_RE = re.compile(r"^- (?!\[)(?P<text>\S.*)$")
+# A top-level plain list item (dash bullet OR numbered — same grammar as
+# user_flags.LIST_MARKER, imported rather than duplicated so the two can't
+# drift) the trace pass may re-attach a comment to. Bodies starting with "["
+# are excluded: valid tags are already entries, and markdown checkboxes
+# ("- [ ]", "- [x]") must never inherit a trace.
+_PLAIN_BULLET_RE = re.compile(rf"^{user_flags.LIST_MARKER}(?!\[)(?P<text>\S.*)$")
 
 
 def _trace_fields(pe, new_text: str, today: str) -> dict[str, str]:
@@ -176,7 +183,7 @@ def _omission_warnings(lines: list[str], entry_starts: set[int]) -> list[str]:
             continue
         if idx in entry_starts or not _BULLET_LINE_RE.match(line):
             continue
-        text = line.strip().lstrip("-*+ ").strip()
+        text = _BULLET_MARKER_STRIP_RE.sub("", line).strip()
         if _OMISSION_HEADING_RE.search(heading) or _OMISSION_PHRASE_RE.search(text):
             warns.append(
                 f"line {idx + 1}: possible unflagged user-facing content "

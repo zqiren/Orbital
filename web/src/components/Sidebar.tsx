@@ -28,22 +28,27 @@ interface SidebarProps {
 }
 
 /** Nav-row count badge: total flagged entries across the (privacy-filtered)
- *  global Workbench. Fetched once on mount — the surface itself refetches
- *  live; the sidebar count is a light, best-effort signal, not required to
- *  stay millisecond-fresh (no WS event exists for it). */
+ *  global Workbench. Fetched on mount and refetched whenever a
+ *  `orbital:workbench-changed` event fires (dispatched by `useWorkbench.ts`
+ *  after a successful exit/migrate) — event-driven, no polling. */
 function useWorkbenchCount(): number {
   const [count, setCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    api<{ entries?: unknown[] }>('/api/v2/workbench')
-      .then((d) => {
-        if (!cancelled) setCount(d?.entries?.length ?? 0);
-      })
-      .catch(() => {
-        if (!cancelled) setCount(0);
-      });
+    function fetchCount() {
+      api<{ entries?: unknown[] }>('/api/v2/workbench')
+        .then((d) => {
+          if (!cancelled) setCount(d?.entries?.length ?? 0);
+        })
+        .catch(() => {
+          if (!cancelled) setCount(0);
+        });
+    }
+    fetchCount();
+    window.addEventListener('orbital:workbench-changed', fetchCount);
     return () => {
       cancelled = true;
+      window.removeEventListener('orbital:workbench-changed', fetchCount);
     };
   }, []);
   return count;

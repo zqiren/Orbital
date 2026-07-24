@@ -130,6 +130,7 @@ async def test_get_parses_seeded_file(tmp_path):
     assert x["age_days"] == 5           # 07-19 -> 07-24
     assert x["overdue"] is False
     assert x["project_id"] == "proj_a"
+    assert x["section"] == "Focus"      # nearest preceding '## ' heading
 
     # The unflagged dated fact never surfaces — not as an entry, and the
     # computed-card system that used to promote it as "overdue" is gone.
@@ -154,6 +155,8 @@ async def test_get_sort_overdue_first_then_oldest(tmp_path):
     order = [e["id"] for e in body["entries"]]
     # overdue first; then remaining by oldest created.
     assert order == ["ovrd", "oldr", "newr"]
+    # No '## ' heading anywhere above these entries -> section is null.
+    assert all(e["section"] is None for e in body["entries"])
 
 
 async def test_global_get_survives_invalid_utf8_project(tmp_path):
@@ -183,6 +186,140 @@ async def test_privacy_toggle_skips_project_in_global_view(tmp_path):
         lensed = (await client.get("/api/v2/workbench",
                                    params={"project_id": "proj_b"})).json()
         assert {e["project_id"] for e in lensed["entries"]} == {"proj_b"}
+
+
+# --------------------------------------------------------------------------
+# Digests (read-only, mechanical in-flight summary — zero LLM)
+# --------------------------------------------------------------------------
+
+DIGEST_STATE = "\n".join([
+    FORMAT_LINE,
+    "## In Progress",
+    "Refactoring the export pipeline to stream instead of buffering.",
+    "- [user] Approve the new vendor before we integrate.",
+    '  <!--mem id:dig001 from:s1 evidence:"approve the vendor" created:2026-07-19-->',
+    "- [due:2026-07-20] Cron job ships nightly backups.",
+    "  <!--mem id:dig002 created:2026-07-15-->",
+    "",
+    "## Next Steps (priority)",
+    "Write the migration doc, then cut the release branch.",
+    "",
+    "## Blockers",
+    "None currently.",
+    "",
+])
+
+
+async def test_digest_extracts_in_progress_and_next_steps(tmp_path):
+    project = _seed_project(tmp_path, state=DIGEST_STATE)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench",
+                                 params={"project_id": "proj_a"})).json()
+    assert body["digests"] == [{
+        "project_id": "proj_a",
+        "in_progress": (
+            "Refactoring the export pipeline to stream instead of buffering.\n"
+            "- [due:2026-07-20] Cron job ships nightly backups."
+        ),
+        "next_steps": "Write the migration doc, then cut the release branch.",
+    }]
+
+
+async def test_digest_excludes_flagged_lines_and_mem_comments(tmp_path):
+    project = _seed_project(tmp_path, state=DIGEST_STATE)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench",
+                                 params={"project_id": "proj_a"})).json()
+    digest = body["digests"][0]
+    # The [user]-flagged line is already a card — must not also appear here.
+    assert "Approve the new vendor" not in digest["in_progress"]
+    # Mem-comments are daemon metadata, never surfaced in the digest.
+    assert "<!--mem" not in digest["in_progress"]
+    assert "dig001" not in digest["in_progress"]
+    assert "dig002" not in digest["in_progress"]
+    # An unflagged dated fact's bullet text stays (only [user] lines drop).
+    assert "Cron job ships nightly backups" in digest["in_progress"]
+
+
+async def test_digest_case_insensitive_heading_match(tmp_path):
+    state = "\n".join([
+        FORMAT_LINE,
+        "## in progress",
+        "Lowercase heading still matches.",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench",
+                                 params={"project_id": "proj_a"})).json()
+    assert body["digests"][0]["in_progress"] == "Lowercase heading still matches."
+
+
+async def test_digest_null_when_one_heading_missing(tmp_path):
+    state = "\n".join([
+        FORMAT_LINE,
+        "## Next Steps",
+        "Ship the release.",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench",
+                                 params={"project_id": "proj_a"})).json()
+    digest = body["digests"][0]
+    assert digest["in_progress"] is None
+    assert digest["next_steps"] == "Ship the release."
+
+
+async def test_digest_omitted_when_both_null(tmp_path):
+    # SEEDED_STATE has no 'In Progress'/'Next Steps' headings at all.
+    project = _seed_project(tmp_path)  # default SEEDED_STATE
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench")).json()
+    assert body["digests"] == []
+
+
+async def test_digest_empty_after_exclusions_is_null(tmp_path):
+    # The 'In Progress' section has content, but it's ENTIRELY a flagged line
+    # + its comment — nothing survives the exclusions, so it must render
+    # null, not an empty string. 'Next Steps' is non-null so the digest
+    # itself isn't omitted (isolates "empty after exclusion" from "both
+    # null").
+    state = "\n".join([
+        FORMAT_LINE,
+        "## In Progress",
+        "- [user] Approve the new vendor before we integrate.",
+        '  <!--mem id:only1 from:s1 evidence:"approve" created:2026-07-19-->',
+        "",
+        "## Next Steps",
+        "Cut the release branch.",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench",
+                                 params={"project_id": "proj_a"})).json()
+    assert body["digests"][0]["in_progress"] is None
+    assert body["digests"][0]["next_steps"] == "Cut the release branch."
+
+
+async def test_digest_privacy_toggle_respected_in_global(tmp_path):
+    a = _seed_project(tmp_path, pid="proj_a", state=DIGEST_STATE)
+    b = _seed_project(tmp_path, pid="proj_b", state=DIGEST_STATE,
+                      extra={"workbench_exclude_global": True})
+    client, *_ = _make_client(tmp_path, [a, b])
+    async with client:
+        glob = (await client.get("/api/v2/workbench")).json()
+        assert {d["project_id"] for d in glob["digests"]} == {"proj_a"}
+        lensed = (await client.get("/api/v2/workbench",
+                                   params={"project_id": "proj_b"})).json()
+        assert {d["project_id"] for d in lensed["digests"]} == {"proj_b"}
 
 
 # --------------------------------------------------------------------------
@@ -237,6 +374,33 @@ async def test_fulfilled_exit_keeps_comment_adjacent_and_preserves_id(tmp_path):
     assert comment.lstrip().startswith("<!--mem")    # comment immediately follows
     assert "id:x7f3a2" in comment                    # id preserved
     assert "resolved:2026-07-24" in comment          # resolved stamp present
+
+
+async def test_fulfilled_exit_numbered_item_preserves_prefix(tmp_path):
+    """A numbered flagged item retiring to a fact must stay a numbered item —
+    `f"{entry.prefix}{entry.text}"`, not a hardcoded `- ` bullet — so the
+    surrounding list's numbering and any cross-references into it survive."""
+    state = "\n".join([
+        FORMAT_LINE,
+        "## Blockers",
+        "3. [user] Approve the numbered blocker.",
+        '  <!--mem id:num001 from:s1 evidence:"approve it" created:2026-07-19-->',
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.post(
+            "/api/v2/workbench/proj_a/entries/num001/exit",
+            json={"kind": "fulfilled", "reason": "done"},
+        )
+        assert r.status_code == 200, r.text
+
+    lines = open(_state_path(project), encoding="utf-8").read().split("\n")
+    idx = next(i for i, ln in enumerate(lines) if "Approve the numbered blocker." in ln)
+    assert lines[idx] == "3. Approve the numbered blocker."
+    assert lines[idx + 1].lstrip().startswith("<!--mem")
+    assert "resolved:2026-07-24" in lines[idx + 1]
 
 
 async def test_fulfilled_exit_leaves_parseable_resolved_trace(tmp_path):
@@ -370,15 +534,22 @@ async def test_migrate_refreshes_header_and_spawns(tmp_path):
     assert "legacy header placeholder" not in content
     # Body content preserved.
     assert "Approve the Q3 budget before Friday." in content
-    # A migration session was spawned with the [user] grammar instruction.
+    # A migration session was spawned with the one-voice migration instruction
+    # (day-0 flagging AND normalization of already-flagged files, in one edit).
     assert len(am.injected) == 1
     # The instruction must be imperative — edit NOW, no permission-seeking
     # (2026-07-24 live regression: the agent presented an options menu and
     # stalled instead of applying tags).
     msg = am.injected[0][1]
-    assert "apply [user] flags" in msg
+    assert "bring it fully to the format header's rails" in msg
     assert "do not ask" in msg.lower()
-    assert "confirmation" in msg
+    assert "this message IS the confirmation" in msg
+    assert "FLAG IN PLACE" in msg
+    assert "ONE VOICE" in msg
+    assert "RECEIPTS" in msg
+    assert "SETTLED LINES" in msg
+    # Never move a line or convert a numbered item to a bullet.
+    assert "never convert a numbered item to a bullet" in msg
 
 
 # --------------------------------------------------------------------------

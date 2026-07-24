@@ -155,6 +155,7 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
         "project_id": project_id,
         "id": e.id,
         "text": e.text,
+        "section": e.section,
         "due": e.due,
         "evidence": e.evidence,
         "from_session": e.from_session,
@@ -169,19 +170,82 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
     }
 
 
-def _collect_project(project: dict, now: datetime) -> list[dict]:
-    """Return the flagged ``[user]`` entry rows for one project."""
+# --------------------------------------------------------------------------
+# In-flight digest (§ one-voice revision): a mechanical, zero-LLM excerpt of
+# the "In Progress" / "Next Steps" sections, read-only. Every [user]-flagged
+# line is dropped (already a card) and every mem-comment line is dropped
+# (daemon metadata, never agent/user prose) — what remains is exactly what a
+# human skimming the raw file would see under that heading.
+# --------------------------------------------------------------------------
+
+def _section_body(content: str, heading_prefix: str) -> str | None:
+    """Raw text of the nearest ``## `` section whose (cleaned) heading starts
+    with ``heading_prefix`` (case-insensitive; so "Next Steps (priority)"
+    matches "next steps"). None when the heading is missing, or its body is
+    empty once flagged ``[user]`` lines and mem-comment lines are excluded
+    and leading/trailing blank lines are trimmed.
+    """
+    if not content:
+        return None
+    lines = content.split("\n")
+    headings = user_flags.iter_section_headings(content)
+    prefix_lower = heading_prefix.lower()
+    match = next((h for h in headings if h[1].lower().startswith(prefix_lower)), None)
+    if match is None:
+        return None
+    match_idx = headings.index(match)
+    body_start = match[0] + 1
+    body_end = headings[match_idx + 1][0] if match_idx + 1 < len(headings) else len(lines)
+
+    excluded: set[int] = set()
+    for e in user_flags.parse_entries(content):
+        if not e.flagged:
+            continue
+        if body_start <= e.line_start < body_end:
+            excluded.update(range(e.line_start, min(e.line_end, body_end - 1) + 1))
+
+    kept = [lines[i] for i in range(body_start, body_end) if i not in excluded]
+    body = user_flags.strip_mem_comments("\n".join(kept))
+
+    body_lines = body.split("\n")
+    start = 0
+    while start < len(body_lines) and body_lines[start].strip() == "":
+        start += 1
+    end = len(body_lines)
+    while end > start and body_lines[end - 1].strip() == "":
+        end -= 1
+    trimmed = "\n".join(body_lines[start:end])
+    return trimmed or None
+
+
+def _project_digest(project_id: str, content: str) -> dict | None:
+    in_progress = _section_body(content, "in progress")
+    next_steps = _section_body(content, "next steps")
+    if in_progress is None and next_steps is None:
+        return None
+    return {
+        "project_id": project_id,
+        "in_progress": in_progress,
+        "next_steps": next_steps,
+    }
+
+
+def _collect_project(project: dict, now: datetime) -> tuple[list[dict], dict | None]:
+    """Return ``(flagged entry rows, digest|None)`` for one project."""
     workspace = project.get("workspace", "")
     if not workspace:
-        return []
+        return [], None
     project_id = project.get("project_id", "")
     _, content = _load_state(_state_path(workspace))
-    parsed = user_flags.parse_entries(content or "")
+    content = content or ""
+    parsed = user_flags.parse_entries(content)
     triggers = project.get("triggers", []) or []
     tz = workbench_cards.project_timezone(project, triggers)
 
     flagged = [e for e in parsed if e.flagged]
-    return [_entry_row(project_id, e, tz, now) for e in flagged]
+    entries = [_entry_row(project_id, e, tz, now) for e in flagged]
+    digest = _project_digest(project_id, content)
+    return entries, digest
 
 
 @router.get("")
@@ -202,13 +266,14 @@ async def get_workbench(project_id: str | None = Query(None)):
         ]
 
     all_entries: list[dict] = []
+    digests: list[dict] = []
     for project in projects:
         # Per-project isolation: one project failing to collect (corrupt state,
         # I/O error) must never sink the whole global view. Failed projects are
         # skipped and logged — chosen over a degraded in-band marker to keep the
-        # {entries} response contract stable for the frontend.
+        # {entries, digests} response contract stable for the frontend.
         try:
-            entries = _collect_project(project, now)
+            entries, digest = _collect_project(project, now)
         except Exception:
             logger.warning(
                 "workbench: skipping project %s — collection failed",
@@ -216,9 +281,11 @@ async def get_workbench(project_id: str | None = Query(None)):
             )
             continue
         all_entries.extend(entries)
+        if digest is not None:
+            digests.append(digest)
 
     all_entries.sort(key=lambda e: (not e["overdue"], e.get("created") or "9999-99-99"))
-    return {"entries": all_entries}
+    return {"entries": all_entries, "digests": digests}
 
 
 # --------------------------------------------------------------------------
@@ -262,7 +329,7 @@ def _apply_exit(content: str, entry, kind: str, reason: str, today: str):
     if kind == "fulfilled":
         fields = _entry_comment_fields(entry)
         fields["resolved"] = today
-        replacement = [f"- {entry.text}", "  " + user_flags.render_comment(fields)]
+        replacement = [f"{entry.prefix}{entry.text}", "  " + user_flags.render_comment(fields)]
     else:  # irrelevant (Literal already validated by pydantic)
         replacement = []
         retraction = retractions.Retraction(
@@ -330,20 +397,34 @@ async def exit_entry(project_id: str, mem_id: str, req: ExitRequest):
 # confirmation; the never-auto-decide rail covers external/irreversible acts,
 # not this requested file edit.
 _MIGRATION_MESSAGE = (
-    "Edit orbital/PROJECT_STATE.md NOW, in this turn, and apply [user] flags "
-    "per the format header's rails. Do not present findings first, do not ask "
-    "which option I prefer, do not wait for confirmation — this message IS "
-    "the confirmation, and tagging is a plain file edit (the never-auto-decide "
-    "rail is about external or irreversible acts, not this). For each entry "
-    "that needs the user: rewrite its bullet as `- [user] <one plain sentence "
-    "addressed to the user>` (append ` due:YYYY-MM-DD` inside the tag only "
-    "when a real deadline exists), and on the next line add "
-    '`<!--mem from:<session-id> evidence:"<the user\'s own words>" '
-    "confidence:stated-->` — use confidence:unconfirmed for anything you "
-    "inferred rather than heard; omit fields you do not know; never write an "
-    "id (ids are daemon-assigned). Do not invent obligations; do not flag "
-    "agent work; leave every other line untouched. After saving, reply with "
-    "one line: the number of entries you flagged."
+    'Edit orbital/PROJECT_STATE.md NOW, in this turn, and bring it fully to '
+    "the format header's rails. Do not present findings first, do not ask "
+    'which option I prefer, do not wait for confirmation — this message IS '
+    'the confirmation, and this is a plain file edit (the never-auto-decide '
+    'rail is about external or irreversible acts, not this). Do ALL of the '
+    'following in one edit: (1) FLAG IN PLACE: for each line that needs the '
+    "user (their decision, their action, or something they'd be sorry to "
+    'miss), insert `[user]` right after the list marker of THAT line — `- '
+    '[user] <text>` or `3. [user] <text>`. Never move the line, never convert '
+    'a numbered item to a bullet, never copy it into another section. One '
+    'fact = one entry: if the same fact is already flagged elsewhere, keep '
+    'one and fold the other into it. (2) ONE VOICE: rewrite any line — '
+    'flagged or not — that a reader without your working memory could not '
+    'understand: expand project shorthand and abbreviations, and replace '
+    'list-number cross-references ("per Blocker #11") with the referenced '
+    "thing's name. Keep each line one concrete statement. (3) RECEIPTS: on "
+    'the line after a flagged entry you may add `<!--mem evidence:"<verbatim '
+    'quote of the user\'s words or of the source line>" '
+    'confidence:stated|unconfirmed-->` — evidence ONLY when you have a real '
+    'quote; NEVER a description of your own reasoning; use '
+    'confidence:unconfirmed for anything inferred rather than heard; omit '
+    'fields you do not know; never write an id (ids are daemon-assigned); '
+    'never edit existing ids. (4) SETTLED LINES: a line whose mem-comment '
+    'carries `resolved:<date>` is done — rewrite it from an imperative into '
+    'the completed fact (or delete it if no longer worth recording). Never '
+    're-open or re-flag it. Leave every other line untouched. After saving, '
+    'reply with one line: how many lines you flagged and how many you '
+    'normalized.'
 )
 
 
@@ -381,8 +462,10 @@ async def open_entry(project_id: str, mem_id: str):
 @router.post("/{project_id}/migrate")
 async def migrate_project(project_id: str):
     """Empty-state day-0 flow (spec §5.4): force-refresh the PROJECT_STATE
-    format header to the current ``[user]`` grammar rails, then spawn a
-    session that flags the legacy unflagged content."""
+    format header to the current one-voice/tag-in-place rails, then spawn a
+    session that both flags unflagged content AND normalizes any file that
+    already adopted the grammar (the migration message covers both in one
+    edit — see ``_MIGRATION_MESSAGE``)."""
     project = _require_project(project_id)
     path = _state_path(project.get("workspace", ""))
     _, content = _load_state(path)

@@ -207,6 +207,138 @@ class TestNewEntryId:
         assert len(ids) > 1
 
 
+class TestPrefixCapture:
+    def test_bullet_prefix_is_dash_space(self):
+        e = uf.parse_entries(CANONICAL_ENTRY)[0]
+        assert e.prefix == "- "
+
+    def test_numbered_dot_prefix_captured(self):
+        content = (
+            "3. [user] Approve the vendor contract.\n"
+            "  <!--mem id:abc123 from:s1 evidence:\"approve it\" "
+            "created:2026-07-19-->\n"
+        )
+        entries = uf.parse_entries(content)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.prefix == "3. "
+        assert e.flagged is True
+        assert e.text == "Approve the vendor contract."
+        assert e.id == "abc123"
+
+    def test_numbered_paren_prefix_captured(self):
+        content = "12) [user] Do the thing.\n"
+        e = uf.parse_entries(content)[0]
+        assert e.prefix == "12) "
+        assert e.flagged is True
+        assert e.text == "Do the thing."
+
+    def test_numbered_dated_unflagged_fact(self):
+        content = "7. [due:2026-07-28] Renew the domain.\n"
+        e = uf.parse_entries(content)[0]
+        assert e.prefix == "7. "
+        assert e.flagged is False
+        assert e.due == "2026-07-28"
+
+    def test_plain_numbered_item_no_tag_no_comment_not_returned(self):
+        content = "1. Just a plain numbered note, no grammar at all.\n"
+        assert uf.parse_entries(content) == []
+
+    def test_numbered_tagless_bullet_with_comment_is_returned(self):
+        # Mirrors the fulfilled-exit anti-resurrection trace, but for a
+        # numbered item retiring to a plain numbered fact (spec §5.3).
+        content = (
+            "3. Send the drafts.\n"
+            "  <!--mem id:x7f3a2 resolved:2026-07-24 created:2026-07-19-->\n"
+        )
+        entries = uf.parse_entries(content)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.prefix == "3. "
+        assert e.flagged is False
+        assert e.text == "Send the drafts."
+        assert e.id == "x7f3a2"
+        assert e.resolved == "2026-07-24"
+
+
+class TestSectionDetection:
+    def test_entry_above_any_heading_has_none_section(self):
+        content = "- [user] Do the thing before any heading.\n"
+        e = uf.parse_entries(content)[0]
+        assert e.section is None
+
+    def test_entry_under_heading_captures_section_text(self):
+        content = (
+            "## Blockers\n"
+            "- [user] Approve the vendor contract.\n"
+        )
+        e = uf.parse_entries(content)[0]
+        assert e.section == "Blockers"
+
+    def test_section_with_parenthetical_preserved(self):
+        content = (
+            "## Next Steps (priority)\n"
+            "- [user] Ship the release notes.\n"
+        )
+        e = uf.parse_entries(content)[0]
+        assert e.section == "Next Steps (priority)"
+
+    def test_nearest_preceding_heading_wins_across_multiple_sections(self):
+        content = (
+            "## Focus\n"
+            "- [user] First entry.\n"
+            "## Blockers\n"
+            "- [user] Second entry.\n"
+        )
+        entries = uf.parse_entries(content)
+        by_text = {e.text: e for e in entries}
+        assert by_text["First entry."].section == "Focus"
+        assert by_text["Second entry."].section == "Blockers"
+
+    def test_h1_and_h3_headings_do_not_set_section(self):
+        content = (
+            "# PROJECT_STATE\n"
+            "### Sub-detail\n"
+            "- [user] An entry under non-## headings.\n"
+        )
+        e = uf.parse_entries(content)[0]
+        assert e.section is None
+
+    def test_numbered_entry_also_gets_section(self):
+        content = (
+            "## Blockers\n"
+            "3. [user] Approve the vendor contract.\n"
+        )
+        e = uf.parse_entries(content)[0]
+        assert e.section == "Blockers"
+
+
+class TestExistingBulletRoundTripUnchanged:
+    """Every existing `- [user]` parsing behavior must be byte-identical
+    after the numbered-item grammar extension."""
+
+    def test_canonical_entry_fields_unchanged(self):
+        entries = uf.parse_entries(CANONICAL_ENTRY)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.flagged is True
+        assert e.due == "2026-07-28"
+        assert e.prefix == "- "
+        assert e.text == (
+            "Send 宝玉 + Simon DM drafts — only you can send from your accounts."
+        )
+
+    def test_real_prose_still_parses_to_zero_entries(self):
+        assert uf.parse_entries(REAL_PROSE) == []
+
+    def test_markdown_checkbox_bullets_still_not_tags(self):
+        content = (
+            "- [ ] Awaiting claude-code findings on root cause\n"
+            "- [x] Recorded bug in BACKLOG.md as item 29\n"
+        )
+        assert uf.parse_entries(content) == []
+
+
 class TestLint:
     def test_malformed_due_warns(self):
         content = "- [user due:tomorrow] Do the thing.\n"

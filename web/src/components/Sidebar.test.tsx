@@ -208,4 +208,30 @@ describe('Sidebar — Workbench nav item', () => {
       expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('3'),
     );
   });
+
+  it('refetches the badge count when orbital:workbench-changed fires', async () => {
+    apiMock.mockResolvedValueOnce({ entries: [{ id: 'e1' }] });
+    render(<Sidebar {...defaultProps} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('1'),
+    );
+
+    apiMock.mockResolvedValueOnce({ entries: [{ id: 'e1' }, { id: 'e2' }] });
+    fireEvent(window, new CustomEvent('orbital:workbench-changed'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-badge-count')).toHaveTextContent('2'),
+    );
+  });
+
+  it('cleans up the orbital:workbench-changed listener on unmount', async () => {
+    apiMock.mockResolvedValue({ entries: [] });
+    const { unmount } = render(<Sidebar {...defaultProps} />);
+    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(1));
+
+    unmount();
+    fireEvent(window, new CustomEvent('orbital:workbench-changed'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiMock).toHaveBeenCalledTimes(1); // no refetch after unmount
+  });
 });
