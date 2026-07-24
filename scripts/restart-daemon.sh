@@ -41,7 +41,7 @@ fi
 # 3. Start new daemon
 echo "[2/4] Starting daemon from $PROJECT_ROOT ..."
 cd "$PROJECT_ROOT"
-python -m uvicorn agent_os.api.app:create_app --factory --port "$PORT" --host 0.0.0.0 &
+"${PYTHON:-python3}" -m uvicorn agent_os.api.app:create_app --factory --port "$PORT" --host 0.0.0.0 &
 DAEMON_PID=$!
 echo "  Daemon PID: $DAEMON_PID"
 
