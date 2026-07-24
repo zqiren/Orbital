@@ -431,7 +431,13 @@ async def test_migrate_refreshes_header_and_spawns(tmp_path):
     assert "Approve the Q3 budget before Friday." in content
     # A migration session was spawned with the [user] grammar instruction.
     assert len(am.injected) == 1
-    assert "flag entries that need the user" in am.injected[0][1]
+    # The instruction must be imperative — edit NOW, no permission-seeking
+    # (2026-07-24 live regression: the agent presented an options menu and
+    # stalled instead of applying tags).
+    msg = am.injected[0][1]
+    assert "apply [user] flags" in msg
+    assert "do not ask" in msg.lower()
+    assert "confirmation" in msg
 
 
 # --------------------------------------------------------------------------

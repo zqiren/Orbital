@@ -31,7 +31,7 @@ feed.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from croniter import croniter
 
@@ -134,12 +134,16 @@ class AutomationSource:
             if occ >= end_dt:
                 break
             occ_iso = occ.isoformat()
+            # Nominal 30-minute block: zero-duration events collapse to
+            # sliver-height rows on the week grid and overprint each other
+            # (observed live, 2026-07-24).
+            end_iso = (occ + timedelta(minutes=30)).isoformat()
             out.append(NormalizedEvent(
                 source=self.id,
                 source_id=f"{project_id}/{trigger_id}/{occ_iso}",
                 title=title,
                 start=occ_iso,
-                end=occ_iso,
+                end=end_iso,
                 all_day=False,
                 timezone=tz_name,
                 project_id=project_id,

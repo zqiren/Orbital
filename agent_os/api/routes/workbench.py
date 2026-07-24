@@ -438,12 +438,26 @@ async def dismiss_computed(project_id: str, card_type: str, key: str):
 # Doorway: open + migrate (session spawn seam)
 # --------------------------------------------------------------------------
 
+# Imperative on purpose: weaker models otherwise ANALYZE the file and ask
+# for permission instead of editing (observed live, 2026-07-24 — the session
+# presented an (a)/(b)/(c) menu and stalled). This instruction IS the user's
+# confirmation; the never-auto-decide rail covers external/irreversible acts,
+# not this requested file edit.
 _MIGRATION_MESSAGE = (
-    "Review orbital/PROJECT_STATE.md and flag entries that need the user per "
-    "the [user] grammar in the format header: one plain sentence addressed to "
-    'the user, evidence:"<user quote>" and from:<session> where known, '
-    "confidence:unconfirmed for anything you inferred. Do not invent "
-    "obligations; do not flag agent work."
+    "Edit orbital/PROJECT_STATE.md NOW, in this turn, and apply [user] flags "
+    "per the format header's rails. Do not present findings first, do not ask "
+    "which option I prefer, do not wait for confirmation — this message IS "
+    "the confirmation, and tagging is a plain file edit (the never-auto-decide "
+    "rail is about external or irreversible acts, not this). For each entry "
+    "that needs the user: rewrite its bullet as `- [user] <one plain sentence "
+    "addressed to the user>` (append ` due:YYYY-MM-DD` inside the tag only "
+    "when a real deadline exists), and on the next line add "
+    '`<!--mem from:<session-id> evidence:"<the user\'s own words>" '
+    "confidence:stated-->` — use confidence:unconfirmed for anything you "
+    "inferred rather than heard; omit fields you do not know; never write an "
+    "id (ids are daemon-assigned). Do not invent obligations; do not flag "
+    "agent work; leave every other line untouched. After saving, reply with "
+    "one line: the number of entries you flagged."
 )
 
 
