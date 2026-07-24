@@ -233,6 +233,61 @@ describe('WorkbenchPage — computed cards + This week', () => {
     expect(screen.queryByText('Secret obligation sentence')).toBeNull();
   });
 
+  it('This week strip shows ONE row per automation trigger, not one per daily occurrence', async () => {
+    // Real-data regression (2026-07-24 screenshot): daily crons emitted 7
+    // occurrences each into the strip — five copies of the same two jobs.
+    const occ = (day: number, trig: string, title: string) => ({
+      id: `automation:proj-a/${trig}/2026-07-${day}T11:00:00+08:00`,
+      title,
+      start: `2026-07-${day}T03:00:00Z`,
+      all_day: false,
+      project_id: 'proj-a',
+    });
+    mockApi({
+      entries: [entry()],
+      calendarAvailable: true,
+      calendarEvents: [
+        occ(25, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
+        occ(26, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
+        occ(27, 'trg_scan', 'Daily Adjacent-Repo Issue Scan'),
+        occ(25, 'trg_issues', 'Daily Orbital issues check'),
+        occ(26, 'trg_issues', 'Daily Orbital issues check'),
+        { id: 'memory:proj-a/e9', title: 'Ship the deadline thing', start: '2026-07-26', all_day: true, project_id: 'proj-a' },
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-this-week')).toBeInTheDocument());
+    expect(screen.getAllByText('Daily Adjacent-Repo Issue Scan')).toHaveLength(1);
+    expect(screen.getAllByText('Daily Orbital issues check')).toHaveLength(1);
+    expect(screen.getByText('Ship the deadline thing')).toBeInTheDocument();
+  });
+
+  it('shows the migrate banner when only computed cards exist (no flagged entries)', async () => {
+    // Real-data regression (2026-07-24): computed noise buried the empty
+    // state, making "Review & label" unreachable on legacy projects.
+    mockApi({
+      entries: [],
+      computed: [
+        {
+          type: 'paused_thread',
+          project_id: 'proj-a',
+          key: 'sess-1',
+          text: 'Ship v1 or wait?',
+          since: '2026-07-23T10:00:00+00:00',
+        },
+      ],
+    });
+    render(<WorkbenchPage projectId="proj-a" setRoute={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-migrate-banner')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('workbench-migrate-cta')).toBeInTheDocument();
+    // The list still renders the computed card — banner supplements, not replaces.
+    expect(
+      screen.getByTestId('workbench-card-computed-proj-a-paused_thread-sess-1'),
+    ).toBeInTheDocument();
+  });
+
   it('per-project lens This week strip still shows that project own events even when excluded globally', async () => {
     mockApi({
       entries: [entry({ project_id: 'proj-x' })],

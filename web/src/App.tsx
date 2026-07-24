@@ -93,18 +93,11 @@ export default function App() {
   // once on mount; any error (incl. the endpoint not existing until the backend
   // lands this wave) is treated as unavailable. Gates the per-project calendar
   // lens tab in ProjectDetail.
-  const [calendarAvailable, setCalendarAvailable] = useState(false);
   // Sandbox-repair affordance: the wizard's old sandbox step carried the only
   // Retry Setup button; with that step removed (spec 011 §0.7) the warning
   // banner hosts it instead. triggerSetup re-fetches status on success, which
   // hides the banner when setup completes.
   const [sandboxRetrying, setSandboxRetrying] = useState(false);
-  useEffect(() => {
-    api<{ available?: boolean }>('/api/v2/calendar/availability')
-      .then((d) => setCalendarAvailable(d?.available === true))
-      .catch(() => setCalendarAvailable(false));
-  }, []);
-
   // Derive selected project ID from route for convenience
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
 
@@ -591,7 +584,6 @@ export default function App() {
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
                 globalDefaultModel={defaultModel}
-                calendarAvailable={calendarAvailable}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
@@ -615,19 +607,6 @@ export default function App() {
                 )}
                 {route.tab === 'files' && (
                   <FileExplorer projectId={selectedProject.project_id} />
-                )}
-                {route.tab === 'calendar' && (
-                  <CalendarPage
-                    key={`calendar-${selectedProject.project_id}`}
-                    projectId={selectedProject.project_id}
-                  />
-                )}
-                {route.tab === 'workbench' && (
-                  <WorkbenchPage
-                    key={`workbench-${selectedProject.project_id}`}
-                    projectId={selectedProject.project_id}
-                    setRoute={setRoute}
-                  />
                 )}
               </ProjectDetail>
             )}

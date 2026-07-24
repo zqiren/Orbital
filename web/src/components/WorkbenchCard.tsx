@@ -7,12 +7,15 @@
  * either a flagged `[user]` entry or a daemon-computed card from the same
  * merged list (`useWorkbench().items`).
  *
- * Entry card: sentence · project chip (global view only) · monospace age ·
- * receipt ("Why I believe this": evidence quote + from-session link,
- * expanded by default when `confidence === 'unconfirmed'`) · two exits
- * (Done/Got it, Not relevant). Computed card: text · age (from `since`) ·
- * Dismiss. Tapping the card body anywhere but a button is the doorway
- * (`onOpen`) — spec §5.3.
+ * Entry card: sentence · project chip (global view only) · age · receipt
+ * ("Why I believe this": evidence quote + from-session reference, expanded by
+ * default when `confidence === 'unconfirmed'`) · two exits (Done/Got it,
+ * Not relevant). Computed card: text · age (from `since`) · Dismiss. Tapping
+ * the card body anywhere but a button is the doorway (`onOpen`) — spec §5.3.
+ *
+ * Styling follows the Apple-design pass (2026-07-24): soft elevated cards,
+ * feedback on press (scale, 100ms), size-specific tracking, motion respects
+ * `prefers-reduced-motion` via Tailwind's `motion-reduce:` variants.
  */
 
 import { useState } from 'react';
@@ -80,6 +83,13 @@ function ageLabel(
   return waitingLabel(t, n);
 }
 
+/** Quiet pill button (Not relevant / Dismiss). */
+const GHOST_BTN =
+  'rounded-full border border-border/70 px-3.5 py-1.5 text-[12.5px] font-medium ' +
+  'text-secondary transition-[transform,background-color,color] duration-100 ease-out ' +
+  'hover:bg-card-hover hover:text-primary active:scale-[0.96] motion-reduce:transition-none ' +
+  'motion-reduce:active:scale-100';
+
 export default function WorkbenchCard({
   item,
   showProjectChip,
@@ -114,30 +124,34 @@ export default function WorkbenchCard({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onOpen();
       }}
-      className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-3 text-left transition-all duration-150 hover:border-secondary/40 cursor-pointer"
+      className="group flex cursor-pointer flex-col gap-2 rounded-2xl border border-border/60 bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_rgba(0,0,0,0.03)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-px hover:border-border hover:shadow-[0_2px_4px_rgba(0,0,0,0.05),0_8px_24px_rgba(0,0,0,0.05)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:transform-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent/60"
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 flex-1 text-sm text-primary">{text}</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="line-clamp-3 min-w-0 flex-1 text-[15px] leading-snug tracking-[-0.01em] text-primary">
+          {text}
+        </p>
         {isEntry && entry!.overdue && (
           <span
             data-testid="workbench-card-overdue-badge"
-            className="shrink-0 rounded-full bg-error/10 px-1.5 py-0.5 text-[10px] font-medium text-error"
+            className="shrink-0 rounded-full bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error"
           >
             {t('workbench.overdue')}
           </span>
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-secondary">
+      <div className="flex flex-wrap items-center gap-2">
         {showProjectChip && projectName && (
           <span
             data-testid="workbench-card-project-chip"
-            className="rounded-full bg-sidebar px-1.5 py-0.5 text-[10px] text-secondary"
+            className="rounded-full bg-sidebar px-2 py-0.5 text-[11px] font-medium text-secondary"
           >
             {projectName}
           </span>
         )}
-        {age && <span className="font-mono">{age}</span>}
+        {age && (
+          <span className="font-mono text-[11px] tabular-nums text-muted">{age}</span>
+        )}
       </div>
 
       {hasReceipt && (
@@ -150,12 +164,18 @@ export default function WorkbenchCard({
             }}
             aria-expanded={expanded}
             data-testid="workbench-card-receipt-toggle"
-            className="text-left text-[11px] font-medium text-secondary hover:text-primary"
+            className="inline-flex items-center gap-1 text-left text-[12px] font-medium text-secondary transition-colors duration-100 hover:text-primary"
           >
-            {t('workbench.receipt.title')} {expanded ? '▾' : '▸'}
+            <span
+              aria-hidden="true"
+              className={`inline-block text-[9px] transition-transform duration-150 ease-out motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
+            >
+              ▶
+            </span>
+            {t('workbench.receipt.title')}
           </button>
           {expanded && (
-            <div className="mt-1 space-y-1 border-l-2 border-border pl-2 text-[11px] text-secondary">
+            <div className="mt-1.5 space-y-1 rounded-xl bg-sidebar/60 px-3 py-2 text-[12px] leading-relaxed text-secondary">
               {entry!.evidence && <p className="italic">&ldquo;{entry!.evidence}&rdquo;</p>}
               {entry!.from_session && (
                 <p>
@@ -164,7 +184,7 @@ export default function WorkbenchCard({
                       "source" link must not side-effect a session spawn. */}
                   <span
                     data-testid="workbench-card-from-session"
-                    className="font-mono"
+                    className="font-mono text-[11px]"
                   >
                     {entry!.from_session}
                   </span>
@@ -176,7 +196,7 @@ export default function WorkbenchCard({
         </div>
       )}
 
-      <div className="mt-1 flex items-center gap-2">
+      <div className="mt-0.5 flex items-center gap-2">
         {isEntry ? (
           <>
             <button
@@ -186,7 +206,7 @@ export default function WorkbenchCard({
                 e.stopPropagation();
                 onExit?.('fulfilled');
               }}
-              className="rounded-md border border-border px-2.5 py-1 text-[12px] font-medium text-secondary hover:bg-card-hover hover:text-primary"
+              className="rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
             >
               {t('workbench.exit.fulfilled')}
             </button>
@@ -197,7 +217,7 @@ export default function WorkbenchCard({
                 e.stopPropagation();
                 onExit?.('irrelevant');
               }}
-              className="rounded-md border border-border px-2.5 py-1 text-[12px] font-medium text-secondary hover:bg-card-hover hover:text-primary"
+              className={GHOST_BTN}
             >
               {t('workbench.exit.irrelevant')}
             </button>
@@ -210,7 +230,7 @@ export default function WorkbenchCard({
               e.stopPropagation();
               onDismiss?.();
             }}
-            className="rounded-md border border-border px-2.5 py-1 text-[12px] font-medium text-secondary hover:bg-card-hover hover:text-primary"
+            className={GHOST_BTN}
           >
             {t('workbench.dismiss')}
           </button>

@@ -563,11 +563,48 @@ def test_paused_thread_detector_on_unanswered_question():
                "timestamp": "2026-07-24T11:00:00+00:00"},
     }
     cards = workbench_cards.paused_thread_cards(
-        "proj_a", sessions, lambda uuid: tails.get(uuid))
+        "proj_a", sessions, lambda uuid: tails.get(uuid),
+        now=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc))
     assert len(cards) == 1
     assert cards[0]["type"] == "paused_thread"
     assert cards[0]["key"] == "u1"          # resume key = session uuid
     assert cards[0]["text"].endswith("?")
+
+
+def test_paused_thread_noise_guards():
+    """Real-data regression (2026-07-24 screenshot): months-old sessions must
+    not surface, only ONE card per project, and the card text is the final
+    question sentence — not the whole markdown-laden assistant turn."""
+    long_turn = (
+        "[STATUS: drafting]\n\nDone. Created `content-bank/drafts/005.md` "
+        "with both versions. **How the rigor landed:** 1. **Two-dimensional "
+        "compounding** — separated context capture drift from execution "
+        "accuracy. Voice check passed. Good to add to your weekly rotation?"
+    )
+    sessions = [
+        {"session_uuid": "old", "status": "idle",
+         "last_activity_at": "2026-04-26T10:00:00+00:00"},   # 89 days old
+        {"session_uuid": "new1", "status": "waiting",
+         "last_activity_at": "2026-07-22T10:00:00+00:00"},
+        {"session_uuid": "new2", "status": "idle",
+         "last_activity_at": "2026-07-23T10:00:00+00:00"},
+    ]
+    tails = {
+        "old": {"role": "assistant", "content": "Still want this?",
+                "timestamp": "2026-04-26T10:00:00+00:00"},
+        "new1": {"role": "assistant", "content": "Ship v1 or wait?",
+                 "timestamp": "2026-07-22T10:00:00+00:00"},
+        "new2": {"role": "assistant", "content": long_turn,
+                 "timestamp": "2026-07-23T10:00:00+00:00"},
+    }
+    cards = workbench_cards.paused_thread_cards(
+        "proj_a", sessions, lambda uuid: tails.get(uuid),
+        now=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc))
+    # 89-day-old thread skipped; one card max; newest wins.
+    assert len(cards) == 1
+    assert cards[0]["key"] == "new2"
+    # Text is the final question only, markdown/status noise stripped.
+    assert cards[0]["text"] == "Good to add to your weekly rotation?"
 
 
 async def test_workbench_exclude_global_persists_via_project_update(tmp_path):

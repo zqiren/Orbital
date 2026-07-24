@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import date, datetime, timezone
 
 from croniter import croniter
@@ -291,18 +292,50 @@ def _message_text(msg: dict) -> str:
     return ""
 
 
+# A conversation parked longer than this is an abandoned session, not a
+# "paused thread" — surfacing 3-month-old questions is noise, not attention.
+_PAUSED_MAX_AGE_DAYS = 7
+_PAUSED_SUMMARY_CHARS = 180
+
+_STATUS_TAG_RE = re.compile(r"\[STATUS:[^\]]*\]")
+_MD_NOISE_RE = re.compile(r"[*_`#]+")
+
+
+def _question_summary(text: str) -> str:
+    """The final question sentence, cleaned of markdown — not the whole turn.
+
+    The card's job is "we stopped on this question"; the full assistant
+    message belongs in the session, not on the Workbench.
+    """
+    text = _STATUS_TAG_RE.sub(" ", text)
+    text = _MD_NOISE_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # Walk back from the trailing "?" to the previous sentence boundary.
+    cut = max(text.rfind(". ", 0, len(text) - 1),
+              text.rfind("! ", 0, len(text) - 1),
+              text.rfind("? ", 0, len(text) - 1))
+    question = text[cut + 2:] if cut != -1 else text
+    if len(question) > _PAUSED_SUMMARY_CHARS:
+        question = "…" + question[-_PAUSED_SUMMARY_CHARS:]
+    return question
+
+
 def paused_thread_cards(project_id: str, sessions: list[dict],
-                        tail_reader) -> list[dict]:
-    """Computed cards for sessions paused on an unanswered agent question.
+                        tail_reader, now: datetime | None = None) -> list[dict]:
+    """Computed card for a session recently paused on an unanswered question.
 
     Heuristic (documented, cheapest reliable signal): for each session that is
     NOT actively running (status not ``running``/``pending_approval``), read
     its last persisted message via ``tail_reader(session_uuid)``; if that
     message is an assistant turn whose text ends in ``?`` it is a paused
-    thread. Newest (by ``last_activity_at``) first. ``tail_reader`` returns the
-    last message dict or ``None``; any read failure yields no card (best
+    thread. Noise guards: threads older than ``_PAUSED_MAX_AGE_DAYS`` are
+    skipped (an abandoned session is not a paused one), the card text is the
+    final question sentence only (markdown/status noise stripped), and at most
+    ONE card — the newest — is emitted per project. ``tail_reader`` returns
+    the last message dict or ``None``; any read failure yields no card (best
     effort — a missing signal must never 500 the Workbench).
     """
+    now_dt = _now(now)
     cards: list[dict] = []
     for s in sessions or []:
         if s.get("status") in ("running", "pending_approval"):
@@ -320,12 +353,19 @@ def paused_thread_cards(project_id: str, sessions: list[dict],
         text = _message_text(tail).strip()
         if not text.endswith("?"):
             continue
+        since = tail.get("timestamp") or s.get("last_activity_at")
+        since_dt = _parse_iso(since)
+        if since_dt is not None:
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            if (now_dt - since_dt).days > _PAUSED_MAX_AGE_DAYS:
+                continue
         cards.append({
             "type": "paused_thread",
             "project_id": project_id,
             "key": uuid,
-            "text": text,
-            "since": tail.get("timestamp") or s.get("last_activity_at"),
+            "text": _question_summary(text),
+            "since": since,
         })
     cards.sort(key=lambda c: c.get("since") or "", reverse=True)
-    return cards
+    return cards[:1]

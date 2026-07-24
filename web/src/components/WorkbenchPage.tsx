@@ -116,15 +116,43 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   }
 
   function handleOpenCalendar() {
-    if (projectId) {
-      setRoute({ name: 'project', projectId, tab: 'calendar' });
-    } else {
-      setRoute({ name: 'calendar' });
-    }
+    setRoute({ name: 'calendar' });
   }
 
   const isEmpty = !loading && !error && entries.length === 0 && computed.length === 0;
+  // The migrate affordance must stay reachable when computed cards exist but
+  // no entries do (real-data regression 2026-07-24: computed noise buried the
+  // empty state, making "Review & label" undiscoverable on legacy projects).
+  const showMigrateBanner =
+    !loading && !error && entries.length === 0 && computed.length > 0;
   const showThisWeek = weekAvailability?.available === true && weekEvents.length > 0;
+
+  // This-week strip rows: privacy-filter (global mode), chronological, then
+  // ONE row per automation trigger (a daily cron emits 7 occurrences in the
+  // window — the strip shows the next one, not seven copies; the full series
+  // stays on the Calendar). Memory/external events are never deduped.
+  const weekRows = useMemo(() => {
+    const seenTriggers = new Set<string>();
+    return weekEvents
+      .slice()
+      .filter(
+        (ev) =>
+          projectId != null ||
+          !ev.project_id ||
+          !projects.find(
+            (p) => p.project_id === ev.project_id && p.workbench_exclude_global,
+          ),
+      )
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+      .filter((ev) => {
+        const m = /^automation[:/](.*)[/][^/]*$/.exec(ev.id);
+        if (!m) return true;
+        if (seenTriggers.has(m[1])) return false;
+        seenTriggers.add(m[1]);
+        return true;
+      })
+      .slice(0, 5);
+  }, [weekEvents, projects, projectId]);
 
   const rootProps = {
     className: 'flex flex-col flex-1 min-h-0',
@@ -134,8 +162,8 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
 
   return (
     <div {...rootProps}>
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <h1 className="mr-1 font-mono text-[14px] font-semibold text-primary">
+      <div className="flex items-center gap-2 border-b border-border/60 bg-card/80 px-4 py-2.5 backdrop-blur-xl">
+        <h1 className="mr-1 text-[17px] font-semibold tracking-[-0.01em] text-primary">
           {t('workbench.title')}
         </h1>
         <span className="flex-1" />
@@ -144,9 +172,9 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           onClick={() => refetch()}
           aria-label={t('workbench.retry')}
           data-testid="workbench-refresh"
-          className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[12px] text-secondary hover:bg-card-hover hover:text-primary"
+          className="inline-flex items-center justify-center rounded-full p-1.5 text-secondary transition-[transform,background-color,color] duration-100 ease-out hover:bg-card-hover hover:text-primary active:scale-[0.92] motion-reduce:transition-none motion-reduce:active:scale-100"
         >
-          <RefreshCw size={14} aria-hidden="true" />
+          <RefreshCw size={15} aria-hidden="true" />
         </button>
       </div>
 
@@ -164,48 +192,70 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         </div>
       )}
 
-      {showThisWeek && (
-        <div data-testid="workbench-this-week" className="border-b border-border px-3 py-2">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-secondary">
-              {t('workbench.thisWeek.title')}
-            </span>
-            <button
-              type="button"
-              onClick={handleOpenCalendar}
-              data-testid="workbench-open-calendar"
-              className="text-[11px] text-secondary hover:text-primary"
-            >
-              {t('workbench.thisWeek.openCalendar')}
-            </button>
-          </div>
-          <ul className="space-y-1">
-            {weekEvents
-              .slice()
-              // Privacy toggle (spec §6.5): in GLOBAL mode the strip must not
-              // surface events from projects excluded from the global Workbench.
-              .filter(
-                (ev) =>
-                  projectId != null ||
-                  !ev.project_id ||
-                  !projects.find(
-                    (p) => p.project_id === ev.project_id && p.workbench_exclude_global,
-                  ),
-              )
-              .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-              .slice(0, 5)
-              .map((ev) => (
+      {showThisWeek && weekRows.length > 0 && (
+        <div data-testid="workbench-this-week" className="px-4 pt-3">
+          <div className="rounded-2xl bg-sidebar/50 px-3.5 py-2.5">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-secondary">
+                {t('workbench.thisWeek.title')}
+              </span>
+              <button
+                type="button"
+                onClick={handleOpenCalendar}
+                data-testid="workbench-open-calendar"
+                className="text-[12px] font-medium text-accent transition-colors duration-100 hover:text-accent/80"
+              >
+                {t('workbench.thisWeek.openCalendar')}
+              </button>
+            </div>
+            <ul className="space-y-1">
+              {weekRows.map((ev) => (
                 <li
                   key={ev.id}
-                  className="flex items-center gap-2 text-[12px] text-secondary"
+                  className="flex items-center gap-2.5 text-[12.5px] text-secondary"
                 >
-                  <span className="font-mono text-[11px]">
+                  <span className="w-16 shrink-0 font-mono text-[11px] tabular-nums text-muted">
                     {ev.all_day ? t('calendar.allDay') : formatTime(ev.start)}
                   </span>
                   <span className="truncate text-primary">{ev.title}</span>
                 </li>
               ))}
-          </ul>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {showMigrateBanner && (
+        <div data-testid="workbench-migrate-banner" className="px-4 pt-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-accent/20 bg-accent/5 px-3.5 py-2.5">
+            <p className="min-w-0 flex-1 text-[12.5px] leading-snug text-secondary">
+              {t('workbench.migrateBanner')}
+            </p>
+            {projectId ? (
+              <button
+                type="button"
+                onClick={() => handleMigrate(projectId)}
+                data-testid="workbench-migrate-cta"
+                className="rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+              >
+                {t('workbench.empty.migrateCta')}
+              </button>
+            ) : (
+              projects
+                .filter((p) => p.workspace)
+                .map((p) => (
+                  <button
+                    key={p.project_id}
+                    type="button"
+                    onClick={() => handleMigrate(p.project_id)}
+                    data-testid={`workbench-migrate-cta-${p.project_id}`}
+                    className="rounded-full border border-accent/40 px-3 py-1 text-[12px] font-medium text-accent transition-[transform,background-color] duration-100 ease-out hover:bg-accent/10 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+                  >
+                    {p.name}
+                  </button>
+                ))
+            )}
+          </div>
         </div>
       )}
 
@@ -236,7 +286,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           data-testid="workbench-empty"
         >
           <Inbox size={28} aria-hidden="true" className="text-muted" />
-          <h2 className="font-mono text-[15px] font-semibold text-primary">
+          <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-primary">
             {t('workbench.empty.title')}
           </h2>
           <p className="max-w-sm text-sm text-secondary">{t('workbench.empty.body')}</p>
@@ -245,7 +295,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
               type="button"
               onClick={() => handleMigrate(projectId)}
               data-testid="workbench-migrate-cta"
-              className="bg-accent text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-accent/90 transition-all duration-150"
+              className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
             >
               {t('workbench.empty.migrateCta')}
             </button>
@@ -259,7 +309,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                     type="button"
                     onClick={() => handleMigrate(p.project_id)}
                     data-testid={`workbench-migrate-cta-${p.project_id}`}
-                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-primary hover:bg-card-hover"
+                    className="rounded-full border border-border px-4 py-2 text-sm font-medium text-primary transition-[transform,background-color] duration-100 ease-out hover:bg-card-hover active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
                   >
                     {t('workbench.empty.migrateCtaFor', { name: p.name })}
                   </button>
@@ -268,8 +318,8 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           )}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-auto px-3 py-2" data-testid="workbench-list">
-          <ul className="space-y-2">
+        <div className="flex-1 min-h-0 overflow-auto px-4 py-3" data-testid="workbench-list">
+          <ul className="space-y-2.5">
             {items.map((item) => {
               const key =
                 item.kind === 'entry'

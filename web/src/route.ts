@@ -19,7 +19,7 @@ export type Route =
   | {
       name: 'project';
       projectId: string;
-      tab: 'queue' | 'chat' | 'files' | 'calendar' | 'workbench';
+      tab: 'queue' | 'chat' | 'files';
       sessionId?: string;
       settings?: boolean;
       /**
