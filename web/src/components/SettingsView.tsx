@@ -132,8 +132,8 @@ export default function SettingsView({
   );
 
   // Workbench privacy toggle (spec §6 "Aggregation & privacy") — excludes this
-  // project's flagged entries/computed cards from the GLOBAL Workbench view.
-  // The per-project lens is unaffected.
+  // project's flagged entries from the GLOBAL Workbench view. The
+  // per-project lens is unaffected.
   const [workbenchExcludeGlobal, setWorkbenchExcludeGlobal] = useState(
     project.workbench_exclude_global ?? false,
   );
@@ -756,8 +756,8 @@ export default function SettingsView({
 
         {/* Workbench privacy toggle (spec 2026-07-23 §6). Per-project — the
             per-project Workbench lens is unaffected; this only controls
-            whether the project's flagged entries/computed cards are
-            aggregated into the GLOBAL Workbench view. */}
+            whether the project's flagged entries are aggregated into the
+            GLOBAL Workbench view. */}
         <div data-settings-section="workbench" className="scroll-mt-4">
           <label className="block text-sm font-medium text-primary mb-1.5">
             {t('settings.workbench.label')}

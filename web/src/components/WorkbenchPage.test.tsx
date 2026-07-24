@@ -76,13 +76,16 @@ function entry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('WorkbenchPage — sort order', () => {
-  it('renders entries in server order (overdue-first-then-oldest is the backend\'s sort, not re-applied client-side)', async () => {
-    // The backend already returns entries pre-sorted (overdue first, then
-    // oldest first); the page must render them as-is, not re-sort them.
+  it('renders entries in server order as-is, guarding against reintroducing a client-side (overdue, created) re-sort', async () => {
+    // Deliberately NOT in "overdue first, then oldest first" order — the
+    // overdue entry sits in the middle. A client-side (overdue, created)
+    // re-sort would move it to the front and produce a different order
+    // than what's asserted below; only rendering the server's order as-is
+    // passes.
     mockApi({
       entries: [
-        entry({ id: 'overdue-entry', created: '2026-07-15', overdue: true, due: '2026-07-10' }),
         entry({ id: 'older', created: '2026-06-01', overdue: false }),
+        entry({ id: 'overdue-entry', created: '2026-07-15', overdue: true, due: '2026-07-10' }),
         entry({ id: 'newer', created: '2026-07-20', overdue: false }),
       ],
     });
@@ -93,8 +96,8 @@ describe('WorkbenchPage — sort order', () => {
       .getAllByTestId(/^workbench-card-entry-/)
       .map((el) => el.getAttribute('data-testid'));
     expect(cards).toEqual([
-      'workbench-card-entry-proj-a-overdue-entry',
       'workbench-card-entry-proj-a-older',
+      'workbench-card-entry-proj-a-overdue-entry',
       'workbench-card-entry-proj-a-newer',
     ]);
   });

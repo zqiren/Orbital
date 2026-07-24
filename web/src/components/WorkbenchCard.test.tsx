@@ -169,6 +169,7 @@ describe('WorkbenchCard — entry exits', () => {
     fireEvent.click(screen.getByTestId('workbench-card-exit-fulfilled'));
     expect(onExit).toHaveBeenCalledWith('fulfilled');
     expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.getByTestId('workbench-card-exit-fulfilled')).toHaveTextContent('Resolved');
   });
 
   it('Delete fires onExit("irrelevant") and does NOT trigger the doorway open', () => {
@@ -185,6 +186,7 @@ describe('WorkbenchCard — entry exits', () => {
     fireEvent.click(screen.getByTestId('workbench-card-exit-irrelevant'));
     expect(onExit).toHaveBeenCalledWith('irrelevant');
     expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.getByTestId('workbench-card-exit-irrelevant')).toHaveTextContent('Delete');
   });
 
   it('tapping the card body (not a button) triggers the doorway open', () => {
