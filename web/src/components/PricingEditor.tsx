@@ -257,7 +257,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                     ))}
                   </select>
                   {curr.origin === 'override' && (
-                    <span className="text-[10px] text-accent uppercase tracking-wide">
+                    <span className="text-2xs text-accent uppercase tracking-wide">
                       {t('pricing.badge.override')}
                     </span>
                   )}
@@ -338,7 +338,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                                 )}
                               </div>
                               {err && (
-                                <p className="text-[10px] text-error mt-0.5 text-right">{err}</p>
+                                <p className="text-2xs text-error mt-0.5 text-right">{err}</p>
                               )}
                             </td>
                           );

@@ -37,7 +37,7 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <span className="font-mono text-lg text-primary tracking-tight">
+          <span className="text-lg text-primary tracking-tight">
             {t('setupGate.wordmark')}
           </span>
         </div>

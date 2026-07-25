@@ -96,7 +96,7 @@ function WorkerCapsule({ capsule, t }: { capsule: WorkerCapsuleItem; t: Translat
     <div data-testid="drillin-capsule" className="ml-9 flex gap-[10px]">
       <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary">
+        <div className="flex items-center gap-2 w-full text-left font-mono text-[11px] text-secondary">
           <span className="truncate text-primary font-medium">{summary}</span>
         </div>
       </div>
@@ -355,7 +355,7 @@ export default function SubAgentDrillIn({ projectId, sessionId, handle, displayN
       </div>
 
       <div className="shrink-0 px-4 pb-4 pt-2">
-        <div className="relative flex items-center gap-2 bg-background border border-border rounded-[10px] shadow-lg px-3 py-2">
+        <div className="relative flex items-center gap-2 bg-background border border-border rounded-lg shadow-lg px-3 py-2">
           <input
             type="text"
             data-testid="drillin-composer-input"

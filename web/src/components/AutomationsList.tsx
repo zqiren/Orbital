@@ -32,46 +32,63 @@ function TriggerCard({ trigger }: { trigger: Trigger }) {
   const conditionLabel = isSchedule ? t('automations.condition.cron') : t('automations.condition.path');
 
   return (
+    // Same card family as the queue items — identical radius, border weight and
+    // padding — but deliberately FLAT (no shadow, lighter hairline). An
+    // automation is a definition, not work in flight: it produces queue items
+    // rather than being one. Keeping it in the family but one step back in the
+    // depth hierarchy says "related, different kind of thing" without needing a
+    // second visual language. The left slot reinforces it: queue items carry a
+    // state dot, automations carry a type icon.
     <div
-      className="rounded-[6px] border border-border bg-background px-3 py-2.5 flex flex-col gap-1.5"
+      className="flex flex-col gap-2 rounded-xl border border-border/50 bg-card px-4 py-3"
       data-testid={`automation-card-${trigger.id}`}
     >
       <div className="flex items-center gap-2">
         {isSchedule ? (
-          <Calendar className="w-3.5 h-3.5 shrink-0 text-accent" aria-hidden />
+          <Calendar className="w-3.5 h-3.5 shrink-0 text-muted" aria-hidden />
         ) : (
-          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-accent" aria-hidden />
+          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-muted" aria-hidden />
         )}
-        <span className="text-sm font-medium text-primary flex-1 truncate">
+        <span className="flex-1 truncate text-[13px] font-medium text-primary">
           {trigger.name}
         </span>
+        {/* Dot + label, matching the queue's state markers, instead of a
+            tinted pill. Enabled/disabled stays legible because a paused
+            automation is a silent failure mode. */}
         <span
-          className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none ${
-            trigger.enabled
-              ? 'bg-accent/10 text-accent'
-              : 'bg-border text-secondary'
+          className={`inline-flex shrink-0 items-center gap-1.5 text-[11px] ${
+            trigger.enabled ? 'text-secondary' : 'text-muted'
           }`}
           aria-label={trigger.enabled ? 'enabled' : 'disabled'}
           data-testid={`automation-status-${trigger.id}`}
         >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              trigger.enabled ? 'bg-success' : 'bg-idle'
+            }`}
+          />
           {trigger.enabled ? t('automations.on') : t('automations.off')}
         </span>
       </div>
 
-      <div className="pl-[22px] flex flex-col gap-1">
-        <p className="text-xs text-secondary">
-          <span className="uppercase tracking-wide text-[10px] text-secondary/60 mr-1">
-            {conditionLabel}
-          </span>
-          <span className="font-mono text-primary/80" data-testid={`automation-condition-${trigger.id}`}>
+      <div className="flex flex-col gap-1 pl-[22px]">
+        <p className="text-[11px] text-muted">
+          <span className="mr-1.5 uppercase tracking-wide">{conditionLabel}</span>
+          {/* A cron expression / watch path is an identifier — stays mono. */}
+          <span
+            className="font-mono text-secondary"
+            data-testid={`automation-condition-${trigger.id}`}
+          >
             {condition}
           </span>
         </p>
-        <p className="text-xs text-secondary">
-          <span className="uppercase tracking-wide text-[10px] text-secondary/60 mr-1">
-            {t('automations.lastFired')}
-          </span>
-          <span data-testid={`automation-last-fired-${trigger.id}`}>
+        <p className="text-[11px] text-muted">
+          <span className="mr-1.5 uppercase tracking-wide">{t('automations.lastFired')}</span>
+          <span
+            className="font-mono tabular-nums text-secondary"
+            data-testid={`automation-last-fired-${trigger.id}`}
+          >
             {formatLastFired(trigger.last_triggered)}
           </span>
         </p>

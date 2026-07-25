@@ -164,13 +164,13 @@ export default function ProjectDetail({
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 bg-card">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 px-6 pt-5 pb-4 max-md:px-4">
         {/* Left cluster keeps a readable minimum so a long budget pill on the
             right can never crush the title to 0 width (P3-J header collision). */}
         <div className="flex items-center gap-3 min-w-[40%] flex-1">
-          <h1 className="font-mono text-[18px] font-semibold text-primary truncate min-w-0">{project.name}</h1>
+          <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{project.name}</h1>
           <StatusBadge status={agentStatus} />
         </div>
         <div className="flex items-center gap-3 min-w-0 shrink">
@@ -218,7 +218,7 @@ export default function ProjectDetail({
             <button
               key={tab.key}
               onClick={() => handleTabChange(tab.key)}
-              className={`text-[12.5px] font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center gap-1.5 ${
+              className={`text-xs font-medium px-3 py-2 -mb-px transition-all duration-150 max-md:min-h-[44px] max-md:flex max-md:items-center gap-1.5 ${
                 activeTab === tab.key
                   ? 'text-primary border-b-2 border-primary'
                   : 'text-secondary hover:text-primary'
@@ -226,7 +226,7 @@ export default function ProjectDetail({
             >
               {t(tab.labelKey)}
               {count > 0 && (
-                <span className="text-[10.5px] font-mono text-secondary">
+                <span className="text-2xs font-mono text-secondary">
                   {count}
                 </span>
               )}
@@ -238,7 +238,11 @@ export default function ProjectDetail({
       {/* Tab content. `relative` so the file-preview drawer (absolute) overlays
           only this content area, not the header/tab bar. The OpenPathContext
           hands the drawer-open handler down to the chat's MarkdownContent. */}
-      <div className="flex-1 overflow-hidden min-h-0 relative">
+      <div
+        className={`flex-1 overflow-hidden min-h-0 relative ${
+          activeTab === 'queue' ? 'bg-background' : ''
+        }`}
+      >
         <OpenPathContext.Provider value={handleOpenPath}>
           {children}
         </OpenPathContext.Provider>

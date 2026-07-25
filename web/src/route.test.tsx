@@ -141,10 +141,13 @@ describe('Sidebar routing', () => {
       />,
     );
 
-    // The active button should have bg-card-hover; inactive should not
+    // The active button carries the selection tint at full strength; the
+    // inactive one only carries it as a /50 hover. The nav column uses its own
+    // `nav-hover` tint rather than `card-hover`, because card-hover sits only
+    // ~3 levels off the nav surface and would be invisible against it.
     const buttons = container.querySelectorAll('nav button');
-    expect(buttons[0].className).toContain('bg-card-hover');
-    expect(buttons[1].className).not.toMatch(/\bbg-card-hover\b(?!\/)/);
+    expect(buttons[0].className).toContain('bg-nav-hover');
+    expect(buttons[1].className).not.toMatch(/\bbg-nav-hover\b(?!\/)/);
   });
 });
 

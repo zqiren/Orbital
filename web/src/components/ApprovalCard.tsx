@@ -181,7 +181,7 @@ export default function ApprovalCard({
   return (
     <div className="mb-3 shrink-0 rounded-lg border border-warning/50 border-l-[3px] border-l-warning bg-[#FFFBF0] overflow-hidden">
       <div className="px-4 py-1.5 border-b border-warning/20 flex items-center justify-between">
-        <span className="text-[10.5px] uppercase tracking-[0.6px] text-warning font-semibold">{t('approval.header')}</span>
+        <span className="text-2xs uppercase tracking-[0.6px] text-warning font-semibold">{t('approval.header')}</span>
       </div>
 
       <div className="px-4 py-3 space-y-3">
@@ -291,7 +291,7 @@ export default function ApprovalCard({
               onClick={handleDenyClick}
               onTouchEnd={(e) => { e.preventDefault(); handleDenyClick(); }}
               disabled={submitting}
-              className="border border-error/40 text-error bg-background rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="border border-error/40 text-error bg-background rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-error/5 transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
               {t('credCard.deny')}
             </button>
@@ -301,7 +301,7 @@ export default function ApprovalCard({
               onTouchEnd={(e) => { e.preventDefault(); handleApprove(true); }}
               disabled={submitting}
               title={t('approval.autoApprove.title')}
-              className="border border-border bg-background text-secondary rounded-[6px] text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="border border-border bg-background text-secondary rounded-sm text-[11px] px-2.5 py-1 font-medium hover:bg-card-hover transition-colors duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
               {t('approval.autoApprove')}
             </button>
@@ -310,7 +310,7 @@ export default function ApprovalCard({
               onClick={() => handleApprove()}
               onTouchEnd={(e) => { e.preventDefault(); handleApprove(); }}
               disabled={submitting}
-              className="bg-primary text-white rounded-[6px] text-[12px] font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
+              className="bg-primary text-white rounded-sm text-xs font-medium px-3.5 py-1.5 hover:opacity-90 transition-opacity duration-150 disabled:opacity-50 cursor-pointer w-full md:w-auto min-h-[44px]"
             >
               {t('approval.approve')}
             </button>

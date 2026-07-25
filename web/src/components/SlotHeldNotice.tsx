@@ -63,7 +63,7 @@ export default function SlotHeldNotice({
   return (
     <div
       data-testid="slot-held-notice"
-      className="mb-3 rounded-[6px] border border-border bg-background px-4 py-3 shadow-lg"
+      className="mb-3 rounded-sm border border-border bg-background px-4 py-3 shadow-lg"
       role="status"
       aria-live="polite"
     >

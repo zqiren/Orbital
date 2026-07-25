@@ -75,7 +75,7 @@ export default function AttachmentChip({
         >
           {truncated}
         </span>
-        <span className="text-[10px] text-secondary">{humanSize(size)}</span>
+        <span className="text-2xs text-secondary">{humanSize(size)}</span>
       </div>
 
       {isPendingOrUploading && (

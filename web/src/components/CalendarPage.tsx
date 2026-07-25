@@ -109,7 +109,7 @@ export default function CalendarPage({ projectId }: CalendarPageProps) {
           data-testid="calendar-unavailable"
         >
           <CalendarX size={28} aria-hidden="true" className="text-muted" />
-          <h1 className="font-mono text-[16px] font-semibold text-primary">
+          <h1 className="text-base font-semibold tracking-[-0.01em] text-primary">
             {t('calendar.unavailable.title')}
           </h1>
           <p className="max-w-sm text-sm text-secondary">{t('calendar.unavailable.body')}</p>
@@ -122,7 +122,7 @@ export default function CalendarPage({ projectId }: CalendarPageProps) {
     <div {...rootProps}>
       {/* Range nav + refresh */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <h1 className="mr-1 font-mono text-[14px] font-semibold text-primary">
+        <h1 className="mr-1 text-sm font-semibold text-primary">
           {t('workspace.calendar.title')}
         </h1>
         <div className="flex items-center gap-1">
@@ -139,7 +139,7 @@ export default function CalendarPage({ projectId }: CalendarPageProps) {
             type="button"
             onClick={() => setAnchor(new Date())}
             data-testid="calendar-today"
-            className="rounded border border-border px-2 py-0.5 text-[12px] text-secondary hover:bg-card-hover hover:text-primary"
+            className="rounded border border-border px-2 py-0.5 text-xs text-secondary hover:bg-card-hover hover:text-primary"
           >
             {t('calendar.nav.today')}
           </button>
@@ -165,7 +165,7 @@ export default function CalendarPage({ projectId }: CalendarPageProps) {
           disabled={refreshing}
           aria-label={t('calendar.refresh')}
           data-testid="calendar-refresh"
-          className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[12px] text-secondary hover:bg-card-hover hover:text-primary disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-secondary hover:bg-card-hover hover:text-primary disabled:opacity-60"
         >
           <RefreshCw
             size={14}
@@ -188,7 +188,7 @@ export default function CalendarPage({ projectId }: CalendarPageProps) {
           <button
             type="button"
             onClick={refetch}
-            className="rounded border border-border px-3 py-1 text-[12px] text-secondary hover:bg-card-hover hover:text-primary"
+            className="rounded border border-border px-3 py-1 text-xs text-secondary hover:bg-card-hover hover:text-primary"
           >
             {t('calendar.retry')}
           </button>

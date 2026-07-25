@@ -78,7 +78,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
         role="dialog"
         aria-label={t('calendar.detail.aria')}
         data-testid="calendar-event-detail"
-        className="w-full max-w-sm rounded-lg border border-border bg-white shadow-lg"
+        className="w-full max-w-sm rounded-lg border border-border bg-elevated shadow-lg"
       >
         {/* Header: accent bar + title + close */}
         <div className="flex items-start gap-2 p-4 border-b border-border">
@@ -87,7 +87,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
             className="mt-1 h-4 w-1 shrink-0 rounded"
             style={{ backgroundColor: color.border }}
           />
-          <h2 className="flex-1 font-mono text-[15px] font-semibold text-primary break-words">
+          <h2 className="flex-1 text-[15px] font-semibold tracking-[-0.01em] text-primary break-words">
             {event.title || t('calendar.detail.untitled')}
           </h2>
           <button
@@ -164,7 +164,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
               value={event.project_id ?? ''}
               disabled={linking}
               onChange={(e) => handleLinkChange(e.target.value)}
-              className="w-full rounded-md border border-border bg-white px-2 py-1.5 text-[13px] text-primary disabled:opacity-50"
+              className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-primary disabled:opacity-50"
             >
               <option value="">{t('calendar.detail.linkNone')}</option>
               {projects.map((p) => (

@@ -495,7 +495,10 @@ export default function App() {
         />
       </div>
 
-      <main className={`flex-1 overflow-hidden flex flex-col${contentHidden ? ' hidden' : ''}`}>
+      {/* NOTE: keep a space before `${` — Tailwind's scanner will not extract a
+          class that runs straight into a template-literal interpolation, so
+          `shadow-panel${...}` silently emits no CSS. */}
+      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel ${contentHidden ? 'hidden' : ''}`}>
         {/* Mobile back button */}
         {isMobile && mobileView === 'content' && (
           <button

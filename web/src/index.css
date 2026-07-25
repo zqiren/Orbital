@@ -1,18 +1,122 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #FAFAFA;
-  --color-sidebar: #F8F8F9;
-  --color-card-hover: #EDEDF0;
+  /* ---------------------------------------------------------------- surfaces
+     A three-step depth ladder. Before this, `--color-card` was never defined
+     while `bg-card` was used 51× across 20 files — Tailwind v4 derives colour
+     utilities from `--color-*`, so every one of those classes emitted NO CSS
+     and every "card" in the app rendered transparent. That, plus a 2/255 gap
+     between the canvas and the sidebar, is why the whole UI read as one flat
+     sheet with 1px borders doing all the separation work.
+
+     Material weight now encodes hierarchy (Apple HIG: heavier materials
+     separate structural regions, lighter ones carry content):
+
+       nav       #E9E9EF   global nav column — heaviest chrome
+       sidebar   #F1F1F5   secondary list column (sessions) + subtle fills
+       background#F4F4F6   canvas — the surface card-lists sit ON
+       card      #FFFFFF   content — lifts off the canvas; also chat "paper"
+       elevated  #FFFFFF   modals/popovers — above a scrim, not the canvas
+
+     The three columns now step: nav -> sidebar -> card. Before this, the
+     project column and the session column were BOTH `bg-sidebar` — the same
+     token, not merely a similar tone — and the chat pane set no background at
+     all, so it inherited the canvas and owned no surface of its own.
+
+     Reading surfaces and card-list surfaces want opposite treatments, which is
+     why `card` serves both: chat is white PAPER, while Workbench/Calendar keep
+     the grey canvas so their white cards still lift off it.
+
+     `card` and `elevated` are the same value in light mode but are kept
+     distinct: they answer to different backdrops (canvas vs. scrim) and are
+     the hook a dark theme would diverge on. */
+  --color-nav: #E9E9EF;
+  --color-background: #F4F4F6;
+  --color-sidebar: #F1F1F5;
+  --color-card: #FFFFFF;
+  --color-elevated: #FFFFFF;
+  /* Row hover/selection tints. Each must read clearly against the surface it
+     sits on, so the nav column needs its own: `card-hover` is only ~3 levels
+     off `nav` and would be invisible there. Used at full strength for the
+     selected row and at /50 for hover, matching the existing pattern. */
+  --color-card-hover: #E6E6EC;
+  --color-nav-hover: #DCDCE6;
   --color-border: #E4E4E7;
+
+  /* ------------------------------------------------------------------- text
+     A three-step ladder with checked contrast against the canvas (#F4F4F6):
+       primary   #18181B   15.9:1  — body and headings
+       secondary #6E6E78    4.6:1  — AA for normal text (was #71717A = 4.2:1,
+                                     which failed AA even on the old lighter
+                                     canvas, and would have dropped to 4.0:1)
+       muted     #8A8A94    3.1:1  — AA-large / non-text only; reserve for
+                                     timestamps, counts and de-emphasised
+                                     metadata, never for body copy */
   --color-primary: #18181B;
-  --color-secondary: #71717A;
-  --color-muted: #A1A1AA;
+  --color-secondary: #6E6E78;
+  --color-muted: #8A8A94;
+
   --color-accent: #6366F1;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
   --color-error: #EF4444;
-  --color-idle: #A1A1AA;
+  --color-idle: #8A8A94;
+
+  /* ------------------------------------------------------------------ radius
+     One ladder, slightly softer than Tailwind's default, replacing the five
+     competing scales (`rounded-lg` ×147, `md` ×35, `[6px]` ×18, `[10px]` ×4,
+     `[4px]` ×1). Retuning here rather than rewriting call sites means the 147
+     `rounded-lg` uses move as a set. The arbitrary values map EXACTLY onto
+     steps below, so migrating them off is a no-op visually. */
+  --radius-xs: 4px;   /* was rounded-[4px] */
+  --radius-sm: 6px;   /* was rounded-[6px] */
+  --radius-md: 8px;
+  --radius-lg: 10px;  /* was rounded-[10px] */
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+
+  /* -------------------------------------------------------------- type scale
+     Tracking is size-specific by design: letters read too far apart as they
+     grow, and too tight as they shrink. A single global `letter-spacing` is
+     therefore wrong somewhere by definition.
+
+     Sizes and line-heights are deliberately UNCHANGED — `text-sm` (×282) and
+     `text-xs` (×236) are load-bearing across the app, and re-scaling them
+     would resize 518 sites. Only tracking is added, so this is an optical
+     correction, not a layout change.
+
+     Explicit uppercase micro-labels still override with `tracking-wide`;
+     letter-spacing utilities sort after font-size utilities, so they win. */
+  --text-3xs: 9px;
+  --text-3xs--line-height: 1.4;
+  --text-3xs--letter-spacing: 0.02em;
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 1.4;
+  --text-2xs--letter-spacing: 0.015em;
+
+  /* ------------------------------------------------------------------ depth
+     Edge shading, so the zones read as stacked layers rather than as regions
+     that merely abut. Two roles, matching the two-zone rule:
+
+       panel  a RAISED surface casting onto what's behind it — used at the
+              shell -> project boundary, so the project lifts off the shell
+       well   a RECESSED region, shaded inward at its own edges — used on the
+              session inset, so it reads as carved INTO the project rather
+              than as another panel sitting beside it
+
+     Kept deliberately faint: this should register as depth, not as a drop
+     shadow you can point at. */
+  --shadow-panel: -1px 0 12px -4px rgb(0 0 0 / 0.10);
+  --shadow-well: inset 7px 0 8px -8px rgb(0 0 0 / 0.13),
+    inset -7px 0 8px -8px rgb(0 0 0 / 0.09);
+
+  --text-xs--letter-spacing: 0.005em;
+  --text-sm--letter-spacing: 0em;
+  --text-base--letter-spacing: -0.005em;
+  --text-lg--letter-spacing: -0.01em;
+  --text-xl--letter-spacing: -0.015em;
+  --text-2xl--letter-spacing: -0.02em;
   /* Latin glyphs render in Geist / JetBrains Mono (unchanged). CJK glyphs,
      which those Latin-only faces don't cover, fall through to a professional
      system Chinese font — PingFang SC (Apple), Microsoft YaHei (Windows),
@@ -88,6 +192,48 @@ body {
 
 .animate-slide-up {
   animation: slide-up 0.2s ease-out;
+}
+
+/* ---------------------------------------------------------- accessibility
+   Three independent user signals, none of which the app honoured globally
+   before (only 13 `motion-reduce:` variants in 2 files). */
+
+/* Reduced motion is NOT "no feedback" — it means a gentler, non-vestibular
+   equivalent. Movement (transform) is dropped; opacity/colour cross-fades are
+   deliberately KEPT, because they still carry state changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: opacity, color, background-color, border-color,
+      fill, stroke !important;
+    transition-duration: 150ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-slide-up {
+    animation: none;
+  }
+}
+
+/* Translucent chrome becomes frosty/solid rather than blurred. */
+@media (prefers-reduced-transparency: reduce) {
+  [class*="backdrop-blur"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background-color: var(--color-card) !important;
+  }
+}
+
+/* Near-solid surfaces with defined, contrasting borders. */
+@media (prefers-contrast: more) {
+  :root {
+    --color-border: #9A9AA3;
+    --color-secondary: #45454E;
+    --color-muted: #52525B;
+  }
 }
 
 /* Markdown content styles for agent messages */

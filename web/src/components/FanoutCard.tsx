@@ -123,7 +123,7 @@ export default function FanoutCard({
     <div data-testid="fanout-card" data-fanout-id={fanoutId} className="ml-9 flex gap-[10px]">
       <div className="w-0.5 shrink-0 rounded-sm bg-border" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 w-full font-mono text-[11.5px] text-secondary">
+        <div className="flex items-center gap-2 w-full font-mono text-[11px] text-secondary">
           <span className="truncate text-primary font-medium">
             {t(tasks.length === 1 ? 'fanout.card.title.one' : 'fanout.card.title.other', { n: tasks.length })}
           </span>
@@ -137,7 +137,7 @@ export default function FanoutCard({
             // else fall back to the batch join time; else keep ticking.
             const rowElapsed = Math.max(0, (entry?.completedAtMs ?? completedAtMs ?? now) - startedAtMs);
             return (
-              <div key={task.handle} className="mb-1 font-mono text-[11.5px] text-secondary">
+              <div key={task.handle} className="mb-1 font-mono text-[11px] text-secondary">
                 <button
                   type="button"
                   data-testid={`fanout-row-${task.handle}`}
@@ -148,7 +148,7 @@ export default function FanoutCard({
                   <span
                     data-testid={`fanout-status-${task.handle}`}
                     data-status={status}
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] leading-4 ${STATUS_CLASS[status]}`}
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-2xs leading-4 ${STATUS_CLASS[status]}`}
                   >
                     {t(STATUS_LABEL_KEY[status])}
                   </span>

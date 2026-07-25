@@ -64,12 +64,12 @@ export default function WeekGrid({
     <div className="flex-1 min-h-0 overflow-auto" data-testid="calendar-week-grid">
       <div className="min-w-[720px]">
         {/* Day headers */}
-        <div className="grid sticky top-0 z-10 bg-white" style={{ gridTemplateColumns: gridCols }}>
+        <div className="grid sticky top-0 z-10 bg-background" style={{ gridTemplateColumns: gridCols }}>
           <div className="border-b border-r border-border" />
           {days.map((day) => (
             <div
               key={day.toISOString()}
-              className={`border-b border-r border-border px-2 py-1.5 text-center text-[12px] ${
+              className={`border-b border-r border-border px-2 py-1.5 text-center text-xs ${
                 isSameDay(day, today) ? 'text-accent font-semibold' : 'text-secondary'
               }`}
             >
@@ -81,7 +81,7 @@ export default function WeekGrid({
         {/* All-day strip (only when there are all-day events that week) */}
         {hasAllDay && (
           <div className="grid" style={{ gridTemplateColumns: gridCols }}>
-            <div className="border-b border-r border-border px-1 py-1 text-right text-[10px] uppercase tracking-wide text-muted">
+            <div className="border-b border-r border-border px-1 py-1 text-right text-2xs uppercase tracking-wide text-muted">
               {t('calendar.allDay')}
             </div>
             {allDayByDay.map((list, i) => (
@@ -117,7 +117,7 @@ export default function WeekGrid({
             {Array.from({ length: 24 }, (_, h) => (
               <div
                 key={h}
-                className="absolute right-1 -translate-y-1/2 text-[10px] text-muted"
+                className="absolute right-1 -translate-y-1/2 text-2xs text-muted"
                 style={{ top: h * HOUR_H }}
               >
                 {h === 0 ? '' : hourLabel(h)}
@@ -178,11 +178,11 @@ export default function WeekGrid({
                       <span className="block truncate font-medium">
                         {ev.title || t('calendar.detail.untitled')}
                       </span>
-                      <span className="block truncate text-[10px] opacity-80">
+                      <span className="block truncate text-2xs opacity-80">
                         {formatTime(ev.start)}
                       </span>
                       {pname && (
-                        <span className="mt-0.5 block truncate text-[9px] opacity-90">
+                        <span className="mt-0.5 block truncate text-3xs opacity-90">
                           {pname}
                         </span>
                       )}

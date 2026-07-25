@@ -140,7 +140,7 @@ export default function FilePreviewDrawer({
           ${open ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full pointer-events-none'}`}
       >
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-          <span className="text-[12px] font-medium text-secondary">{t('filePreview.heading')}</span>
+          <span className="text-xs font-medium text-secondary">{t('filePreview.heading')}</span>
           <button
             ref={closeBtnRef}
             type="button"

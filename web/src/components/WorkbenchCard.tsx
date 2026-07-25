@@ -103,15 +103,19 @@ function ageLabel(t: ReturnType<typeof useT>, entry: WorkbenchEntry): string | n
   return null;
 }
 
-/** Filled primary pill — the card's ONE emphasized action. */
+/** Tinted primary pill — the card's ONE emphasized action.
+ *  Was a SOLID accent fill, which meant a saturated indigo block repeated on
+ *  every card in the list. A tint keeps it unambiguously primary (it is the
+ *  only filled control on the card) without stacking blocks of colour down the
+ *  whole surface. */
 const PRIMARY_BTN =
-  'rounded-full bg-accent px-3.5 py-1.5 text-[12.5px] font-medium text-white ' +
-  'transition-[transform,background-color] duration-100 ease-out hover:bg-accent/90 ' +
+  'rounded-full bg-accent/12 px-3.5 py-1.5 text-xs font-medium text-accent ' +
+  'transition-[transform,background-color] duration-100 ease-out hover:bg-accent/20 ' +
   'active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100';
 
 /** Quiet text action (secondary: Delete). */
 const QUIET_BTN =
-  'rounded-full px-2.5 py-1.5 text-[12.5px] font-medium text-secondary ' +
+  'rounded-full px-2.5 py-1.5 text-xs font-medium text-secondary ' +
   'transition-[transform,background-color,color] duration-100 ease-out ' +
   'hover:bg-card-hover hover:text-primary active:scale-[0.96] ' +
   'motion-reduce:transition-none motion-reduce:active:scale-100';
@@ -139,8 +143,7 @@ export default function WorkbenchCard({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onOpen();
       }}
-      style={accent ? { borderLeftWidth: '3px', borderLeftColor: accent.border } : undefined}
-      className="group flex cursor-pointer flex-col gap-2 rounded-2xl border border-border/60 bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_rgba(0,0,0,0.03)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-px hover:border-border hover:shadow-[0_2px_4px_rgba(0,0,0,0.05),0_8px_24px_rgba(0,0,0,0.05)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:transform-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent/60"
+      className="group flex cursor-pointer flex-col gap-2 rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:border-border hover:shadow-[0_2px_6px_rgb(0_0_0/0.06)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:transform-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent/60"
     >
       <div className="flex items-start justify-between gap-3">
         <p className="line-clamp-3 min-w-0 flex-1 text-[15px] leading-snug tracking-[-0.01em] text-primary">
@@ -158,15 +161,23 @@ export default function WorkbenchCard({
 
       <div className="flex flex-wrap items-center gap-2">
         {showProjectChip && projectName && (
+          // Dot + name, exactly how the sidebar already renders a project.
+          // This replaced a tinted+bordered pill AND a 3px coloured spine down
+          // the card edge: between them, project identity was carrying more
+          // visual weight than the entry text it was labelling, which is what
+          // made the list read as playful. The hue still identifies the
+          // project — it just does so in a 6px dot instead of two filled
+          // shapes.
           <span
             data-testid="workbench-card-project-chip"
-            className="rounded-full border px-2 py-0.5 text-[11px] font-medium"
-            style={{
-              backgroundColor: accent!.bg,
-              color: accent!.text,
-              borderColor: accent!.border,
-            }}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-secondary"
           >
+            <span
+              aria-hidden="true"
+              data-testid="workbench-card-project-dot"
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: accent!.border }}
+            />
             {projectName}
           </span>
         )}
@@ -174,12 +185,12 @@ export default function WorkbenchCard({
           // Raw string from PROJECT_STATE.md's `## ` heading — no i18n key
           // (not UI chrome, per the i18n convention for backend-authored
           // strings). No expander (2026-07-24 amendment removed the receipt).
-          <span data-testid="workbench-card-section" className="font-mono text-[11px] text-muted">
+          <span data-testid="workbench-card-section" className="text-[11px] text-muted">
             {entry.section}
           </span>
         )}
         {age && (
-          <span className="font-mono text-[11px] tabular-nums text-muted">{age}</span>
+          <span className="text-[11px] tabular-nums text-muted">{age}</span>
         )}
       </div>
 

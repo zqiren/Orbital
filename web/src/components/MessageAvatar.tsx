@@ -41,7 +41,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
           data-testid="message-avatar"
           data-variant="agent"
           data-agent-handle={agentHandle}
-          className="shrink-0 w-[26px] h-[26px] rounded-[6px] object-contain"
+          className="shrink-0 w-[26px] h-[26px] rounded-sm object-contain"
         />
       );
     }
@@ -50,7 +50,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
         data-testid="message-avatar"
         data-variant="agent"
         data-agent-handle={agentHandle}
-        className="shrink-0 w-[26px] h-[26px] rounded-[6px] flex items-center justify-center font-mono text-[9px] font-bold text-white"
+        className="shrink-0 w-[26px] h-[26px] rounded-sm flex items-center justify-center font-mono text-3xs font-bold text-white"
         style={{ backgroundColor: icon.color }}
       >
         {icon.monogram}
@@ -63,7 +63,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
       data-testid="message-avatar"
       data-variant={variant}
       className={
-        'shrink-0 w-[26px] h-[26px] rounded-[6px] flex items-center justify-center font-mono text-[10px] font-semibold ' +
+        'shrink-0 w-[26px] h-[26px] rounded-sm flex items-center justify-center font-mono text-2xs font-semibold ' +
         (isUser
           ? 'bg-primary text-white'
           : 'bg-background border border-border text-primary')

@@ -251,7 +251,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="mb-1 font-mono text-[11.5px] text-secondary">
+    <div className="mb-1 font-mono text-[11px] text-secondary">
       <button
         type="button"
         onClick={expandable ? () => setExpanded(e => !e) : undefined}
@@ -271,7 +271,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         const raw = row.result_content;
         if (raw === null || raw === '') {
           return (
-            <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-[12px] italic text-secondary/70">
+            <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-xs italic text-secondary/70">
               {t('chat.toolRow.noResult')}
             </div>
           );
@@ -279,7 +279,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         const { text, footer } = truncateResult(raw);
         return (
           <div className="mt-1 ml-5">
-            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-[12px] text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+            <pre className="px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
               {text}
             </pre>
             {footer && (
@@ -2845,7 +2845,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   key={`sa-${index}`}
                   data-testid="sub-agent-activity"
                   data-action={item.action}
-                  className={`flex items-baseline gap-2 px-2 py-1 text-[11.5px] font-mono ${tone}`}
+                  className={`flex items-baseline gap-2 px-2 py-1 text-[11px] font-mono ${tone}`}
                 >
                   <span className="text-primary">{item.handle}</span>
                   <span className="truncate">{label}</span>
@@ -2904,7 +2904,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                           }
                     }
                     disabled={isLocked}
-                    className={`flex items-center gap-2 w-full text-left font-mono text-[11.5px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
+                    className={`flex items-center gap-2 w-full text-left font-mono text-[11px] text-secondary ${isLocked ? 'cursor-default' : 'cursor-pointer hover:text-primary'}`}
                   >
                     <Chevron size={13} className="shrink-0" />
                     {derivedStatus === 'running' && (
@@ -3026,7 +3026,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 <div
                   key={`fanout-summary-${item.fanout_id}-${index}`}
                   data-testid="fanout-summary"
-                  className="px-2 py-1 text-[11.5px] font-mono text-secondary whitespace-pre-wrap"
+                  className="px-2 py-1 text-[11px] font-mono text-secondary whitespace-pre-wrap"
                 >
                   {item.content}
                 </div>
@@ -3271,11 +3271,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         </div>
       )}
 
-      <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-background max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
+      <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-card max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
         {queueActive ? (
           <ComposerDisabledPrompt onPauseQueue={stopQueue} />
         ) : (
-        <div className="relative flex flex-col gap-2 bg-background border border-border rounded-[10px] shadow-lg px-3 py-2">
+        <div className="relative flex flex-col gap-2 bg-card border border-border rounded-lg shadow-[0_1px_2px_rgba(0,0,0,0.04)] px-3 py-2 transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-accent)18%,transparent)] motion-reduce:transition-none">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
               {filteredCommands.map((cmd, i) => (

@@ -151,7 +151,7 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
           <span
             data-testid={`sub-agent-badge-${a.handle}`}
             data-status={a.status}
-            className={`rounded-full border px-1.5 py-px text-[10px] leading-4 ${BADGE_CLASS[a.status]}`}
+            className={`rounded-full border px-1.5 py-px text-2xs leading-4 ${BADGE_CLASS[a.status]}`}
           >
             {t(BADGE_LABEL_KEY[a.status])}
           </span>

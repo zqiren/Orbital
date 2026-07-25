@@ -17,7 +17,7 @@ describe('MessageAvatar', () => {
     expect(box?.className).toContain('text-white');
     expect(box?.className).toContain('w-[26px]');
     expect(box?.className).toContain('h-[26px]');
-    expect(box?.className).toContain('rounded-[6px]');
+    expect(box?.className).toContain('rounded-sm');
   });
 
   it('user variant falls back to "ME" when no label is given', () => {

@@ -202,7 +202,7 @@ export default function QueueHeader({
                 <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
                 <div
                   role="menu"
-                  className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-lg border border-border bg-white shadow-lg py-1"
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-lg border border-border bg-elevated shadow-lg py-1"
                   data-testid="queue-pause-menu"
                 >
                   <button

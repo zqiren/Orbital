@@ -209,7 +209,7 @@ export default function ConnectorSettings() {
                       {pending && (
                         <span
                           data-testid={`connector-pending-${c.id}`}
-                          className="shrink-0 text-[10.5px] uppercase tracking-wide text-secondary border border-border rounded-full px-2 py-0.5"
+                          className="shrink-0 text-2xs uppercase tracking-wide text-secondary border border-border rounded-full px-2 py-0.5"
                         >
                           {t('connectors.pendingBadge')}
                         </span>

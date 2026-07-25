@@ -50,8 +50,8 @@ export default function QueueComposer({
   };
 
   return (
-    <div className="border-t border-border bg-white p-3 max-md:p-2">
-      <div className="flex items-center gap-2 rounded-[10px] border border-border bg-white px-3 py-2 focus-within:border-accent transition-colors max-md:gap-1.5">
+    <div className="border-t border-border bg-card p-3 max-md:p-2">
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 focus-within:border-accent transition-colors max-md:gap-1.5">
         <span className="font-mono text-muted text-sm shrink-0 select-none">+</span>
         <textarea
           value={value}
@@ -68,14 +68,14 @@ export default function QueueComposer({
           disabled={!canSubmit}
           aria-label={t('queue.composer.submit.aria')}
           data-testid="queue-composer-submit"
-          className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-white text-[11.5px] font-medium px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors max-md:min-h-[40px]"
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-white text-[11px] font-medium px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors max-md:min-h-[40px]"
         >
           <Send className="w-3 h-3" /> {t('queue.composer.submit')}
         </button>
       </div>
       <div className="flex items-center gap-3 mt-2 text-xs text-secondary max-md:flex-wrap">
         {hint && (
-          <span className="font-mono text-[10.5px] text-muted max-md:w-full">{hint}</span>
+          <span className="text-2xs text-muted max-md:w-full">{hint}</span>
         )}
         <div className="flex items-center gap-3 ml-auto max-md:ml-0">
           <label className="flex items-center gap-1 cursor-pointer select-none">

@@ -91,7 +91,7 @@ export default function PendingInputNotice({
   return (
     <div
       data-testid="pending-input-notice"
-      className="mb-3 rounded-[6px] border border-border bg-background px-4 py-3 shadow-lg"
+      className="mb-3 rounded-sm border border-border bg-background px-4 py-3 shadow-lg"
       role="status"
       aria-live="polite"
     >
@@ -101,7 +101,7 @@ export default function PendingInputNotice({
         aria-label={t('pending.edit')}
         onClick={handleEdit}
         disabled={!canEdit}
-        className="group flex w-full items-start gap-2 text-left rounded-[4px] -mx-1 px-1 py-0.5 enabled:hover:bg-card-hover enabled:cursor-pointer disabled:cursor-default transition-colors duration-150"
+        className="group flex w-full items-start gap-2 text-left rounded-xs -mx-1 px-1 py-0.5 enabled:hover:bg-card-hover enabled:cursor-pointer disabled:cursor-default transition-colors duration-150"
       >
         <Clock size={14} className="mt-0.5 shrink-0 text-secondary" />
         <span

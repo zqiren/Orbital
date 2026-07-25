@@ -42,7 +42,7 @@ export default function AgendaList({
         {groups.map((group) => (
           <li key={group.day.toISOString()}>
             <div
-              className={`sticky top-0 bg-white py-1 text-[12px] font-semibold ${
+              className={`sticky top-0 bg-background py-1 text-xs font-semibold ${
                 isSameDay(group.day, today) ? 'text-accent' : 'text-secondary'
               }`}
             >
@@ -58,7 +58,7 @@ export default function AgendaList({
                       type="button"
                       onClick={() => onEventClick(ev)}
                       data-testid={`calendar-event-${ev.id}`}
-                      className="flex w-full items-stretch gap-2 rounded-md border border-border bg-white p-2 text-left hover:bg-card-hover"
+                      className="flex w-full items-stretch gap-2 rounded-md border border-border bg-card p-2 text-left hover:bg-card-hover"
                     >
                       <span
                         aria-hidden="true"
@@ -73,10 +73,10 @@ export default function AgendaList({
                           {ev.all_day ? t('calendar.allDay') : formatTimeRange(ev.start, ev.end)}
                         </span>
                         <span className="mt-0.5 flex items-center gap-1.5">
-                          <span className="text-[10px] text-muted">{ev.source}</span>
+                          <span className="text-2xs text-muted">{ev.source}</span>
                           {pname && (
                             <span
-                              className="rounded-full px-1.5 py-0.5 text-[10px]"
+                              className="rounded-full px-1.5 py-0.5 text-2xs"
                               style={{ backgroundColor: c.bg, color: c.text }}
                             >
                               {pname}

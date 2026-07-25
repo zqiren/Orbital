@@ -237,7 +237,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
             onChange={(e) => setFilterProjectId(e.target.value)}
             aria-label={t('workbench.filter.all')}
             data-testid="workbench-project-filter"
-            className="rounded-full border border-border bg-card px-3 py-1 text-[12.5px] text-secondary transition-all duration-150 focus:border-accent focus:outline-none"
+            className="rounded-full border border-border bg-card px-3 py-1 text-xs text-secondary transition-all duration-150 focus:border-accent focus:outline-none"
           >
             <option value="">{t('workbench.filter.all')}</option>
             {filterOptions.map((o) => (
@@ -261,29 +261,34 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
       {conflict && (
         <div
           data-testid="workbench-conflict-notice"
-          className="border-b border-warning/20 bg-warning/10 px-3 py-1.5 text-[12px] text-warning"
+          className="border-b border-warning/20 bg-warning/10 px-3 py-1.5 text-xs text-warning"
         >
           {t('workbench.conflict.notice')}
         </div>
       )}
       {openError && (
-        <div className="border-b border-error/20 bg-error/5 px-3 py-1.5 text-[12px] text-error">
+        <div className="border-b border-error/20 bg-error/5 px-3 py-1.5 text-xs text-error">
           {openError}
         </div>
       )}
 
       {showToday && todayRows.length > 0 && (
         <div data-testid="workbench-today" className="px-4 pt-3">
-          <div className="rounded-2xl bg-sidebar/50 px-3.5 py-2.5">
+          {/* Same surface recipe as WorkbenchCard — radius, border, shadow.
+              These two sit in the same column, so any difference in the
+              container reads as "these are unrelated things"; previously the
+              strip was a bare white block while the entries were bordered,
+              double-shadowed, hover-lifting cards. */}
+          <div className="rounded-xl border border-border/60 bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)]">
             <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[12px] font-semibold text-secondary">
+              <span className="text-xs font-semibold text-secondary">
                 {t('workbench.today.title')}
               </span>
               <button
                 type="button"
                 onClick={handleOpenCalendar}
                 data-testid="workbench-open-calendar"
-                className="text-[12px] font-medium text-accent transition-colors duration-100 hover:text-accent/80"
+                className="text-xs font-medium text-accent transition-colors duration-100 hover:text-accent/80"
               >
                 {t('workbench.today.openCalendar')}
               </button>
@@ -301,7 +306,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                     key={ev.id}
                     data-testid="workbench-today-row"
                     data-past={isPast ? 'true' : 'false'}
-                    className={`flex items-center gap-2.5 text-[12.5px] text-secondary ${isPast ? 'opacity-50' : ''}`}
+                    className={`flex items-center gap-2.5 text-xs text-secondary ${isPast ? 'opacity-50' : ''}`}
                   >
                     <span className="w-16 shrink-0 font-mono text-[11px] tabular-nums text-muted">
                       {ev.all_day ? t('calendar.allDay') : formatTime(ev.start)}
@@ -331,7 +336,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           <button
             type="button"
             onClick={() => refetch()}
-            className="rounded border border-border px-3 py-1 text-[12px] text-secondary hover:bg-card-hover hover:text-primary"
+            className="rounded border border-border px-3 py-1 text-xs text-secondary hover:bg-card-hover hover:text-primary"
           >
             {t('workbench.retry')}
           </button>
@@ -342,7 +347,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
           data-testid="workbench-empty"
         >
           <Inbox size={28} aria-hidden="true" className="text-muted" />
-          <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-primary">
+          <h2 className="text-base font-semibold tracking-[-0.01em] text-primary">
             {t('workbench.empty.title')}
           </h2>
           <p className="max-w-sm text-sm text-secondary">{t('workbench.empty.body')}</p>

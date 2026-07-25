@@ -220,14 +220,14 @@ export function SessionListItem({
                 cancelRename();
               }
             }}
-            className="flex-1 min-w-0 font-mono text-[11.5px] text-primary bg-white border border-border rounded px-1 py-0.5"
+            className="flex-1 min-w-0 text-xs text-primary bg-card border border-border rounded px-1 py-0.5"
             style={{ fontSize: '11.5px' }}
           />
         ) : (
           <>
             <span
               data-testid="session-name"
-              className="font-mono text-[11.5px] text-primary truncate"
+              className="text-xs text-primary truncate"
               style={{ fontSize: '11.5px' }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
@@ -238,7 +238,7 @@ export function SessionListItem({
             </span>
             <span
               data-testid="session-time"
-              className="text-[10px] text-secondary shrink-0"
+              className="text-2xs text-secondary shrink-0"
             >
               {formatRelativeTime(session.last_activity_at, t)}
             </span>
@@ -278,7 +278,7 @@ export function SessionListItem({
             <div
               role="menu"
               data-testid="session-three-dot-dropdown"
-              className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-white shadow-md py-1"
+              className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-elevated shadow-md py-1"
             >
               <button
                 type="button"
@@ -324,7 +324,7 @@ export function SessionListItem({
           }}
         >
           <div
-            className="max-w-sm w-[320px] rounded-lg bg-white shadow-xl border border-border p-4"
+            className="max-w-sm w-[320px] rounded-lg bg-elevated shadow-xl border border-border p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <p className="text-sm text-primary font-medium mb-1">{t('sessionItem.deleteConfirm.title')}</p>

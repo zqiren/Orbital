@@ -104,7 +104,7 @@ export function SessionSidebar({
     <aside
       data-testid="session-sidebar"
       style={{ width: 260, minWidth: 260, maxWidth: 260 }}
-      className="flex flex-col h-full bg-sidebar border-r border-border"
+      className="flex flex-col h-full bg-sidebar border-r border-border/60 shadow-well"
     >
       {/* Header */}
       <div
@@ -112,7 +112,7 @@ export function SessionSidebar({
         data-testid="session-sidebar-header"
       >
         <span
-          className="font-mono text-secondary font-semibold"
+          className="text-secondary font-semibold"
           style={{
             fontSize: '9.5px',
             letterSpacing: '0.8px',
@@ -163,7 +163,7 @@ export function SessionSidebar({
           type="button"
           data-testid="session-new-button"
           onClick={onNewSession}
-          className="w-full font-mono rounded-md border border-border text-secondary hover:text-primary hover:border-secondary/60 hover:bg-card-hover transition-colors text-sm py-1.5"
+          className="w-full rounded-lg border border-border/60 bg-card/70 py-1.5 text-sm font-medium text-primary shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[box-shadow,transform,background-color] duration-100 ease-out hover:bg-card hover:shadow-[0_2px_5px_rgb(0_0_0/0.06)] active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
           style={{ fontSize: '12px' }}
         >
           {t('sessionSidebar.newSession')}

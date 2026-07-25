@@ -234,7 +234,7 @@ export default function PairPhone() {
             <div className="p-6 flex items-center gap-5">
               <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
                 <Wifi className="w-8 h-8 text-accent/40" />
-                <span className="text-[10px] text-accent/40 font-medium uppercase tracking-wider">
+                <span className="text-2xs text-accent/40 font-medium uppercase tracking-wider">
                   LAN
                 </span>
               </div>
@@ -353,7 +353,7 @@ export default function PairPhone() {
             {/* Illustration placeholder */}
             <div className="flex-shrink-0 w-24 h-24 rounded-xl bg-accent/5 border border-accent/10 flex flex-col items-center justify-center gap-1.5">
               <Scan className="w-8 h-8 text-accent/40" />
-              <span className="text-[10px] text-accent/40 font-medium uppercase tracking-wider">
+              <span className="text-2xs text-accent/40 font-medium uppercase tracking-wider">
                 Scan
               </span>
             </div>

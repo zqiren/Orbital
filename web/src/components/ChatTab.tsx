@@ -206,7 +206,7 @@ export default function ChatTab({
           onSessionDeleted={handleSessionDeleted}
         />
       </div>
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-card">
         {/* Quick Tasks scope chip (Spec 012 §2c) — chat-header area, scratch
             project only. ScopeChip also self-gates on is_scratch. */}
         {project.is_scratch && (

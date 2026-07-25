@@ -70,7 +70,7 @@ export default class ErrorBoundary extends Component<
             type="button"
             data-testid="error-boundary-retry"
             onClick={this.handleRetry}
-            className="rounded-[6px] bg-accent text-on-accent text-sm font-medium px-4 py-1.5 hover:bg-accent/85 cursor-pointer"
+            className="rounded-sm bg-accent text-on-accent text-sm font-medium px-4 py-1.5 hover:bg-accent/85 cursor-pointer"
           >
             Try again
           </button>

@@ -112,17 +112,17 @@ export default function Sidebar({
       <button
         key={project.project_id}
         onClick={() => onSelectProject(project.project_id)}
-        className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-          isActive ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+        className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+          isActive ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'
         }`}
       >
         <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`} />
         <div className="min-w-0 flex-1">
-          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+          <span className="text-xs font-medium text-primary block truncate">
             {truncate(project.name, 20)}
           </span>
           {summary && (
-            <span className="text-[10px] text-secondary block truncate mt-0.5">
+            <span className="text-2xs text-secondary block truncate mt-0.5">
               {summary}
             </span>
           )}
@@ -132,10 +132,10 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="w-[260px] shrink-0 bg-sidebar border-r border-border flex flex-col h-full max-md:w-full">
+    <aside className="w-[260px] shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full">
       {/* Wordmark */}
       <div className="px-4 pt-4 pb-3">
-        <span className="font-mono text-sm font-semibold text-primary tracking-tight">
+        <span className="text-sm font-semibold text-primary tracking-tight">
           {t('sidebar.wordmark')}
         </span>
       </div>
@@ -148,7 +148,7 @@ export default function Sidebar({
 
       {/* Workspace zone — global surfaces (Calendar) + Quick Tasks, above Projects */}
       <div className="flex items-center px-4 pt-2 pb-1">
-        <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
+        <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
           {t('workspace.zone.label')}
         </span>
       </div>
@@ -156,12 +156,12 @@ export default function Sidebar({
         <button
           onClick={onSelectCalendar}
           aria-current={route.name === 'calendar' ? 'page' : undefined}
-          className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-            route.name === 'calendar' ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+          className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+            route.name === 'calendar' ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'
           }`}
         >
           <Calendar size={14} className="shrink-0 text-secondary" aria-hidden="true" />
-          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+          <span className="text-xs font-medium text-primary block truncate">
             {t('workspace.calendar.nav')}
           </span>
           <BetaBadge />
@@ -170,19 +170,19 @@ export default function Sidebar({
           onClick={onSelectWorkbench}
           aria-current={route.name === 'workbench' ? 'page' : undefined}
           aria-label={t(workbenchCount === 1 ? 'workbench.badge.aria.one' : 'workbench.badge.aria.other', { n: workbenchCount })}
-          className={`w-full text-left px-3 py-2 rounded-[6px] flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
-            route.name === 'workbench' ? 'bg-card-hover' : 'hover:bg-card-hover/50'
+          className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+            route.name === 'workbench' ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'
           }`}
         >
           <Inbox size={14} className="shrink-0 text-secondary" aria-hidden="true" />
-          <span className="font-mono text-[11.5px] font-medium text-primary block truncate">
+          <span className="text-xs font-medium text-primary block truncate">
             {t('workspace.workbench.nav')}
           </span>
           <BetaBadge />
           {workbenchCount > 0 && (
             <span
               data-testid="workbench-badge-count"
-              className="ml-auto font-mono text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-sidebar"
+              className="ml-auto font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-secondary bg-nav-hover"
             >
               {workbenchCount}
             </span>
@@ -193,10 +193,10 @@ export default function Sidebar({
 
       {/* Projects section header */}
       <div className="flex items-center justify-between px-4 pt-2 pb-1">
-        <span className="text-[9.5px] uppercase tracking-[0.08em] text-secondary font-medium">
+        <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
           {t('sidebar.projects')}
         </span>
-        <span className="font-mono text-[9.5px] text-secondary">
+        <span className="font-mono text-2xs text-secondary">
           {regularProjects.length}
         </span>
       </div>
@@ -210,7 +210,7 @@ export default function Sidebar({
       <div className="px-3 pb-3 pt-2 border-t border-border space-y-2">
         <button
           onClick={onNewProject}
-          className="w-full text-sm font-medium text-primary border border-border rounded-[6px] px-3 py-2 hover:bg-card-hover transition-all duration-150 max-md:min-h-[44px]"
+          className="w-full rounded-lg border border-border/60 bg-card/55 px-3 py-2 text-sm font-medium text-primary shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-[box-shadow,transform,background-color] duration-100 ease-out hover:bg-card/80 hover:shadow-[0_2px_5px_rgb(0_0_0/0.07)] active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 max-md:min-h-[44px]"
         >
           {t('app.newProject')}
         </button>
@@ -220,7 +220,7 @@ export default function Sidebar({
           aria-current={route.name === 'settings' ? 'page' : undefined}
           className={`w-full text-sm px-3 py-1.5 text-left rounded-lg transition-all duration-150 max-md:min-h-[44px] ${
             route.name === 'settings'
-              ? 'bg-card-hover text-primary'
+              ? 'bg-nav-hover text-primary'
               : 'text-secondary hover:text-primary'
           }`}
         >

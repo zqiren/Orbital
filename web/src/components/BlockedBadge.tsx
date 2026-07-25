@@ -40,8 +40,8 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
       role="region"
       aria-label={t(blockedCount === 1 ? 'blocked.aria.one' : 'blocked.aria.other', { n: blockedCount })}
       onClick={onClick}
-      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[12.5px] transition-all duration-150 ${
-        onClick ? 'cursor-pointer hover:bg-card-hover/50' : ''
+      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-sm text-xs transition-all duration-150 ${
+        onClick ? 'cursor-pointer hover:bg-nav-hover/50' : ''
       } ${active ? 'text-primary' : 'text-secondary opacity-60'}`}
     >
       <AlertTriangle
@@ -54,7 +54,7 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
         <span
           data-testid="blocked-badge-budget-pill"
           aria-label={t(budgetCount === 1 ? 'blocked.budget.aria' : 'blocked.budget.aria.other', { n: budgetCount })}
-          className="font-mono text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full text-error bg-error/10"
+          className="font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-error bg-error/10"
         >
           {t('blocked.budget.marker', { n: budgetCount })}
         </span>
@@ -62,7 +62,7 @@ export default function BlockedBadge({ onClick }: BlockedBadgeProps) {
       {hasBlocked && (
         <span
           data-testid="blocked-badge-pill"
-          className="font-mono text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full text-warning bg-warning/10"
+          className="font-mono text-2xs font-medium leading-none px-1.5 py-0.5 rounded-full text-warning bg-warning/10"
         >
           {blockedCount}
         </span>

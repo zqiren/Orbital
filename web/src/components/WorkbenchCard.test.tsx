@@ -112,8 +112,27 @@ function normalizedColor(value: string): string {
   return probe.style.color;
 }
 
-describe('WorkbenchCard — project prominence (round 3, item 3): reuses the calendar eventColor hash', () => {
-  it('applies a left accent border matching eventColor(project_id).border on the global view (showProjectChip)', () => {
+// Project identity is still the calendar's eventColor hash, but it is carried
+// by a small DOT beside the project name rather than by a tinted+bordered pill
+// plus a 3px coloured spine down the card. The invariant these tests guard is
+// unchanged — identity is visually encoded, only on the global view, and
+// differs per project; only the element carrying it moved.
+describe('WorkbenchCard — project prominence: reuses the calendar eventColor hash', () => {
+  it('marks the project with a dot coloured by eventColor(project_id) on the global view', () => {
+    render(
+      <WorkbenchCard
+        entry={entry({ project_id: 'proj-a' })}
+        showProjectChip
+        projectName="Marketing"
+        onOpen={vi.fn()}
+      />,
+    );
+    const dot = screen.getByTestId('workbench-card-project-dot');
+    const accent = eventColor('proj-a');
+    expect(normalizedColor(dot.style.backgroundColor)).toBe(normalizedColor(accent.border));
+  });
+
+  it('does NOT apply any accent to the card surface itself', () => {
     render(
       <WorkbenchCard
         entry={entry({ project_id: 'proj-a' })}
@@ -123,11 +142,10 @@ describe('WorkbenchCard — project prominence (round 3, item 3): reuses the cal
       />,
     );
     const card = screen.getByTestId('workbench-card-entry-proj-a-e1');
-    const accent = eventColor('proj-a');
-    expect(normalizedColor(card.style.borderLeftColor)).toBe(normalizedColor(accent.border));
+    expect(card.style.borderLeftColor).toBe('');
   });
 
-  it('does NOT apply the accent border on the lens view (showProjectChip false)', () => {
+  it('renders no project marker at all on the lens view (showProjectChip false)', () => {
     render(
       <WorkbenchCard
         entry={entry({ project_id: 'proj-a' })}
@@ -135,25 +153,9 @@ describe('WorkbenchCard — project prominence (round 3, item 3): reuses the cal
         onOpen={vi.fn()}
       />,
     );
+    expect(screen.queryByTestId('workbench-card-project-dot')).toBeNull();
     const card = screen.getByTestId('workbench-card-entry-proj-a-e1');
     expect(card.style.borderLeftColor).toBe('');
-  });
-
-  it('styles the project chip with eventColor bg/text/border (not the plain gray classes) and font-medium', () => {
-    render(
-      <WorkbenchCard
-        entry={entry({ project_id: 'proj-b' })}
-        showProjectChip
-        projectName="Ops"
-        onOpen={vi.fn()}
-      />,
-    );
-    const chip = screen.getByTestId('workbench-card-project-chip');
-    const accent = eventColor('proj-b');
-    expect(normalizedColor(chip.style.backgroundColor)).toBe(normalizedColor(accent.bg));
-    expect(normalizedColor(chip.style.color)).toBe(normalizedColor(accent.text));
-    expect(chip.className).toMatch(/font-medium/);
-    expect(chip.className).not.toMatch(/text-secondary/);
   });
 
   it('different projects get different accent hues (hash-based, matches the calendar)', () => {
@@ -165,7 +167,7 @@ describe('WorkbenchCard — project prominence (round 3, item 3): reuses the cal
         onOpen={vi.fn()}
       />,
     );
-    const chipA = screen.getByTestId('workbench-card-project-chip').style.borderColor;
+    const dotA = screen.getByTestId('workbench-card-project-dot').style.backgroundColor;
 
     rerender(
       <WorkbenchCard
@@ -175,9 +177,9 @@ describe('WorkbenchCard — project prominence (round 3, item 3): reuses the cal
         onOpen={vi.fn()}
       />,
     );
-    const chipB = screen.getByTestId('workbench-card-project-chip').style.borderColor;
+    const dotB = screen.getByTestId('workbench-card-project-dot').style.backgroundColor;
 
-    expect(chipA).not.toBe(chipB);
+    expect(dotA).not.toBe(dotB);
   });
 });
 

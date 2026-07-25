@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useState } from 'react';
-import { Clock, Eye, Trash2 } from 'lucide-react';
+import { ChevronRight, Clock, Eye, Trash2 } from 'lucide-react';
 import type { Trigger } from '../types';
 import { useT } from '../i18n/useT';
 
@@ -348,42 +348,57 @@ export default function TriggerStrip({ triggers, onToggle, onDelete }: TriggerSt
 
   if (triggers.length === 0) return null;
 
-  const visible = showAll ? triggers : triggers.slice(0, 2);
-  const hiddenCount = triggers.length - 2;
   const expandedTrigger = expandedId
     ? triggers.find((t) => t.id === expandedId) ?? null
     : null;
 
+  // How many are paused. Surfaced ON the collapsed summary: a disabled trigger
+  // is a silent failure mode, so hiding the rows must not hide that some of
+  // them aren't running.
+  const offCount = triggers.filter((tr) => !tr.enabled).length;
+
   return (
     <div className="border-b border-border">
-      {visible.map((t) => (
-        <TriggerLine
-          key={t.id}
-          trigger={t}
-          onToggle={onToggle}
-          onDelete={onDelete}
-          expanded={!isMobile && expandedId === t.id}
-          onClickLine={() => handleClickLine(t.id)}
+      {/* Collapsed summary (progressive disclosure). The strip previously
+          rendered two full rows with toggles plus a "show more" — roughly 64px
+          of header before any content. Nothing is removed, just moved one
+          level deeper: the rows (and their toggles) are one click away. */}
+      <button
+        type="button"
+        onClick={() => setShowAll((v) => !v)}
+        aria-expanded={showAll}
+        data-testid="trigger-summary"
+        className="flex w-full items-center gap-2 px-6 py-1.5 text-left text-xs text-secondary transition-colors duration-100 hover:bg-sidebar/50 max-md:min-h-[44px] max-md:px-4"
+      >
+        <Clock size={13} aria-hidden="true" className="shrink-0 text-muted" />
+        <span className="text-primary">
+          {t(triggers.length === 1 ? 'trigger.summary.one' : 'trigger.summary.other', {
+            n: triggers.length,
+          })}
+        </span>
+        {offCount > 0 && (
+          <span className="text-muted">{t('trigger.summary.off', { n: offCount })}</span>
+        )}
+        <ChevronRight
+          size={13}
+          aria-hidden="true"
+          className={`ml-auto shrink-0 text-muted transition-transform duration-150 motion-reduce:transition-none ${
+            showAll ? 'rotate-90' : ''
+          }`}
         />
-      ))}
-      {!showAll && hiddenCount > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          className="w-full text-xs text-accent px-6 py-1 hover:underline max-md:px-4"
-        >
-          {t('trigger.showMore', { n: hiddenCount })}
-        </button>
-      )}
-      {showAll && hiddenCount > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowAll(false)}
-          className="w-full text-xs text-accent px-6 py-1 hover:underline max-md:px-4"
-        >
-          {t('trigger.showLess')}
-        </button>
-      )}
+      </button>
+
+      {showAll &&
+        triggers.map((t) => (
+          <TriggerLine
+            key={t.id}
+            trigger={t}
+            onToggle={onToggle}
+            onDelete={onDelete}
+            expanded={!isMobile && expandedId === t.id}
+            onClickLine={() => handleClickLine(t.id)}
+          />
+        ))}
 
       {/* Mobile bottom sheet */}
       {isMobile && expandedTrigger && (

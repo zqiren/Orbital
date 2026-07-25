@@ -193,7 +193,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         </div>
 
         <div className="text-center mb-8">
-          <span className="font-mono text-lg text-primary tracking-tight">
+          <span className="text-lg text-primary tracking-tight">
             {t('setupGate.wordmark')}
           </span>
         </div>

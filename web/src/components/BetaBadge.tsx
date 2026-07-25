@@ -17,7 +17,7 @@ export default function BetaBadge({ className = '' }: { className?: string }) {
     <span
       data-testid="beta-badge"
       title={t('beta.tooltip')}
-      className={`inline-flex shrink-0 items-center rounded-full border border-warning/40 bg-warning/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-warning ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-full border border-warning/40 bg-warning/10 px-1.5 py-px text-3xs font-semibold uppercase tracking-wide text-warning ${className}`}
     >
       {t('beta.badge')}
     </span>
