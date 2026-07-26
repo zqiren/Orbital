@@ -4,8 +4,10 @@
 
 <p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital managing a real project — coordinating agents, decisions, approvals, and project artifacts" width="100%"></p>
 
-<h2 align="center">One agent runs the project. Any agent can do the work.</h2>
-<p align="center">Orbital is a persistent management agent that plans, delegates, supervises and remembers. It coordinates Claude Code, Codex, Gemini and other agents inside one local project—with shared context, approvals and budgets.</p>
+<h2 align="center">Every agent owns a session. Orbital owns the project.</h2>
+<p align="center">A local-first agent that holds your project's plan, decisions, and budget — and briefs Claude Code, Codex, or any CLI agent when it's their turn.</p>
+
+<p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/download/v0.7.6/Orbital-Setup-0.7.6.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
@@ -28,8 +30,6 @@
 
 People already use multiple capable agents at work — for the newest model, the leftover quota, or because their context is locked into one tool. But each agent works in its own silo: its own sessions, its own decisions, its own context. You end up working as their intern, ferrying context between them to keep your own project moving.
 
-Every agent is accountable for a session. No agent is accountable for your project.
-
 Orbital puts a management agent over your project. It owns the project's memory, state, decisions, lessons, budget, task queue, and artifacts; worker sub-agents execute against that shared context. When a chat closes, the manager still knows what is in motion, what finished, and what needs attention.
 
 Orbital is accountable for your project.
@@ -38,34 +38,46 @@ Orbital is accountable for your project.
 
 ## What makes Orbital different
 
-**An agent, not a dashboard** — Orbital has its own management agent that maintains the project's state, memory, and progress.
+**One manager owns the project across sessions** — an agent, not a dashboard. It keeps the plan, decisions, and state current whether or not a chat is open.
 
-**Workers are interchangeable** — the manager keeps the project's context, so you can use the best agent for each task without losing continuity.
+**Any coding agent can act as a worker** — the manager holds the context, so you pick the best agent for each task instead of re-explaining the project to it.
 
-**Your project stays yours** — state, decisions, lessons and artifacts live on your machine.
+**Every queued task ends Completed or Blocked** — an agent that stops without a verdict gets re-prompted, then force-blocked with a reason. Nothing drifts away silently.
 
-One project has one queue, one budget, one approval policy, and one audit trail.
-
-Swap agents as often as you like — your work and your progress are always yours.
+One project has one queue, one budget, one approval policy, and one audit trail — and all of it stays on your machine.
 
 ---
 
 ## At a Glance
 
+**Why the project never loses its memory**
+
 - **Accountable management loop** — one agent plans, delegates, supervises, and records outcomes for the project
 - **Persistent project context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md, and artifacts remain available to the manager across sessions
-- **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
-- **Interchangeable workers** — the manager dispatches Claude Code, Codex, Gemini CLI, or any CLI agent against the same project context
 - **Self-improving skills** — agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
+
+**Why you can swap agents mid-project**
+
+- **Interchangeable workers** — the manager dispatches Claude Code, Codex, Gemini CLI, or any CLI agent against the same project context
 - **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
-- **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
-- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
-- **Browser automation** — 26 browser actions via Patchright with anti-detection
-- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
+
+**Why you can delegate without watching**
+
+- **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
 - **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
 - **Approval workflows** — agents pause before risky actions; approve from desktop or phone
 - **Budget controls** — per-project spending limits with configurable actions
+- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
+
+**Why the project moves while you're away**
+
+- **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
 - **Mobile supervision** — manage agents from your phone via QR code pairing
+
+**Under the hood**
+
+- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
+- **Browser automation** — 26 browser actions via Patchright with anti-detection
 
 ---
 
@@ -151,16 +163,15 @@ flowchart TB
 
 ## How Orbital compares
 
-| Capability (July 2026) | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
-| --- | --- | --- | --- | --- | --- |
-| Persistent memory, scheduling, and sub-agents | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Management loop with its own project decisions | ✅ (state + decisions + lessons) | Partial (task loop + memory) | Partial (task loop + memory) | Partial (agent loop + self-improving memory) | Partial (agent loop + workspace memory) |
-| Mixed worker agents under one project manager | ✅ (Claude Code, Codex, Gemini, any CLI) | ❌ (Claude workers) | ❌ (Codex workers) | ❌ (Hermes workers) | Partial (external harnesses via ACP) |
-| Project queue with enforced completed/blocked closure | ✅ | ❌ | ❌ | ❌ | ❌ |
-| One project budget + approval policy + audit trail | ✅ | Partial (permissions + run history) | Partial (approvals + enterprise audit) | Partial (command approvals) | Partial (approvals + logs) |
-| Mobile supervision | ✅ (start, steer, approve) | ✅ (Dispatch + Remote Control) | ✅ (Remote) | ✅ (chat platforms) | ✅ (mobile + chat platforms) |
+Memory, scheduling, and sub-agents are table stakes now — every tool below has them. These are the three questions where the answers still differ.
 
-**The short version:** Memory, scheduling, and sub-agents are no longer differentiators by themselves. Orbital's difference is the combination: one accountable manager, mixed worker agents sharing its project context, enforced queue closure, and project-level governance.
+| July 2026 | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
+| --- | --- | --- | --- | --- | --- |
+| Can a different agent pick up the next task? | ✅ Claude Code, Codex, Gemini, any CLI | ❌ Claude workers | ❌ Codex workers | ❌ Hermes workers | Partial (external harnesses via ACP) |
+| What stops a queued task from drifting? | ✅ Enforced Completed/Blocked closure | ❌ | ❌ | ❌ | ❌ |
+| Who owns the budget, approvals, and audit trail? | ✅ The project | Partial (permissions + run history) | Partial (approvals + enterprise audit) | Partial (command approvals) | Partial (approvals + logs) |
+
+**The short version:** the difference isn't any one capability — it's that the project, not the session, is the unit that owns state, workers, and governance.
 
 ---
 
@@ -661,7 +672,7 @@ Built nights and weekends while working full-time. Still very early. Feedback an
 Orbital is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ```
-Orbital — One agent runs the project. Any agent can do the work.
+Orbital — Every agent owns a session. Orbital owns the project.
 Copyright (C) 2026 Orbital Contributors
 
 This program is free software: you can redistribute it and/or modify
