@@ -95,14 +95,17 @@ export default function Sidebar({
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
   const workbenchCount = useWorkbenchCount();
 
-  // Quick Tasks (is_scratch) is promoted into the Workspace zone; the Projects
-  // zone below lists only non-scratch projects so it is never duplicated.
+  // Quick Tasks (is_scratch) is pinned to the top of the Projects list; the
+  // rest follow below a hairline so it is never duplicated. It sat in the
+  // Workspace zone before, alongside Calendar and Workbench, which framed it
+  // as a global surface rather than the project you can start working in
+  // without setting anything up.
   const scratchProjects = projects.filter((p) => p.is_scratch);
   const regularProjects = projects.filter((p) => !p.is_scratch);
 
   // Shared project-row renderer — identical status dot / summary / active-state
-  // behavior wherever a project appears (Quick Tasks in Workspace, projects in
-  // the Projects zone). Keeps Quick Tasks' promotion from changing its behavior.
+  // behavior for the pinned Quick Tasks row and every project below it. Being
+  // pinned changes where the row sits, never how it looks or behaves.
   function renderProjectRow(project: Project) {
     const isActive = project.project_id === selectedProjectId;
     const dotColor = getProjectDotColor(project.project_id, agentStatuses, pendingApprovals);
@@ -164,7 +167,7 @@ export default function Sidebar({
           project awaiting approval already shows an amber dot in the list
           below (see getProjectDotColor). BlockedBadge itself is kept for the
           dedicated 'blocked' route it was always headed for. */}
-      {/* Workspace zone — global surfaces (Calendar) + Quick Tasks, above Projects */}
+      {/* Workspace zone — global surfaces (Calendar, Workbench), above Projects */}
       <div className="flex items-center px-4 pt-2 pb-1">
         <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
           {t('workspace.zone.label')}
@@ -206,7 +209,6 @@ export default function Sidebar({
             </span>
           )}
         </button>
-        {scratchProjects.map(renderProjectRow)}
       </div>
 
       {/* Projects section header */}
@@ -219,8 +221,26 @@ export default function Sidebar({
         </span>
       </div>
 
-      {/* Project list (non-scratch only) */}
+      {/* Project list — Quick Tasks pinned above the rest.
+          Deliberately the same row as any other project (same dot, same name
+          treatment): position above a hairline is what marks it pinned, the
+          way pinned items read everywhere else. Giving it its own icon made it
+          look like a different kind of thing rather than the project you start
+          in. The rule is suppressed when there are no regular projects, so a
+          fresh install doesn't get a divider with nothing under it. */}
       <nav className="flex-1 overflow-y-auto px-2">
+        {scratchProjects.length > 0 && (
+          <div
+            data-testid="pinned-projects"
+            className={
+              regularProjects.length > 0
+                ? 'pb-1 mb-1 border-b border-border/60'
+                : undefined
+            }
+          >
+            {scratchProjects.map(renderProjectRow)}
+          </div>
+        )}
         {regularProjects.map(renderProjectRow)}
       </nav>
 

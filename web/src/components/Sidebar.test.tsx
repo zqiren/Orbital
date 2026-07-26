@@ -113,19 +113,35 @@ describe('Sidebar — Workspace zone (two-zone IA)', () => {
     expect(calBtn).toHaveAttribute('aria-current', 'page');
   });
 
-  it('pins the is_scratch project in the Workspace zone and removes it from the Projects list', () => {
+  it('pins the is_scratch project at the top of the Projects list, above the rest', () => {
     const { container } = render(
-      <Sidebar {...defaultProps} projects={[scratchProject, mockProject]} />,
+      <Sidebar {...defaultProps} projects={[mockProject, scratchProject]} />,
     );
-    // Quick Tasks renders exactly once (promoted, not duplicated).
+    // Quick Tasks renders exactly once (pinned, not duplicated).
     expect(screen.getAllByText('Quick Tasks')).toHaveLength(1);
-    // The Projects zone (<nav>) contains the regular project but NOT Quick Tasks.
+
+    // It now lives inside the Projects zone (<nav>) rather than the Workspace
+    // block above it, and sorts first even though the prop order puts it last.
     const nav = container.querySelector('nav') as HTMLElement;
+    expect(within(nav).getByText('Quick Tasks')).toBeInTheDocument();
     expect(within(nav).getByText('Test Project')).toBeInTheDocument();
-    expect(within(nav).queryByText('Quick Tasks')).toBeNull();
-    // Quick Tasks keeps its clickable project behavior (routes via onSelectProject).
+
+    const rows = within(nav).getAllByRole('button');
+    expect(rows[0]).toHaveTextContent('Quick Tasks');
+
+    // Pinning changes placement only — it still routes like any project row.
     fireEvent.click(screen.getByText('Quick Tasks'));
     expect(defaultProps.onSelectProject).toHaveBeenCalledWith('scratch-1');
+  });
+
+  it('drops the pinned hairline when there are no regular projects', () => {
+    const { rerender } = render(
+      <Sidebar {...defaultProps} projects={[scratchProject]} />,
+    );
+    expect(screen.getByTestId('pinned-projects').className).not.toMatch(/border-b/);
+
+    rerender(<Sidebar {...defaultProps} projects={[scratchProject, mockProject]} />);
+    expect(screen.getByTestId('pinned-projects').className).toMatch(/border-b/);
   });
 
   it('the Projects count reflects non-scratch projects only', () => {
