@@ -10,15 +10,9 @@ import type { Project } from '../types';
 
 afterEach(() => cleanup());
 
-// ---------------------------------------------------------------------------
-// Mock useBlockedCount with a configurable fn so each test group can control
-// the returned count (the pattern BlockedBadge.test.tsx uses).
-// ---------------------------------------------------------------------------
-const mockUseBlockedCount = vi.fn();
-
-vi.mock('../hooks/useBlockedCount', () => ({
-  useBlockedCount: () => mockUseBlockedCount(),
-}));
+// The Sidebar no longer renders BlockedBadge, so useBlockedCount is not in its
+// module graph and needs no mock here. BlockedBadge.test.tsx still covers the
+// component itself.
 
 // Sidebar's Workbench badge count fetches GET /api/v2/workbench directly
 // (no dedicated hook module to mock) — stub the api client. Defaults to an
@@ -59,23 +53,19 @@ beforeEach(() => {
   apiMock.mockResolvedValue({ entries: [] });
 });
 
-describe('Sidebar — BlockedBadge integration (count 0)', () => {
-  beforeEach(() => {
-    mockUseBlockedCount.mockReturnValue({ blockedCount: 0, blockedSessions: [], loading: false });
-  });
-
+describe('Sidebar — base render', () => {
   it('renders the Sidebar without crashing', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByText('Orbital')).toBeInTheDocument();
   });
 
-  it('renders the "Blocked" label from BlockedBadge in the global area', () => {
+  // Deliberate removal, not an oversight: the row was a non-clickable status
+  // readout that greyed itself out at zero, so users read it as a state they
+  // had to act on with nowhere to act. Pending approvals still surface as an
+  // amber dot on the project row.
+  it('does NOT render the global "Blocked" row', () => {
     render(<Sidebar {...defaultProps} />);
-    expect(screen.getByText('Blocked')).toBeInTheDocument();
-  });
-
-  it('does NOT show the blocked count pill when blockedCount is 0', () => {
-    render(<Sidebar {...defaultProps} />);
+    expect(screen.queryByText('Blocked')).toBeNull();
     expect(screen.queryByTestId('blocked-badge-pill')).toBeNull();
   });
 
@@ -96,30 +86,7 @@ describe('Sidebar — BlockedBadge integration (count 0)', () => {
   });
 });
 
-describe('Sidebar — BlockedBadge integration (count > 0)', () => {
-  beforeEach(() => {
-    mockUseBlockedCount.mockReturnValue({ blockedCount: 3, blockedSessions: [], loading: false });
-  });
-
-  it('renders the blocked count pill inside the Sidebar when blockedCount > 0', () => {
-    render(<Sidebar {...defaultProps} />);
-    const pill = screen.getByTestId('blocked-badge-pill');
-    expect(pill).toBeInTheDocument();
-    expect(pill).toHaveTextContent('3');
-  });
-
-  it('still renders the project list alongside the pill', () => {
-    render(<Sidebar {...defaultProps} />);
-    expect(screen.getByTestId('blocked-badge-pill')).toBeInTheDocument();
-    expect(screen.getByText('Test Project')).toBeInTheDocument();
-  });
-});
-
 describe('Sidebar — Workspace zone (two-zone IA)', () => {
-  beforeEach(() => {
-    mockUseBlockedCount.mockReturnValue({ blockedCount: 0, blockedSessions: [], loading: false });
-  });
-
   const scratchProject: Project = {
     ...mockProject,
     project_id: 'scratch-1',
@@ -170,10 +137,6 @@ describe('Sidebar — Workspace zone (two-zone IA)', () => {
 });
 
 describe('Sidebar — Workbench nav item', () => {
-  beforeEach(() => {
-    mockUseBlockedCount.mockReturnValue({ blockedCount: 0, blockedSessions: [], loading: false });
-  });
-
   it('renders a Workbench item in the Workspace zone', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByText('Workbench')).toBeInTheDocument();

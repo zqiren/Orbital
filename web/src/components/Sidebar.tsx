@@ -7,7 +7,6 @@ import { Calendar, Inbox } from 'lucide-react';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { api } from '../config';
-import BlockedBadge from './BlockedBadge';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
 
@@ -157,12 +156,14 @@ export default function Sidebar({
         </span>
       </div>
 
-      {/* Global nav-row block */}
-      <div className="px-2 pb-1 space-y-0.5">
-        {/* Blocked row — reuses BlockedBadge restyled into V1MNavRow form */}
-        <BlockedBadge />
-      </div>
-
+      {/* The global "Blocked" row used to sit here. It was removed because it
+          read as a status readout rather than a control: it was rendered
+          without an onClick, so it was not clickable, and at zero it greyed
+          itself out — users took it for a state they were supposed to act on
+          and had nowhere to go. Its pending-approval signal is not lost: a
+          project awaiting approval already shows an amber dot in the list
+          below (see getProjectDotColor). BlockedBadge itself is kept for the
+          dedicated 'blocked' route it was always headed for. */}
       {/* Workspace zone — global surfaces (Calendar) + Quick Tasks, above Projects */}
       <div className="flex items-center px-4 pt-2 pb-1">
         <span className="text-2xs uppercase tracking-[0.08em] text-secondary font-medium">
