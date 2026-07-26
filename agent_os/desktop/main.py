@@ -488,6 +488,28 @@ def open_window(port: int):
             # but a working Cmd+W / Cmd+M / Dock menu.
             pass
 
+    def _set_chrome_mode(mode: str):
+        """Tell the SPA which window chrome it is living under.
+
+        In fullscreen macOS auto-hides the titlebar and re-reveals it as an
+        overlay on hover at the top edge, so the traffic-light gutter the SPA
+        reserves is dead space there. Flipping this attribute collapses it —
+        `--titlebar-h` falls back to 0px for any value that isn't 'mac-inline',
+        so the fullscreen case needs no CSS branch of its own.
+
+        Calling evaluate_js here is safe specifically because `maximized` and
+        `restored` are non-locking events, which pywebview runs on their own
+        thread (webview/event.py). evaluate_js queues its script onto the main
+        thread and then blocks waiting for the result, so calling it from a
+        *locking* handler like `before_show` would deadlock the window.
+        """
+        if not inline_titlebar:
+            return
+        try:
+            window.evaluate_js(f"document.documentElement.dataset.chrome = '{mode}'")
+        except Exception:
+            pass
+
     def _on_loaded():
         """Origin guard: catch a same-frame navigation that escaped the SPA.
 
@@ -552,6 +574,11 @@ def open_window(port: int):
     window.events.closing += _on_closing
     window.events.loaded += _on_loaded
     window.events.before_show += _reveal_traffic_lights
+    # macOS fires `maximized` on entering fullscreen and `restored` on leaving
+    # it (webview/platforms/cocoa.py). `restored` also fires on un-minimize,
+    # which is harmless here: a minimized window is never fullscreen.
+    window.events.maximized += lambda: _set_chrome_mode("fullscreen")
+    window.events.restored += lambda: _set_chrome_mode("mac-inline")
     webview.start(icon=resolve_window_icon_path(), func=_activate_macos)
 
 

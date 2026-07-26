@@ -137,8 +137,22 @@ export default function Sidebar({
   return (
     <aside className="w-[260px] shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar">
       {/* Wordmark */}
-      <div className="px-4 pt-4 pb-3">
-        <span className="text-sm font-semibold text-primary tracking-tight">
+      <div className="px-4 pt-4 pb-3 flex items-center gap-2">
+        {/* Served straight from web/public (vite copies it to the dist root, so
+            it resolves in the desktop bundle too) — no new asset, no import.
+            Decorative: the text beside it already names the app, so alt=""
+            keeps screen readers from announcing "Orbital" twice. */}
+        <img
+          src="/icon-192.png"
+          alt=""
+          aria-hidden="true"
+          className="w-5 h-5 shrink-0"
+        />
+        {/* text-lg, not text-sm: at text-sm the wordmark was the same size as
+            the nav rows below it and only font-weight separated them, so the
+            app name read as one more list item. Matches the project title
+            across the divider. */}
+        <span className="text-lg font-semibold text-primary tracking-tight">
           {t('sidebar.wordmark')}
         </span>
       </div>
