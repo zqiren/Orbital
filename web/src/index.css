@@ -185,6 +185,49 @@ body {
   box-sizing: border-box;
 }
 
+/* ------------------------------------------------------------- window chrome
+   The macOS desktop shell runs pywebview frameless (agent_os/desktop/main.py),
+   which on macOS is not actually a frameless window: it keeps the titled style
+   mask but makes the titlebar transparent and lets the SPA render underneath,
+   so the traffic lights float over the app's own top-left corner and there is
+   no separate grey system bar.
+
+   That band still belongs to the native titlebar view, which sits ABOVE the
+   webview and swallows mouse events — so no interactive control may sit in it.
+   Panes pad themselves by this amount rather than one shared wrapper doing it,
+   so each pane's own surface colour fills its own slice of the band (the nav
+   column is a heavier material than the content pane; one wrapper would paint
+   a single flat strip across both and flatten that distinction).
+
+   0 everywhere else: Windows keeps its native frame — WebView2 has no
+   transparent-titlebar equivalent — and the relay/mobile browser has no window
+   chrome at all, so both stay byte-identical to before. */
+:root {
+  --titlebar-h: 0px;
+}
+
+:root[data-chrome="mac-inline"] {
+  --titlebar-h: 28px;
+}
+
+.pt-titlebar {
+  padding-top: var(--titlebar-h);
+}
+
+/* Band fill for panes that don't otherwise paint a background of their own.
+   Scoped to the attribute rather than applied as a plain `bg-*` utility so
+   that off macOS these classes resolve to nothing at all and the non-mac
+   render stays byte-identical — <main> currently paints no background, and
+   giving it one unconditionally would recolour the strip around the
+   sandbox-warning banner on the project route. */
+:root[data-chrome="mac-inline"] .titlebar-band-card {
+  background-color: var(--color-card);
+}
+
+:root[data-chrome="mac-inline"] .titlebar-band-canvas {
+  background-color: var(--color-background);
+}
+
 @keyframes slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

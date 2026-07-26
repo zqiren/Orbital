@@ -498,7 +498,12 @@ export default function App() {
       {/* NOTE: keep a space before `${` — Tailwind's scanner will not extract a
           class that runs straight into a template-literal interpolation, so
           `shadow-panel${...}` silently emits no CSS. */}
-      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel ${contentHidden ? 'hidden' : ''}`}>
+      {/* pt-titlebar clears the macOS transparent-titlebar band (0 elsewhere).
+          The band's fill is route-dependent so it matches the pane beneath it:
+          the chat pane is white "paper" while the card-list surfaces keep the
+          grey canvas so their cards still lift off it. Both classes are inert
+          off macOS, so the non-mac render is unchanged. */}
+      <main className={`flex-1 overflow-hidden flex flex-col shadow-panel pt-titlebar ${route.name === 'project' ? 'titlebar-band-card' : 'titlebar-band-canvas'} ${contentHidden ? 'hidden' : ''}`}>
         {/* Mobile back button */}
         {isMobile && mobileView === 'content' && (
           <button

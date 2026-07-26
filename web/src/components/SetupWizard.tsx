@@ -17,7 +17,7 @@
  * skippable; wizard completion stays derived from `llm.api_key_set` upstream.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Loader2, Globe, Plug } from 'lucide-react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
@@ -33,9 +33,64 @@ interface SetupWizardProps {
   onComplete: () => void;
 }
 
-export default function SetupWizard({ onComplete }: SetupWizardProps) {
+/** Ambient language toggle (Spec 008 A2), reachable on every wizard step.
+ *  Owns its own hooks rather than taking props so WizardCard can place it
+ *  without either step having to thread locale state through. */
+function LocaleToggle() {
   const t = useT();
   const { locale, setLocale } = useLocale();
+  return (
+    <div className="inline-flex shrink-0 items-center gap-1.5">
+      <Globe className="w-3.5 h-3.5 text-secondary" aria-hidden="true" />
+      <select
+        aria-label={t('global.language')}
+        data-testid="wizard-locale-select"
+        value={locale}
+        onChange={(e) => setLocale(e.target.value as typeof locale)}
+        className="text-xs bg-card border border-border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+      >
+        {LOCALES.map((l) => (
+          <option key={l.code} value={l.code}>{l.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** Shared card chrome for both wizard steps.
+ *
+ *  The language toggle lives here rather than above the card because the two
+ *  steps render separate cards — hoisting it out of them was what left it
+ *  floating as loose chrome over the dialog. Declaring it once in the shared
+ *  header keeps it inside the card and identical across steps.
+ *
+ *  bg-card, not bg-background: this is content that must lift off the canvas
+ *  (see the surface ladder in index.css). Both onboarding screens were setting
+ *  the same token as the page behind them, leaving a 1px border to do all the
+ *  separation work — the exact flatness that ladder was introduced to fix. */
+function WizardCard({
+  title,
+  intro,
+  children,
+}: {
+  title: string;
+  intro: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="bg-card border border-border rounded-lg p-8">
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <h1 className="text-2xl font-semibold text-primary">{title}</h1>
+        <LocaleToggle />
+      </div>
+      <p className="text-secondary text-sm leading-relaxed mb-6">{intro}</p>
+      {children}
+    </div>
+  );
+}
+
+export default function SetupWizard({ onComplete }: SetupWizardProps) {
+  const t = useT();
   const [step, setStep] = useState<WizardStep>('api_key');
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -169,44 +224,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   }, [t]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    // pt-titlebar: this is a full-screen surface rendered outside the app
+    // shell, so it clears the macOS titlebar band itself — the native titlebar
+    // view sits above the webview and eats clicks in that strip. Safe against
+    // min-h-screen because box-sizing is border-box globally, so the padding
+    // comes out of the 100vh rather than adding to it.
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 pt-titlebar">
       <div className="w-full max-w-lg">
-        {/* A2 header widget (Spec 008) — ambient language toggle, visible on
-            every wizard step. Reuses the LOCALES select from
-            GlobalSettings.tsx; no new i18n keys needed (labels are
-            language-neutral). */}
-        <div className="flex justify-end mb-2">
-          <div className="inline-flex items-center gap-1.5">
-            <Globe className="w-3.5 h-3.5 text-secondary" aria-hidden="true" />
-            <select
-              aria-label={t('global.language')}
-              data-testid="wizard-locale-select"
-              value={locale}
-              onChange={(e) => setLocale(e.target.value as typeof locale)}
-              className="text-xs bg-background border border-border rounded-lg px-2 py-1 text-primary focus:outline-none focus:border-accent transition-all duration-150"
-            >
-              {LOCALES.map((l) => (
-                <option key={l.code} value={l.code}>{l.label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="text-center mb-8">
-          <span className="text-lg text-primary tracking-tight">
-            {t('setupGate.wordmark')}
-          </span>
-        </div>
-
         {step === 'api_key' && (
-          <div className="bg-background border border-border rounded-lg p-8">
-            <h1 className="text-2xl font-semibold text-primary mb-3">
-              {t('wizard.welcome')}
-            </h1>
-            <p className="text-secondary text-sm leading-relaxed mb-6">
-              {t('wizard.intro')}
-            </p>
-
+          <WizardCard title={t('wizard.welcome')} intro={t('wizard.intro')}>
             <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
 
             <div className="mt-6 flex justify-end">
@@ -225,18 +251,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 )}
               </button>
             </div>
-          </div>
+          </WizardCard>
         )}
 
         {step === 'accounts' && (
-          <div className="bg-background border border-border rounded-lg p-8">
-            <h1 className="text-2xl font-semibold text-primary mb-3">
-              {t('wizard.accounts.title')}
-            </h1>
-            <p className="text-secondary text-sm leading-relaxed mb-6">
-              {t('wizard.accounts.intro')}
-            </p>
-
+          <WizardCard title={t('wizard.accounts.title')} intro={t('wizard.accounts.intro')}>
             {/* Group (a): API connectors — featured, available catalog
                 entries only. Hidden entirely when the fetch failed or
                 nothing qualifies. */}
@@ -378,7 +397,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 {t('wizard.getStarted')}
               </button>
             </div>
-          </div>
+          </WizardCard>
         )}
       </div>
     </div>

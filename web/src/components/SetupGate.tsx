@@ -34,15 +34,17 @@ export default function SetupGate({ setupIssues, onComplete }: SetupGateProps) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    // pt-titlebar: full-screen surface outside the app shell — clears the
+    // macOS titlebar band on its own. See SetupWizard for the reasoning.
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 pt-titlebar">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <span className="text-lg text-primary tracking-tight">
-            {t('setupGate.wordmark')}
-          </span>
-        </div>
-
-        <div className="bg-background border border-border rounded-lg p-8">
+        {/* No standalone wordmark above the card: the heading below already
+            names the app, and stacking both put "Orbital" on screen twice in
+            the same eyeful. bg-card (not bg-background) so the dialog lifts
+            off the canvas instead of relying on a 1px border — see the surface
+            ladder in index.css. Kept in step with SetupWizard, which users can
+            see back-to-back with this screen. */}
+        <div className="bg-card border border-border rounded-lg p-8">
           <h1 className="text-2xl font-semibold text-primary mb-3">
             {t('setupGate.welcome')}
           </h1>

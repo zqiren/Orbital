@@ -131,8 +131,11 @@ export default function Sidebar({
     );
   }
 
+  // pt-titlebar: clears the macOS traffic lights, which float over this
+  // column's top-left corner when the desktop shell runs frameless. Padding
+  // (not margin) so bg-nav still fills the band. 0 off macOS.
   return (
-    <aside className="w-[260px] shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full">
+    <aside className="w-[260px] shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar">
       {/* Wordmark */}
       <div className="px-4 pt-4 pb-3">
         <span className="text-sm font-semibold text-primary tracking-tight">

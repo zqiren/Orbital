@@ -452,6 +452,42 @@ def open_window(port: int):
             pass
         return False
 
+    def _reveal_traffic_lights():
+        """Put the macOS window buttons back after the frameless style hides them.
+
+        pywebview's `frameless` on macOS is not a truly frameless window: it
+        keeps NSTitled|NSClosable|NSMiniaturizable, adds NSFullSizeContentView,
+        and makes the titlebar transparent — then hides all three standard
+        buttons (webview/platforms/cocoa.py). We want every part of that except
+        the last step. Content runs edge-to-edge under an empty titlebar, but
+        the traffic lights stay where users expect them, and because the style
+        mask still says "titled window", macOS keeps handling titlebar drag and
+        fullscreen auto-hide (lights hide in fullscreen, slide back on hover at
+        the top edge) with no code from us.
+
+        Runs on `before_show` rather than `shown` so the buttons are already
+        visible on the first frame — `window.native` doesn't exist until
+        webview.start() builds the NSWindow, so this can't happen at
+        create_window time.
+        """
+        if sys.platform != "darwin":
+            return
+        try:
+            import AppKit
+
+            native = window.native
+            for button in (
+                AppKit.NSWindowCloseButton,
+                AppKit.NSWindowMiniaturizeButton,
+                AppKit.NSWindowZoomButton,
+            ):
+                native.standardWindowButton_(button).setHidden_(False)
+        except Exception:
+            # Never let window chrome cosmetics block the app from opening —
+            # worst case the user gets a window with no visible traffic lights
+            # but a working Cmd+W / Cmd+M / Dock menu.
+            pass
+
     def _on_loaded():
         """Origin guard: catch a same-frame navigation that escaped the SPA.
 
@@ -479,22 +515,43 @@ def open_window(port: int):
         except Exception:
             pass
         try:
-            window.load_url(f"http://127.0.0.1:{port}")
+            window.load_url(app_url)
         except Exception:
             pass
 
+    # macOS only: reclaim the native titlebar. Windows keeps its native frame —
+    # WebView2 has no transparent-titlebar equivalent, so matching this there
+    # would mean hand-drawing minimize/maximize/close plus drag and snap.
+    inline_titlebar = sys.platform == "darwin"
+
+    app_url = f"http://127.0.0.1:{port}"
+    if inline_titlebar:
+        # Tells the SPA to reserve a gutter for the traffic lights now floating
+        # over its top-left corner. A query param rather than `window.pywebview`
+        # (which is injected asynchronously) so the gutter is there on the first
+        # paint instead of popping in. Windows and the relay/mobile browser
+        # serve the same bundle and never see it.
+        app_url += "/?chrome=mac-inline"
+
     _window = webview.create_window(
         title="Orbital",
-        url=f"http://127.0.0.1:{port}",
+        url=app_url,
         width=1200,
         height=800,
         min_size=(800, 600),
         text_select=True,
         js_api=Api(),
+        frameless=inline_titlebar,
+        # Must be False whenever frameless is on: pywebview implements easy_drag
+        # by making the *entire* WebKitHost surface a drag handle, so dragging to
+        # select text in the chat would drag the window instead. With it off,
+        # drag comes from the native (now transparent) titlebar band only.
+        easy_drag=False,
     )
     window = _window
     window.events.closing += _on_closing
     window.events.loaded += _on_loaded
+    window.events.before_show += _reveal_traffic_lights
     webview.start(icon=resolve_window_icon_path(), func=_activate_macos)
 
 
