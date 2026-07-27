@@ -63,6 +63,7 @@ One project has one queue, one budget, one approval policy, and one audit trail 
 
 **Why you can delegate without watching**
 
+- **Workbench** (beta) — the decisions and actions only you can take, flagged by the agent as it works and collected across every project into one list, each with the evidence behind it
 - **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
 - **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
 - **Approval workflows** — agents pause before risky actions; approve from desktop or phone
@@ -72,6 +73,7 @@ One project has one queue, one budget, one approval policy, and one audit trail 
 **Why the project moves while you're away**
 
 - **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
+- **Calendar** (beta) — every enabled automation projected onto a week view, so scheduled work stays visible instead of firing invisibly
 - **Mobile supervision** — manage agents from your phone via QR code pairing
 
 **Under the hood**
@@ -300,8 +302,34 @@ The agent must declare an outcome on every item; it can't silently drift to the 
 
 **Continuity by design.** Each completed item's artifacts are already in the project when the next item starts, so the manager can use them when supervising later tasks. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
 
-<p align="center"><img src="docs/screenshots/queue-paused.png" alt="Queue tab showing Now Running, Queued, Completed, and Automations sections; the queue can be paused to chat and steer" width="100%"></p>
+<p align="center"><img src="docs/screenshots/queue-paused.png" alt="A paused queue: Now Running empty, one blocked item under Needs Attention with the agent's reason, two queued tasks, and completed items with their summaries" width="100%"></p>
 <p align="center"><em>Queue tasks and walk away — each finished one becomes context the next builds on</em></p>
+
+</details>
+
+<details>
+<summary><strong>Workbench — what only you can decide</strong> (beta)</summary>
+
+Some things an agent genuinely cannot finish for you: a spend decision, a message that has to come from your account, a judgment call between three options it already researched. As the manager works, it flags those in the project's state file — and the **Workbench** collects them from every project into one list.
+
+Each card carries its provenance, so you are never asked to act on a bare instruction. Expand **Why I believe this** and you see the evidence the agent recorded and the session it came from. Cards sort overdue-first, then oldest, and each one exits in a single tap — **Done** once you've handled it, **Delete** when it stopped mattering. Tapping the card itself opens that project's chat with the decision pre-filled, so answering is one message instead of a hunt for context.
+
+The **Today** strip along the top lists the day's automation slots, including the ones that already fired — so a single glance covers both what needs you and what ran without you.
+
+<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: decisions and actions flagged across every project, each with its source project, how long it has been waiting, and Done / Delete exits" width="100%"></p>
+<p align="center"><em>Every project's open decisions in one list — with the evidence behind each one a click away</em></p>
+
+</details>
+
+<details>
+<summary><strong>Calendar</strong> (beta)</summary>
+
+Automations you set up months ago shouldn't fire invisibly. Every enabled schedule trigger projects its upcoming runs onto a week grid, so the rhythm of the project is something you can see rather than remember. Dated commitments the agent recorded in the project state land on the same grid and drop off once they're resolved, and connecting Google Calendar brings those events into the same view.
+
+The manager can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
+
+<p align="center"><img src="docs/screenshots/calendar.png" alt="Calendar week view showing a project's recurring automations — a daily repo scan across the week plus a Monday growth ritual" width="100%"></p>
+<p align="center"><em>The week ahead, as your automations will actually run it</em></p>
 
 </details>
 
@@ -375,10 +403,10 @@ The management agent translates this into a `create_trigger` tool call with the 
 | **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
 | **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
 
-<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger detail: watching uploads/ for new .jpg files, analyzing each on arrival" width="100%"></p>
+<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger detail: watching uploads/ for new images and triaging each one on arrival, with its watched path, patterns, last fired time, and run count" width="100%"></p>
 <p align="center"><em>File watch trigger: watches uploads/ for new photos and analyzes each one on arrival</em></p>
 
-<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Schedule trigger detail: daily competitor watch at 2 PM with task, schedule, and run history" width="100%"></p>
+<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Schedule trigger detail: a weekly growth-experiment ritual every Monday at 9 AM, with its full task, cadence, last fired time, and run count" width="100%"></p>
 <p align="center"><em>Schedule trigger: a daily competitor watch dispatched every day at 2 PM — 19 runs so far</em></p>
 
 **Real-world example — Health Tracker with file watch:**

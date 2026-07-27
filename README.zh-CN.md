@@ -118,13 +118,19 @@ Orbital 对你的项目负责。
 <p align="center"><img src="docs/screenshots/zh/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
 <p align="center"><em>在每个项目的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
 
-<p align="center"><img src="docs/screenshots/zh/queue-paused.png" alt="任务队列——正在运行、排队中、已完成、自动任务分区；队列可暂停以便介入引导" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/queue-paused.png" alt="暂停中的任务队列——正在运行为空、需要关注里有一条受阻任务并附上 agent 给出的原因、两条排队中任务、以及已完成任务及其总结" width="800"></p>
 <p align="center"><em>把任务排进队列然后走开——agent 逐项处理，每个完成项都会成为下一项的上下文；随时可暂停介入引导，再继续</em></p>
+
+<p align="center"><img src="docs/screenshots/zh/workbench.png" alt="工作台——跨所有项目汇总的待你决策事项，每条都标注来源项目、已等待时长，以及「已完成 / 删除」出口" width="800"></p>
+<p align="center"><em>工作台（beta）——只有你能拍板的事（花钱决策、必须用你账号发出的消息）由 agent 标记后跨项目汇总到一处，展开还能看到它这么判断的依据</em></p>
+
+<p align="center"><img src="docs/screenshots/zh/calendar.png" alt="日历周视图——项目的循环自动任务：每天的仓库巡检，加上每周一的增长复盘" width="800"></p>
+<p align="center"><em>日历（beta）——把已启用的定时 trigger 和带截止日期的承诺投影到周视图上，自动任务不再悄无声息地跑；管理 agent 自己也能读取它来安排工作</em></p>
 
 <p align="center"><img src="docs/screenshots/zh/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
 <p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式，下次遇到类似任务先查阅</em></p>
 
-<p align="center"><img src="docs/screenshots/zh/scheduled-trigger.png" alt="定时 trigger 详情——每天下午 2 点的竞品观察任务，含计划、上次触发与运行次数" width="800"></p>
+<p align="center"><img src="docs/screenshots/zh/scheduled-trigger.png" alt="定时 trigger 详情——每周一上午 9 点的增长实验复盘任务，含完整任务描述、执行周期、上次触发与运行次数" width="800"></p>
 <p align="center"><em>定时与文件监听 trigger——让管理 agent 定期检查并自动派发 sub-agent，无需你动手</em></p>
 
 <p align="center"><img src="docs/screenshots/zh/settings-budget.png" alt="预算设置——花费上限、重置周期、按模型的实时成本明细、可编辑的价格表" width="800"></p>
