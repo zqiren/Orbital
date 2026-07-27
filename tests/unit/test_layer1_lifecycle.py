@@ -218,3 +218,49 @@ def test_every_layer1_file_has_a_defined_overflow_behaviour(key):
         assert key not in _mem.ARCHIVE_OF
     else:
         assert _mem.ARCHIVE_OF[key] in FILE_NAMES
+
+
+# ---------------------------------------------------------------------------
+# 5. The <!--format--> contract is scaffolding, not content — it must not
+#    consume the file's own budget.
+#
+#    The contract is code-owned: we inject it, the user never wrote it, and the
+#    agent cannot remove it. Counting it against the budget means every rail we
+#    add to the contract silently steals space from real project memory. The
+#    PROJECT_STATE header reached 498 tokens — 46% of that file's 1080
+#    consolidation target — which left 582 tokens for actual content and put a
+#    real project permanently over budget with no way down.
+#
+#    This is a HYGIENE budget only. Compaction fires on the provider's reported
+#    usage (ContextManager.should_compact -> _last_usage_pct), and context-window
+#    math runs through budgets_for_window/inject_view, which measure the real
+#    injected text. Excluding the header here cannot undercount either.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("key", ["state", "decisions", "lessons", "index"])
+def test_format_header_does_not_consume_the_files_budget(key):
+    header = _mem.FORMAT_HEADERS[key]
+    body = "- a real line of project content\n"
+    with_header = header + "\n" + body
+
+    assert _mem.est_tokens(_mem._budget_text(with_header, key)) == pytest.approx(
+        _mem.est_tokens(_mem._budget_text(body, key)), abs=1.0
+    )
+
+
+def test_header_exclusion_is_worth_a_real_headroom_gain():
+    """Concretely: PROJECT_STATE gets its whole target back for content."""
+    header_tokens = _mem.est_tokens(_mem.FORMAT_HEADERS["state"])
+    assert header_tokens > 300, "guard: the header is genuinely large"
+    target = _mem.consolidation_target("state")
+    assert header_tokens / target > 0.25, "guard: it was a large share of the target"
+
+    padded = _mem.FORMAT_HEADERS["state"] + "\n" + ("- content line\n" * 50)
+    counted = _mem.est_tokens(_mem._budget_text(padded, "state"))
+    assert counted < target, "content of this size must now fit the target"
+
+
+def test_mem_comments_are_still_excluded_for_state():
+    """The pre-existing exclusion must survive the new one."""
+    body = "- [user] a line\n  <!--mem id:abc created:2026-07-01 touched:2026-07-01-->\n"
+    assert "abc" not in _mem._budget_text(body, "state")

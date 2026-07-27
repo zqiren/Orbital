@@ -289,9 +289,36 @@ def _budget_text(content: str, key: str) -> str:
     Content with no mem-comments round-trips unchanged (no grammar adopted
     yet), so this is a no-op for the common case.
     """
+    text = strip_format_header(content)
     if key != "state":
-        return content
-    return user_flags.strip_mem_comments(content)
+        return text
+    return user_flags.strip_mem_comments(text)
+
+
+def strip_format_header(content: str | None) -> str:
+    """Drop a leading ``<!--format ...-->`` contract line, if present.
+
+    The contract is code-owned scaffolding: we inject it, the user never wrote
+    it, and the agent cannot remove it — so charging it to the file's own
+    budget means every rail added to the contract silently steals space from
+    real project memory. PROJECT_STATE's header reached 498 tokens, 46% of that
+    file's 1080 consolidation target, leaving 582 for content and putting a
+    real project permanently over budget with no route down.
+
+    Hygiene only. Compaction fires on the provider's reported usage
+    (``ContextManager.should_compact``), and context-window math runs through
+    ``budgets_for_window``/``inject_view``, both of which measure the real
+    injected text — header included. Nothing here can undercount those.
+    """
+    text = content or ""
+    stripped = text.lstrip()
+    if not stripped.startswith("<!--format"):
+        return text
+    end = stripped.find("-->")
+    if end == -1:
+        return text
+    rest = stripped[end + 3:]
+    return rest[1:] if rest.startswith("\n") else rest
 
 
 def _today() -> str:
