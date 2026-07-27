@@ -668,6 +668,16 @@ class LLMProvider:
         ``disable_reasoning``: when True AND ``self.reasoning.enable`` starts
         with ``"param:"``, send the matching off-switch via ``extra_body=``
         on the OpenAI SDK call. No-op for the Anthropic SDK path.
+
+        NOTE for long single-shot utility calls: both SDKs default to a 600s
+        per-request timeout WITH automatic retries. That is fine for the
+        conversational turns and short utility calls that use this path, but a
+        generation running longer than 600s will be aborted mid-flight and then
+        re-run from scratch. The memory merge hit exactly that (844s of
+        generation) and now streams instead — see
+        ``workspace_files._stream_merge_text``. If another caller ever needs a
+        multi-minute single-shot completion, stream it rather than raising this
+        client's timeout, which is shared with every ordinary turn.
         """
         if self.sdk == "anthropic":
             return await self._complete_anthropic(messages, tools)

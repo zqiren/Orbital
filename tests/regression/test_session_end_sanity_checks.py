@@ -37,6 +37,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.testutils import streamable
+
 from agent_os.agent import memory_entries as M
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
@@ -68,7 +70,7 @@ def _mock_session(session_id="sess_sanity"):
 
 
 def _mock_provider(response_text):
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     resp = MagicMock()
     resp.text = response_text
     provider.complete.return_value = resp

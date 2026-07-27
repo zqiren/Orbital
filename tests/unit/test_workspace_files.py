@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.testutils import streamable
+
 from agent_os.agent.workspace_files import (
     FILE_NAMES,
     WorkspaceFileManager,
@@ -70,7 +72,7 @@ def _mock_session(messages=None, session_id="sess_test123", session_uuid=None):
 
 def _mock_provider(response_text):
     """Build a mock LLM provider whose complete() returns an object with .text."""
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     resp = MagicMock()
     resp.text = response_text
     provider.complete.return_value = resp

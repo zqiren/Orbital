@@ -58,6 +58,31 @@ FILE_BUDGETS: dict[str, dict[str, int]] = {
     "index": {"soft": 1500, "hard": 2000},
 }
 
+# Consolidation aims BELOW the soft budget, never at it. A pass that lands
+# exactly on the threshold re-trips the hygiene flag as soon as the next entry
+# is appended, which is how a project ends up checkpointing continuously
+# without ever getting quieter. The headroom is what makes a pass last.
+CONSOLIDATION_HEADROOM_TOKENS = 1000
+
+# ...but a flat 1000 would gut the small volatile files (state soft=1800,
+# index soft=1500), so the target never demands more than a 40% cut.
+_MIN_TARGET_FRACTION = 0.6
+
+
+def consolidation_target(key: str) -> int:
+    """Token count a consolidation pass should bring ``key`` down to.
+
+    Sits a full ``CONSOLIDATION_HEADROOM_TOKENS`` below the soft budget for the
+    entry-structured files that grow by appending (DECISIONS, LESSONS), and a
+    proportional margin below it for the small freeform ones.
+    """
+    budgets = FILE_BUDGETS.get(key)
+    if not budgets:
+        return 0
+    soft = budgets["soft"]
+    return max(soft - CONSOLIDATION_HEADROOM_TOKENS, int(soft * _MIN_TARGET_FRACTION))
+
+
 # Guard for tiny-window models only: total injected Layer-1 must stay under this
 # fraction of the active model's context window. For any window >= ~80k the
 # floors above already fit, so the floor is what bites in practice.

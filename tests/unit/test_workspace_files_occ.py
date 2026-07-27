@@ -38,6 +38,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.testutils import streamable
+
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
@@ -67,7 +69,7 @@ def _mock_session(messages=None, session_id="sess_occ"):
 
 
 def _mock_provider(response_text):
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     resp = MagicMock()
     resp.text = response_text
     provider.complete.return_value = resp
@@ -173,7 +175,7 @@ async def test_user_edit_during_llm_aborts_state_write(tmp_path, caplog):
         resp.text = _valid_llm_response("after_edit")
         return resp
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = _llm_side_effect
 
     with caplog.at_level(logging.WARNING, logger="agent_os.agent.workspace_files"):
@@ -220,7 +222,7 @@ async def test_one_file_aborts_others_still_write(tmp_path, caplog):
         resp.text = _valid_llm_response("multi")
         return resp
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = _llm_side_effect
 
     session = _mock_session(session_id="sess_multi")
@@ -293,7 +295,7 @@ async def test_user_creates_file_during_llm_aborts_state_write(tmp_path, caplog)
         resp.text = _valid_llm_response("late")
         return resp
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = _llm_side_effect
 
     session = _mock_session(session_id="sess_create_race")
@@ -331,7 +333,7 @@ async def test_log_includes_all_required_structured_fields(tmp_path, caplog):
         resp.text = _valid_llm_response("struct")
         return resp
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = _llm_side_effect
     session = _mock_session(session_id="sess_struct")
 

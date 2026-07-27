@@ -28,6 +28,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.testutils import streamable
+
 from agent_os.agent import memory_entries as _mem
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
@@ -93,7 +95,7 @@ async def test_succeeds_first_attempt(tmp_path, caplog):
     ws = WorkspaceFileManager(str(tmp_path))
     session = _mock_session(session_id="s_first")
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     resp = MagicMock()
     resp.text = _valid_llm_response("first")
     provider.complete.return_value = resp
@@ -126,7 +128,7 @@ async def test_succeeds_after_one_timeout(tmp_path, caplog):
     resp = MagicMock()
     resp.text = _valid_llm_response("one_timeout")
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = [
         asyncio.TimeoutError(),
         resp,
@@ -165,7 +167,7 @@ async def test_succeeds_after_two_timeouts(tmp_path, caplog):
     resp = MagicMock()
     resp.text = _valid_llm_response("two_timeouts")
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = [
         asyncio.TimeoutError(),
         asyncio.TimeoutError(),
@@ -214,7 +216,7 @@ async def test_all_attempts_timeout_runs_backstop(tmp_path, caplog, monkeypatch)
     ws.write("decisions", _decisions(12, body="x" * 20))
     session = _mock_session(session_id="s_all_timeout")
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = [
         asyncio.TimeoutError(),
         asyncio.TimeoutError(),
@@ -269,7 +271,7 @@ async def test_non_timeout_exception_no_retry(tmp_path, caplog, monkeypatch):
     ws.write("decisions", _decisions(12, body="x" * 20))
     session = _mock_session(session_id="s_value_error")
 
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     provider.complete.side_effect = ValueError("bad input")
 
     with caplog.at_level(logging.DEBUG, logger="agent_os.agent.workspace_files"):

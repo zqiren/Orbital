@@ -479,6 +479,21 @@ class WorkspaceFileManager:
             sections.append(f"## {header}\n\n{content.strip()}")
         return "\n\n---\n\n".join(sections)
 
+    def bounded_view(self, file_key: str) -> str:
+        """The <= injection-budget view of a Layer-1 file, as fed to the merge.
+
+        Shared by the prompt builder and the timeout estimator so the deadline
+        is always derived from exactly the text the merge is asked to
+        reproduce — they cannot drift apart.
+        """
+        from agent_os.agent import memory_entries as _mem
+
+        raw = self.read(file_key)
+        if not raw or not raw.strip():
+            return f"(no existing {file_key})"
+        view = _mem.inject_view(raw, file_key, _mem.FILE_BUDGETS[file_key]["hard"])
+        return view or f"(no existing {file_key})"
+
     def build_session_end_prompt(self, session_summary: dict) -> str:
         """Build the LLM prompt for the session-end dedup/cleanup pass.
 
@@ -492,19 +507,10 @@ class WorkspaceFileManager:
 
         Returns a prompt asking for JSON: project_state, decisions, lessons, index.
         """
-        from agent_os.agent import memory_entries as _mem
-
-        def _bounded(file_key: str) -> str:
-            raw = self.read(file_key)
-            if not raw or not raw.strip():
-                return f"(no existing {file_key})"
-            view = _mem.inject_view(raw, file_key, _mem.FILE_BUDGETS[file_key]["hard"])
-            return view or f"(no existing {file_key})"
-
-        existing_state = _bounded("state")
-        existing_decisions = _bounded("decisions")
-        existing_lessons = _bounded("lessons")
-        existing_index = _bounded("index")
+        existing_state = self.bounded_view("state")
+        existing_decisions = self.bounded_view("decisions")
+        existing_lessons = self.bounded_view("lessons")
+        existing_index = self.bounded_view("index")
 
         # Format recent messages
         recent_lines: list[str] = []
@@ -518,11 +524,36 @@ class WorkspaceFileManager:
         message_count = session_summary.get("message_count", 0)
         tool_calls_count = session_summary.get("tool_calls_count", 0)
 
-        # Token targets for the archive instruction (field 5), read from the
-        # shared budgets so the numbers never drift from the enforced caps.
         today = date.today().isoformat()
-        dec_budget = _mem.FILE_BUDGETS["decisions"]["soft"]
-        les_budget = _mem.FILE_BUDGETS["lessons"]["soft"]
+
+        # MEASURED sizes for the archive instruction (field 5). The prompt used
+        # to state only the target and hand the model "(~4 chars/token)",
+        # asking it to estimate its own output length — which models cannot do.
+        # With no reliable signal the model concluded it was within budget every
+        # time and archived nothing (orbital-marketing 2026-07-27: a successful
+        # merge returned decisions 7355 -> 7652 and lessons 5251 -> 5463, with
+        # no archive field at all). We already know the exact numbers, so state
+        # them as fact and give a concrete quota to remove.
+        measure_lines = []
+        for fk in ("state", "decisions", "lessons", "index"):
+            raw = self.read(fk) or ""
+            if not raw.strip():
+                continue
+            now = int(_mem.est_tokens(_mem._budget_text(raw, fk)))
+            target = _mem.consolidation_target(fk)
+            name = FILE_NAMES[fk]
+            if now <= target:
+                measure_lines.append(f"- {name}: {now} tokens, target {target} — within target, no size action needed.")
+            else:
+                verb = "archive" if fk in _mem.DURABLE_KEYS else "trim"
+                measure_lines.append(
+                    f"- {name}: {now} tokens, target {target} — OVER by {now - target}. "
+                    f"You must {verb} AT LEAST {now - target} tokens from it."
+                )
+        measured_block = (
+            "\n--- MEASURED SIZES (authoritative — these are exact counts, do NOT estimate) ---\n"
+            + "\n".join(measure_lines) + "\n"
+        ) if measure_lines else ""
 
         # Ride-along shape tidy: report-only lint on the volatile files. This
         # is the ONLY consumer of shape_report — formatting is fixed inside a
@@ -554,14 +585,14 @@ Produce a JSON object with these fields. Return "" for any field that needs no c
 
 4. "index" (string): The COMPLETE updated INDEX.md — NAVIGATION ONLY. A short map: important files/dirs, ONE sentence each ("path — what it is"). NOT a place for decisions, status, or lessons (those live in their own files). If older entries were archived, point to DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md.
 
-5. "archive" (OPTIONAL object — omit unless needed): DECISIONS targets ~{dec_budget} tokens and LESSONS ~{les_budget} tokens (~4 chars/token). If either still exceeds its target after you have merged and deduplicated, move its COMPLETED or DORMANT entries — NEVER an entry tagged `pinned` — OUT of the kept file and return them here VERBATIM under the key "decisions" and/or "lessons" (include only the file(s) you trimmed). For each block you move, leave ONE pointer line in the kept file noting what left and when it is worth re-reading, e.g. `[archived {today}] v0.6 release/signing decisions → DECISIONS_ARCHIVE.md — read before installer work`. Archiving is a last resort — prefer merging and superseding.
+5. "archive" (object — REQUIRED whenever MEASURED SIZES below reports a file OVER target): the exact token counts are given to you below; do not estimate them. Prefer merging and superseding first — but if a file is still over its target after that, you MUST bring it down by moving its COMPLETED or DORMANT entries — NEVER an entry tagged `pinned` — OUT of the kept file and returning them here VERBATIM under the key "decisions" and/or "lessons" (include only the file(s) you trimmed). Keep removing the coldest entries until the file is at or under its stated target; the target sits deliberately below the budget so the file has room to grow before this is needed again. For each block you move, leave ONE pointer line in the kept file noting what left and when it is worth re-reading, e.g. `[archived {today}] v0.6 release/signing decisions → DECISIONS_ARCHIVE.md — read before installer work`.
 
 RULES:
 - A non-empty field MUST be the COMPLETE updated file. "" preserves the existing file.
 - MERGE AND SUPERSEDE — never append a contradicting entry.
 - If you correct a fact in one file, check the other three for stale copies of it and fix them in the same pass.
 - Respond with ONLY valid JSON. No markdown fences. No explanation.
-{formatting_block}
+{formatting_block}{measured_block}
 --- EXISTING FILES (bounded view; full files are on disk) ---
 PROJECT_STATE.md:
 {existing_state}
@@ -646,7 +677,7 @@ async def run_session_end_routine(
         for key in ("state", "decisions", "lessons", "index")
     }
     result: dict | None = None
-    _per_attempt_timeouts = _dedup_timeouts(llm)
+    _per_attempt_timeouts = _dedup_timeouts(llm, workspace_files)
     if len(_per_attempt_timeouts) == 1:
         logger.info(
             "session_end LLM dedup: reasoning locked-on for model %s — "
@@ -655,10 +686,8 @@ async def run_session_end_routine(
         )
     for _attempt, _timeout in enumerate(_per_attempt_timeouts, start=1):
         try:
-            response = await asyncio.wait_for(
-                llm.complete(messages, disable_reasoning=True), timeout=_timeout
-            )
-            result = _parse_session_end_response(response.text)
+            text = await _stream_merge_text(llm, messages, total_timeout=_timeout)
+            result = _parse_session_end_response(text)
             break
         except asyncio.TimeoutError:
             if _attempt < len(_per_attempt_timeouts):
@@ -739,9 +768,16 @@ async def run_session_end_routine(
     # ---- Part B: deterministic hard cap (ALWAYS runs; NEVER an LLM call) ----
     _apply_hard_caps(workspace_files)
 
-    # Record the cleanup marker (post-write mtimes) so the next no-delta check is
-    # accurate, then mark idempotency.
-    _write_cleanup_marker(workspace_files)
+    # Record the cleanup marker (post-write mtimes) so the next no-delta check
+    # is accurate — but ONLY when the merge actually ran. Stamping the files
+    # "clean" after a failure disarms the retry: the next checkpoint_state sees
+    # no delta and short-circuits without trying, so a project stuck over
+    # budget checkpoints forever and never shrinks (orbital-marketing,
+    # 2026-07-27 — 5 timeouts, each followed by an instant no_delta). The
+    # deterministic backstop in Part B still ran either way; leaving the files
+    # dirty is what lets the next pass pick the merge back up.
+    if result:
+        _write_cleanup_marker(workspace_files)
     if not bypass_idempotency:
         _completed_session_ends.add(session_uuid)
 
@@ -755,26 +791,110 @@ async def run_session_end_routine(
 # Layer-1 files whose changes count as an un-consolidated delta.
 _DELTA_KEYS = ("state", "decisions", "lessons", "index")
 
-# Per-attempt timeout ladders for the LLM dedup/merge call.
-_DEDUP_TIMEOUTS_DEFAULT = (30.0, 60.0, 90.0)
-_DEDUP_TIMEOUTS_LOCKED_ON = (240.0,)
+# Fast retry rungs for providers that CAN skip reasoning — cheap probes for a
+# transient stall. The final rung always carries the real generation budget.
+_DEDUP_FAST_RUNGS = (30.0, 60.0)
+
+# The merge regenerates every Layer-1 file in ONE non-streaming response, so
+# its deadline has to scale with how much text that is. A flat constant went
+# stale twice: 30/60/90 timed out 3/3 daily on a MiniMax-M3 project
+# (2026-07-03..09), and its replacement — a flat 240s — timed out 5/5 on the
+# same project on 2026-07-27 once the files reached ~16k tokens. Deriving the
+# deadline from the bounded views stops it rotting a third time as files grow.
+_DEDUP_FLOOR_S = 240.0       # never shorter than the previous flat constant
+_DEDUP_CEILING_S = 1320.0    # worst case is ~1270s; see _ASSUMED_MERGE_TOK_PER_SEC
+
+# The real deadline: how long the merge may go with NO chunk at all. A healthy
+# generation emits continuously (reasoning deltas included), so silence this
+# long means the connection is dead, not that the model is thinking hard.
+# Generous enough to cover prefill on a ~18k-token prompt.
+_MERGE_IDLE_TIMEOUT_S = 180.0
+
+# Effective rate for the VISIBLE response, measured end-to-end rather than
+# guessed. orbital-marketing, 2026-07-27: 15.9k expected output tokens took
+# 844s -> 18.9 visible tok/s. That is far below the ~77 tok/s the streaming
+# agent turns show, because this call is non-streaming, uncached, and ~45% of
+# what M3 generates is reasoning it cannot be asked to skip (27,962 generated
+# tokens for 15,232 tokens of JSON). Budgeting at 15 leaves ~25% headroom.
+_ASSUMED_MERGE_TOK_PER_SEC = 15.0
 
 
-def _dedup_timeouts(llm) -> list[float]:
+async def _stream_merge_text(llm, messages, *, total_timeout: float) -> str:
+    """Run the merge as a STREAM and return the accumulated visible text.
+
+    The merge was a single non-streaming request, which meant the connection
+    sat idle for the entire generation while the server worked. On a mature
+    project that is ~15 minutes, and the connection does not reliably survive
+    it: orbital-marketing died with "Connection error." at 901s — inside both
+    our own deadline and the SDK's. Streaming keeps bytes flowing, so the
+    connection stays alive.
+
+    It also fixes the deadline's semantics. Bounding total duration means
+    guessing how long a generation "should" take, and that guess has gone stale
+    twice. What actually distinguishes a healthy slow pass from a dead one is
+    PROGRESS, so the real deadline here is ``_MERGE_IDLE_TIMEOUT_S`` between
+    chunks; ``total_timeout`` is only an outer backstop against a stream that
+    dribbles forever.
+
+    Reasoning deltas count as progress but are discarded — the streaming path
+    already peels inline ``<think>`` into ``reasoning_content`` per chunk, so
+    what accumulates here is the JSON the parser wants.
+    """
+    parts: list[str] = []
+    deadline = time.monotonic() + total_timeout
+    iterator = llm.stream(messages).__aiter__()
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("merge exceeded its total budget")
+        try:
+            chunk = await asyncio.wait_for(
+                iterator.__anext__(), timeout=min(_MERGE_IDLE_TIMEOUT_S, remaining),
+            )
+        except StopAsyncIteration:
+            break
+        if getattr(chunk, "text", ""):
+            parts.append(chunk.text)
+
+    return "".join(parts)
+
+
+def _merge_timeout_for(workspace_files: "WorkspaceFileManager") -> float:
+    """Seconds to allow the merge, derived from what it must regenerate.
+
+    The response has to carry the COMPLETE text of all four Layer-1 files, so
+    the bounded views the prompt feeds in are also the floor on what comes
+    back out.
+    """
+    from agent_os.agent import memory_entries as _mem
+
+    expected_tokens = sum(
+        _mem.est_tokens(workspace_files.bounded_view(key)) for key in _DELTA_KEYS
+    )
+    derived = expected_tokens / _ASSUMED_MERGE_TOK_PER_SEC
+    return max(_DEDUP_FLOOR_S, min(_DEDUP_CEILING_S, derived))
+
+
+def _dedup_timeouts(llm, workspace_files: "WorkspaceFileManager | None" = None) -> list[float]:
     """Timeout ladder for the session-end LLM dedup call, per provider.
 
     Locked-on reasoning models (e.g. MiniMax-M3, enable='model_only') cannot
     skip their thinking phase — ``disable_reasoning`` is a no-op, and retrying
-    the identical prompt on a 30/60/90s ladder can never succeed; it only burns
-    tokens (observed: every consolidation for a MiniMax-M3 project timed out
-    3/3 for days, 2026-07-03..09). One attempt, one realistic timeout — the
-    pass runs in the background, so a long single attempt never blocks the
-    loop. The ``is True`` comparison guards against mocks, whose auto-created
-    attributes are truthy without being True.
+    the identical prompt on short rungs can never succeed; it only burns
+    tokens. One attempt, one realistic deadline — the pass runs in the
+    background, so a long single attempt never blocks the loop. The ``is True``
+    comparison guards against mocks, whose auto-created attributes are truthy
+    without being True.
+
+    Everyone else keeps the fast rungs (a stalled connection is worth one cheap
+    retry) but the FINAL rung gets the same derived budget — a model that can
+    skip reasoning still has to emit the same number of tokens.
     """
+    final = _merge_timeout_for(workspace_files) if workspace_files is not None else _DEDUP_FLOOR_S
     if getattr(llm, "reasoning_locked_on", False) is True:
-        return list(_DEDUP_TIMEOUTS_LOCKED_ON)
-    return list(_DEDUP_TIMEOUTS_DEFAULT)
+        return [final]
+    return [*_DEDUP_FAST_RUNGS, final]
 
 
 def _cleanup_marker_path(workspace_files: "WorkspaceFileManager") -> str:
@@ -823,17 +943,25 @@ def _ensure_index_archive_pointer(workspace_files: "WorkspaceFileManager", archi
 def _apply_hard_caps(workspace_files: "WorkspaceFileManager") -> None:
     """Deterministic size backstop. Demotes durable / trims volatile. No LLM.
 
-    - DECISIONS/LESSONS: while over hard budget, demote coldest-``touched``
+    - DECISIONS/LESSONS: while over the SOFT budget, demote coldest-``touched``
       entries to the archive (moves, never deletes; protects oldest-3 + pinned).
-    - PROJECT_STATE/INDEX: while over hard budget, trim oldest (volatile).
+    - PROJECT_STATE/INDEX: while over the SOFT budget, trim oldest (volatile).
+
+    Both fire at the SOFT budget and land on ``consolidation_target`` — a full
+    headroom below it. They used to fire only at the HARD cap, which left a
+    dead band (decisions 7000-9000, lessons 5000-6000) where the hygiene flag
+    nagged every turn but nothing deterministic would act, so relief depended
+    entirely on an LLM merge that in practice returned the files unchanged or
+    larger. This is the floor under that: it runs after the merge, so a merge
+    that did its job leaves nothing to do here.
     """
     budgets = _mem.FILE_BUDGETS
     # Durable: demote to archive.
     for key in _mem.DURABLE_KEYS:
         content = workspace_files.read(key)
-        if not content or _mem.est_tokens(content) <= budgets[key]["hard"]:
+        if not content or _mem.est_tokens(content) <= budgets[key]["soft"]:
             continue
-        kept, demoted = _mem.split_for_demotion(content, key, budgets[key]["hard"])
+        kept, demoted = _mem.split_for_demotion(content, key, _mem.consolidation_target(key))
         if not demoted:
             continue
         archive_key = _mem.ARCHIVE_OF[key]
@@ -847,17 +975,19 @@ def _apply_hard_caps(workspace_files: "WorkspaceFileManager") -> None:
         workspace_files.write(key, kept)
         _ensure_index_archive_pointer(workspace_files, archive_filename)
         logger.info(
-            "hard cap: demoted %d chars from %s to %s", len(demoted), key, archive_key
+            "size backstop: demoted %d chars from %s to %s (target %d tok)",
+            len(demoted), key, archive_key, _mem.consolidation_target(key),
         )
     # Volatile: trim oldest.
     for key in _mem.VOLATILE_KEYS:
         content = workspace_files.read(key)
-        if not content or _mem.est_tokens(content) <= budgets[key]["hard"]:
+        if not content or _mem.est_tokens(content) <= budgets[key]["soft"]:
             continue
-        trimmed = _mem.trim_volatile(content, budgets[key]["hard"])
+        target = _mem.consolidation_target(key)
+        trimmed = _mem.trim_volatile(content, target)
         if trimmed != content:
             workspace_files.write(key, trimmed)
-            logger.info("hard cap: trimmed %s to <= %d tok", key, budgets[key]["hard"])
+            logger.info("size backstop: trimmed %s to <= %d tok", key, target)
 
 
 def _build_session_summary(session) -> dict:

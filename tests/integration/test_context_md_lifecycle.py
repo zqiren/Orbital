@@ -50,6 +50,16 @@ class _JsonProvider:
     async def complete(self, messages, disable_reasoning=False):
         return _Resp(self._text)
 
+    async def stream(self, messages, tools=None, **kwargs):
+        # The merge streams (a 15-min idle connection is unreliable); replay
+        # complete()'s payload as chunks so this test keeps its own subject.
+        from agent_os.agent.providers.types import StreamChunk, TokenUsage
+        resp = await self.complete(messages)
+        text = getattr(resp, "text", "") or ""
+        for i in range(0, len(text), 256):
+            yield StreamChunk(text=text[i:i + 256])
+        yield StreamChunk(is_final=True, usage=TokenUsage(input_tokens=1, output_tokens=1))
+
 
 NEW_CONTEXT = (
     "## Overview\nOrbital agent OS test project.\n\n"

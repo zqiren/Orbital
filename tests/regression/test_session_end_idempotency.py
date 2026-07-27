@@ -32,6 +32,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.testutils import streamable
+
 from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.workspace_files import (
     WorkspaceFileManager,
@@ -57,7 +59,7 @@ def _mock_session(messages=None, session_id="sess_test"):
 
 
 def _mock_provider(response_text):
-    provider = AsyncMock()
+    provider = streamable(AsyncMock())
     resp = MagicMock()
     resp.text = response_text
     provider.complete.return_value = resp
@@ -255,7 +257,7 @@ async def test_llm_failure_runs_backstop_and_does_not_raise(tmp_path):
     _force_delta(ws, "s_fail")
     session = _mock_session(session_id="s_fail")
 
-    failing_provider = AsyncMock()
+    failing_provider = streamable(AsyncMock())
     failing_provider.complete.side_effect = RuntimeError("LLM exploded")
 
     # Must NOT raise — the deterministic backstop owns durability now.
