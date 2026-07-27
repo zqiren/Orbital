@@ -179,7 +179,12 @@ def _collect_project(project: dict, now: datetime) -> list[dict]:
     triggers = project.get("triggers", []) or []
     tz = workbench_cards.project_timezone(project, triggers)
 
-    flagged = [e for e in parsed if e.flagged]
+    # `resolved` wins over `flagged`. The write chokepoint now unflags a
+    # resolved entry (flag_chokepoint), but a file already on disk — written
+    # before that guard, or by any writer that bypasses it — must still never
+    # resurrect a card the user closed with "Done". Read-side guarantee, so
+    # the promise holds without waiting for the next write.
+    flagged = [e for e in parsed if e.flagged and not e.resolved]
     return [_entry_row(project_id, e, tz, now) for e in flagged]
 
 

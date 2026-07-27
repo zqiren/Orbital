@@ -271,8 +271,11 @@ class TestResolvedTraceReattach:
     def test_flagged_bullet_wins_trace_over_plain_duplicate(self):
         # (4) both a flagged bullet AND a plain bullet match the same prev
         # trace. Flagged matching takes precedence (existing semantics): the
-        # flagged entry inherits the id + resolved; the plain duplicate does
+        # flagged entry claims the id + resolved; the plain duplicate does
         # NOT also steal it (one-to-one), so it stays a plain, untracked bullet.
+        # The claimer then emits UNFLAGGED, because the trace it claimed is
+        # resolved (see TestResolvedNeverReopens) — so the file ends up with
+        # exactly one entry carrying the id and nothing flagged at all.
         prev = self._trace("trc004")
         new = (
             "- [user] Send the DM drafts to 宝玉 and Simon.\n"   # flagged
@@ -281,10 +284,9 @@ class TestResolvedTraceReattach:
         merged, warns = reconcile_flags(prev, new, TODAY)
         entries = user_flags.parse_entries(merged)
         assert [e.id for e in entries if e.id == "trc004"] == ["trc004"]  # exactly one
-        flagged = [e for e in entries if e.flagged]
-        assert len(flagged) == 1
-        assert flagged[0].id == "trc004"
-        assert flagged[0].resolved == "2026-07-20"
+        claimer = next(e for e in entries if e.id == "trc004")
+        assert claimer.resolved == "2026-07-20"
+        assert [e for e in entries if e.flagged] == []
 
     def test_round_trip_fulfilled_exit_survives_agent_rewrite(self):
         # (5) end-to-end: a fulfilled exit's on-disk output → the agent's
@@ -306,17 +308,20 @@ class TestResolvedTraceReattach:
         assert e.flagged is False
 
     def test_new_flagged_bullet_matching_resolved_trace_inherits_lifecycle(self):
-        # m17 baseline (pins CURRENT behavior for the backlogged m17 decision):
-        # a NEW [user]-tagged bullet whose sentence matches a resolved trace
-        # inherits the trace's id + resolved via lifecycle-wins. If m17 later
-        # changes this, THIS assertion is the deliberate line to revisit.
+        # m17, now DECIDED (was: "pins CURRENT behavior for the backlogged m17
+        # decision ... THIS assertion is the deliberate line to revisit").
+        # A NEW [user]-tagged bullet whose sentence matches a resolved trace
+        # still inherits the trace's id + resolved via lifecycle-wins — but it
+        # no longer comes back flagged. Re-flagging a settled entry silently
+        # undid the user's "Done" click and re-rendered the card; `resolved` is
+        # now a lock, enforced in code rather than by a prompt rail.
         prev = self._trace("trc017")
         new = "- [user] Send the DM drafts to 宝玉 and Simon.\n"
         merged, warns = reconcile_flags(prev, new, TODAY)
         e = _entry(merged)
         assert e.id == "trc017"
         assert e.resolved == "2026-07-20"
-        assert e.flagged is True
+        assert e.flagged is False
 
     def test_verbatim_numbered_item_reattaches_resolved_trace(self):
         # Same as test_verbatim_plain_bullet_reattaches_resolved_trace, but
@@ -529,3 +534,83 @@ class TestWiring:
         content = "# State\nDoing well.\n"
         wf.write("state", content)
         assert wf.read("state") == mem.FORMAT_HEADERS["state"] + "\n" + content
+
+
+# ---------------------------------------------------------------------------
+# Resolved is a lock, not a note (Workbench stickiness fix)
+# ---------------------------------------------------------------------------
+
+class TestResolvedNeverReopens:
+    """A `resolved:` stamp is the user's deliberate close (Workbench "Done").
+
+    The format header's rail 6 already tells the agent never to re-open a
+    settled line, but that was prompt-only: an agent rewriting from its
+    comment-stripped view cannot see the stamp, re-adds `[user]`, and
+    `_merge_fields` faithfully re-attaches `resolved` — yielding an entry that
+    is flagged AND resolved, which the Workbench renders as a card again. The
+    user's click is silently undone. These lock it in code.
+    """
+
+    def test_reflagging_a_resolved_entry_strips_the_tag(self):
+        # Previous file: the user pressed Done — tag dropped, resolved stamped.
+        prev = (
+            "# State\n\n"
+            "- Pick option A, B or C (default A)?\n"
+            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
+        )
+        # The agent, blind to the comment, re-flags the line.
+        new = "# State\n\n- [user] Pick option A, B or C (default A)?\n"
+        merged, _warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.resolved == "2026-07-22", "the resolved stamp must survive"
+        assert e.flagged is False, "a resolved entry must never come back flagged"
+
+    def test_reflagging_a_resolved_entry_warns(self):
+        prev = (
+            "# State\n\n"
+            "- Pick option A, B or C (default A)?\n"
+            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
+        )
+        new = "# State\n\n- [user] Pick option A, B or C (default A)?\n"
+        _merged, warns = reconcile_flags(prev, new, TODAY)
+        assert any("resolved" in w.lower() for w in warns), warns
+
+    def test_self_carried_resolved_stamp_is_also_unflagged(self):
+        # A file already corrupted on disk (flagged AND resolved inline) heals
+        # on the next write — not only the prev-match path.
+        new = (
+            "# State\n\n"
+            "- [user] Pick option A, B or C (default A)?\n"
+            "  <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
+        )
+        merged, _warns = reconcile_flags(None, new, TODAY)
+        e = _entry(merged)
+        assert e.flagged is False
+        assert e.resolved == "2026-07-22"
+
+    def test_unresolved_entries_are_untouched(self):
+        # Guard against over-reach: a normal flagged entry keeps its flag.
+        prev = (
+            "# State\n\n"
+            "- [user] Approve the Q3 budget.\n"
+            "  <!--mem id:bud001 created:2026-07-20-->\n"
+        )
+        new = "# State\n\n- [user] Approve the Q3 budget.\n"
+        merged, warns = reconcile_flags(prev, new, TODAY)
+        e = _entry(merged)
+        assert e.flagged is True
+        assert e.id == "bud001"
+        assert not any("resolved" in w.lower() for w in warns)
+
+    def test_numbered_entry_keeps_its_marker_when_unflagged(self):
+        # Unflagging rewrites the line, so the exact list marker must survive
+        # (the grammar forbids converting a numbered item to a bullet).
+        prev = (
+            "# State\n\n"
+            "3. Pick option A, B or C (default A)?\n"
+            "   <!--mem id:4148d8 created:2026-07-20 resolved:2026-07-22-->\n"
+        )
+        new = "# State\n\n3. [user] Pick option A, B or C (default A)?\n"
+        merged, _warns = reconcile_flags(prev, new, TODAY)
+        assert "3. Pick option A, B or C (default A)?" in merged
+        assert "[user]" not in merged

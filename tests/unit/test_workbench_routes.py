@@ -521,3 +521,30 @@ async def test_workbench_exclude_global_persists_via_project_update(tmp_path):
         pids = {e["project_id"] for e in after["entries"]}
         assert pid_excl not in pids
         assert pid_keep in pids
+
+
+async def test_get_excludes_flagged_but_resolved_entries(tmp_path):
+    """A resolved entry never renders as a card, even if it is still flagged.
+
+    The write chokepoint unflags these, but a file already on disk (written
+    before that guard, or by any writer that bypasses it) must not resurrect a
+    card the user already closed with "Done". Read-side guarantee.
+    """
+    state = "\n".join([
+        FORMAT_LINE,
+        "## Focus",
+        "- [user] Approve the Q3 budget before Friday.",
+        "  <!--mem id:open01 created:2026-07-20-->",
+        "- [user] Pick option A, B or C (default A)?",
+        "  <!--mem id:done01 created:2026-07-20 resolved:2026-07-22-->",
+        "",
+    ])
+    project = _seed_project(tmp_path, state=state)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        r = await client.get("/api/v2/workbench")
+        assert r.status_code == 200, r.text
+        ids = {e["id"] for e in r.json()["entries"]}
+
+    assert "open01" in ids
+    assert "done01" not in ids, "a resolved entry must not come back as a card"

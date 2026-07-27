@@ -213,3 +213,58 @@ class TestShapeReportFilenameDates:
 """
         report = mem.shape_report(content, "index")
         assert report is not None and "dated" in report
+
+
+class TestUserAnswerUnflagRail:
+    """Fix 1: the agent must drop the [user] tag the turn you answer it.
+
+    The agent is IN the conversation when the user answers a flagged line — it
+    has the evidence at full fidelity. The background consolidation model does
+    not (it sees a bounded, truncated window, minutes to many turns later, and
+    on this project it timed out on every attempt for a full day). So the
+    unflagging duty belongs to the agent, and the contract has to say so.
+    """
+
+    def test_state_header_instructs_unflagging_when_the_user_answers(self):
+        header = mem.FORMAT_HEADERS["state"]
+        low = header.lower()
+        assert "answers" in low or "answered" in low, (
+            "the state contract never tells the agent what to do when the user "
+            "actually answers a flagged line"
+        )
+        assert "remove the [user] flag" in low or "drop the [user] flag" in low
+
+
+class TestStaleHeaderUpgrade:
+    """A contract change must actually reach files that already have a header.
+
+    ensure_format_header only ever PREPENDED a missing header, so every project
+    already carrying one was pinned to whatever contract shipped the day its
+    file was created. Rails added later silently never applied — which would
+    make the fix above a no-op on every existing project.
+    """
+
+    def test_stale_header_is_replaced_with_the_current_contract(self):
+        stale = "<!--format PROJECT_STATE: an older contract, no [user] rails-->"
+        out = mem.ensure_format_header(stale + "\n# State\n\n- A fact.\n", "state")
+        assert out.startswith(mem.FORMAT_HEADERS["state"])
+        assert stale not in out
+        assert out.count("<!--format") == 1
+
+    def test_body_survives_the_header_upgrade_byte_for_byte(self):
+        stale = "<!--format older contract-->"
+        body = "# State\n\n- [user] Approve the budget.\n  <!--mem id:a1 created:2026-07-20-->\n"
+        out = mem.ensure_format_header(stale + "\n" + body, "state")
+        assert out == mem.FORMAT_HEADERS["state"] + "\n" + body
+
+    def test_current_header_is_left_untouched(self):
+        content = mem.FORMAT_HEADERS["state"] + "\n# State\n\n- A fact.\n"
+        assert mem.ensure_format_header(content, "state") == content
+
+    def test_upgrade_reaches_the_file_through_the_write_chokepoint(self, tmp_path):
+        wf = WorkspaceFileManager(str(tmp_path))
+        stale = "<!--format PROJECT_STATE: an older contract-->"
+        wf.write("state", stale + "\n# State\n\n- A plain fact.\n")
+        on_disk = wf.read("state")
+        assert on_disk.startswith(mem.FORMAT_HEADERS["state"])
+        assert stale not in on_disk

@@ -305,11 +305,31 @@ def reconcile_flags(
 
     # Build the per-entry decision (retracted entries drop, facts pass through,
     # flagged entries emit with reconciled comment fields).
+    #
+    # `resolved` is a LOCK, not a note: an entry the user closed via the
+    # Workbench ("Done") had its tag dropped and a resolved:<date> stamp
+    # written. The agent, blind to mem-comments, re-emits the line looking
+    # open and re-adds `[user]`; _merge_fields then faithfully re-attaches
+    # `resolved`, and the result is flagged AND resolved — which the Workbench
+    # renders as a card again, silently undoing a deliberate user action. The
+    # format header's rail 6 forbids this, but a prompt rail is a request, not
+    # a guarantee. Here it is enforced: a resolved entry emits UNFLAGGED (as
+    # the settled fact it is) and warns. Re-opening is the user's call, and
+    # arrives as a new entry with a new id.
     decisions: dict[int, tuple[str, dict[str, str] | None]] = {}
     for e in new_entries:
         kind = kinds[e.line_start]
         if kind == "flag":
-            decisions[e.line_start] = ("emit", _merge_fields(e, match_for.get(id(e)), today))
+            fields = _merge_fields(e, match_for.get(id(e)), today)
+            if fields.get("resolved"):
+                decisions[e.line_start] = ("emit_unflagged", fields)
+                warnings.append(
+                    f"RESOLVED: dropped the [user] flag from \"{e.text[:60]}\" — "
+                    f"the user settled this on {fields['resolved']}; a resolved "
+                    f"entry may be re-opened only by explicit user request."
+                )
+            else:
+                decisions[e.line_start] = ("emit", fields)
         else:
             decisions[e.line_start] = (kind, None)
 
@@ -340,7 +360,14 @@ def reconcile_flags(
             out.extend(lines[e.line_start:end + 1])
             i = end + 1
             continue
-        out.append(_strip_inline_comment(lines[e.line_start]))
+        if kind == "emit_unflagged":
+            # Rebuild from the parsed prefix + text so the exact list marker
+            # ("- ", "3. ") survives — the grammar forbids converting a
+            # numbered item to a bullet. Same shape as the Workbench's own
+            # fulfilled exit (`workbench._apply_exit`).
+            out.append(f"{e.prefix}{e.text}")
+        else:
+            out.append(_strip_inline_comment(lines[e.line_start]))
         out.append(_COMMENT_INDENT + user_flags.render_comment(fields))
         i = end + 1
     merged = "\n".join(out)

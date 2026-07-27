@@ -138,7 +138,7 @@ FORMAT_HEADERS: dict[str, str] = {
         "LESSONS.md.-->"
     ),
     "state": (
-        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress work, blockers, next steps. Overwrite stale lines; never append dated history. Every line must be understandable without this session\'s context: concrete names, no unexplained shorthand, no cross-references by list number. [user] flag — one judgment per line: does this need the user (their decision, their action, or something they\'d be sorry to miss — including things they assigned to themselves)? If yes, insert [user] after the list marker of the line where the fact already lives: `- [user] <text>` or `3. [user] <text>`. Flagging marks a line, never creates one: one fact = one entry, never duplicated into another section. A dated commitment needing no decision is `[due:YYYY-MM-DD]` (shows on the calendar). Machine attributes (id, created, touched, resolved) live in a daemon-managed mem-comment on the next line — never write or edit these comments; leave them exactly where they are. Never auto-decide: spending money, sending external messages as the user, or irreversible/destructive acts are always surfaced, whatever the autonomy setting. Write timeless ("due Jul 28", never "tomorrow"). A line whose mem-comment carries resolved:<date> is settled — on consolidation rewrite it as the completed fact or drop it; never re-open or re-flag it.-->'
+        '<!--format PROJECT_STATE is what is true NOW: current focus, in-progress work, blockers, next steps. Overwrite stale lines; never append dated history. Every line must be understandable without this session\'s context: concrete names, no unexplained shorthand, no cross-references by list number. [user] flag — one judgment per line: does this need the user (their decision, their action, or something they\'d be sorry to miss — including things they assigned to themselves)? If yes, insert [user] after the list marker of the line where the fact already lives: `- [user] <text>` or `3. [user] <text>`. Flagging marks a line, never creates one: one fact = one entry, never duplicated into another section. A dated commitment needing no decision is `[due:YYYY-MM-DD]` (shows on the calendar). Machine attributes (id, created, touched, resolved) live in a daemon-managed mem-comment on the next line — never write or edit these comments; leave them exactly where they are. Never auto-decide: spending money, sending external messages as the user, or irreversible/destructive acts are always surfaced, whatever the autonomy setting. Write timeless ("due Jul 28", never "tomorrow"). A line whose mem-comment carries resolved:<date> is settled — on consolidation rewrite it as the completed fact or drop it; never re-open or re-flag it. CLOSE THE LOOP THE SAME TURN: the moment the user answers a flagged line, decides it, or does it, remove the [user] flag from that line in this turn — rewrite the line as the settled fact (`- Chose option A.`) and leave the mem-comment alone. You are the only reader who can see both the flag and the user\'s answer; consolidation runs later, sees a truncated window, and cannot do this for you. A flagged line you leave behind after it is answered keeps nagging the user for something they already gave you. Never flag a question you asked during this session — flag the decision that is still genuinely open, written so someone who was not here can act on it.-->'
     ),
     "decisions": (
         "<!--format DECISIONS entries: '## <slug>' then Chose / Reason / "
@@ -154,15 +154,27 @@ FORMAT_HEADERS: dict[str, str] = {
 
 
 def ensure_format_header(content: str | None, key: str) -> str:
-    """Prepend the file's <!--format--> contract if missing (idempotent).
+    """Prepend the file's <!--format--> contract, or upgrade a stale one.
 
-    An existing header (even an agent-edited variant) is left alone — this is
-    self-healing, not normalization.
+    The contract is code-owned. This used to only ever PREPEND when the header
+    was missing, leaving any existing one alone — which meant every project
+    already carrying a header was pinned to whatever contract shipped the day
+    its file was created, and every rail added afterwards silently never
+    applied. Only the Workbench migration endpoint (``force_format_header``)
+    could ever refresh one, and nothing routes an active project there.
+
+    So a divergent first-line header is now replaced with the current
+    contract. Content after the header is preserved byte-for-byte; an
+    already-current header is returned untouched (idempotent). An agent-edited
+    variant is normalized rather than preserved — the header is the grammar
+    contract we hand the agent, not agent content.
     """
     header = FORMAT_HEADERS.get(key)
     text = content or ""
-    if header is None or text.lstrip().startswith("<!--format"):
+    if header is None:
         return text
+    if text.lstrip().startswith("<!--format"):
+        return force_format_header(text, key)
     return header + "\n" + text
 
 
