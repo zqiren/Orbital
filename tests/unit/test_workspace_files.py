@@ -148,11 +148,12 @@ def test_read_all_mixed(ws):
     # read_all now spans the archives too.
     assert result["decisions_archive"] is None
     assert result["lessons_archive"] is None
+    assert result["state_archive"] is None
     assert set(result) == {
         "state", "decisions", "lessons",
-        "index", "decisions_archive", "lessons_archive",
+        "index", "decisions_archive", "lessons_archive", "state_archive",
     }
-    assert len(result) == 6
+    assert len(result) == 7
 
 
 # ---------------------------------------------------------------------------

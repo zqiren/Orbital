@@ -29,6 +29,7 @@ _LESSONS = "LESSONS.md"
 _INDEX = "INDEX.md"
 _DECISIONS_ARCHIVE = "DECISIONS_ARCHIVE.md"
 _LESSONS_ARCHIVE = "LESSONS_ARCHIVE.md"
+_PROJECT_STATE_ARCHIVE = "PROJECT_STATE_ARCHIVE.md"
 _PROJECT_GOALS = "project_goals.md"
 _USER_DIRECTIVES = "user_directives.md"
 _APPROVAL_HISTORY = "approval_history.jsonl"
@@ -92,6 +93,15 @@ class ProjectPaths:
         Rename of the former ``context`` (CONTEXT.md → INDEX.md).
         """
         return os.path.join(self.orbital_dir, _INDEX)
+
+    @property
+    def project_state_archive(self) -> str:
+        """Trimmed PROJECT_STATE prose (read-on-demand; never injected).
+
+        Volatile overflow used to be deleted outright; it is demoted here
+        instead so a trimmed briefing stays recoverable.
+        """
+        return os.path.join(self.orbital_dir, _PROJECT_STATE_ARCHIVE)
 
     @property
     def decisions_archive(self) -> str:

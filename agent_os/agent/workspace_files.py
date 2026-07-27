@@ -131,6 +131,7 @@ FILE_NAMES: dict[str, str] = {
     # Archives: demoted durable entries, read-on-demand, never injected.
     "decisions_archive": "DECISIONS_ARCHIVE.md",
     "lessons_archive": "LESSONS_ARCHIVE.md",
+    "state_archive": "PROJECT_STATE_ARCHIVE.md",
 }
 
 # Layer-1 files injected every turn (excludes archives). Order for cold resume.
@@ -387,6 +388,7 @@ class WorkspaceFileManager:
             "index": self._paths.index,
             "decisions_archive": self._paths.decisions_archive,
             "lessons_archive": self._paths.lessons_archive,
+            "state_archive": self._paths.project_state_archive,
         }
         return _key_to_path[file_key]
 
@@ -494,6 +496,51 @@ class WorkspaceFileManager:
         view = _mem.inject_view(raw, file_key, _mem.FILE_BUDGETS[file_key]["hard"])
         return view or f"(no existing {file_key})"
 
+    def build_archive_manifest_prompt(self, over: dict[str, int]) -> str:
+        """Phase 2: ask which entries to archive, by id — never by body.
+
+        Phase 1 returns whole files, which on a mature project is ~16k tokens
+        and many minutes. Archiving cannot afford to work that way: the earlier
+        design had the model return moved entries VERBATIM on top of the kept
+        files, which made the response bigger the more it archived, and the
+        pass never finished. The daemon already holds those exact bytes, so
+        this pass sends a MANIFEST (id, date, title, age) and gets back a short
+        list of ids plus a one-line pointer each. Cheap, and byte-exact.
+        """
+        blocks = []
+        for key, over_by in over.items():
+            if key not in _mem.ENTRY_MARKERS:
+                continue
+            rows = []
+            for e in _mem.entry_manifest(self.read(key) or "", key):
+                if e["tag"] == "pinned":
+                    continue
+                rows.append(
+                    f"  id={e['id']}  touched={e['touched']}  {e['title'][:90]}"
+                )
+            if not rows:
+                continue
+            blocks.append(
+                f"{FILE_NAMES[key]} — OVER target by {over_by} tokens. Entries:\n"
+                + "\n".join(rows)
+            )
+        if not blocks:
+            return ""
+
+        return f"""You are trimming an AI agent project's memory. Merging has already run; what remains is genuinely distinct, so some entries must move to a read-on-demand archive.
+
+For each file below, choose the COLDEST entries — completed work, dormant threads, decisions long since superseded in practice — until the file would be under its target. Entries tagged `pinned` are not listed and must never be chosen.
+
+MANIFEST (ids only — the full text stays on disk and will be moved for you):
+
+{chr(10).join(blocks)}
+
+Return ONLY this JSON. For each entry, "pointer" is one short line telling a future reader what left and when it is worth going back for — e.g. "v0.6 release/signing decisions — read before installer work".
+
+{{"archive": {{"decisions": [{{"id": "...", "pointer": "..."}}], "lessons": [{{"id": "...", "pointer": "..."}}]}}}}
+
+Include a file key only if you are archiving from it. No markdown fences, no explanation."""
+
     def build_session_end_prompt(self, session_summary: dict) -> str:
         """Build the LLM prompt for the session-end dedup/cleanup pass.
 
@@ -545,10 +592,10 @@ class WorkspaceFileManager:
             if now <= target:
                 measure_lines.append(f"- {name}: {now} tokens, target {target} — within target, no size action needed.")
             else:
-                verb = "archive" if fk in _mem.DURABLE_KEYS else "trim"
                 measure_lines.append(
                     f"- {name}: {now} tokens, target {target} — OVER by {now - target}. "
-                    f"You must {verb} AT LEAST {now - target} tokens from it."
+                    f"Merge and supersede as much as you honestly can; if it is still "
+                    f"over afterwards that is expected and handled separately."
                 )
         measured_block = (
             "\n--- MEASURED SIZES (authoritative — these are exact counts, do NOT estimate) ---\n"
@@ -585,7 +632,7 @@ Produce a JSON object with these fields. Return "" for any field that needs no c
 
 4. "index" (string): The COMPLETE updated INDEX.md — NAVIGATION ONLY. A short map: important files/dirs, ONE sentence each ("path — what it is"). NOT a place for decisions, status, or lessons (those live in their own files). If older entries were archived, point to DECISIONS_ARCHIVE.md / LESSONS_ARCHIVE.md.
 
-5. "archive" (object — REQUIRED whenever MEASURED SIZES below reports a file OVER target): the exact token counts are given to you below; do not estimate them. Prefer merging and superseding first — but if a file is still over its target after that, you MUST bring it down by moving its COMPLETED or DORMANT entries — NEVER an entry tagged `pinned` — OUT of the kept file and returning them here VERBATIM under the key "decisions" and/or "lessons" (include only the file(s) you trimmed). Keep removing the coldest entries until the file is at or under its stated target; the target sits deliberately below the budget so the file has room to grow before this is needed again. For each block you move, leave ONE pointer line in the kept file noting what left and when it is worth re-reading, e.g. `[archived {today}] v0.6 release/signing decisions → DECISIONS_ARCHIVE.md — read before installer work`.
+Do NOT archive anything in this pass and do NOT try to hit the size targets by deleting entries. Your only job here is to merge duplicates and supersede contradictions. If a file is still over its target after an honest merge, that is expected — a separate, much cheaper pass decides what to archive, and it moves entries by id rather than asking you to reproduce them.
 
 RULES:
 - A non-empty field MUST be the COMPLETE updated file. "" preserves the existing file.
@@ -734,39 +781,10 @@ async def run_session_end_routine(
                 workspace_files, "index", result["index"],
                 _occ_baselines["index"], project_id=project_id,
             )
-        # LLM-driven archive: entries the merge could not condense within budget
-        # get MOVED into the read-on-demand archive file (same filename
-        # convention as the deterministic hard-cap demotion in _apply_hard_caps),
-        # under a date-stamped section, with an INDEX pointer. Never fatal.
-        archive = result.get("archive")
-        if isinstance(archive, dict):
-            for key in ("decisions", "lessons"):
-                moved = archive.get(key)
-                if not isinstance(moved, str) or not moved.strip():
-                    continue
-                archive_key = _mem.ARCHIVE_OF[key]
-                archive_filename = FILE_NAMES[archive_key]
-                section = f"## [archived {today}]\n\n{moved.strip()}\n"
-                try:
-                    existing_archive = workspace_files.read(archive_key) or ""
-                    if existing_archive.strip():
-                        new_archive = existing_archive.rstrip() + "\n\n" + section
-                    else:
-                        new_archive = (
-                            f"# {archive_filename} (demoted entries, read-on-demand)\n\n"
-                            + section
-                        )
-                    workspace_files.write(archive_key, new_archive)
-                    _ensure_index_archive_pointer(workspace_files, archive_filename)
-                except OSError as e:
-                    logger.warning(
-                        "session_end: could not archive %s entries (%s); skipping",
-                        key, e,
-                    )
-                    continue
-
-    # ---- Part B: deterministic hard cap (ALWAYS runs; NEVER an LLM call) ----
-    _apply_hard_caps(workspace_files)
+        # NOTE: phase 1 no longer returns an "archive" field. Having one call
+        # both merge AND return moved entries verbatim made the response grow
+        # the more it archived — measured at 17.7 minutes without finishing.
+        # Archiving is phase 2 below, by id, against bytes already on disk.
 
     # Record the cleanup marker (post-write mtimes) so the next no-delta check
     # is accurate — but ONLY when the merge actually ran. Stamping the files
@@ -776,12 +794,105 @@ async def run_session_end_routine(
     # 2026-07-27 — 5 timeouts, each followed by an instant no_delta). The
     # deterministic backstop in Part B still ran either way; leaving the files
     # dirty is what lets the next pass pick the merge back up.
+    # ---- Phase 2: archive by id, ONLY where the merge left a file over ----
+    # "Still over target after the model just tried to merge" is the workable
+    # definition of "nothing left to dedup" — measurable, not a heuristic.
+    archived_any = False
+    if result:
+        archived_any = await _run_archive_pass(workspace_files, llm, project_id=project_id)
+
+    # ---- Phase 3: deterministic floor (ALWAYS runs; NEVER an LLM call) ----
+    _apply_hard_caps(workspace_files)
+
     if result:
         _write_cleanup_marker(workspace_files)
     if not bypass_idempotency:
         _completed_session_ends.add(session_uuid)
 
-    return "llm_merged" if result else "backstop_only"
+    if not result:
+        return "backstop_only"
+    return "llm_merged_archived" if archived_any else "llm_merged"
+
+
+async def _run_archive_pass(
+    workspace_files: "WorkspaceFileManager", llm, *, project_id: str
+) -> bool:
+    """Phase 2. Returns True if anything was moved. Never fatal.
+
+    Cheap by construction: the manifest carries ids, not bodies, and the reply
+    is a short id list, so this cannot time out the way a verbatim archive
+    response did. Any failure here just falls through to the deterministic
+    floor, which still guarantees the target.
+    """
+    over = {}
+    for key in _mem.ENTRY_MARKERS:
+        content = workspace_files.read(key) or ""
+        now = _mem.est_tokens(_mem._budget_text(content, key))
+        target = _mem.consolidation_target(key)
+        if now > target:
+            over[key] = int(now - target)
+    if not over:
+        return False
+
+    prompt = workspace_files.build_archive_manifest_prompt(over)
+    if not prompt:
+        return False
+
+    try:
+        text = await _stream_merge_text(
+            llm,
+            [
+                {"role": "system", "content": "You curate an AI agent's project memory. Respond with ONLY valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            total_timeout=_ARCHIVE_PASS_TIMEOUT_S,
+        )
+        picks = (_parse_session_end_response(text) or {}).get("archive")
+    except Exception as e:  # noqa: BLE001 — quality pass; the floor is the guarantee
+        logger.warning("archive pass failed (%s); deterministic floor only", e)
+        return False
+    if not isinstance(picks, dict):
+        return False
+
+    today = date.today().isoformat()
+    moved_any = False
+    for key, chosen in picks.items():
+        if key not in _mem.ENTRY_MARKERS or not isinstance(chosen, list):
+            continue
+        by_id = {
+            c["id"]: str(c.get("pointer", "")).strip()
+            for c in chosen
+            if isinstance(c, dict) and c.get("id")
+        }
+        kept, moved, matched = _mem.split_by_ids(
+            workspace_files.read(key) or "", key, set(by_id)
+        )
+        if not moved:
+            continue
+        archive_key = _mem.ARCHIVE_OF[key]
+        archive_filename = FILE_NAMES[archive_key]
+        try:
+            existing = workspace_files.read(archive_key) or ""
+            section = f"## [archived {today}]\n\n{moved.strip()}\n"
+            workspace_files.write(
+                archive_key,
+                (existing.rstrip() + "\n\n" + section) if existing.strip()
+                else f"# {archive_filename} (demoted entries, read-on-demand)\n\n" + section,
+            )
+            stubs = "\n".join(
+                f"[archived {today}] {by_id[i] or 'older entries'} → {archive_filename}"
+                for i in sorted(matched) if by_id.get(i) is not None
+            )
+            workspace_files.write(key, kept.rstrip() + "\n\n" + stubs + "\n")
+            _ensure_index_archive_pointer(workspace_files, archive_filename)
+            moved_any = True
+            logger.info(
+                "archive pass: moved %d %s entries to %s by id",
+                len(matched), key, archive_key,
+            )
+        except OSError as e:
+            logger.warning("archive pass: could not write %s (%s)", archive_key, e)
+    return moved_any
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +920,10 @@ _DEDUP_CEILING_S = 1320.0    # worst case is ~1270s; see _ASSUMED_MERGE_TOK_PER_
 # long means the connection is dead, not that the model is thinking hard.
 # Generous enough to cover prefill on a ~18k-token prompt.
 _MERGE_IDLE_TIMEOUT_S = 180.0
+
+# Phase 2 returns a short id list, not file bodies, so it is cheap by
+# construction and gets a small fixed budget rather than a derived one.
+_ARCHIVE_PASS_TIMEOUT_S = 240.0
 
 # Effective rate for the VISIBLE response, measured end-to-end rather than
 # guessed. orbital-marketing, 2026-07-27: 15.9k expected output tokens took
@@ -966,28 +1081,89 @@ def _apply_hard_caps(workspace_files: "WorkspaceFileManager") -> None:
             continue
         archive_key = _mem.ARCHIVE_OF[key]
         archive_filename = FILE_NAMES[archive_key]
-        existing_archive = workspace_files.read(archive_key) or ""
-        if existing_archive.strip():
-            new_archive = existing_archive.rstrip() + "\n\n" + demoted
-        else:
-            new_archive = f"# {archive_filename} (demoted entries, read-on-demand)\n\n" + demoted
-        workspace_files.write(archive_key, new_archive)
-        workspace_files.write(key, kept)
-        _ensure_index_archive_pointer(workspace_files, archive_filename)
+        # Write the ARCHIVE first and only shrink the live file once it lands.
+        # Ordering is the whole safety property: demotion is a move, so a
+        # failure here must leave the entries where they are rather than
+        # removing them from a file whose copy was never written.
+        try:
+            existing_archive = workspace_files.read(archive_key) or ""
+            if existing_archive.strip():
+                new_archive = existing_archive.rstrip() + "\n\n" + demoted
+            else:
+                new_archive = f"# {archive_filename} (demoted entries, read-on-demand)\n\n" + demoted
+            workspace_files.write(archive_key, new_archive)
+            workspace_files.write(key, kept)
+            _ensure_index_archive_pointer(workspace_files, archive_filename)
+        except OSError as e:
+            logger.warning(
+                "size backstop: could not demote %s to %s (%s); leaving the "
+                "live file intact — over budget beats losing entries",
+                key, archive_key, e,
+            )
+            continue
         logger.info(
             "size backstop: demoted %d chars from %s to %s (target %d tok)",
             len(demoted), key, archive_key, _mem.consolidation_target(key),
         )
-    # Volatile: trim oldest.
+    # Volatile: trim oldest — and DEMOTE what was trimmed where an archive
+    # exists. This path used to delete outright, which cost a real project 22
+    # lines of briefing on 2026-07-27. INDEX has no archive on purpose: it is
+    # regenerable navigation, so a dropped pointer is noise, not history.
     for key in _mem.VOLATILE_KEYS:
         content = workspace_files.read(key)
         if not content or _mem.est_tokens(content) <= budgets[key]["soft"]:
             continue
         target = _mem.consolidation_target(key)
         trimmed = _mem.trim_volatile(content, target)
-        if trimmed != content:
-            workspace_files.write(key, trimmed)
-            logger.info("size backstop: trimmed %s to <= %d tok", key, target)
+        if trimmed == content:
+            continue
+        archive_key = _mem.ARCHIVE_OF.get(key)
+        if archive_key:
+            _archive_trimmed_lines(workspace_files, key, content, trimmed, archive_key)
+        workspace_files.write(key, trimmed)
+        logger.info("size backstop: trimmed %s to <= %d tok", key, target)
+
+
+def _archive_trimmed_lines(
+    workspace_files: "WorkspaceFileManager",
+    key: str,
+    before: str,
+    after: str,
+    archive_key: str,
+) -> None:
+    """Append the lines ``trim_volatile`` dropped to the file's Layer-2 archive.
+
+    Line-diff rather than entry-diff: volatile files are freeform, so there are
+    no entry boundaries to move. Never fatal — a failed archive write must not
+    stop the trim, but it must also not silently lose the text, so the trim is
+    abandoned by the caller only if this raises (it does not).
+    """
+    kept = set(after.split("\n"))
+    dropped = [ln for ln in before.split("\n") if ln not in kept and ln.strip()]
+    if not dropped:
+        return
+    today = date.today().isoformat()
+    archive_filename = FILE_NAMES[archive_key]
+    section = f"## [trimmed {today}]\n\n" + "\n".join(dropped) + "\n"
+    try:
+        existing = workspace_files.read(archive_key) or ""
+        if existing.strip():
+            new_archive = existing.rstrip() + "\n\n" + section
+        else:
+            new_archive = (
+                f"# {archive_filename} (trimmed content, read-on-demand)\n\n" + section
+            )
+        workspace_files.write(archive_key, new_archive)
+        _ensure_index_archive_pointer(workspace_files, archive_filename)
+        logger.info(
+            "size backstop: archived %d trimmed lines from %s to %s",
+            len(dropped), key, archive_key,
+        )
+    except OSError as e:
+        logger.warning(
+            "size backstop: could not archive trimmed %s lines (%s); "
+            "trim proceeds and the text is lost", key, e,
+        )
 
 
 def _build_session_summary(session) -> dict:

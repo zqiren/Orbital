@@ -113,10 +113,15 @@ MEMORY_FILENAME: dict[str, str] = {
     "state": "PROJECT_STATE.md",
     "index": "INDEX.md",
 }
-# Durable file -> its archive file-key (read-on-demand, never injected).
+# Layer-1 file -> its Layer-2 archive file-key (read-on-demand, never
+# injected, never budgeted). PROJECT_STATE was absent here until 2026-07-27,
+# which meant its overflow was DELETED rather than demoted: a real project lost
+# 22 lines of briefing that way. INDEX stays absent on purpose — it is
+# regenerable navigation, so a stale pointer is noise, not history.
 ARCHIVE_OF: dict[str, str] = {
     "decisions": "decisions_archive",
     "lessons": "lessons_archive",
+    "state": "state_archive",
 }
 
 # ---------------------------------------------------------------------------
@@ -501,18 +506,19 @@ def _head_within(content: str, budget_tokens: int) -> str:
     char_budget = budget_tokens * 4
     if len(content) <= char_budget:
         return content
+    # The note is part of the result, so it has to come out of the budget.
+    # Leaving it unbudgeted put the result a note's width OVER the cap, which
+    # the deterministic floor can never then satisfy — the file sits
+    # permanently over target by that exact margin.
+    body_budget = max(1, char_budget - len(_TRIM_NOTE))
     kept: list[str] = []
     used = 0
     for line in content.splitlines():
-        if used + len(line) + 1 > char_budget:
+        if used + len(line) + 1 > body_budget:
             break
         kept.append(line)
         used += len(line) + 1
-    note = (
-        f"\n[... older content trimmed from this view — read the file on disk "
-        f"for the full text ...]"
-    )
-    return "\n".join(kept) + note
+    return "\n".join(kept) + _TRIM_NOTE
 
 
 _TRIM_NOTE = (
@@ -538,6 +544,52 @@ def _flagged_lines(content: str) -> set[int]:
         if e.flagged:
             lines.update(range(e.line_start, e.line_end + 1))
     return lines
+
+
+_SECTION_HEADING = re.compile(r"^#{1,6}\s")
+
+# Lines naming an archive file are the ONLY route from a Layer-1 file to its
+# Layer-2 archive. On the real project the LESSONS_ARCHIVE pointer was the last
+# line of INDEX.md — the first casualty of a tail-dropping trim, which would
+# leave the archive on disk and invisible. Pin them.
+_ARCHIVE_POINTER = re.compile(r"_ARCHIVE\.md")
+
+
+def _flagged_sections(content: str) -> set[int]:
+    """0-based line indices of every ``##`` section containing a flagged entry.
+
+    The protected unit is the SECTION, not the flagged line. A ``[user]`` item
+    is a question, and the prose that makes it answerable is by definition
+    unflagged — so line-level protection reliably keeps the question and
+    destroys its briefing. That is exactly what happened to orbital-marketing
+    on 2026-07-27: ``- [user] **选方案 A / B / C**（默认 A）？`` survived while
+    the description of A, B and C did not.
+
+    Block-level would not have helped either: the briefing sat two blank lines
+    above its questions. Sections are the unit that actually holds a topic
+    together, so the whole section lives or dies as one.
+
+    Archive-pointer lines are pinned here too — they are unflagged navigation,
+    but losing one strands a whole archive.
+    """
+    lines = content.split("\n")
+    flagged = _flagged_lines(content)
+    protected: set[int] = {
+        i for i, l in enumerate(lines) if _ARCHIVE_POINTER.search(l)
+    }
+
+    heading_idx = [i for i, l in enumerate(lines) if _SECTION_HEADING.match(l)]
+    if not heading_idx:
+        # No headings means no sections to reason about — treating the whole
+        # file as one would make any flagged file entirely untrimmable. Fall
+        # back to protecting just the flagged entries, as before.
+        return protected | flagged
+
+    starts = heading_idx if heading_idx[0] == 0 else [0, *heading_idx]
+    for start, end in zip(starts, starts[1:] + [len(lines)]):
+        if any(i in flagged for i in range(start, end)):
+            protected.update(range(start, end))
+    return protected | flagged
 
 
 def _drop_unflagged_tail_first(
@@ -765,6 +817,60 @@ def soft_flag(
 # Hard cap (WU5) — deterministic demote (durable) / trim (volatile).
 # ---------------------------------------------------------------------------
 
+def entry_manifest(content: str, key: str) -> list[dict]:
+    """One row per entry: id, touched, tag, title — no bodies.
+
+    Feeds the archive pass, which chooses entries by id. Keeping bodies out is
+    the entire point: the daemon already has them, and making the model
+    reproduce them is what made archiving unaffordable.
+    """
+    marker = ENTRY_MARKERS.get(key)
+    if not content or not marker:
+        return []
+    _pre, raws = _split_entries(content, marker)
+    rows = []
+    for raw in raws:
+        first_line, _rest = _first_line_split(raw)
+        title, meta = _parse_meta(first_line)
+        entry_id = meta.get("id")
+        if not entry_id:
+            continue                      # unstamped: only the floor can move it
+        rows.append({
+            "id": entry_id,
+            "touched": meta.get("touched", ""),
+            "tag": meta.get("tag", ""),
+            "title": re.sub(r"^(##\s+|\d+\.\s+)", "", title).strip(),
+        })
+    return rows
+
+
+def split_by_ids(content: str, key: str, ids: set[str]) -> tuple[str, str, set[str]]:
+    """Split ``content`` into (kept, moved, matched_ids) by entry id.
+
+    Byte-exact: the moved text is the original entry, not a reproduction. Ids
+    that do not match, or that name a ``pinned`` entry, are simply not moved —
+    the deterministic floor still guarantees the target, so a bad id costs
+    quality, never content.
+    """
+    marker = ENTRY_MARKERS.get(key)
+    if not content or not marker or not ids:
+        return content, "", set()
+    pre, raws = _split_entries(content, marker)
+    kept, moved, matched = [], [], set()
+    for raw in raws:
+        first_line, _rest = _first_line_split(raw)
+        _title, meta = _parse_meta(first_line)
+        entry_id = meta.get("id")
+        if entry_id in ids and meta.get("tag") != "pinned":
+            moved.append(raw)
+            matched.add(entry_id)
+        else:
+            kept.append(raw)
+    if not moved:
+        return content, "", set()
+    return pre + "".join(kept), "".join(moved), matched
+
+
 def split_for_demotion(content: str, key: str, hard_budget: int) -> tuple[str, str]:
     """Deterministically demote coldest entries until the file fits its budget.
 
@@ -840,11 +946,19 @@ def trim_volatile(content: str, hard_budget: int) -> str:
     if _fits_stripped(content, hard_budget):
         return content
 
-    flagged_lines = _flagged_lines(content)
+    # Protect the SECTION around a flag, not just the flagged line, so a
+    # question keeps the briefing that makes it answerable. Archive-pointer
+    # lines are pinned here too — see _flagged_sections.
+    flagged_lines = _flagged_sections(content)
     if not flagged_lines:
+        # _head_within appends its own note; leave its budgeting alone.
         return _head_within(content, hard_budget)
 
-    trimmed, fits = _drop_unflagged_tail_first(content, hard_budget, flagged_lines)
+    # Below, the note is appended AFTER fitting, so budget for it up front —
+    # otherwise the result lands a note's width OVER the target and the file
+    # stays permanently over budget by exactly that margin.
+    fit_budget = max(1, int(hard_budget - est_tokens(_TRIM_NOTE)))
+    trimmed, fits = _drop_unflagged_tail_first(content, fit_budget, flagged_lines)
     if not fits:
         # Flagged entries alone exceed the cap even with every unflagged
         # line removed — leave the file untouched.
