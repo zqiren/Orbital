@@ -10,8 +10,8 @@
 <p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-Setup-0.8.0.exe"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-0.8.0-macOS.dmg"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>Watch the demo</strong></a>
 </p>
 <p align="center">Set up in under 5 minutes. No Python or Node required.</p>
@@ -543,7 +543,7 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 ### Windows
 
-1. Download [`Orbital-Setup-0.8.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-Setup-0.8.0.exe) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.8.0) (latest Windows build)
+1. Download the `Orbital-Setup-*.exe` from [Releases](https://github.com/zqiren/Orbital/releases/latest) (latest Windows build)
 2. Run the installer and follow the prompts
 3. Launch Orbital from the Start Menu or desktop shortcut
 
@@ -559,7 +559,7 @@ Click **"More info"** then **"Run anyway"**. Code signing will be added in a fut
 
 ### macOS
 
-1. Download [`Orbital-0.8.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-0.8.0-macOS.dmg) from [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.8.0)
+1. Download the `Orbital-*-macOS.dmg` from [Releases](https://github.com/zqiren/Orbital/releases/latest)
 2. Open the DMG and drag Orbital to your Applications folder
 3. Launch Orbital from Applications or Spotlight
 
