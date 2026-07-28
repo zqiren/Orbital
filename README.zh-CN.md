@@ -2,7 +2,9 @@
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center"><img src="docs/screenshots/hero-multi-agent-handoff.gif" alt="Orbital 管理一个真实项目——协调 agent、决策、审批与项目成果" width="100%"></p>
+<p align="center"><img src="docs/screenshots/hero-competitor-investigation.zh.gif" alt="Orbital 在一个市场项目中执行竞品调研——先自行调研以补全任务背景，再把深度调研派给 Claude Code，最后结合项目自身的决策与经验解读结果" width="100%"></p>
+
+<p align="center"><em>画面里发生的事：在一个市场项目中，Orbital 接到「评估竞品」的任务。它先自行调研，确保任务简报准确；再按项目中既定的指示，把耗 token 的深度调研交给 Claude&nbsp;Code；最后结合项目自身的决策与经验解读返回的结果——并把需要你拍板的选择留给你。</em></p>
 
 <h2 align="center">agent 只负责一次会话，Orbital 负责整个项目。</h2>
 <p align="center">本地优先的管理 agent，掌管项目的计划、决策与预算，并在轮到 Claude Code、Codex 或任意 CLI agent 执行时，把上下文交接给它们。</p>

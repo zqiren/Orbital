@@ -2,7 +2,9 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center"><img src="docs/screenshots/hero-compounding.gif" alt="Orbital managing a real project — coordinating agents, decisions, approvals, and project artifacts" width="100%"></p>
+<p align="center"><img src="docs/screenshots/hero-competitor-investigation.gif" alt="Orbital running a competitor investigation inside a marketing project — researching the brief itself, dispatching the deep-dive to Claude Code, then reading the findings against the project's own decisions and lessons" width="100%"></p>
+
+<p align="center"><em>What you're seeing: a marketing project asks Orbital to size up a competitor. It researches the target itself so the task brief is accurate, hands the token-heavy deep-dive to Claude&nbsp;Code per a standing project directive, then reads the findings back against the project's own decisions and lessons — ending on the calls only you can make.</em></p>
 
 <h2 align="center">Every agent owns a session. Orbital owns the project.</h2>
 <p align="center">A local-first agent that holds your project's plan, decisions, and budget — and briefs Claude Code, Codex, or any CLI agent when it's their turn.</p>
