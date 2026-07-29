@@ -14,13 +14,13 @@
 <p align="center"><strong>project agent（项目 agent）</strong></p>
 <h3 align="center">agent 只负责一次会话，Orbital 负责整个项目。</h3>
 
-Orbital 和 Claude Code、Codex 一样干活：调研、规划、写作、执行命令、浏览网页，或者调用你的各种工具。
+Orbital 和 Claude Code、Codex 一样干活：调研、规划、写作、执行命令、浏览网页，调用各种工具。
 
-不同的是，Orbital 把本地的一个文件夹当作长期运行的项目。
+不同的是，Orbital 会把本地的一个文件夹当作长期项目来维护。
 
-干活的同时，Orbital 会把项目的当前状态、决策、经验教训、任务队列和产出成果沉淀并记录在这个文件夹里。每一次新任务都从此前工作积累下来的上下文开始，agent 的工作因此能够不断累积。
+干活的同时，Orbital 会把项目的当前状态、决策、经验教训、任务队列和产出成果沉淀并记录在这个文件夹里。每一次新任务都从此前工作积累的上下文开始，agent 的工作因此能够不断复利。
 
-Orbital 也可以把任务派给 Claude Code、Codex、Gemini CLI、Cursor 等 CLI agent。每次派发都会向子 agent 交代项目背景和任务背景，并指向相关的项目文件——你不需要每次都把项目重讲一遍。子 agent 跑完后，Orbital 结合项目上下文解读返回的结果，并把结论写回项目。
+Orbital 也可以把任务派给 Claude Code、Codex、Gemini CLI、Cursor 等 CLI agent。每次任务派发都会向子 agent 交代项目背景和任务背景，并告诉它们相关的项目文件——用户就不需要每次任务都重讲一遍。Orbital 会监控任务的运行情况，结合项目上下文解读返回的结果，并把产出写回项目——项目持续复利。
 
 <p align="center"><strong>一个持续负责的管理 agent · 可替换的执行 agent · 本地优先</strong></p>
 
