@@ -6,47 +6,104 @@
 
 <p align="center"><em>画面里发生的事：在一个市场项目中，Orbital 接到「评估竞品」的任务。它先自行调研，确保任务简报准确；再按项目中既定的指示，把耗 token 的深度调研交给 Claude&nbsp;Code；最后结合项目自身的决策与经验解读返回的结果——并把需要你拍板的选择留给你。</em></p>
 
-<h2 align="center">agent 只负责一次会话，Orbital 负责整个项目。</h2>
-<p align="center">本地优先的管理 agent，掌管项目的计划、决策与预算，并在轮到 Claude Code、Codex 或任意 CLI agent 执行时，把上下文交接给它们。</p>
-
-<p align="center"><strong>一个持续负责的管理 agent · 可替换的执行 agent · 本地优先</strong></p>
-
-<p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-Setup-0.8.0.exe"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-0.8.0-macOS.dmg"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>演示视频</strong></a>
-</p>
-<p align="center">5 分钟装好。不需要 Python 或 Node 环境。</p>
-
 <p align="center">
   <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
 </p>
 
-# Orbital
+<h1 align="center">Orbital</h1>
+<p align="center"><strong>project agent（项目 agent）</strong></p>
+<h3 align="center">agent 只负责一次会话，Orbital 负责整个项目。</h3>
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
+Orbital 和 Claude Code、Codex 一样干活：调研、规划、写作、执行命令、浏览网页，或者调用你的各种工具。
+
+不同的是，Orbital 把本地的一个文件夹当作长期运行的项目。
+
+干活的同时，Orbital 会把项目的当前状态、决策、经验教训、任务队列和产出成果沉淀并记录在这个文件夹里。每一次新任务都从此前工作积累下来的上下文开始，agent 的工作因此能够不断累积。
+
+Orbital 也可以把任务派给 Claude Code、Codex、Gemini CLI、Cursor 等 CLI agent。每次派发都会向子 agent 交代项目背景和任务背景，并指向相关的项目文件——你不需要每次都把项目重讲一遍。子 agent 跑完后，Orbital 结合项目上下文解读返回的结果，并把结论写回项目。
+
+<p align="center"><strong>一个持续负责的管理 agent · 可替换的执行 agent · 本地优先</strong></p>
+
+<p align="center">
+  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>Windows 安装包 (.exe)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>macOS 安装包 (.dmg)</strong></a> &nbsp;&middot;&nbsp;
+  <a href="https://www.bilibili.com/video/BV1yN3B6CEKW/"><strong>30 秒演示视频</strong></a>
+</p>
+<p align="center">5 分钟装好。不需要 Python 或 Node 环境。自备 API key。</p>
+
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple)
 
 ---
 
-## 为什么要有 Orbital
+## 为什么需要一个 project agent
 
-在工作中，大家都已经在使用很多不同的 agent —— 可能是因为新出的模型、剩余的额度，也可能是因为上下文已经被对应的 agent 绑死了。但每个 agent 都是一个孤岛：各有各的会话、决策和上下文。你需要做它们的实习生，帮它们串联上下文，来保证你自己的“项目”正常运转。
+在工作中，大家都已经在同时用好几个 agent —— 可能是因为新出的模型、剩余的额度，也可能是因为某个工具更擅长这类活。
 
-Orbital 在你的“项目”之上加入一个管理 agent。项目的记忆、状态、决策、经验、预算、任务队列和产出成果都由它负责；worker 子 agent 基于同一份上下文执行。会话关闭后，管理 agent 仍然知道项目里什么正在进行、什么已经完成、什么需要处理。
+但每个 agent 都活在自己的会话里，各有各的上下文和历史。当你在会话和工具之间来回切换时，把项目「搬运」过去的活就落到了你身上：重述目标、解释此前的决策、翻找产出的文件、确认还有什么没做完。你需要做它们的实习生，帮它们串联上下文，来保证你自己的项目正常运转。
 
-Orbital 对你的项目负责。
+Orbital 把工作的单位从「会话」换成「项目」。
+
+project agent 跨任务、跨会话、跨执行 agent 持续对项目负责：维护共享的上下文，判断下一步该做什么，需要时把活派出去，并把每一次的结果记录回项目。
+
+单个 agent 完成任务。Orbital 让项目往前走。
 
 ---
 
-## Orbital 的不同之处
+## 「负责整个项目」意味着什么
 
-**一个管理 agent 跨会话负责整个项目** —— 它是一个 agent，不是一个面板。不管聊天窗口开着还是关着，它都在维护项目的计划、决策和状态。
+有五样东西通常会在 agent 会话之间丢失或散落各处，Orbital 把它们全部以普通文件的形式维护在你的项目文件夹里：
 
-**任何 coding agent 都可以当 worker** —— 上下文在管理 agent 手里，所以你可以为每项任务挑最合适的 agent，而不用再向它把项目重讲一遍。
+- **状态** —— 项目现在是什么情况（`PROJECT_STATE.md`）
+- **决策** —— 定了什么、为什么这么定（`DECISIONS.md`）
+- **经验教训** —— 项目一路上学到了什么（`LESSONS.md`）
+- **进展** —— 什么在跑、什么完成了、什么受阻了（`queue.json`）。每个队列任务都必须以**完成**或**受阻**收尾 —— agent 如果没给结论就停下，会被重新追问，再不给就强制标记为受阻并附上原因。没有任务会悄悄漂走。
+- **产出成果** —— agent 调研、撰写、构建出来的东西（工作空间本身，以及 `orbital/output/`）
 
-**每个队列任务都必须以「完成」或「受阻」收尾** —— agent 如果没给结论就停下，会被重新追问，再不给就强制标记为受阻并附上原因。没有任务会悄悄漂走。
+这些都留在本地项目里，成为后续工作的上下文。冷启动时，Orbital 会先把它们组装进自己的 system prompt，再开始动手。
 
-一个项目只有一个统一的任务队列，统一的预算上限，统一的审批策略和统一的审计记录 —— 而且全部留在你自己的机器上。
+派活时，子 agent 会被指向同一批文件，并被告知这些内容具有权威性 —— 这份交接在每次派发时现场生成，不需要你手动粘贴。每个子 agent 在项目里还有自己的记忆文件，跨多次派发积累自己的经验。任务结束后，Orbital 读取结果，把值得留下的部分记录回项目。
+
+执行的 agent 可以换。项目一直在。
+
+---
+
+## 它是怎么工作的
+
+1. **一次性设置** —— 选一家 LLM 服务商并填入 API key；需要的话再关联 agent 要用到的账户。
+
+2. **创建项目** —— 起个名字，选择存放你工作内容的本地文件夹，设定 autonomy 等级。
+
+3. **交给 Orbital 一个任务** —— 调研、规划、写作、写代码、浏览网页或处理文件。
+
+4. **Orbital 维护上下文** —— 工作推进的同时，它让项目的状态、决策、经验教训、队列和成果保持最新。
+
+5. **需要时派活** —— 把任务派给 Claude Code、Codex、Gemini CLI、Cursor 或其他 CLI agent，它们用的是同一份积累下来的上下文。
+
+6. **每个结果都进入项目** —— 之后的任务都建立在此前的工作之上。
+
+```mermaid
+flowchart LR
+    You["你"] --> Orbital["Orbital<br/>project agent"]
+    Orbital <--> Project["本地项目文件夹<br/>状态 · 决策 · 经验教训 · 队列 · 成果"]
+    Orbital -->|交代背景 + 派活| Workers["执行 agent<br/>Claude Code · Codex · Gemini CLI · Cursor"]
+    Workers -->|结果| Orbital
+    Orbital -->|每个任务都以<br/>完成或受阻收尾| Project
+    Phone["你的手机"] -.->|审批 · 查看进展| Orbital
+```
+
+---
+
+## 一个具体的例子
+
+假设你让 Orbital 调研一个竞品。
+
+Orbital 先自己收集基础信息，把发现记录进项目。然后把耗 token 的深度技术调研派给 Claude Code —— 后者开工前会先从项目文件夹里读取项目目标、约束和此前的决策。
+
+Claude Code 跑完后，Orbital 读取它的结论，把其中有用的部分记录回项目。
+
+一周后，你让 Orbital 写一份上线计划。它从那次调研、之后做的决策、以及已经产出的文件开始。
+
+你不用从一个空白对话重新开始。你是在延续这个项目。
 
 ---
 
@@ -60,7 +117,7 @@ Orbital 对你的项目负责。
 
 **为什么可以中途换 agent**
 
-- **可互换的 worker** —— 管理 agent 把工作派给 Claude Code、Codex、Gemini CLI 或任何 CLI agent，它们使用同一份项目上下文
+- **可互换的 worker** —— 管理 agent 把工作派给 Claude Code、Codex、Gemini CLI、Cursor 或任何 CLI agent，它们使用同一份项目上下文
 - **任务队列** —— 把任务按项目排进队列，然后走开；agent 逐项处理，每项标记完成（附总结）或受阻（附原因）；中途可暂停介入引导，再继续
 
 **为什么可以放心委派、不用盯着**
@@ -150,7 +207,7 @@ Orbital 对你的项目负责。
 
 ---
 
-## 工作原理
+## 架构
 
 Orbital 是绑定在一个**项目**上的持久管理 agent——而不是一个聊天会话。它是项目的本地 control plane，统一管理工作空间、instructions、状态、队列、预算和审批规则。管理 agent 负责规划、委派、监督并记录结果；worker agent 基于同一份项目上下文执行。你可以从任何地方监督。
 
@@ -203,7 +260,7 @@ flowchart TB
 
 | 2026 年 7 月 | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
 | --- | --- | --- | --- | --- | --- |
-| 下一个任务能换一个 agent 接手吗？ | ✅ Claude Code、Codex、Gemini、任意 CLI | ❌ 只有 Claude worker | ❌ 只有 Codex worker | ❌ 只有 Hermes worker | 部分（通过 ACP 调用外部 agent） |
+| 下一个任务能换一个 agent 接手吗？ | ✅ Claude Code、Codex、Gemini CLI、Cursor、任意 CLI | ❌ 只有 Claude worker | ❌ 只有 Codex worker | ❌ 只有 Hermes worker | 部分（通过 ACP 调用外部 agent） |
 | 靠什么防止队列任务悄悄漂走？ | ✅ 强制以完成/受阻闭环 | ❌ | ❌ | ❌ | ❌ |
 | 预算、审批和审计属于谁？ | ✅ 属于项目 | 部分（权限 + 运行历史） | 部分（审批 + 企业审计） | 部分（命令审批） | 部分（审批 + 日志） |
 
@@ -221,7 +278,7 @@ flowchart TB
 
 ### Windows
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.8.0) 下载 [`Orbital-Setup-0.8.0.exe`](https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-Setup-0.8.0.exe)（最新 Windows 版本）
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/latest) 下载最新的 `Orbital-Setup-*.exe`（Windows 版本）
 2. 运行安装程序，按提示完成
 3. 从开始菜单或桌面快捷方式启动 Orbital
 
@@ -237,7 +294,7 @@ Orbital 的 Windows 安装包暂未做代码签名，Windows 会提示安全警�
 
 ### macOS
 
-1. 从 [Releases](https://github.com/zqiren/Orbital/releases/tag/v0.8.0) 下载 [`Orbital-0.8.0-macOS.dmg`](https://github.com/zqiren/Orbital/releases/download/v0.8.0/Orbital-0.8.0-macOS.dmg)
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/latest) 下载最新的 `Orbital-*-macOS.dmg`
 2. 打开 DMG，把 Orbital 拖到 Applications 文件夹
 3. 从启动台或 Spotlight 启动 Orbital
 
