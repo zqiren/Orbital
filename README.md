@@ -6,82 +6,106 @@
 
 <p align="center"><em>What you're seeing: a marketing project asks Orbital to size up a competitor. It researches the target itself so the task brief is accurate, hands the token-heavy deep-dive to Claude&nbsp;Code per a standing project directive, then reads the findings back against the project's own decisions and lessons — ending on the calls only you can make.</em></p>
 
-<h2 align="center">Every agent owns a session. Orbital owns the project.</h2>
-<p align="center">A local-first agent that holds your project's plan, decisions, and budget — and briefs Claude Code, Codex, or any CLI agent when it's their turn.</p>
+<p align="center">
+  <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
+</p>
+
+<h1 align="center">Orbital</h1>
+<p align="center"><strong>The project agent</strong></p>
+<h3 align="center">Every agent owns a session. Orbital owns the project.</h3>
+
+Orbital works like Claude Code or Codex: ask it to research, plan, write, run commands, browse the web, or operate your tools.
+
+The difference is that Orbital treats a local folder as a long-running project.
+
+As it works, Orbital maintains and records the project's current state, decisions, lessons, task queue, and artifacts inside that folder. Every new task starts from the context accumulated by previous work, so the agent's work compounds over time.
+
+Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task, and points it at the relevant project files — so you don't have to explain the project again each time. Orbital watches the run, reads what comes back against the project's context, and writes the outcome into the project.
 
 <p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
 
 <p align="center">
   <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://www.youtube.com/watch?v=ranTQFmW6vU"><strong>Watch the demo</strong></a>
+  <a href="https://www.youtube.com/watch?v=U2I0DUUUIzo"><strong>Watch the demo</strong></a>
 </p>
-<p align="center">Set up in under 5 minutes. No Python or Node required.</p>
-
-<p align="center">
-  <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
-</p>
-
-# Orbital
+<p align="center">Set up in under 5 minutes. No Python or Node required. Bring your own API key.</p>
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple) ![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)
 
----
-
-## Why this exists
-
-People already use multiple capable agents at work — for the newest model, the leftover quota, or because their context is locked into one tool. But each agent works in its own silo: its own sessions, its own decisions, its own context. You end up working as their intern, ferrying context between them to keep your own project moving.
-
-Orbital puts a management agent over your project. It owns the project's memory, state, decisions, lessons, budget, task queue, and artifacts; worker sub-agents execute against that shared context. When a chat closes, the manager still knows what is in motion, what finished, and what needs attention.
-
-Orbital is accountable for your project.
+> Orbital is currently in alpha.
 
 ---
 
-## What makes Orbital different
+## Why a project agent?
 
-**One manager owns the project across sessions** — an agent, not a dashboard. It keeps the plan, decisions, and state current whether or not a chat is open.
+People already use several capable agents at work — for the newest model, the leftover quota, or because a particular tool is better at the job.
 
-**Any coding agent can act as a worker** — the manager holds the context, so you pick the best agent for each task instead of re-explaining the project to it.
+But each agent works inside its own session, with its own context and history. When you move between sessions or tools, you become responsible for carrying the project between them: restating goals, explaining previous decisions, locating artifacts, and checking what was left unfinished. You end up working as their intern, ferrying context between them to keep your own project moving.
 
-**Every queued task ends Completed or Blocked** — an agent that stops without a verdict gets re-prompted, then force-blocked with a reason. Nothing drifts away silently.
+Orbital changes the unit of work from the session to the project.
 
-One project has one queue, one budget, one approval policy, and one audit trail — and all of it stays on your machine.
+A project agent stays responsible for the project across tasks, sessions, and worker agents. It maintains the shared context, decides what needs to happen next, delegates when useful, and records every outcome back into the project.
+
+Individual agents complete tasks. Orbital keeps the project moving.
 
 ---
 
-## At a Glance
+## What it means to own the project
 
-**Why the project never loses its memory**
+Orbital maintains five things that normally disappear or fragment between agent sessions — all of them as plain files in your project folder:
 
-- **Accountable management loop** — one agent plans, delegates, supervises, and records outcomes for the project
-- **Persistent project context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md, and artifacts remain available to the manager across sessions
-- **Self-improving skills** — agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
+- **State** — what is true about the project now (`PROJECT_STATE.md`)
+- **Decisions** — what was decided and why (`DECISIONS.md`)
+- **Lessons** — what the project has learned (`LESSONS.md`)
+- **Work** — what is running, completed, or blocked (`queue.json`). Every queued task ends **Completed** or **Blocked** — an agent that stops without a verdict gets re-prompted, then force-blocked with a reason. Nothing drifts away silently.
+- **Artifacts** — what the agents researched, wrote, or built (the workspace itself, plus `orbital/output/`)
 
-**Why you can swap agents mid-project**
+These stay in the local project and become context for future work. On a cold start, Orbital assembles them into its own system prompt before it acts.
 
-- **Interchangeable workers** — the manager dispatches Claude Code, Codex, Gemini CLI, or any CLI agent against the same project context
-- **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
+When Orbital delegates, the worker is pointed at those same files and told they are authoritative — that briefing is rendered fresh on every dispatch, not something you paste in. Each worker also keeps its own memory file inside the project, so it accumulates its own experience across dispatches. When the task finishes, Orbital reads the result and records what matters back into the project.
 
-**Why you can delegate without watching**
+The worker can change. The project continues.
 
-- **Workbench** (beta) — the decisions and actions only you can take, flagged by the agent as it works and collected across every project into one list, each with the evidence behind it
-- **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
-- **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
-- **Approval workflows** — agents pause before risky actions; approve from desktop or phone
-- **Budget controls** — per-project spending limits with configurable actions
-- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
+---
 
-**Why the project moves while you're away**
+## How it works
 
-- **Triggers** — set up a cron job or file watcher so the management agent checks in regularly and kicks off sub-agents without you
-- **Calendar** (beta) — every enabled automation projected onto a week view, so scheduled work stays visible instead of firing invisibly
-- **Mobile supervision** — manage agents from your phone via QR code pairing
+1. **Set up once** — pick an LLM provider and paste your API key; optionally connect accounts your agents will need.
 
-**Under the hood**
+2. **Create a project** — name it, choose the local folder that holds your work, set an autonomy level.
 
-- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
-- **Browser automation** — 26 browser actions via Patchright with anti-detection
+3. **Give Orbital a task** — ask it to research, plan, write, code, browse, or work with files.
+
+4. **Orbital maintains the context** — it keeps the project's state, decisions, lessons, queue, and artifacts current as the work progresses.
+
+5. **Orbital delegates when useful** — it dispatches work to Claude Code, Codex, Gemini CLI, Cursor, or another CLI agent against the same accumulated context.
+
+6. **Every result becomes part of the project** — future tasks begin on top of the work that came before them.
+
+```mermaid
+flowchart LR
+    You["You"] --> Orbital["Orbital<br/>Project agent"]
+    Orbital <--> Project["Local project folder<br/>State · Decisions · Lessons · Queue · Artifacts"]
+    Orbital -->|briefs + dispatches| Workers["Worker agents<br/>Claude Code · Codex · Gemini CLI · Cursor"]
+    Workers -->|results| Orbital
+    Orbital -->|every task ends<br/>Completed or Blocked| Project
+    Phone["Your phone"] -.->|approvals · check-ins| Orbital
+```
+
+---
+
+## A concrete example
+
+Suppose you ask Orbital to research a competitor.
+
+Orbital gathers the initial information and records the findings inside the project. It then dispatches the token-heavy technical investigation to Claude Code, which starts by reading the project's goals, constraints, and previous decisions from the project folder.
+
+When Claude Code finishes, Orbital reads its findings and records the useful results back into the project.
+
+A week later, you ask Orbital to draft a launch plan. It begins with that earlier research, the decisions made since, and the artifacts already produced.
+
+You do not begin again with an empty chat. You continue the project.
 
 ---
 
@@ -103,7 +127,7 @@ One project has one queue, one budget, one approval policy, and one audit trail 
 
 <p align="center"><img src="docs/screenshots/new-project-setting.png" alt="New project creation dialog with workspace directory and autonomy level settings" width="100%"></p>
 
-3. **Chat** — type a task in the chat bar and the management agent handles it
+3. **Chat** — type a task in the chat bar and the project agent handles it
 4. **Walk away** — queue the next tasks; each finished one becomes context the next builds on
 
 ---
@@ -111,57 +135,45 @@ One project has one queue, one budget, one approval policy, and one audit trail 
 ## See the project stay under one manager
 
 <p align="center"><img src="docs/screenshots/memory-context.png" alt="The orbital/ memory files — CONTEXT.md, DECISIONS.md, LESSONS.md, PROJECT_STATE.md, SESSION_LOG.md — maintained by the agent and read back every session" width="100%"></p>
-<p align="center"><em>The manager keeps the project's state, decisions, and lessons current across sessions.</em></p>
+<p align="center"><em>The project agent keeps the project's state, decisions, and lessons current across sessions.</em></p>
 
 <p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="Your agent dispatches a task to the Claude Code sub-agent, which reads the project context, completes the work, and reports the deliverable back into the workspace" width="100%"></p>
-<p align="center"><em>The manager delegates to Claude Code, Codex, or Gemini against the same project context, then records the result.</em></p>
+<p align="center"><em>It delegates to Claude Code, Codex, or Gemini CLI against the same project context, then records the result.</em></p>
 
 ---
 
-## How It Works
+## At a Glance
 
-Orbital is one persistent manager bound to a **project** — not a chat session. It acts as a local control plane for the project's workspace, instructions, state, queue, budget, and approval rules. The manager plans, delegates, supervises, and records outcomes; worker agents execute against the same project context. You supervise from anywhere.
+**Why the project never loses its memory**
 
-```mermaid
-flowchart TB
-    UI["<b>Frontend (React SPA)</b><br/>Chat UI · Approval Cards · Settings · Files"]
+- **Accountable management loop** — one agent plans, delegates, supervises, and records outcomes for the project
+- **Persistent project context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md, and artifacts remain available across sessions
+- **Self-improving skills** — the agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
 
-    subgraph daemon["Daemon (FastAPI + uvicorn)"]
-        direction TB
-        AM["AgentManager<br/><i>lifecycle</i>"]
-        SAM["SubAgentManager<br/><i>delegation</i>"]
-        TM["TriggerManager<br/><i>cron · file watch</i>"]
-        Loop["Agent Loop<br/><i>streaming · safety guards</i>"]
-        TR["Worker Transports<br/>Codex app-server · SDK · PTY · ACP · Pipe"]
-        LLM["LLM Provider<br/><i>OpenAI + Anthropic SDK</i>"]
-        Tools["Tool Registry<br/><i>shell · file · browser · triggers</i>"]
-        Auto["Autonomy Interceptor<br/><i>approve · deny · bypass</i>"]
+**Why you can swap agents mid-project**
 
-        AM --> Loop
-        SAM --> TR
-        TM --> AM
-        Loop --> LLM
-        Loop --> Tools
-        Loop --> Auto
-    end
+- **Interchangeable workers** — dispatch Claude Code, Codex, Gemini CLI, Cursor, or any CLI agent against the same project context
+- **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
 
-    Platform["<b>Platform Layer</b><br/>Windows sandbox user · macOS Seatbelt · Linux bubblewrap (planned)"]
-    Relay["<b>Cloud Relay (Node.js, optional)</b><br/>REST proxy · Event forwarding · Push notifications · Pairing"]
-    Phone["Phone"]
+**Why you can delegate without watching**
 
-    UI <-->|REST + WS| AM
-    UI <-->|REST + WS| SAM
-    Tools --> Platform
-    AM -.WebSocket tunnel.-> Relay
-    Relay -.WebSocket.-> Phone
-```
+- **Workbench** (beta) — the decisions and actions only you can take, flagged by the agent as it works and collected across every project into one list, each with the evidence behind it
+- **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
+- **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
+- **Approval workflows** — agents pause before risky actions; approve from desktop or phone
+- **Budget controls** — per-project spending limits with configurable actions
+- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
 
-**Key design decisions:**
-- **The manager owns the project**: the agent maintains structured state, decisions, lessons, and session history so planning and accountability remain in one place
-- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
-- **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
-- **Single daemon**: PID file enforcement prevents multiple instances
-- **Local-first**: Your files and project state live on your disk. The cloud relay, when enabled, proxies approvals and events — not your files.
+**Why the project moves while you're away**
+
+- **Triggers** — set up a cron job or file watcher so the project agent checks in regularly and kicks off workers without you
+- **Calendar** (beta) — every enabled automation projected onto a week view, so scheduled work stays visible instead of firing invisibly
+- **Mobile supervision** — manage agents from your phone via QR code pairing
+
+**Under the hood**
+
+- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
+- **Browser automation** — 26 browser actions via Patchright with anti-detection
 
 ---
 
@@ -171,7 +183,7 @@ Memory, scheduling, and sub-agents are table stakes now — every tool below has
 
 | July 2026 | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
 | --- | --- | --- | --- | --- | --- |
-| Can a different agent pick up the next task? | ✅ Claude Code, Codex, Gemini, any CLI | ❌ Claude workers | ❌ Codex workers | ❌ Hermes workers | Partial (external harnesses via ACP) |
+| Can a different agent pick up the next task? | ✅ Claude Code, Codex, Gemini CLI, Cursor, any CLI | ❌ Claude workers | ❌ Codex workers | ❌ Hermes workers | Partial (external harnesses via ACP) |
 | What stops a queued task from drifting? | ✅ Enforced Completed/Blocked closure | ❌ | ❌ | ❌ | ❌ |
 | Who owns the budget, approvals, and audit trail? | ✅ The project | Partial (permissions + run history) | Partial (approvals + enterprise audit) | Partial (command approvals) | Partial (approvals + logs) |
 
@@ -187,7 +199,7 @@ Memory, scheduling, and sub-agents are table stakes now — every tool below has
 | Orbital **IS** | Orbital **IS NOT** |
 | --- | --- |
 | A project workspace where you and your agents share the same files, history, and context | A cloud service — everything runs on your machine |
-| A sub-agent coordinator: Claude Code via SDK, Codex via app-server, and Gemini CLI or other workers via PTY/[ACP](https://agentcommunicationprotocol.dev/) | An OpenClaw fork — custom agent loop, built from scratch |
+| A sub-agent coordinator: Claude Code via SDK, Codex via app-server, and Gemini CLI, Cursor, or other workers via PTY/[ACP](https://agentcommunicationprotocol.dev/) | An OpenClaw fork — custom agent loop, built from scratch |
 | Remote supervision: approve actions, browse workspace files, upload from phone | A chat wrapper — agents run continuously via cron and file watchers |
 | Budget controls, autonomy presets, credential management (OS keychain) | Fully autonomous God Mode (yet) — scheduler-driven today, full autonomy on the roadmap |
 
@@ -198,7 +210,7 @@ Memory, scheduling, and sub-agents are table stakes now — every tool below has
 <details>
 <summary><strong>Project & Workspace Model</strong></summary>
 
-Each project maps to a workspace directory and maintains its own sessions, triggers, and configuration.
+Each project maps to a workspace directory and maintains its own sessions, queue, triggers, and configuration.
 
 <p align="center"><img src="docs/screenshots/files.png" alt="The workspace file tree with the agent's accumulating output and the orbital/ memory files" width="100%"></p>
 <p align="center"><em>Browse, preview, and upload files in each project's workspace — and watch the agent's output accumulate</em></p>
@@ -212,12 +224,13 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
     |   +-- project_goals.md
     |   +-- user_directives.md
     +-- skills/                         # Project skills
-    +-- sub_agents/                     # Sub-agent transcripts
+    +-- sub_agents/                     # Sub-agent transcripts + per-worker MEMORY.md
     +-- tool-results/                   # Tool output artifacts
     +-- output/                         # Agent work artifacts
     |   +-- screenshots/                # Browser screenshots
     |   +-- pdfs/                       # Saved PDFs
     |   +-- shell-output/               # Shell command output
+    +-- queue.json                      # Task queue (queued / running / completed / blocked)
     +-- PROJECT_STATE.md                # Current-state scratchpad (overwrite)
     +-- DECISIONS.md                    # Durable decisions + reasoning
     +-- LESSONS.md                      # Durable heuristics / playbooks
@@ -239,7 +252,7 @@ Each project maps to a workspace directory and maintains its own sessions, trigg
 <details>
 <summary><strong>Context Management & Compaction</strong></summary>
 
-This is how the manager keeps project context available across sessions. The agent-maintained Layer-1 files are injected every turn (bounded per file) and consolidated at session boundaries:
+This is how the project agent keeps context available across sessions. The agent-maintained Layer-1 files are injected every turn (bounded per file) and consolidated at session boundaries:
 
 | File | Purpose | Bound |
 |------|---------|-------|
@@ -251,7 +264,7 @@ This is how the manager keeps project context available across sessions. The age
 
 Each entry carries system-managed metadata (`id` / `created` / `touched` / `tag`) so dedup runs on recency. Per-turn injection bounds each file to a budget derived from the active model's context window. Session-end runs a deterministic size backstop (demote/trim, never an LLM call) plus a best-effort LLM dedup/merge that fixes contradictions. (`SESSION_LOG.md` was retired; the Layer-1 files are injected every turn, so a separate session history is redundant.)
 
-**Cold resume**: On session start, these files are assembled into the system prompt so the manager can reorient before it acts.
+**Cold resume**: On session start, these files are assembled into the system prompt so the agent can reorient before it acts.
 
 <p align="center"><img src="docs/screenshots/memory-decisions.png" alt="DECISIONS.md — the agent's decision log with rationale, maintained across sessions" width="100%"></p>
 <p align="center"><img src="docs/screenshots/memory-lessons.png" alt="LESSONS.md — patterns and pitfalls the agent learned, read back before each task" width="100%"></p>
@@ -266,7 +279,9 @@ Each entry carries system-managed metadata (`id` / `created` / `touched` / `tag`
 <details>
 <summary><strong>Sub-Agent Delegation</strong></summary>
 
-Orbital is not tied to a single AI tool. The management agent plans and delegates, while specialized sub-agents execute — each reading the same accumulated project context. Any CLI-based agent can be registered via a manifest file.
+Orbital is not tied to a single AI tool. The project agent plans and delegates, while specialized workers execute — each reading the same accumulated project context. Any CLI-based agent can be registered via a manifest file; Claude Code, Codex, Cursor, Gemini CLI, Aider, Cline, Goose, Copilot CLI, and Continue ship with one.
+
+Each dispatch renders a fresh inheritance prompt that points the worker at `PROJECT_STATE.md`, `DECISIONS.md`, `LESSONS.md`, `INDEX.md`, the project's instructions, and its skills — declaring them authoritative and off-limits for writes. Workers read them on demand rather than receiving a pasted copy, so the brief never goes stale.
 
 <p align="center"><img src="docs/screenshots/subagent-memories.png" alt="Sub-Agent Memories panel — each sub-agent keeps its own long-term memory, curated per project, that it reads on every dispatch" width="100%"></p>
 <p align="center"><em>Each sub-agent keeps its own long-term memory across dispatches — curate what it remembers...</em></p>
@@ -280,18 +295,18 @@ Orbital is not tied to a single AI tool. The management agent plans and delegate
 |-----------|----------|
 | **Codex app-server** | Native Codex JSON-RPC over stdio, with structured lifecycle and approvals |
 | **Pipe** | stdin/stdout subprocess, JSON streaming |
-| **PTY** | Pseudo-terminal for interactive agents — Gemini CLI, Copilot CLI, Cline, Goose |
+| **PTY** | Pseudo-terminal for interactive agents — Gemini CLI, Aider, Cline, Goose, Copilot CLI, Continue |
 | **SDK** | Direct Claude SDK integration |
-| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — supported but not the current default |
+| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — Cursor, via its official ACP server |
 
-> **Note:** Codex uses its native app-server path, not PTY or ACP. Orbital launches `codex app-server` and speaks JSON-RPC directly. ACP remains available for compatible workers; PTY is the default for interactive CLI agents.
+> **Note:** Codex uses its native app-server path, not PTY or ACP. Orbital launches `codex app-server` and speaks JSON-RPC directly. ACP is available for any ACP-compliant worker; PTY is the default for other interactive CLI agents.
 
 </details>
 
 <details>
 <summary><strong>Task Queue</strong></summary>
 
-Each project has a queue. Add tasks — pin urgent ones to the front — and your agent works through them one at a time, in order, without you watching.
+Each project has a queue, stored with the project at `orbital/queue.json`. Add tasks — pin urgent ones to the front — and your agent works through them one at a time, in order, without you watching.
 
 The agent must declare an outcome on every item; it can't silently drift to the next one:
 
@@ -302,7 +317,7 @@ The agent must declare an outcome on every item; it can't silently drift to the 
 
 **Pause to steer.** Pause the queue mid-item to chat freely — your clarifications land in the same session, so the agent sees them when you resume.
 
-**Continuity by design.** Each completed item's artifacts are already in the project when the next item starts, so the manager can use them when supervising later tasks. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
+**Continuity by design.** Each completed item's artifacts are already in the project when the next item starts, so the agent can use them when supervising later tasks. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
 
 <p align="center"><img src="docs/screenshots/queue-paused.png" alt="A paused queue: Now Running empty, one blocked item under Needs Attention with the agent's reason, two queued tasks, and completed items with their summaries" width="100%"></p>
 <p align="center"><em>Queue tasks and walk away — each finished one becomes context the next builds on</em></p>
@@ -312,7 +327,7 @@ The agent must declare an outcome on every item; it can't silently drift to the 
 <details>
 <summary><strong>Workbench — what only you can decide</strong> (beta)</summary>
 
-Some things an agent genuinely cannot finish for you: a spend decision, a message that has to come from your account, a judgment call between three options it already researched. As the manager works, it flags those in the project's state file — and the **Workbench** collects them from every project into one list.
+Some things an agent genuinely cannot finish for you: a spend decision, a message that has to come from your account, a judgment call between three options it already researched. As the agent works, it flags those in the project's state file — and the **Workbench** collects them from every project into one list.
 
 Each card carries its provenance, so you are never asked to act on a bare instruction. Expand **Why I believe this** and you see the evidence the agent recorded and the session it came from. Cards sort overdue-first, then oldest, and each one exits in a single tap — **Done** once you've handled it, **Delete** when it stopped mattering. Tapping the card itself opens that project's chat with the decision pre-filled, so answering is one message instead of a hunt for context.
 
@@ -328,7 +343,7 @@ The **Today** strip along the top lists the day's automation slots, including th
 
 Automations you set up months ago shouldn't fire invisibly. Every enabled schedule trigger projects its upcoming runs onto a week grid, so the rhythm of the project is something you can see rather than remember. Dated commitments the agent recorded in the project state land on the same grid and drop off once they're resolved, and connecting Google Calendar brings those events into the same view.
 
-The manager can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
+The project agent can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
 
 <p align="center"><img src="docs/screenshots/calendar.png" alt="Calendar week view showing a project's recurring automations — a daily repo scan across the week plus a Monday growth ritual" width="100%"></p>
 <p align="center"><em>The week ahead, as your automations will actually run it</em></p>
@@ -359,7 +374,7 @@ Agents create reusable skills from multi-step workflows and consult matching ski
 <details>
 <summary><strong>Built-in Tool Suite</strong></summary>
 
-The management agent has access to these tool categories:
+The project agent has access to these tool categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
@@ -396,7 +411,7 @@ Agents run continuously via triggers — no manual intervention needed. Create t
 > *"Watch the uploads/ folder for new .jpg files and analyze them"*
 > *"Run a research scan every morning at 6 AM"*
 
-The management agent translates this into a `create_trigger` tool call with the appropriate type and parameters.
+The project agent translates this into a `create_trigger` tool call with the appropriate type and parameters.
 
 **Trigger types:**
 
@@ -541,6 +556,53 @@ Orbital ships as a desktop application bundled with PyInstaller:
 
 ---
 
+## Architecture
+
+Orbital is one persistent agent bound to a **project** — not a chat session. It acts as a local control plane for the project's workspace, instructions, state, queue, budget, and approval rules. It plans, delegates, supervises, and records outcomes; worker agents execute against the same project context. You supervise from anywhere.
+
+```mermaid
+flowchart TB
+    UI["<b>Frontend (React SPA)</b><br/>Chat UI · Approval Cards · Settings · Files"]
+
+    subgraph daemon["Daemon (FastAPI + uvicorn)"]
+        direction TB
+        AM["AgentManager<br/><i>lifecycle</i>"]
+        SAM["SubAgentManager<br/><i>delegation</i>"]
+        TM["TriggerManager<br/><i>cron · file watch</i>"]
+        Loop["Agent Loop<br/><i>streaming · safety guards</i>"]
+        TR["Worker Transports<br/>Codex app-server · SDK · PTY · ACP · Pipe"]
+        LLM["LLM Provider<br/><i>OpenAI + Anthropic SDK</i>"]
+        Tools["Tool Registry<br/><i>shell · file · browser · triggers</i>"]
+        Auto["Autonomy Interceptor<br/><i>approve · deny · bypass</i>"]
+
+        AM --> Loop
+        SAM --> TR
+        TM --> AM
+        Loop --> LLM
+        Loop --> Tools
+        Loop --> Auto
+    end
+
+    Platform["<b>Platform Layer</b><br/>Windows sandbox user · macOS Seatbelt · Linux bubblewrap (planned)"]
+    Relay["<b>Cloud Relay (Node.js, optional)</b><br/>REST proxy · Event forwarding · Push notifications · Pairing"]
+    Phone["Phone"]
+
+    UI <-->|REST + WS| AM
+    UI <-->|REST + WS| SAM
+    Tools --> Platform
+    AM -.WebSocket tunnel.-> Relay
+    Relay -.WebSocket.-> Phone
+```
+
+**Key design decisions:**
+- **The agent owns the project**: it maintains structured state, decisions, lessons, and session history so planning and accountability remain in one place
+- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
+- **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
+- **Single daemon**: PID file enforcement prevents multiple instances
+- **Local-first**: Your files and project state live on your disk. The cloud relay, when enabled, proxies approvals and events — not your files.
+
+---
+
 ## Installation
 
 ### Windows
@@ -627,6 +689,7 @@ npx vite --host 127.0.0.1 --port 5173
 | LLM providers | `agent_os/agent/providers/` |
 | Trigger manager | `agent_os/daemon_v2/trigger_manager.py` |
 | Browser manager | `agent_os/daemon_v2/browser_manager.py` |
+| Sub-agent manifests | `agent_os/agents/manifests/` |
 | Desktop entry point | `agent_os/desktop/main.py` |
 | System tray | `agent_os/desktop/tray.py` |
 | Frontend components | `web/src/components/` |
@@ -637,8 +700,7 @@ npx vite --host 127.0.0.1 --port 5173
 
 ```bash
 # Unit + platform tests
-python -m pytest tests/unit/ tests/platform/ -q \
-  --ignore=tests/platform/test_consumer3_wiring.py
+python -m pytest tests/unit/ tests/platform/ -q
 
 # TypeScript check (zero errors expected)
 cd web && npx tsc -b
@@ -649,7 +711,6 @@ curl http://localhost:8000/api/v2/projects
 ```
 
 **Known pre-existing test notes:**
-- `test_consumer3_wiring.py` — requires Windows sandbox user configuration
 - `test_e2e.py`, `test_user_stories.py` — require a real LLM API key set via `AGENT_OS_TEST_API_KEY`
 
 ---
