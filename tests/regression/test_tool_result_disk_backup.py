@@ -2,10 +2,13 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression: full tool results are saved to disk when truncated to stubs.
+"""Regression: full tool results are archived to disk, unconditionally.
 
-The disk backup ensures the agent can recall full results via read_file
-if needed. Files are stored at orbital/tool-results/{session_id}/.
+Files are stored at orbital/tool-results/{session_uuid}/. The archive is
+DECOUPLED from history rewriting: it happens for every result over the size
+threshold whether or not that result is ever stubbed. It is load-bearing
+observability (the corpus behind the tool-result lifecycle investigation) and
+the recovery path for content a supersession stub replaced.
 """
 
 import json
@@ -14,7 +17,9 @@ import os
 import pytest
 
 from agent_os.agent.session import Session
-from agent_os.agent.tool_result_lifecycle import truncate_consumed_tool_results
+from agent_os.agent.tool_result_lifecycle import (
+    archive_and_supersede_tool_results,
+)
 
 
 @pytest.fixture
@@ -45,19 +50,22 @@ def _add_tool_call_and_result(session, call_id, tool_name, arguments, content):
 
 
 class TestToolResultDiskBackup:
-    """Verify full tool results are saved to disk after truncation."""
+    """Verify full tool results are saved to disk."""
 
-    def test_disk_file_exists_after_truncation(self, session, workspace):
-        """Disk backup file is created at the expected path."""
+    def test_disk_file_exists_for_unstubbed_result(self, session, workspace):
+        """Disk archive is created even when history is left untouched."""
         _add_tool_call_and_result(
             session, "tc_disk1", "browser",
             {"action": "snapshot", "url": "https://example.com"},
             "D" * 5_000,
         )
 
-        truncate_consumed_tool_results(session, "Analyzed.", iteration=3)
+        archive_and_supersede_tool_results(session, iteration=3)
 
-        # Check file exists
+        # History is NOT rewritten — a single fetch is never superseded.
+        tool_msg = [m for m in session.get_messages() if m.get("role") == "tool"][0]
+        assert not tool_msg.get("_stubbed")
+
         tool_results_dir = os.path.join(
             workspace, "orbital", "tool-results", "disk-backup-test",
         )
@@ -73,7 +81,7 @@ class TestToolResultDiskBackup:
             original_content,
         )
 
-        truncate_consumed_tool_results(session, "Log output.", iteration=1)
+        archive_and_supersede_tool_results(session, iteration=1)
 
         tool_results_dir = os.path.join(
             workspace, "orbital", "tool-results", "disk-backup-test",
@@ -101,7 +109,7 @@ class TestToolResultDiskBackup:
             original,
         )
 
-        truncate_consumed_tool_results(session, "Read the CSV.", iteration=2)
+        archive_and_supersede_tool_results(session, iteration=2)
 
         tool_results_dir = os.path.join(
             workspace, "orbital", "tool-results", "disk-backup-test",
@@ -127,7 +135,7 @@ class TestToolResultDiskBackup:
         for i in range(3):
             session.append_tool_result(f"tc_multi_{i}", "R" * 2_000)
 
-        truncate_consumed_tool_results(session, "Read all files.", iteration=5)
+        archive_and_supersede_tool_results(session, iteration=5)
 
         tool_results_dir = os.path.join(
             workspace, "orbital", "tool-results", "disk-backup-test",
@@ -136,27 +144,48 @@ class TestToolResultDiskBackup:
             path = os.path.join(tool_results_dir, f"turn_5_call_tc_multi_{i}.json")
             assert os.path.exists(path), f"Missing backup for tc_multi_{i}"
 
-    def test_stub_contains_disk_path(self, session, workspace):
-        """The stub in session history contains the correct disk path."""
+    def test_superseded_stub_contains_disk_path(self, session, workspace):
+        """The one stub that exists carries the path to the archived content."""
         _add_tool_call_and_result(
             session, "tc_path", "browser",
             {"action": "fetch", "url": "https://example.com/api"},
             "F" * 5_000,
         )
+        _add_tool_call_and_result(
+            session, "tc_path_2", "browser",
+            {"action": "fetch", "url": "https://example.com/api"},
+            "G" * 5_000,
+        )
 
-        truncate_consumed_tool_results(session, "Fetched data.", iteration=4)
+        archive_and_supersede_tool_results(session, iteration=4)
 
         messages = session.get_messages()
-        tool_msg = [m for m in messages if m.get("role") == "tool"][0]
-        stub = tool_msg["content"]
+        stub = [
+            m for m in messages
+            if m.get("role") == "tool" and m.get("tool_call_id") == "tc_path"
+        ][0]["content"]
 
-        # Extract the disk path from the stub
         assert "Full result:" in stub
-        # The path should exist on disk
-        path_start = stub.index("Full result: ") + len("Full result: ")
-        path_end = stub.index("]", path_start)
-        disk_path = path_end  # Just verify the path reference is there
         assert "turn_4_call_tc_path.json" in stub
+        # The path in the stub actually resolves to the archived content.
+        marker = "Full result: "
+        disk_path = stub[stub.index(marker) + len(marker):].rstrip("]")
+        with open(disk_path, "r", encoding="utf-8") as f:
+            assert json.load(f)["content"] == "F" * 5_000
+
+    def test_archive_is_written_once_per_call_id(self, session, workspace):
+        """Repeated invocations must not duplicate a result under a new turn_N."""
+        _add_tool_call_and_result(
+            session, "tc_dedupe", "read", {"path": "stable.md"}, "S" * 3_000,
+        )
+
+        archive_and_supersede_tool_results(session, iteration=1)
+        archive_and_supersede_tool_results(session, iteration=2)
+
+        tool_results_dir = os.path.join(
+            workspace, "orbital", "tool-results", "disk-backup-test",
+        )
+        assert sorted(os.listdir(tool_results_dir)) == ["turn_1_call_tc_dedupe.json"]
 
     def test_disk_file_readable_after_session_reload(self, session, workspace):
         """Disk backup is independently readable even after session reload."""
@@ -167,7 +196,7 @@ class TestToolResultDiskBackup:
             content,
         )
 
-        truncate_consumed_tool_results(session, "Done.", iteration=1)
+        archive_and_supersede_tool_results(session, iteration=1)
 
         # Reload session (simulating a new session lifecycle)
         reloaded = Session.load(session._filepath)

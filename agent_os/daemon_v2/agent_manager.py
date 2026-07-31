@@ -689,7 +689,8 @@ class AgentManager:
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
         self._register_tools(registry, config, project_id,
                              vision_enabled=model_info.capabilities.vision,
-                             session_id=session_id)
+                             session_id=session_id,
+                             context_window=model_info.context_window)
 
         # Reflect enabled connectors' remote tools into the registry (spec 011
         # §0.9 — per-project enablement gates reflection; unknown tools fail
@@ -1090,7 +1091,8 @@ class AgentManager:
 
     def _register_tools(self, registry: ToolRegistry, config: AgentConfig,
                         project_id: str = "", vision_enabled: bool = False,
-                        *, session_id: str | None = None) -> None:
+                        *, session_id: str | None = None,
+                        context_window: int | None = None) -> None:
         """Register all tools. Imports are deferred to avoid circular deps at module level."""
         # Queue signal tools — always registered, used by the queue dispatcher
         # to detect attempt completion. Detection happens at response-parsing
@@ -1116,7 +1118,11 @@ class AgentManager:
             root_labels_cb = lambda: self._compute_scope_roots(project_id, session_id)[1]
         try:
             from agent_os.agent.tools.read import ReadTool
-            registry.register(ReadTool(workspace=config.workspace, read_roots=read_roots_cb))
+            # context_window sizes the read cap to the active model — same
+            # model_info.context_window ContextManager uses.
+            registry.register(ReadTool(workspace=config.workspace,
+                                       read_roots=read_roots_cb,
+                                       context_window=context_window))
         except ImportError:
             pass
         try:
@@ -1327,7 +1333,14 @@ class AgentManager:
 
         def make_tool_registry(allowed, forbidden, worker_handle):
             registry = ToolRegistry()
-            registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb))
+            # context_window is deliberately NOT threaded here: this path
+            # reaches for the parent's *utility* provider first and only
+            # builds config/model_info in the fallback branch, so there is no
+            # single model window that covers both. None → the 100_000-char
+            # default, i.e. exactly what workers had before. Thread it if
+            # worker reads ever need to scale with the model.
+            registry.register(ReadTool(workspace=workspace, read_roots=read_roots_cb,
+                                       context_window=None))
             registry.register(WriteTool(workspace=workspace))
             registry.register(EditTool(workspace=workspace))
             registry.register(GlobTool(workspace=workspace,

@@ -5,7 +5,12 @@
 """Integration: tool result lifecycle end-to-end with real LLM.
 
 Uses real Kimi kimi-k2.5 LLM to verify the full tool result lifecycle:
-pre-filter → LLM consumes → truncation to stubs → disk backup.
+pre-filter → LLM consumes → disk archive → history left intact.
+
+The lifecycle no longer stubs consumed tool results: blanket history mutation
+took documents away from the agent mid-turn. What is asserted here is the new
+contract — the read result stays readable in history, AND the full content is
+archived to orbital/tool-results/ regardless.
 
 Env vars:
     AGENT_OS_TEST_API_KEY: LLM API key (Moonshot)
@@ -134,10 +139,15 @@ def large_file(workspace):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(90)
-async def test_tool_result_truncated_after_read(
+async def test_tool_result_stays_live_after_read(
     agent_loop, session, workspace, large_file,
 ):
-    """Real LLM reads a large file → tool result becomes a stub after response."""
+    """Real LLM reads a large file → the tool result stays readable in history.
+
+    This is the inversion of the old assertion. A single read is never
+    superseded, so nothing about it is rewritten: the agent can still see the
+    document it just read on every subsequent iteration.
+    """
     await agent_loop.run(
         initial_message=(
             "Read the file large_document.txt and tell me the first sentence. "
@@ -151,20 +161,20 @@ async def test_tool_result_truncated_after_read(
     tool_msgs = [m for m in messages if m.get("role") == "tool"]
     assert len(tool_msgs) >= 1, "Expected at least one tool result"
 
-    # Tool results should be stubbed (content was >500 chars)
+    # No tool result may be stubbed: the file was read once, so nothing
+    # superseded it.
     stubbed = [m for m in tool_msgs if m.get("_stubbed")]
-    assert len(stubbed) >= 1, "Expected at least one stubbed tool result"
+    assert not stubbed, (
+        f"A single read must not be stubbed, got {len(stubbed)} stub(s): "
+        f"{[m['content'][:120] for m in stubbed]}"
+    )
 
-    for msg in stubbed:
-        assert msg["content"].startswith("[Tool:")
-        # Honest stub: a notice that the content was evicted, never the model's
-        # narration masquerading as a summary of the content.
-        assert "NOT the content" in msg["content"]
-        assert "Agent summary:" not in msg["content"]
-        # Stub must be much smaller than the original file (~9600 chars)
-        assert len(msg["content"]) < 1000, (
-            f"Stub should be compact, got {len(msg['content'])} chars"
-        )
+    # The document itself is still in history.
+    assert any(
+        "Lorem ipsum" in m.get("content", "")
+        for m in tool_msgs
+        if isinstance(m.get("content"), str)
+    ), "The file content must remain in the session after the LLM responds"
 
     # LLM should have produced a response
     assistant_msgs = [m for m in messages if m.get("role") == "assistant" and m.get("content")]
@@ -176,23 +186,31 @@ async def test_tool_result_truncated_after_read(
 async def test_disk_backup_exists_after_read(
     agent_loop, session, workspace, large_file,
 ):
-    """Disk backup file exists after tool result truncation."""
+    """Disk archive exists even though the tool result was never stubbed.
+
+    The archive is unconditional — it does not depend on history being
+    rewritten. It is the corpus the lifecycle work is measured against.
+    """
     await agent_loop.run(
         initial_message="Read the file large_document.txt and summarize it in one word.",
     )
 
-    # Check disk backup directory
+    # Check disk archive directory
     tool_results_dir = os.path.join(
         workspace, "orbital", "tool-results", "lifecycle-e2e",
     )
 
-    if not os.path.exists(tool_results_dir):
-        # If no tool results were large enough to stub, skip
-        tool_msgs = [m for m in session.get_messages() if m.get("role") == "tool"]
-        for msg in tool_msgs:
-            if len(msg.get("content", "")) > 500 and not msg.get("_stubbed"):
-                pytest.fail("Large tool result was not truncated and no disk backup exists")
-        pytest.skip("No tool results were large enough to trigger truncation")
+    tool_msgs = [m for m in session.get_messages() if m.get("role") == "tool"]
+    large = [
+        m for m in tool_msgs
+        if isinstance(m.get("content"), str) and len(m["content"]) > 500
+    ]
+    if not large:
+        pytest.skip("No tool results were large enough to trigger archiving")
+
+    assert os.path.exists(tool_results_dir), (
+        "Large tool results must be archived to disk even when not stubbed"
+    )
 
     backup_files = os.listdir(tool_results_dir)
     assert len(backup_files) >= 1, "Expected at least one disk backup file"
@@ -212,10 +230,10 @@ async def test_disk_backup_exists_after_read(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(90)
-async def test_session_jsonl_has_stubs_after_reload(
+async def test_session_jsonl_keeps_content_after_reload(
     agent_loop, session, workspace, large_file,
 ):
-    """After session reload from disk, tool results are stubs not full content."""
+    """After session reload from disk, the read result still holds the content."""
     await agent_loop.run(
         initial_message="Read large_document.txt and count the words. Reply with just the number.",
     )
@@ -224,7 +242,49 @@ async def test_session_jsonl_has_stubs_after_reload(
     reloaded = Session.load(session._filepath)
     tool_msgs = [m for m in reloaded.get_messages() if m.get("role") == "tool"]
 
-    for msg in tool_msgs:
-        if msg.get("_stubbed"):
-            assert msg["content"].startswith("[Tool:")
-            assert "Lorem ipsum" not in msg["content"]
+    assert not any(m.get("_stubbed") for m in tool_msgs), (
+        "A file read once must not be stubbed in the persisted session"
+    )
+    assert any(
+        "Lorem ipsum" in m.get("content", "")
+        for m in tool_msgs
+        if isinstance(m.get("content"), str)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_reread_supersedes_the_earlier_copy(
+    agent_loop, session, workspace, large_file,
+):
+    """Two reads of one path → the earlier copy is stubbed, the newest survives.
+
+    Whether the model actually re-reads is up to the model, so this skips
+    rather than fails when only one read happened.
+    """
+    await agent_loop.run(
+        initial_message=(
+            "Read the file large_document.txt. Then read large_document.txt "
+            "again to double-check. Reply with just: done."
+        ),
+    )
+
+    tool_msgs = [
+        m for m in session.get_messages()
+        if m.get("role") == "tool" and isinstance(m.get("content"), str)
+    ]
+    if len(tool_msgs) < 2:
+        pytest.skip("Model did not re-read the file — nothing to supersede")
+
+    stubbed = [m for m in tool_msgs if m.get("_stubbed")]
+    assert stubbed, "A re-read of the same path must supersede the earlier copy"
+
+    for msg in stubbed:
+        assert msg["content"].startswith("[SUPERSEDED")
+        assert "NOT the content" in msg["content"]
+        assert "Agent summary:" not in msg["content"]
+
+    # Exactly one live copy of the file remains, and it is the newest.
+    live = [m for m in tool_msgs if not m.get("_stubbed")]
+    assert live, "The newest copy must survive"
+    assert live[-1] is tool_msgs[-1]
