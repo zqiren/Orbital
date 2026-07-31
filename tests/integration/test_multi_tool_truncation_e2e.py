@@ -32,7 +32,15 @@ skip_no_key = pytest.mark.skipif(
     reason="AGENT_OS_TEST_API_KEY not set — skipping real LLM integration tests",
 )
 
-pytestmark = [skip_no_key, pytest.mark.timeout(120)]
+# The wall-clock a turn needs depends entirely on the model under test, so a
+# hard-coded number is only ever right for one of them. 120s fits the default
+# kimi-k2.5; MiniMax-M3 needs far more, because its reasoning is locked on
+# (model_only — `disable_reasoning` is a no-op) and every iteration pays for a
+# think block. Override with AGENT_OS_TEST_TIMEOUT when pointing these at a
+# slower model, e.g. AGENT_OS_TEST_TIMEOUT=600 for M3.
+TIMEOUT = int(os.environ.get("AGENT_OS_TEST_TIMEOUT", "120"))
+
+pytestmark = [skip_no_key, pytest.mark.timeout(TIMEOUT)]
 
 # ---------------------------------------------------------------------------
 # Imports
@@ -136,7 +144,7 @@ def three_files(workspace):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(TIMEOUT)
 async def test_multiple_reads_of_distinct_files_all_stay_live(
     agent_loop, session, workspace, three_files,
 ):
@@ -174,7 +182,7 @@ async def test_multiple_reads_of_distinct_files_all_stay_live(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(TIMEOUT)
 async def test_all_disk_backups_created(
     agent_loop, session, workspace, three_files,
 ):
@@ -219,7 +227,7 @@ async def test_all_disk_backups_created(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(TIMEOUT)
 async def test_any_stub_is_a_supersession_stub_and_is_honest(
     agent_loop, session, workspace, three_files,
 ):
@@ -254,7 +262,7 @@ async def test_any_stub_is_a_supersession_stub_and_is_honest(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(TIMEOUT)
 async def test_session_jsonl_keeps_content_after_multi_read(
     agent_loop, session, workspace, three_files,
 ):
