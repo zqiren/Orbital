@@ -30,7 +30,9 @@ from agent_os.agent.providers.types import (
 )
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.tool_result_filters import dispatch_prefilter
-from agent_os.agent.tool_result_lifecycle import truncate_consumed_tool_results
+from agent_os.agent.tool_result_lifecycle import (
+    archive_and_supersede_tool_results,
+)
 from agent_os.budget.ledger import (
     LedgerEvent,
     SOURCE_MANAGEMENT,
@@ -1038,9 +1040,17 @@ class AgentLoop:
                         break
 
                     self._session.append(assistant_msg)
-                    truncate_consumed_tool_results(
-                        self._session, response.text, iteration,
-                    )
+                    # No blanket stubbing of consumed tool results here any
+                    # more. Rewriting every tool result on every LLM response
+                    # took documents away from the agent while it was still
+                    # reasoning about them, and the stub was shaped like a
+                    # successful retrieval, so history told the model it had
+                    # already looked. Context pressure belongs to compaction
+                    # (compaction.py, the token-pressure trigger below, and the
+                    # sliding window in context.py) — not to history mutation.
+                    # What remains: the disk archive, plus stubbing a result
+                    # whose target was fetched again later in this session.
+                    archive_and_supersede_tool_results(self._session, iteration)
                     self._note_exit("text_complete", iteration)
                     break
 
@@ -1057,10 +1067,14 @@ class AgentLoop:
                     raw_msg["_status"] = status
                 self._session.append(raw_msg)
 
-                # Truncate tool results consumed by this LLM response
-                truncate_consumed_tool_results(
-                    self._session, response.text, iteration,
-                )
+                # Archive large tool results to disk, and stub only those a
+                # later fetch of the same target has superseded. The old
+                # blanket truncation of every consumed result lived here: it
+                # mutated history on every iteration and cost the agent
+                # documents it was still using mid-turn. Context pressure is
+                # compaction's job (compaction.py, the token-pressure trigger
+                # further down this loop, the sliding window in context.py).
+                archive_and_supersede_tool_results(self._session, iteration)
 
                 # ── Queue signal detection ────────────────────────────────
                 # Normalize tool calls, then scan for every terminal queue
