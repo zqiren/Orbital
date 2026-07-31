@@ -328,3 +328,134 @@ async def test_schedule_without_callback_is_safe():
     msg = loop.schedule_checkpoint("agent_decided")
     assert "unavailable" in msg
     await loop.drain_refresh()               # no-op, must not raise
+
+
+# ---------------------------------------------------------------------------
+# Cross-session single-flight (orbital-marketing incident, 2026-07-28/29).
+#
+# The single-flight gate and the debounce both lived on the AgentLoop, but the
+# files they protect ({workspace}/orbital/*.md) belong to the PROJECT. Two
+# sessions on one project each got a fresh loop -> _refresh_task None and
+# _last_merge_at -inf -> both guards open -> two passes over the same four
+# files. The loser's OCC baseline was invalidated by the winner's own write and
+# its merge was discarded, logged as "user mid-edit detected" with no user
+# involved. Observed twice: sessions dbbbc41a/a58482e4 (07-28 19:18/19:20) and
+# again 07-29 11:50/11:53.
+# ---------------------------------------------------------------------------
+
+def _make_project_loop(refresh_calls, project_dir, *, gate: asyncio.Event | None = None,
+                       uuid: str = "sess"):
+    """A loop bound to ``project_dir`` — the resource the gate must cover."""
+    async def refresh_callback(trigger_name: str) -> None:
+        refresh_calls.append((uuid, trigger_name))
+        if gate is not None:
+            await gate.wait()
+
+    session = MagicMock()
+    session.session_uuid = uuid
+    session._stopped = False
+    session.is_stopped.side_effect = lambda: session._stopped
+    session.stop.side_effect = lambda: setattr(session, "_stopped", True)
+    return AgentLoop(
+        session=session,
+        provider=MagicMock(),
+        tool_registry=MagicMock(),
+        context_manager=MagicMock(),
+        on_session_end_refresh=refresh_callback,
+        project_dir=project_dir,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clear_project_refresh_registry():
+    """Project-scoped gate state must not leak between tests."""
+    import agent_os.agent.loop as _loop_mod
+    reg = getattr(_loop_mod, "_PROJECT_REFRESH", None)
+    if reg is not None:
+        reg.clear()
+    yield
+    reg = getattr(_loop_mod, "_PROJECT_REFRESH", None)
+    if reg is not None:
+        reg.clear()
+
+
+@pytest.mark.asyncio
+async def test_second_session_on_same_project_coalesces_instead_of_spawning():
+    """THE regression: session B must not start a competing pass over the same
+    files while session A's pass is still in flight."""
+    calls = []
+    gate = asyncio.Event()
+    a = _make_project_loop(calls, "/ws/proj-1", gate=gate, uuid="sess-A")
+    b = _make_project_loop(calls, "/ws/proj-1", uuid="sess-B")
+
+    assert a.schedule_checkpoint("agent_decided").startswith("Consolidation scheduled")
+    await asyncio.sleep(0)                      # let A's pass reach the gate
+    assert calls == [("sess-A", "agent_decided")]
+
+    msg = b.schedule_checkpoint("agent_decided")
+
+    assert "coalesced" in msg.lower(), f"session B was not coalesced: {msg!r}"
+    assert b._refresh_task is None, "session B spawned a competing pass"
+    assert calls == [("sess-A", "agent_decided")], (
+        f"a second pass ran over the same project files: {calls}"
+    )
+
+    gate.set()
+    await a.drain_refresh()
+
+
+@pytest.mark.asyncio
+async def test_fresh_session_does_not_bypass_the_project_debounce():
+    """A new loop starts at _last_merge_at=-inf; that must not reopen the
+    debounce for a project whose pass just landed."""
+    calls = []
+    a = _make_project_loop(calls, "/ws/proj-2", uuid="sess-A")
+    a.schedule_checkpoint("agent_decided")
+    await a.drain_refresh()                     # A's pass completes
+    assert len(calls) == 1
+
+    b = _make_project_loop(calls, "/ws/proj-2", uuid="sess-B")
+    msg = b.schedule_checkpoint("agent_decided")
+
+    assert "deferred" in msg.lower(), f"fresh session bypassed the debounce: {msg!r}"
+    assert len(calls) == 1, f"a second pass ran inside the debounce window: {calls}"
+    await b.drain_refresh()
+
+
+@pytest.mark.asyncio
+async def test_different_projects_are_independent():
+    """The gate must be per-project, not global — an unrelated project's pass
+    must never block this one."""
+    calls = []
+    gate = asyncio.Event()
+    a = _make_project_loop(calls, "/ws/proj-A", gate=gate, uuid="sess-A")
+    b = _make_project_loop(calls, "/ws/proj-B", uuid="sess-B")
+
+    a.schedule_checkpoint("agent_decided")
+    await asyncio.sleep(0)
+    msg = b.schedule_checkpoint("agent_decided")
+
+    assert msg.startswith("Consolidation scheduled"), f"proj-B was blocked: {msg!r}"
+    gate.set()
+    await a.drain_refresh()
+    await b.drain_refresh()
+    assert sorted(calls) == [("sess-A", "agent_decided"), ("sess-B", "agent_decided")]
+
+
+@pytest.mark.asyncio
+async def test_loop_without_project_dir_keeps_per_loop_behavior():
+    """No project_dir (lightweight/test loops) → unchanged per-loop gating."""
+    calls = []
+    gate = asyncio.Event()
+    a = _make_project_loop(calls, None, gate=gate, uuid="sess-A")
+    b = _make_project_loop(calls, None, uuid="sess-B")
+
+    a.schedule_checkpoint("agent_decided")
+    await asyncio.sleep(0)
+    msg = b.schedule_checkpoint("agent_decided")
+
+    assert msg.startswith("Consolidation scheduled")
+    gate.set()
+    await a.drain_refresh()
+    await b.drain_refresh()
+    assert len(calls) == 2

@@ -353,3 +353,49 @@ async def test_log_includes_all_required_structured_fields(tmp_path, caplog):
     assert isinstance(getattr(rec, "observed_mtime", None), int)
     assert getattr(rec, "cache_thrash_telemetry", None) is True
     assert rec.levelno == logging.WARNING
+
+
+# ---------------------------------------------------------------------------
+# Truth in the abort message (orbital-marketing, 2026-07-28/29).
+#
+# Every OCC abort blamed "user mid-edit detected". In all four observed cases
+# the observed_mtime was the timestamp of a CONCURRENT CONSOLIDATION PASS's own
+# write — no user touched anything. The distinction matters: a real mid-edit is
+# the feature working, a self-collision is a bug, and they were indistinguishable
+# in the log.
+# ---------------------------------------------------------------------------
+
+def test_occ_abort_names_a_concurrent_pass_when_the_daemon_made_the_write(tmp_path, caplog):
+    wf = WorkspaceFileManager(str(tmp_path))
+    wf.write("decisions", "## 2026-07-28: A\n")
+    stale_baseline = 1  # anything that is not the current mtime
+
+    with caplog.at_level(logging.WARNING):
+        ok = wsf_module._occ_write_metadata(
+            wf, "decisions", "## 2026-07-28: B\n", stale_baseline,
+            project_id="proj_x",
+        )
+
+    assert ok is False
+    msg = caplog.text
+    assert "concurrent consolidation pass" in msg.lower(), msg
+    assert "user mid-edit" not in msg.lower(), (
+        "a daemon-authored write must not be reported as a user edit"
+    )
+
+
+def test_occ_abort_still_names_the_user_for_a_real_outside_edit(tmp_path, caplog):
+    wf = WorkspaceFileManager(str(tmp_path))
+    wf.write("decisions", "## 2026-07-28: A\n")
+    # A writer that is NOT the daemon's write path touches the file.
+    path = wf._file_path("decisions")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("## hand edit\n")
+
+    with caplog.at_level(logging.WARNING):
+        ok = wsf_module._occ_write_metadata(
+            wf, "decisions", "## 2026-07-28: B\n", 1, project_id="proj_x",
+        )
+
+    assert ok is False
+    assert "user mid-edit" in caplog.text.lower(), caplog.text

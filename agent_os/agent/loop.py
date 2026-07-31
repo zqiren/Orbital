@@ -60,6 +60,21 @@ COOLDOWN_TURNS = 50
 # which stay synchronous and drain the gate instead.
 REFRESH_DEBOUNCE_S = 300
 
+# Spec 013's single-flight gate and debounce originally lived on the AgentLoop,
+# but the files a pass rewrites ({workspace}/orbital/*.md) belong to the
+# PROJECT, not the session. Two sessions on one project each got a fresh loop
+# (_refresh_task None, _last_merge_at -inf), so both guards read open and both
+# spawned a pass over the same four files. The loser's OCC baselines — captured
+# before a 13-15 min LLM merge — were invalidated by the winner's own write, so
+# its merge was discarded and logged as "user mid-edit detected" with no user
+# involved (orbital-marketing, 2026-07-28 and 2026-07-29).
+#
+# Keyed by workspace path because that IS the contended resource. Entries are
+# small and bounded by project count; last_merge_at must outlive the task, so
+# entries are not evicted when a pass finishes. Loops with no project_dir
+# (lightweight/test loops) fall back to the per-loop fields, unchanged.
+_PROJECT_REFRESH: dict[str, dict] = {}
+
 # Max nudge-retries per run when the model returns a no-tool-call response
 # with no visible text (e.g. generation died inside its thinking block and
 # the provider finalized the stream anyway — MiniMax-M3, 2026-07-13). Bounded
@@ -178,6 +193,12 @@ class AgentLoop:
         # the single-flight gate for background passes (the spec's
         # `_refresh_inflight`). Dirty = a trigger arrived while a pass was in
         # flight or debounced; consumed at the turn boundary or session end.
+        #
+        # These two stay per-loop, but they are only AUTHORITATIVE when this
+        # loop has no project_dir. When it does, `_PROJECT_REFRESH` holds the
+        # real gate — see `_refresh_gate_state`. The dirty bit is deliberately
+        # per-loop either way: it records that THIS session still wants a pass,
+        # and its own turn boundary picks it up once the project gate opens.
         self._refresh_dirty: bool = False
         self._last_merge_at: float = float("-inf")   # monotonic; -inf → first schedule always passes debounce
 
@@ -1445,10 +1466,16 @@ class AgentLoop:
                             iteration,
                             self._context_manager.usage_percentage * 100,
                         )
-                        self._refresh_task = asyncio.create_task(
+                        _tp_task = asyncio.create_task(
                             self._run_refresh("token_pressure", iteration),
                             name=f"refresh-tp-{self._session.session_uuid}-{iteration}",
                         )
+                        self._refresh_task = _tp_task
+                        # Publish to the project gate too: this path bypasses
+                        # _spawn_refresh, and an unpublished pass is invisible
+                        # to a sibling session's scheduler, which would then
+                        # spawn straight into it.
+                        self._register_refresh_task(_tp_task)
                         try:
                             await self._refresh_task
                         except asyncio.CancelledError:
@@ -1460,6 +1487,7 @@ class AgentLoop:
                                 raise
                         finally:
                             self._refresh_task = None
+                            self._clear_refresh_task(_tp_task)
 
                     # Pre-compaction memory flush: give agent one turn to save state
                     try:
@@ -1689,6 +1717,11 @@ class AgentLoop:
             return
         iteration = self._current_iteration
         self._last_merge_at = time.monotonic()
+        gate = self._refresh_gate()
+        if gate is not None:
+            # Project-scoped debounce: a sibling session starting later must
+            # see this spawn, or a fresh loop's -inf reopens the window.
+            gate["last_merge_at"] = self._last_merge_at
         self._refresh_dirty = False           # fresh pass reads files fresh — covers all prior triggers
         # Reset at SPAWN (and again in _run_refresh's finally): turns counted
         # while a slow pass runs are deliberately discarded — benign, and it
@@ -1706,10 +1739,12 @@ class AgentLoop:
             name=f"refresh-{trigger}-{self._session.session_uuid}-{iteration}",
         )
         self._refresh_task = task
+        self._register_refresh_task(task)
 
         def _on_refresh_done(t: asyncio.Task) -> None:
             if self._refresh_task is t:
                 self._refresh_task = None
+            self._clear_refresh_task(t)
             # Idempotent with _run_refresh's finally; covers a task cancelled
             # before its first tick (finally never ran → marker would leak).
             if hasattr(self._context_manager, "_refresh_in_flight"):
@@ -1725,11 +1760,45 @@ class AgentLoop:
 
         task.add_done_callback(_on_refresh_done)
 
+    def _refresh_gate(self) -> dict | None:
+        """This project's gate entry, or None when the loop isn't project-bound."""
+        if not self._project_dir:
+            return None
+        return _PROJECT_REFRESH.setdefault(
+            self._project_dir, {"task": None, "last_merge_at": float("-inf")}
+        )
+
+    def _refresh_gate_state(self) -> tuple[asyncio.Task | None, float]:
+        """(in-flight pass, last spawn time) for whatever scope owns the files.
+
+        Project scope when this loop has a project_dir — the four Layer-1 files
+        are shared by every session on that project, so a sibling session's
+        pass must count as in-flight here. Per-loop otherwise.
+        """
+        gate = self._refresh_gate()
+        if gate is None:
+            return self._refresh_task, self._last_merge_at
+        return gate["task"], gate["last_merge_at"]
+
+    def _register_refresh_task(self, task: asyncio.Task) -> None:
+        """Publish a started pass to the project gate (no-op when unbound)."""
+        gate = self._refresh_gate()
+        if gate is not None:
+            gate["task"] = task
+
+    def _clear_refresh_task(self, task: asyncio.Task) -> None:
+        """Retract a finished pass, unless a newer one already replaced it."""
+        gate = self._refresh_gate()
+        if gate is not None and gate["task"] is task:
+            gate["task"] = None
+
     def schedule_checkpoint(self, trigger: str = "agent_decided") -> str:
         """Single-flight, debounced, coalescing scheduler (spec 013).
 
         Synchronous by design: no await between the in-flight check and the
-        spawn, so two callers can never both observe 'no pass in flight'.
+        spawn, so two callers can never both observe 'no pass in flight'. That
+        holds across sessions too — the gate consulted here is project-scoped
+        (`_refresh_gate_state`) and every mutation of it is synchronous.
         """
         if self._on_session_end_refresh is None:
             return "State refresh unavailable in this session."
@@ -1738,15 +1807,16 @@ class AgentLoop:
             # session never reports "scheduled" for a pass that _spawn_refresh
             # will then refuse (spec 013 race #7) — keeps the ack truthful.
             return "State refresh unavailable in this session."
-        if self._refresh_task is not None and not self._refresh_task.done():
+        inflight, last_merge_at = self._refresh_gate_state()
+        if inflight is not None and not inflight.done():
             self._refresh_dirty = True
             return ("Consolidation already in flight — your request was "
                     "coalesced into it. No further calls needed; the "
                     "[MEMORY HYGIENE] flag may persist until the pass lands.")
-        if time.monotonic() - self._last_merge_at < REFRESH_DEBOUNCE_S:
+        if time.monotonic() - last_merge_at < REFRESH_DEBOUNCE_S:
             self._refresh_dirty = True
             remaining = max(
-                1, int(REFRESH_DEBOUNCE_S - (time.monotonic() - self._last_merge_at)) + 1
+                1, int(REFRESH_DEBOUNCE_S - (time.monotonic() - last_merge_at)) + 1
             )
             return (f"Consolidation ran recently — deferred; it will fire "
                     f"automatically in ~{remaining}s when the debounce window "
@@ -1759,24 +1829,36 @@ class AgentLoop:
 
     def _maybe_consume_dirty(self) -> None:
         """Turn-boundary pickup of a coalesced/deferred trigger (spec 013)."""
+        inflight, last_merge_at = self._refresh_gate_state()
         if (
             self._refresh_dirty
             and self._on_session_end_refresh is not None
-            and (self._refresh_task is None or self._refresh_task.done())
-            and time.monotonic() - self._last_merge_at >= REFRESH_DEBOUNCE_S
+            and (inflight is None or inflight.done())
+            and time.monotonic() - last_merge_at >= REFRESH_DEBOUNCE_S
         ):
             self._spawn_refresh("agent_decided_coalesced")
 
     async def drain_refresh(self) -> None:
-        """Await any in-flight background pass. Called before the two passes
-        that stay synchronous (token_pressure, session boundary) so two
-        consolidations never overlap (spec 013 race #3)."""
-        task = self._refresh_task
+        """Await any in-flight background pass for this PROJECT. Called before
+        the two passes that stay synchronous (token_pressure, session boundary)
+        so two consolidations never overlap (spec 013 race #3).
+
+        Project-scoped, not loop-scoped: draining only our own task would let a
+        sibling session's pass keep running straight into the synchronous one,
+        which is the collision this gate exists to prevent.
+        """
+        task, _ = self._refresh_gate_state()
         if task is not None and not task.done():
+            mine = task is self._refresh_task
             try:
                 await task
             except asyncio.CancelledError:
-                raise
+                # Our own cancellation must propagate (terminate()). A sibling
+                # session cancelling ITS pass is not a cancellation of this
+                # turn — distinguished by who actually got cancelled, so a
+                # cancel delivered to us still re-raises.
+                if mine or not task.cancelled():
+                    raise
             except Exception:
                 pass  # _run_refresh already logged it
 
