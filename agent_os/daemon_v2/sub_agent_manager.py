@@ -1093,6 +1093,46 @@ class SubAgentManager:
                 dispatch_id=prompt.dispatch_id,
             )
 
+    async def _mark_queued_prompts_dropped(
+        self, dropped, project_id: str, handle: str, *, session_id: str,
+        why: str,
+    ) -> None:
+        """Leave a durable timeline row for queued prompts that never dispatch.
+
+        A queued @mention is asymmetric (backlog #26d): the user's own message
+        is persisted up front by ``persist_mention_message``, but its dispatch
+        marker is only written when the prompt actually fires. Dropping the
+        queue entry therefore left an orphaned "You -> handle" bubble with
+        nothing after it — no trace in the session JSONL of what became of the
+        mention.
+
+        Reuses ``on_failed`` rather than inventing a marker shape: its
+        ``[Sub-agent] {handle} failed: {reason}`` text already has both a
+        renderer rule and a marker-parity fixture, so a dropped prompt renders
+        with no frontend change. ``reason`` carries the honest attribution —
+        a user-initiated stop is not a malfunction, so the text must read as
+        an explanation rather than an error.
+
+        One marker per dropped prompt, not one per drop: each queued entry has
+        its own orphaned user bubble upstream, and an aggregate row would
+        leave all but one of them unexplained.
+        """
+        if not dropped or self._lifecycle_observer is None:
+            return
+        for _prompt in dropped:
+            try:
+                await self._lifecycle_observer.on_failed(
+                    project_id, handle,
+                    reason=f"queued message dropped: {why}",
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.exception(
+                    "lifecycle_observer.on_failed raised while marking a "
+                    "dropped queued prompt for project=%s handle=%s",
+                    project_id, handle,
+                )
+
     async def _on_prompt_turn_closed(
         self, project_id: str, handle: str, *, session_id: str | None = None,
         cause: str | None = None,
@@ -1109,10 +1149,14 @@ class SubAgentManager:
                 # gone. Never drain queued work into this dead/unknown
                 # transport; mark it broken so the next send fails honestly
                 # until the handle is stopped/restarted.
-                self._prompt_queues.pop(key, None)
+                dropped = self._prompt_queues.pop(key, None)
                 adapter = self._adapters.get(sk, {}).get(handle)
                 if adapter is not None:
                     adapter._broken = True
+                await self._mark_queued_prompts_dropped(
+                    dropped, project_id, handle, session_id=session_id,
+                    why="transport ended before dispatch",
+                )
                 return
             queue = self._prompt_queues.get(key)
             if not queue:
@@ -1120,7 +1164,11 @@ class SubAgentManager:
                 return
             adapter = self._adapters.get(sk, {}).get(handle)
             if adapter is None or getattr(adapter, "_broken", False) is True:
-                self._prompt_queues.pop(key, None)
+                dropped = self._prompt_queues.pop(key, None)
+                await self._mark_queued_prompts_dropped(
+                    dropped, project_id, handle, session_id=session_id,
+                    why="the sub-agent was no longer available before dispatch",
+                )
                 return
             prompt = queue.popleft()
             if not queue:
@@ -1518,7 +1566,14 @@ class SubAgentManager:
                         )
                 key = (project_id, self._resolve_session_id(session_id), handle)
                 self._prompt_active.discard(key)
-                self._prompt_queues.pop(key, None)
+                dropped = self._prompt_queues.pop(key, None)
+                # The on_failed above covers only the send that raised; the
+                # prompts still waiting behind it are discarded here and are
+                # the same silent-drop class as every other pop of this queue.
+                await self._mark_queued_prompts_dropped(
+                    dropped, project_id, handle, session_id=session_id,
+                    why="a prior send failed before dispatch",
+                )
                 return
 
         adapter._background_send_task = asyncio.create_task(
@@ -1585,9 +1640,16 @@ class SubAgentManager:
         # provider yet.  Pending in-flight interactions are rejected by the
         # transport's stop() implementation so the original JSON-RPC request
         # cannot remain stranded.
-        self._prompt_queues.pop(prompt_key, None)
+        dropped = self._prompt_queues.pop(prompt_key, None)
         self._prompt_active.discard(prompt_key)
         self._permission_bypass_until.pop(prompt_key, None)
+        # Mark before the kill, not after: the teardown below can exceed its
+        # wait budget and return early, and these rows are the only record
+        # that the queued messages existed at all.
+        await self._mark_queued_prompts_dropped(
+            dropped, project_id, handle, session_id=session_id,
+            why="agent stopped before dispatch",
+        )
         teardown = asyncio.create_task(
             self._kill_confirm_and_release(project_id, session_id, handle),
             name=f"teardown-{project_id}-{handle}",

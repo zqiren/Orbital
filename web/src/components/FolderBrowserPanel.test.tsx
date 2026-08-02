@@ -5,14 +5,14 @@
 // @vitest-environment jsdom
 
 /**
- * FolderBrowserPanel unit tests (backlog #25) — the browsing UI extracted
- * from FolderPickerModal so it can be embedded inline in CreateProject's
- * workspace picker. Covers: browse-once-on-mount (regression guard for the
- * infinite re-fetch loop FolderPickerModal.test.tsx already guards), leaf
- * click selects, "Use this folder" selects the currently-browsed directory
- * regardless of children, and the "New folder" affordance (create -> POST
- * /api/v2/platform/mkdir -> navigate into + select the created path; a
- * mkdir error surfaces inline, never as a toast).
+ * FolderBrowserPanel unit tests (backlog #25) — the browsing UI embedded
+ * inline in CreateProject's workspace picker. Covers: browse-once-on-mount
+ * (the sole remaining regression guard for the infinite re-fetch loop, now
+ * that backlog #26 deleted the standalone-wrapper test that also covered it),
+ * leaf click selects, "Use this folder" selects the currently-browsed
+ * directory regardless of children, and the "New folder" affordance (create
+ * -> POST /api/v2/platform/mkdir -> navigate into + select the created path;
+ * a mkdir error surfaces inline, never as a toast).
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';

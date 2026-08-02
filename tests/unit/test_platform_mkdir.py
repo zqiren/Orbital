@@ -54,6 +54,58 @@ class TestMkdirValid:
         assert not missing_parent.exists()
 
 
+class TestMkdirRequiresAbsoluteParent:
+    """`parent` must be absolute (backlog #26b).
+
+    The picker only ever holds absolute paths (every value comes from /browse
+    or /folders), so a relative parent is a caller bug. Resolving it against
+    the daemon's cwd would silently create the folder somewhere the user never
+    chose. Note the relative fixtures below avoid a leading "/" on purpose:
+    `Path("/foo").is_absolute()` is False on Windows (no drive letter), so a
+    POSIX-absolute string is not a portable "relative" fixture.
+    """
+
+    @pytest.mark.parametrize("relative_parent", [
+        "relative/path",
+        "relative",
+        ".",
+        "..",
+        "./nested",
+        "",
+    ])
+    def test_rejects_relative_parent(self, client, relative_parent):
+        resp = client.post("/api/v2/platform/mkdir", json={
+            "parent": relative_parent,
+            "name": "leaf",
+        })
+        assert resp.status_code == 400
+        assert "absolute" in resp.json()["detail"].lower()
+
+    def test_relative_parent_creates_nothing_under_cwd(self, client, tmp_path, monkeypatch):
+        """The rejection must happen before any mkdir — a relative parent that
+        WOULD resolve to a real directory under the daemon's cwd must still
+        not materialize the leaf there."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "existing").mkdir()
+
+        resp = client.post("/api/v2/platform/mkdir", json={
+            "parent": "existing",
+            "name": "leaf",
+        })
+        assert resp.status_code == 400
+        assert not (tmp_path / "existing" / "leaf").exists()
+
+    def test_absolute_parent_still_accepted(self, client, tmp_path):
+        """Guard rails only — the happy path is unchanged. tmp_path is
+        platform-correct absolute on both POSIX and Windows."""
+        resp = client.post("/api/v2/platform/mkdir", json={
+            "parent": str(tmp_path),
+            "name": "absolute-ok",
+        })
+        assert resp.status_code == 200
+        assert (tmp_path / "absolute-ok").is_dir()
+
+
 class TestMkdirInvalidNames:
     """Cross-platform name validation — enforced on ALL platforms."""
 
