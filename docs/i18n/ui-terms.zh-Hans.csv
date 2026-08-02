@@ -374,20 +374,16 @@ sessionThreeDot.batch4,Coming in Batch 4,tooltip,SessionThreeDotMenu.tsx,Disable
 sessionThreeDot.rename,Rename,menu,SessionThreeDotMenu.tsx,Disabled rename action,重命名,
 sessionThreeDot.delete,Delete,menu,SessionThreeDotMenu.tsx,Disabled delete action,删除,
 sessionThreeDot.optionsAria,Session options,tooltip,SessionThreeDotMenu.tsx,Default aria-label for the menu trigger,会话选项,
-folderPicker.title,Choose Workspace Folder,heading,FolderPickerModal.tsx,Modal title for the folder picker,选择工作目录,
-folderPicker.shortcuts,Shortcuts,heading,FolderPickerModal.tsx,Shortcuts panel header,快捷方式,
 folderPicker.shortcut.home,Home,nav,FolderPickerModal.tsx,Home shortcut (from backend folder name),主目录,Backend supplies display_name; may not be translatable client-side.
 folderPicker.shortcut.desktop,Desktop,nav,FolderPickerModal.tsx,Desktop shortcut,桌面,Same caveat — backend-supplied name.
 folderPicker.shortcut.documents,Documents,nav,FolderPickerModal.tsx,Documents shortcut,文档,Backend-supplied name.
 folderPicker.shortcut.downloads,Downloads,nav,FolderPickerModal.tsx,Downloads shortcut,下载,Backend-supplied name.
 folderPicker.thisPc,This PC,nav,FolderPickerModal.tsx,Windows root shortcut label,此电脑,
 folderPicker.root,Root /,nav,FolderPickerModal.tsx,Unix root shortcut label,根目录 /,
-folderPicker.recent,Recent,heading,FolderPickerModal.tsx,Recent paths panel header,最近,
 folderPicker.empty,No folders here.,empty_state,FolderPickerModal.tsx,Shown when a directory has no subfolders,这里没有文件夹。,
 folderPicker.browseError,Failed to browse directory,message_error,FolderPickerModal.tsx,Error browsing a directory,浏览目录失败,
 folderPicker.manualPath.placeholder,Type a path and press Enter...,placeholder,FolderPickerModal.tsx,Manual path entry placeholder,输入路径并按回车…,
 folderPicker.cancel,Cancel,button,FolderPickerModal.tsx,Closes the folder picker,取消,Dedupe target.
-folderPicker.select,Select,button,FolderPickerModal.tsx,Confirms the selected folder,选择,
 folderPicker.useThisFolder,Use this folder,button,FolderBrowserPanel.tsx,Selects the currently-browsed directory even if it has children,使用此文件夹,New in backlog #25 — replaces the old modal-level Select button now that the panel is embeddable inline.
 folderPicker.newFolder.button,New folder,button,FolderBrowserPanel.tsx,Opens the inline new-folder name input,新建文件夹,New in backlog #25.
 folderPicker.newFolder.placeholder,Folder name,placeholder,FolderBrowserPanel.tsx,Placeholder for the new-folder name input,文件夹名称,New in backlog #25.

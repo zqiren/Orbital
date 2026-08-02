@@ -215,6 +215,7 @@ Each project maps to a workspace directory and maintains its own sessions, queue
 
 ```
 {workspace}/
++-- AGENTS.md                           # Onboarding signpost for external agents (seeded at creation, user-owned)
 +-- orbital/                            # Operational metadata
     +-- sessions/
     |   +-- {session_id}.jsonl          # Append-only session log

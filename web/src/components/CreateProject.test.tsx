@@ -230,3 +230,95 @@ describe('CreateProject — inline folder picker composes safely with the outer 
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
+
+describe('CreateProject — modal a11y (backlog #26c)', () => {
+  function dialog() {
+    return screen.getByRole('dialog');
+  }
+
+  it('exposes dialog semantics labelled by its own title', () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    const d = dialog();
+    expect(d.getAttribute('aria-modal')).toBe('true');
+    const labelledBy = d.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(labelledBy as string)?.textContent).toBe('New Project');
+  });
+
+  it('closes on Escape', () => {
+    const onCancel = vi.fn();
+    render(<CreateProject onSubmit={vi.fn()} onCancel={onCancel} />);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores non-Escape keys', () => {
+    const onCancel = vi.fn();
+    render(<CreateProject onSubmit={vi.fn()} onCancel={onCancel} />);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.keyDown(document.body, { key: 'a' });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('does NOT close when Escape is raised inside the embedded folder picker', async () => {
+    // The picker's new-folder input handles Escape itself (cancel the inline
+    // editor) and neither stops propagation nor preventDefaults. If the modal
+    // also acted on it, one keypress would discard the whole half-filled form.
+    const onCancel = vi.fn();
+    render(<CreateProject onSubmit={vi.fn()} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByText('Browse'));
+    await waitFor(() => {
+      const btn = screen.getByText('New folder').closest('button') as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByText('New folder'));
+    const folderNameInput = screen.getByPlaceholderText('Folder name');
+
+    fireEvent.keyDown(folderNameInput, { key: 'Escape' });
+
+    // The picker closed its inline editor; the modal stayed open.
+    expect(onCancel).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Folder name')).toBeNull();
+    });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('autofocuses the workspace field with preventScroll, deferred by two frames (WKWebView-safe)', async () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    const ws = workspaceInput();
+
+    // Not focused synchronously on mount. React's `autoFocus` prop would have
+    // landed focus by now, mid `animate-slide-up` — precisely the WKWebView
+    // scroll-chase this defers around. Checking activeElement (not a spy) is
+    // what makes this meaningful: a spy attached after render cannot observe
+    // a focus that already happened during it.
+    expect(document.activeElement).not.toBe(ws);
+
+    const focusSpy = vi.spyOn(ws, 'focus');
+    await waitFor(() => expect(focusSpy).toHaveBeenCalled());
+    expect(focusSpy.mock.calls[0][0]).toEqual({ preventScroll: true });
+    expect(document.activeElement).toBe(ws);
+  });
+
+  it('traps Tab within the dialog (Shift+Tab from the first focusable wraps to the last)', () => {
+    render(<CreateProject onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    const d = dialog();
+    const focusables = Array.from(
+      d.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    expect(focusables.length).toBeGreaterThan(1);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    first.focus();
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+  });
+});

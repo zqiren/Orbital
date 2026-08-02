@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import { ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
 import type {
   Autonomy,
@@ -74,6 +74,90 @@ export default function CreateProject({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const workspaceInputRef = useRef<HTMLInputElement>(null);
+  // The element focused before the modal mounted, restored when it unmounts.
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+
+  // Esc-to-close. The modal is mounted only while open (App routes to
+  // 'create'), so there is no `open` guard to check.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Escape raised inside the embedded folder picker belongs to the
+      // picker — it cancels the inline "New folder" editor. The picker's own
+      // handler neither stops propagation nor preventDefaults, so this
+      // listener has to scope itself out; otherwise one Escape would both
+      // cancel the folder editor AND tear down the modal, discarding
+      // everything already typed into the form.
+      const target = e.target as Node | null;
+      if (target && pickerRef.current?.contains(target)) return;
+      onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  // Autofocus the first field, then restore focus to the opener on unmount.
+  //
+  // Deliberately NOT React's `autoFocus` prop, and deliberately two frames
+  // late — both because this app ships on pywebview→WKWebView, not Chromium:
+  //  - the panel mounts mid `animate-slide-up`, i.e. translated 100% DOWN and
+  //    off-screen. WebKit's focus scroll-into-view targets an element's
+  //    VISUAL position, so focusing while it is still down there scrolls the
+  //    document to chase it. `preventScroll` suppresses that; Chromium never
+  //    showed it because it uses the layout position.
+  //  - `autoFocus` fires synchronously on mount, before the animating layer
+  //    has painted, and accepts no `preventScroll` option. The double rAF
+  //    guarantees a paint landed before focus moves.
+  useEffect(() => {
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        workspaceInputRef.current?.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      if (inner) cancelAnimationFrame(inner);
+      const prev = prevFocusRef.current;
+      prevFocusRef.current = null;
+      // Same rationale on restore — don't let refocusing the opener scroll.
+      if (prev && document.contains(prev)) prev.focus({ preventScroll: true });
+    };
+  }, []);
+
+  // Focus trap: keep Tab / Shift+Tab cycling within the modal.
+  function handleTrapTab(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'Tab') return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const focusables = Array.from(
+      panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey) {
+      if (active === first || !panel.contains(active)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !panel.contains(active)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   /** Shared by both workspace-change paths (typing the path directly, or
    * picking/creating a folder in the embedded browser): re-derive the name
@@ -150,10 +234,17 @@ export default function CreateProject({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
-      <div className="bg-background rounded-xl shadow-xl border border-border w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 animate-slide-up max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={handleTrapTab}
+        className="bg-background rounded-xl shadow-xl border border-border w-full max-w-[560px] max-h-[85vh] flex flex-col mx-4 animate-slide-up max-md:max-w-full max-md:max-h-full max-md:h-full max-md:mx-0 max-md:rounded-none"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
-          <h2 className="text-sm font-semibold text-primary">{t('createProject.title')}</h2>
+          <h2 id={titleId} className="text-sm font-semibold text-primary">{t('createProject.title')}</h2>
           <button
             type="button"
             onClick={onCancel}
@@ -172,6 +263,7 @@ export default function CreateProject({
             </label>
             <div className="flex gap-2">
               <input
+                ref={workspaceInputRef}
                 type="text"
                 value={workspace}
                 onChange={(e) => handleWorkspaceInputChange(e.target.value)}
@@ -190,7 +282,7 @@ export default function CreateProject({
               <p className="text-xs text-error mt-1">{errors.workspace}</p>
             )}
             {pickerExpanded && (
-              <div className="mt-2 border border-border rounded-lg overflow-hidden">
+              <div ref={pickerRef} className="mt-2 border border-border rounded-lg overflow-hidden">
                 <FolderBrowserPanel compact onSelect={handleWorkspaceSelect} />
               </div>
             )}

@@ -198,6 +198,9 @@ vi.mock('../hooks/useQueue', () => ({
 import ChatView, { appendLiveReasoning } from './ChatView';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
+// Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
+// transform tests and the pytest read. See the marker-row tests at the end.
+import subAgentMarkerFixturesData from '../utils/subAgentMarkerFixtures.json';
 
 const project: Project = {
   project_id: 'p1',
@@ -2285,5 +2288,131 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
     const err = container.querySelector('[data-testid="cold-start-error"]');
     expect(err).not.toBeNull();
     expect(err!.textContent).toMatch(/API key/i);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Sub-agent lifecycle marker rows, end to end (backlog #27). The transform's
+// own parity tests (utils/chatTransform.test.ts + the paired pytest) prove a
+// marker PARSES; they cannot see what the user is told about it, and that is
+// where the second half of this bug lived: the label chain here ended in an
+// unguarded `/* failed */` fallback, so a marker that parsed correctly still
+// rendered as "failed". These tests close that gap by driving the same
+// fixture file through the real component.
+// --------------------------------------------------------------------------
+
+const markerFixtures = subAgentMarkerFixturesData as Array<{
+  shape: string;
+  action: string;
+  content: string;
+}>;
+
+function sysRow(content: string) {
+  return {
+    role: 'system',
+    content,
+    source: 'management',
+    session_id: 's1',
+    timestamp: new Date().toISOString(),
+  };
+}
+
+describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
+  it('renders a row for EVERY producer shape in the parity fixture', async () => {
+    chatInitialResponse = {
+      data: markerFixtures.map((f) => sysRow(f.content)),
+      total: markerFixtures.length,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    const rows = [...container.querySelectorAll('[data-testid="sub-agent-activity"]')];
+    expect(rows.length).toBe(markerFixtures.length);
+    expect(rows.map((r) => r.getAttribute('data-action'))).toEqual(
+      markerFixtures.map((f) => f.action),
+    );
+  });
+
+  it('a user stop is never labelled a failure, and says what it killed', async () => {
+    // The whole point of #27's second half: before the exhaustive switch,
+    // 'stopped' fell through to the failed copy and the timeline told the
+    // user their own stop request had failed.
+    chatInitialResponse = {
+      data: [
+        sysRow(
+          '[Sub-agent] claude-code stopped by user. Terminated 2 background ' +
+            'process(es): npm run dev; python server.py. This background work did NOT complete.',
+        ),
+      ],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    const row = container.querySelector('[data-testid="sub-agent-activity"]');
+    expect(row).not.toBeNull();
+    const text = row!.textContent ?? '';
+    expect(text).not.toMatch(/fail/i);
+    expect(text).toContain('stopped by you');
+    // The destroyed background work is the part the user did not ask for,
+    // so it must be on the row, not swallowed.
+    expect(text).toContain('2');
+    expect(text).toContain('npm run dev');
+  });
+
+  it('a blocked sub-agent shows its question, never the agent-facing instructions', async () => {
+    chatInitialResponse = {
+      data: [
+        sysRow(
+          '[Sub-agent] claude-code requires input (question): Which file should I edit? ' +
+            'Respond on the same in-flight request with agent_message(action="respond", ' +
+            'agent="claude-code", interaction_id="int-1", ...). For a free-form question, ' +
+            'put the answer in message. Do not send a new task.',
+        ),
+      ],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    const row = container.querySelector('[data-testid="sub-agent-activity"]');
+    expect(row).not.toBeNull();
+    const text = row!.textContent ?? '';
+    expect(text).toContain('Which file should I edit?');
+    expect(text).not.toContain('agent_message(');
+    expect(text).not.toContain('Do not send a new task');
+  });
+
+  it('tones rank by severity: lost work and interruptions warn, a plain stop does not', async () => {
+    chatInitialResponse = {
+      data: [
+        sysRow('[Sub-agent] claude-code stopped by user.'),
+        sysRow(
+          '[Sub-agent] claude-code teardown terminated 1 live background process(es): ' +
+            'npm run dev. This background work did NOT complete.',
+        ),
+        sysRow(
+          '[Sub-agent] claude-code was stopped before completing its current task ' +
+            '(turn interrupted — e.g. an approval denied with stop). No result was ' +
+            'produced. The agent remains available. Transcript: /x/y.jsonl',
+        ),
+        sysRow('[Sub-agent] claude-code stopped with error: boom'),
+      ],
+      total: 4,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    const byAction = Object.fromEntries(
+      [...container.querySelectorAll('[data-testid="sub-agent-activity"]')].map((r) => [
+        r.getAttribute('data-action'),
+        r.className,
+      ]),
+    );
+    // A stop the user asked for is not an alarm.
+    expect(byAction['stopped']).toContain('text-secondary');
+    expect(byAction['background_lost']).toContain('text-warning');
+    expect(byAction['interrupted']).toContain('text-warning');
+    expect(byAction['error']).toContain('text-error');
   });
 });

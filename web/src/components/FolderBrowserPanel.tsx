@@ -44,7 +44,7 @@ export interface FolderBrowserPanelProps {
    * navigates into it and selects it in one step).
    */
   onSelect: (path: string) => void;
-  /** Shorter panel for embedding inline in a modal (default: standalone-modal height). */
+  /** Shorter panel for embedding inline in a modal (default: full height). */
   compact?: boolean;
 }
 
@@ -56,10 +56,11 @@ const SHORTCUT_ICONS: Record<string, typeof Home> = {
 };
 
 /**
- * The browsing UI extracted from FolderPickerModal (backlog #25): shortcuts +
- * breadcrumb + entries + manual path input + "New folder", with no modal
- * chrome of its own so it can be embedded inline (CreateProject's workspace
- * picker) as well as wrapped in a standalone dialog (FolderPickerModal).
+ * The workspace browsing UI (backlog #25): shortcuts + breadcrumb + entries +
+ * manual path input + "New folder", with no modal chrome of its own so it can
+ * be embedded inline — today by CreateProject's workspace picker, its only
+ * consumer. The standalone-dialog wrapper it was extracted from was deleted in
+ * backlog #26 once that inline embed became the sole call site.
  */
 export default function FolderBrowserPanel({ onSelect, compact = false }: FolderBrowserPanelProps) {
   const t = useT();

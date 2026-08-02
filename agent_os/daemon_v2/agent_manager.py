@@ -4220,15 +4220,18 @@ class AgentManager:
             # mid-turn sub-agent failure just sits appended in session
             # history until the user happens to send something else
             # (backlog #23 D1; diagnosed live via a codex 400 the user never
-            # saw addressed). Scope is deliberately the negative terminals
-            # only, per the backlog row — `completed` plausibly shares the
-            # same gap but is out of scope here.
+            # saw addressed). Backlog #28 widens that scope from the negative
+            # terminals to EVERY tagged terminal — `completed`, `interrupted`
+            # and the fanout join summary share the identical gap — so the
+            # tag alone now means "a sub-agent reached a terminal state
+            # mid-turn, wake". Matching on the event rather than a kind list
+            # is what keeps a future producer from silently re-opening the
+            # gap by tagging itself with a kind nobody added here.
             wake_on_deferred_terminal = False
             for msg in handle.session.pop_deferred_messages():
                 handle.session.append(msg)
                 meta = msg.get("_meta") or {}
-                if (meta.get("event") == "sub_agent_terminal"
-                        and meta.get("kind") in ("error", "failed", "stopped")):
+                if meta.get("event") == "sub_agent_terminal":
                     wake_on_deferred_terminal = True
 
             # Check if paused for approval FIRST — don't drain the queue

@@ -28,5 +28,30 @@
     "shape": "stopped_with_error",
     "action": "error",
     "content": "[Sub-agent] claude-code stopped with error: model timed out. Transcript: /tmp/fixture-transcript.jsonl"
+  },
+  {
+    "shape": "interaction_required",
+    "action": "interaction_required",
+    "content": "[Sub-agent] claude-code requires input (question): Which file should I edit? Respond on the same in-flight request with agent_message(action=\"respond\", agent=\"claude-code\", interaction_id=\"fixture-int-1\", ...). For a free-form question, put the answer in message. Do not send a new task."
+  },
+  {
+    "shape": "stopped_by_user",
+    "action": "stopped",
+    "content": "[Sub-agent] claude-code stopped by user."
+  },
+  {
+    "shape": "stopped_by_user_with_background",
+    "action": "stopped",
+    "content": "[Sub-agent] claude-code stopped by user. Terminated 2 background process(es): npm run dev; python server.py. This background work did NOT complete."
+  },
+  {
+    "shape": "turn_interrupted",
+    "action": "interrupted",
+    "content": "[Sub-agent] claude-code was stopped before completing its current task (turn interrupted — e.g. an approval denied with stop). No result was produced. The agent remains available. Transcript: /tmp/fixture-transcript.jsonl"
+  },
+  {
+    "shape": "background_work_lost",
+    "action": "background_lost",
+    "content": "[Sub-agent] claude-code teardown terminated 2 live background process(es): npm run dev; python server.py. This background work did NOT complete."
   }
 ]

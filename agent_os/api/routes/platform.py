@@ -258,12 +258,19 @@ async def platform_mkdir(req: MkdirRequest):
 
     Creates ONLY the leaf (`Path.mkdir()`, never `parents=True`) so a typo'd
     parent path fails loudly (400) instead of materializing a deep wrong tree.
+
+    `parent` must be absolute. The picker always sends an absolute path (every
+    value it holds comes from /browse or /folders, both absolute), so a
+    relative one is a caller bug — and resolving it against the daemon's cwd
+    would silently create the folder somewhere the user never chose.
     """
     invalid_reason = _validate_folder_name(req.name)
     if invalid_reason:
         raise HTTPException(status_code=400, detail=invalid_reason)
 
     parent = Path(req.parent)
+    if not parent.is_absolute():
+        raise HTTPException(status_code=400, detail="Parent path must be absolute")
     if not parent.is_dir():
         raise HTTPException(status_code=400, detail="Parent directory does not exist")
 

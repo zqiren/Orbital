@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
+from agent_os.daemon_v2.agent_md_seeder import seed_project_agent_md
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
 from agent_os.daemon_v2.provider_errors import ProviderConfigError
@@ -537,6 +538,18 @@ async def create_project(req: CreateProjectRequest):
     except Exception:
         logger.error(
             "default skills install failed during create_project for %s",
+            pid, exc_info=True,
+        )
+
+    # Seed the workspace-root AGENTS.md signpost. Same failure posture as the
+    # skills seed — the file is a convenience for external agentic tools, and
+    # a missing one is never worth failing project creation over. Seeded once
+    # here only; there is deliberately no reconcile-on-start counterpart.
+    try:
+        seed_project_agent_md(_project_store, pid)
+    except Exception:
+        logger.error(
+            "AGENTS.md seeding failed during create_project for %s",
             pid, exc_info=True,
         )
 

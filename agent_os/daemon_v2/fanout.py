@@ -394,9 +394,18 @@ class FanoutRegistry:
             # The brief's own test stub accepts it either way, but a
             # positional call here would TypeError against production wiring
             # the moment a real project used fanout end-to-end.
+            #
+            # The join summary is the group's terminal event, so it carries
+            # the same `sub_agent_terminal` wake tag the per-worker terminals
+            # do (backlog #28 c). Without it, a fanout whose last worker
+            # landed mid-turn — the all-failed group included — resolved into
+            # a session that never woke to read the summary. `kind`
+            # distinguishes the group-level row from a single worker's.
             await self._inject(group.project_id, content,
                                session_id=group.session_id,
-                               meta={"display_content": display_content})
+                               meta={"event": "sub_agent_terminal",
+                                     "kind": "fanout_join",
+                                     "display_content": display_content})
         except Exception:
             # Guard failures (Task-2 brief teardown requirement): a dead
             # session must not raise out of resolution — the group is

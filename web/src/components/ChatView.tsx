@@ -2825,21 +2825,86 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               // mirrors 'failed''s styling/severity treatment below; it is
               // a distinct terminal outcome (a crash mid-turn vs. a clean
               // failure report), so it gets its own copy key.
-              const label =
-                item.action === 'started' ? t('chat.subActivity.started') :
-                item.action === 'sent' ? t('chat.subActivity.sent', { preview: item.preview ?? '' }) :
-                item.action === 'completed'
-                  ? (item.summary
+              //
+              // backlog #27: this was a ternary chain ending in an unguarded
+              // `/* failed */` fallback, so the four action values added for
+              // #27 would each have rendered as "failed" — the timeline
+              // telling the user their own stop request was a failure, with
+              // no type error to catch it. It is now an exhaustive switch:
+              // the next action added to the union fails `tsc` at the
+              // `never` assignment instead of shipping a plausible lie.
+              const label = ((): string => {
+                // Switch on a captured copy, not `item.action` directly:
+                // narrowing the discriminant would narrow `item` itself to
+                // `never` in the default branch and make the exhaustiveness
+                // proof below unwritable. Every field read here lives on the
+                // one sub_agent_activity shape, so nothing needs `item`
+                // narrowed per action anyway.
+                const action = item.action;
+                switch (action) {
+                  case 'started':
+                    return t('chat.subActivity.started');
+                  case 'sent':
+                    return t('chat.subActivity.sent', { preview: item.preview ?? '' });
+                  case 'completed':
+                    return item.summary
                       ? t('chat.subActivity.completed', { summary: item.summary })
-                      : t('chat.subActivity.completed', { summary: '' }).replace(/[:：]\s*$/, ''))
-                  : item.action === 'error'
-                  ? (item.error
+                      : t('chat.subActivity.completed', { summary: '' }).replace(/[:：]\s*$/, '');
+                  case 'error':
+                    return item.error
                       ? t('chat.subActivity.error', { error: item.error })
-                      : t('chat.subActivity.error', { error: '' }).replace(/[:：]\s*$/, ''))
-                  : /* failed */ (item.error
+                      : t('chat.subActivity.error', { error: '' }).replace(/[:：]\s*$/, '');
+                  case 'failed':
+                    return item.error
                       ? t('chat.subActivity.failed', { error: item.error })
-                      : t('chat.subActivity.failed', { error: '' }).replace(/[:：]\s*$/, ''));
-              const tone = (item.action === 'failed' || item.action === 'error') ? 'text-error/80' : 'text-secondary';
+                      : t('chat.subActivity.failed', { error: '' }).replace(/[:：]\s*$/, '');
+                  case 'stopped':
+                    // The stop itself is unremarkable — the user asked for
+                    // it. The background work it destroyed is the news.
+                    return item.count
+                      ? t('chat.subActivity.stoppedWithBackground', {
+                          n: item.count,
+                          commands: item.detail ?? '',
+                        })
+                      : t('chat.subActivity.stopped');
+                  case 'interrupted':
+                    return t('chat.subActivity.interrupted');
+                  case 'background_lost':
+                    return t('chat.subActivity.backgroundLost', {
+                      n: item.count ?? 0,
+                      commands: item.detail ?? '',
+                    });
+                  case 'interaction_required':
+                    return item.prompt
+                      ? t('chat.subActivity.interactionRequired', { prompt: item.prompt })
+                      : t('chat.subActivity.interactionRequired', { prompt: '' }).replace(/[:：]\s*$/, '');
+                  default: {
+                    // Unreachable while the switch stays exhaustive (this
+                    // assignment is the compile-time proof). It still runs
+                    // if a session written by a NEWER build is replayed
+                    // here, so it stays deliberately generic — an honest
+                    // "don't know" beats guessing a severity.
+                    const unhandled: never = action;
+                    return t('chat.subActivity.unknown', { action: String(unhandled) });
+                  }
+                }
+              })();
+              // Severity, not decoration. Red: something the user was
+              // waiting on will never arrive. Amber: work was destroyed or
+              // is blocked on them. Accent: needs their answer. Neutral: the
+              // user's own deliberate action — a plain stop is not a fault,
+              // but one that killed live background work is amber, because
+              // that part they did not ask for.
+              const tone =
+                item.action === 'failed' || item.action === 'error'
+                  ? 'text-error/80'
+                  : item.action === 'background_lost' ||
+                      item.action === 'interrupted' ||
+                      (item.action === 'stopped' && !!item.count)
+                    ? 'text-warning'
+                    : item.action === 'interaction_required'
+                      ? 'text-accent'
+                      : 'text-secondary';
               rendered = (
                 <div
                   key={`sa-${index}`}

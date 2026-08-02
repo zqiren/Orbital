@@ -1,4 +1,6 @@
+from pathlib import Path
 from types import SimpleNamespace
+import json
 import time
 from unittest.mock import MagicMock
 
@@ -44,9 +46,13 @@ class _Transport:
 class _Lifecycle:
     def __init__(self):
         self.routed = []
+        self.failed = []
 
     async def on_message_routed(self, *args, **kwargs):
         self.routed.append((args, kwargs))
+
+    async def on_failed(self, project_id, handle, reason, **kwargs):
+        self.failed.append((project_id, handle, reason, kwargs))
 
 
 @pytest.mark.asyncio
@@ -153,6 +159,220 @@ async def test_stop_clears_active_and_waiting_prompts(monkeypatch):
     assert result == "Stopped cursor"
     assert key not in manager._prompt_active
     assert key not in manager._prompt_queues
+
+
+class TestDroppedQueuedPromptsLeaveMarkers:
+    """backlog #26d — a queued-then-dropped @mention left zero trace.
+
+    The mention's own user message is persisted up front (by
+    ``persist_mention_message``), but its dispatch marker is only written when
+    the prompt actually fires. Every drop path therefore stranded a "You ->
+    handle" bubble with nothing after it. Each drop must now leave a durable
+    marker row explaining what became of the message.
+    """
+
+    @staticmethod
+    def _queue(manager, key, *messages):
+        from collections import deque
+        manager._prompt_queues[key] = deque(
+            SimpleNamespace(message=m) for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_stop_marks_each_dropped_queued_prompt(self, monkeypatch):
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+        key = ("p1", "s1", "cursor")
+        manager._prompt_active.add(key)
+        self._queue(manager, key, "later", "later-still")
+
+        async def _stopped(*args, **kwargs):
+            return "stopped"
+
+        monkeypatch.setattr(manager, "_kill_confirm_and_release", _stopped)
+        await manager.stop("p1", "cursor", session_id="s1")
+
+        # One marker per dropped message — each has its own orphaned user
+        # bubble upstream, so an aggregate row would leave one unexplained.
+        assert len(lifecycle.failed) == 2
+        for project_id, handle, reason, kwargs in lifecycle.failed:
+            assert (project_id, handle) == ("p1", "cursor")
+            assert kwargs["session_id"] == "s1"
+            # A user-initiated stop is not a malfunction: the text has to read
+            # as an explanation, not an error.
+            assert reason == "queued message dropped: agent stopped before dispatch"
+
+    @pytest.mark.asyncio
+    async def test_stop_with_empty_queue_marks_nothing(self, monkeypatch):
+        """Stopping an idle handle must not manufacture a phantom failure."""
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+
+        async def _stopped(*args, **kwargs):
+            return "stopped"
+
+        monkeypatch.setattr(manager, "_kill_confirm_and_release", _stopped)
+        await manager.stop("p1", "cursor", session_id="s1")
+
+        assert lifecycle.failed == []
+
+    @pytest.mark.asyncio
+    async def test_abnormal_terminal_marks_dropped_queue(self):
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+        adapter = SimpleNamespace(_transport=_Transport(), _broken=False)
+        manager._adapters[make_session_key("p1", "s1")] = {"cursor": adapter}
+        key = ("p1", "s1", "cursor")
+        manager._prompt_active.add(key)
+        self._queue(manager, key, "must-not-run")
+
+        await manager._on_prompt_turn_closed(
+            "p1", "cursor", session_id="s1", cause="stream_ended")
+
+        assert adapter._broken is True
+        assert key not in manager._prompt_queues
+        assert len(lifecycle.failed) == 1
+        assert lifecycle.failed[0][2] == (
+            "queued message dropped: transport ended before dispatch")
+
+    @pytest.mark.asyncio
+    async def test_broken_adapter_at_boundary_marks_dropped_queue(self):
+        """The whole waiting FIFO is discarded when the adapter is gone or
+        already broken — every entry gets its own row."""
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+        adapter = SimpleNamespace(_transport=_Transport(), _broken=True)
+        manager._adapters[make_session_key("p1", "s1")] = {"cursor": adapter}
+        key = ("p1", "s1", "cursor")
+        manager._prompt_active.add(key)
+        self._queue(manager, key, "one", "two")
+
+        await manager._on_prompt_turn_closed(
+            "p1", "cursor", session_id="s1", cause="success")
+
+        assert key not in manager._prompt_queues
+        assert len(lifecycle.failed) == 2
+        assert lifecycle.failed[0][2] == (
+            "queued message dropped: the sub-agent was no longer available "
+            "before dispatch")
+
+    @pytest.mark.asyncio
+    async def test_background_send_exception_marks_dropped_queue(self):
+        """The fifth drop site: a blocking-transport send that raises pops
+        the waiting FIFO — the send itself already gets on_failed, but the
+        prompts queued behind it must each get their own dropped row."""
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+
+        async def _boom(message):
+            raise RuntimeError("send exploded")
+
+        # No _transport with dispatch() -> send() takes the blocking
+        # _background_send path.
+        adapter = SimpleNamespace(_broken=False, send=_boom)
+        manager._adapters[make_session_key("p1", "s1")] = {"cursor": adapter}
+
+        await manager.send("p1", "cursor", "first", session_id="s1",
+                           dispatch_id="d1")
+        await manager.send("p1", "cursor", "waiting", session_id="s1",
+                           dispatch_id="d2")
+        await adapter._background_send_task
+
+        key = ("p1", "s1", "cursor")
+        assert key not in manager._prompt_queues
+        reasons = [entry[2] for entry in lifecycle.failed]
+        assert "background_send_exception" in reasons
+        assert ("queued message dropped: a prior send failed before dispatch"
+                in reasons)
+
+    @pytest.mark.asyncio
+    async def test_normal_drain_marks_nothing(self):
+        """A prompt that actually dispatches gets a routed marker and must
+        NOT also be reported as dropped."""
+        pm = _ProcessManager()
+        lifecycle = _Lifecycle()
+        manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
+        transport = _Transport()
+        adapter = SimpleNamespace(_transport=transport, _broken=False)
+        manager._adapters[make_session_key("p1", "s1")] = {"cursor": adapter}
+
+        await manager.send("p1", "cursor", "first", session_id="s1",
+                           dispatch_id="d1")
+        await manager.send("p1", "cursor", "second", session_id="s1",
+                           dispatch_id="d2")
+        await pm.turn_closed("p1", "cursor", session_id="s1", cause="success")
+
+        assert transport.messages == ["first", "second"]
+        assert lifecycle.failed == []
+        assert len(lifecycle.routed) == 2
+
+
+@pytest.mark.asyncio
+async def test_dropped_queued_mention_lands_a_durable_row_in_session_jsonl(tmp_path):
+    """End-to-end (backlog #26d): the user-visible bug is an empty timeline,
+    so assert the marker survives all the way to the session JSONL on disk —
+    through the REAL LifecycleObserver, not just an observer spy.
+
+    The agent-manager double reproduces ``inject_system_message``'s
+    live-handle branch verbatim (role/content/source/_meta appended to the
+    session); everything upstream of it is production code.
+    """
+    from agent_os.agent.session import Session
+    from agent_os.daemon_v2.lifecycle_observer import LifecycleObserver
+
+    session = Session.new("proj_abcd1234", str(tmp_path), "p1",
+                          session_id="s1")
+
+    class _InjectingAgentManager:
+        async def inject_system_message(self, project_id, content, **kwargs):
+            record = {"role": "system", "content": content, "source": "daemon"}
+            if kwargs.get("meta"):
+                record["_meta"] = kwargs["meta"]
+            session.append(record)
+
+    class _WS:
+        def broadcast(self, project_id, payload):
+            pass
+
+    observer = LifecycleObserver(_InjectingAgentManager(), _WS())
+    manager = SubAgentManager(_ProcessManager(), lifecycle_observer=observer)
+    transport = _Transport()
+    manager._adapters[make_session_key("p1", "s1")] = {
+        "cursor": SimpleNamespace(_transport=transport, _broken=False)}
+
+    # An @mention that dispatches, then a second one that queues behind it.
+    await manager.send("p1", "cursor", "first", session_id="s1",
+                       dispatch_id="d1", initiator="user_mention")
+    queued = await manager.send("p1", "cursor", "the dropped one",
+                                session_id="s1", dispatch_id="d2",
+                                initiator="user_mention")
+    assert "position 1" in queued
+
+    # Transport dies with no honest boundary — the queued mention is dropped.
+    await manager._on_prompt_turn_closed(
+        "p1", "cursor", session_id="s1", cause="stream_ended")
+
+    rows = [
+        json.loads(line)
+        for line in Path(session._filepath).read_text().splitlines()
+        if line.strip()
+    ]
+    dropped_rows = [
+        r for r in rows
+        if "queued message dropped" in str(r.get("content", ""))
+    ]
+    assert len(dropped_rows) == 1, (
+        f"expected exactly one dropped-mention marker, got rows: {rows}")
+    row = dropped_rows[0]
+    assert row["role"] == "system"
+    # Reuses on_failed's already-rendered shape, so chatTransform's existing
+    # SUB_AGENT_FAILED_RE picks it up with no frontend change.
+    assert row["content"].startswith("[Sub-agent] cursor failed:")
+    assert "transport ended before dispatch" in row["content"]
 
 
 def test_acp_sdk_manifest_resolves_streaming_transport():
