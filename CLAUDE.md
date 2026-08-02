@@ -248,6 +248,15 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
    ```
    All four commands must exit zero before proceeding. **Do not skip — local builds can pass on stale caches while fresh checkouts fail.**
 
+4. **Live mid-turn sub-agent terminal smoke** (backlog #23/#28): with a real LLM
+   configured, dispatch a sub-agent from a management session, and while the
+   management turn is still in flight have the worker hit a terminal outcome
+   (an error is easiest — e.g. an invalid worker model). Confirm the manager
+   wakes and acts on it and the timeline renders the terminal row. The
+   deferred-terminal wake path is unit-proven through the real defer buffer,
+   but it must be exercised under a live LLM dispatch at least once per
+   release.
+
 ---
 
 ### Windows build

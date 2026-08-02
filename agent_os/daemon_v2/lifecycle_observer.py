@@ -231,8 +231,16 @@ class LifecycleObserver:
             summary=summary_text, transcript_path=transcript_path,
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id,
-                               meta={"display_content": display_content})
+            # event/kind ride ALONGSIDE the display split (backlog #28 a): a
+            # completion landing mid-turn was appended silently, so the
+            # management agent only noticed its sub-agent had finished the
+            # next time the user typed. Same wake tag as the negative
+            # terminals below — display_content stays untouched.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "completed",
+                      "display_content": display_content},
+            )
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,
@@ -364,7 +372,15 @@ class LifecycleObserver:
             transcript_path=transcript_path,
         )
         if not absorbed:
-            await self._inject(project_id, content, session_id=session_id)
+            # Wake tag (backlog #28 b): the docstring above names the silence
+            # here the Piece-3 Part-C silent-hang class, and a mid-turn
+            # interruption deferred into the management session was exactly
+            # that — appended, never processed. kind matches the
+            # `_absorb_terminal` call above.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "interrupted"},
+            )
         self._ws.broadcast(project_id, {
             "type": "sub_agent.turn_interrupted",
             "project_id": project_id,
