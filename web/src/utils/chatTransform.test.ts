@@ -741,21 +741,125 @@ describe('transformChatHistory — FE-A2 sub-agent lifecycle markers', () => {
       expect(a.error).toBe('model timed out after 60s');
     }
   });
+
+  // backlog #27: four more producer shapes that the whitelist never matched,
+  // so each rendered as NOTHING on history reload.
+  it('#27: parses a bare "stopped by user." marker as a neutral stopped row', () => {
+    const items = transformChatHistory([sys('[Sub-agent] claude-code stopped by user.', TS)]);
+    expect(items.length).toBe(1);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('stopped');
+      expect(a.handle).toBe('claude-code');
+      // A plain stop destroyed no background work — no count/detail to show.
+      expect(a.count).toBeUndefined();
+      expect(a.detail).toBeUndefined();
+    }
+  });
+
+  it('#27: a user stop that killed background work carries the count and commands', () => {
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code stopped by user. Terminated 2 background ' +
+          'process(es): npm run dev; python server.py. This background work did NOT complete.',
+        TS,
+      ),
+    ]);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('stopped');
+      expect(a.count).toBe(2);
+      expect(a.detail).toBe('npm run dev; python server.py');
+      // The row's own copy says the work didn't complete; the producer's
+      // warning sentence must not be duplicated inside the command list.
+      expect(a.detail).not.toContain('did NOT complete');
+    }
+  });
+
+  it('#27: parses a turn-interrupted marker (not an error — no result, agent alive)', () => {
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code was stopped before completing its current task ' +
+          '(turn interrupted — e.g. an approval denied with stop). No result was ' +
+          'produced. The agent remains available. Transcript: /x/y.jsonl',
+        TS,
+      ),
+    ]);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('interrupted');
+      expect(a.handle).toBe('claude-code');
+    }
+  });
+
+  it('#27: parses a teardown background-work-lost marker with count and commands', () => {
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code teardown terminated 2 live background process(es): ' +
+          'npm run dev; python server.py. This background work did NOT complete.',
+        TS,
+      ),
+    ]);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('background_lost');
+      expect(a.count).toBe(2);
+      expect(a.detail).toBe('npm run dev; python server.py');
+    }
+  });
+
+  it('#27: parses an interaction-required marker, stripping the agent-facing instructions', () => {
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code requires input (question): Which file should I edit? ' +
+          'Respond on the same in-flight request with agent_message(action="respond", ' +
+          'agent="claude-code", interaction_id="int-1", ...). For a free-form question, ' +
+          'put the answer in message. Do not send a new task.',
+        TS,
+      ),
+    ]);
+    const a = items[0];
+    expect(a.type).toBe('sub_agent_activity');
+    if (a.type === 'sub_agent_activity') {
+      expect(a.action).toBe('interaction_required');
+      expect(a.handle).toBe('claude-code');
+      expect(a.kind).toBe('question');
+      // Only the sub-agent's actual question survives — the "how to answer"
+      // prose addresses the LLM and must never reach the reader.
+      expect(a.prompt).toBe('Which file should I edit?');
+      expect(a.prompt).not.toContain('agent_message(');
+      expect(a.prompt).not.toContain('Do not send a new task');
+    }
+  });
+
+  it('#27: a stop-by-user marker is never mistaken for the stopped-with-error shape', () => {
+    // Both open "[Sub-agent] <handle> stopped …" — the rules must stay
+    // disjoint or a user stop would render as a red error row.
+    const stopped = transformChatHistory([sys('[Sub-agent] claude-code stopped by user.', TS)])[0];
+    const errored = transformChatHistory([
+      sys('[Sub-agent] claude-code stopped with error: boom', TS),
+    ])[0];
+    expect(stopped.type === 'sub_agent_activity' && stopped.action).toBe('stopped');
+    expect(errored.type === 'sub_agent_activity' && errored.action).toBe('error');
+  });
 });
 
 // --------------------------------------------------------------------------
-// Producer↔renderer marker parity (backlog #23 D2). The fixture at
-// subAgentMarkerFixtures.json is the one source of truth for the covered
-// sub-agent system-marker shapes: started / sent / sent_user_mention /
-// completed / failed / stopped-with-error. (on_user_stopped,
-// on_turn_interrupted, and on_background_work_lost write [Sub-agent]
-// markers of their own with no fixture row and no renderer rule — a
-// pre-existing gap out of scope here, tracked as a backlog follow-up.) The
-// paired pytest (tests/unit/test_sub_agent_marker_parity.py) drives the
-// REAL LifecycleObserver producer methods and asserts their rendered
-// output matches this same fixture exactly. Together: a producer shape
-// that changes without updating the fixture fails the pytest; a fixture
-// shape with no renderer rule (or that stops parsing) fails HERE.
+// Producer↔renderer marker parity (backlog #23 D2, extended by #27). The
+// fixture at subAgentMarkerFixtures.json is the one source of truth for
+// every sub-agent system-marker shape. The paired pytest
+// (tests/unit/test_sub_agent_marker_parity.py) drives the REAL
+// LifecycleObserver producer methods and asserts their rendered output
+// matches this same fixture exactly — and, since #27, discovers the
+// producer set from the observer's AST so a brand-new marker with no
+// fixture row fails there rather than silently rendering as nothing here.
+// Together: a producer shape that changes without updating the fixture
+// fails the pytest; a fixture shape with no renderer rule (or that stops
+// parsing) fails HERE.
 // --------------------------------------------------------------------------
 
 interface SubAgentMarkerFixture {
@@ -779,6 +883,19 @@ describe('transformChatHistory — producer/renderer marker parity fixture', () 
         expect(activity.action).toBe(fixture.action);
       }
     }
+  });
+
+  it('an unlisted [Sub-agent] shape still renders as NOTHING — why the guard exists', () => {
+    // Not a wish, a statement of fact: the renderer is a whitelist, so any
+    // marker without a rule above is dropped in silence rather than falling
+    // back to plain text. That is the #23/#27 bug in one line, and it is why
+    // the paired pytest discovers producers from lifecycle_observer.py's AST
+    // instead of trusting a hand-kept list — a new producer must fail a test
+    // somewhere, and it can never fail HERE.
+    const items = transformChatHistory([
+      sys('[Sub-agent] claude-code did something nobody wrote a rule for.', TS),
+    ]);
+    expect(items).toHaveLength(0);
   });
 });
 

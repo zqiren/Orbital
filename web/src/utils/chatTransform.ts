@@ -82,7 +82,16 @@ export type DisplayItem =
        * FE-A2.
        */
       type: 'sub_agent_activity';
-      action: 'started' | 'sent' | 'completed' | 'failed' | 'error';
+      action:
+        | 'started'
+        | 'sent'
+        | 'completed'
+        | 'failed'
+        | 'error'
+        | 'stopped'
+        | 'interrupted'
+        | 'background_lost'
+        | 'interaction_required';
       handle: string;
       timestamp: string;
       /** Present for action='completed'. Trimmed; may be empty. */
@@ -91,6 +100,27 @@ export type DisplayItem =
       preview?: string;
       /** Present for action='failed' | 'error'. */
       error?: string;
+      /**
+       * Number of background processes killed. Present for
+       * action='background_lost', and for action='stopped' only when the
+       * user's stop actually terminated tracked background work.
+       */
+      count?: number;
+      /**
+       * The `;`-joined command list behind `count`, with the producer's
+       * "This background work did NOT complete." warning sentence stripped —
+       * the row's own copy already carries that meaning, so repeating it
+       * inside the command list would read twice.
+       */
+      detail?: string;
+      /** Present for action='interaction_required'. The interaction kind. */
+      kind?: string;
+      /**
+       * Present for action='interaction_required'. The sub-agent's question,
+       * with the agent-facing "Respond on the same in-flight request …"
+       * instructions stripped (see SUB_AGENT_INTERACTION_RE).
+       */
+      prompt?: string;
       isHistorical?: boolean;
     }
   | {
@@ -337,6 +367,33 @@ const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
 // at all, so the durable error row rendered as nothing — the contract
 // drifted when on_error was added alongside on_failed's "failed:" shape.
 const SUB_AGENT_ERROR_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+stopped with error:\s*([\s\S]*)$/;
+// backlog #27: the same drift, four more times. on_user_stopped,
+// on_turn_interrupted, on_background_work_lost and on_interaction_required
+// each write a durable [Sub-agent] marker that no rule below matched, so all
+// four rendered as NOTHING on history reload — including the one that says
+// the sub-agent is BLOCKED waiting on the user.
+//
+// Each head pattern is deliberately loose (handle + the distinguishing
+// phrase, nothing more) and the payload is extracted separately: if the
+// producer's trailing prose is ever reworded, the row degrades to a
+// less-detailed row instead of silently vanishing again — which is the whole
+// failure mode these rules exist to end.
+const SUB_AGENT_USER_STOPPED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+stopped by user\.\s*([\s\S]*)$/;
+const SUB_AGENT_INTERRUPTED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+was stopped before completing its current task\b/;
+const SUB_AGENT_BACKGROUND_LOST_RE =
+  /^\[Sub-agent\]\s+([\w.-]+)\s+teardown terminated\s+(\d+)\s+live background process\(es\):\s*([\s\S]*)$/;
+const SUB_AGENT_INTERACTION_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+requires input\s*\(([^)]*)\):\s*([\s\S]*)$/;
+// on_user_stopped's optional tail, appended only when the kill actually
+// terminated tracked background work.
+const TERMINATED_BACKGROUND_RE = /Terminated\s+(\d+)\s+background process\(es\):\s*([\s\S]*)$/;
+// Trailing warning shared by on_user_stopped's tail and on_background_work_lost.
+const WORK_INCOMPLETE_RE = /\.?\s*This background work did NOT complete\.?\s*$/;
+// on_interaction_required has NO _meta.display_content split (unlike
+// on_completed), so the persisted content carries the agent-facing "how to
+// answer" instructions inline. Cut them off the prompt — they address the
+// LLM, not the reader. If this sentence is ever reworded the prompt keeps
+// the extra prose (ugly, still visible); the paired parity tests catch it.
+const INTERACTION_GUIDANCE_RE = /\s*Respond on the same in-flight request with[\s\S]*$/;
 
 // Fanout tool call (spec 009 §0.5). The tool call's OWN arguments only carry
 // the requested task labels — handles don't exist yet, the backend assigns
@@ -434,6 +491,48 @@ function parseSubAgentSystemMessage(
       action: 'error',
       handle: m[1],
       error: m[2].trim(),
+      timestamp,
+    };
+  }
+  // backlog #27, in producer order. 'stopped' is a neutral system event (the
+  // user asked for it) — only the background work it destroyed is bad news,
+  // which is what count/detail carry. 'interrupted' and 'background_lost'
+  // are warnings: work was expected and none arrived.
+  if ((m = content.match(SUB_AGENT_USER_STOPPED_RE))) {
+    const terminated = m[2].match(TERMINATED_BACKGROUND_RE);
+    return {
+      type: 'sub_agent_activity',
+      action: 'stopped',
+      handle: m[1],
+      timestamp,
+      ...(terminated
+        ? {
+            count: Number(terminated[1]),
+            detail: terminated[2].replace(WORK_INCOMPLETE_RE, '').trim(),
+          }
+        : {}),
+    };
+  }
+  if ((m = content.match(SUB_AGENT_INTERRUPTED_RE))) {
+    return { type: 'sub_agent_activity', action: 'interrupted', handle: m[1], timestamp };
+  }
+  if ((m = content.match(SUB_AGENT_BACKGROUND_LOST_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'background_lost',
+      handle: m[1],
+      count: Number(m[2]),
+      detail: m[3].replace(WORK_INCOMPLETE_RE, '').trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_INTERACTION_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'interaction_required',
+      handle: m[1],
+      kind: m[2].trim(),
+      prompt: m[3].replace(INTERACTION_GUIDANCE_RE, '').trim(),
       timestamp,
     };
   }
