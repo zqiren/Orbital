@@ -77,7 +77,7 @@ PRODUCER_SHAPES = {
 
 
 def _load_fixtures() -> dict[str, dict]:
-    return {f["shape"]: f for f in json.loads(FIXTURE_PATH.read_text())}
+    return {f["shape"]: f for f in json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))}
 
 
 def _is_marker_literal(node: ast.AST) -> bool:
@@ -108,7 +108,7 @@ def _discover_marker_producers() -> set[str]:
     Docstrings are excluded — this module's prose quotes marker text, and a
     docstring mentioning one does not make its method a producer.
     """
-    tree = ast.parse(OBSERVER_SOURCE_PATH.read_text())
+    tree = ast.parse(OBSERVER_SOURCE_PATH.read_text(encoding="utf-8"))
     docstring_nodes = {
         id(node.body[0].value)
         for node in ast.walk(tree)
