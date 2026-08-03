@@ -377,10 +377,6 @@ sessionThreeDot.batch4,Coming in Batch 4,tooltip,SessionThreeDotMenu.tsx,Disable
 sessionThreeDot.rename,Rename,menu,SessionThreeDotMenu.tsx,Disabled rename action,重命名,
 sessionThreeDot.delete,Delete,menu,SessionThreeDotMenu.tsx,Disabled delete action,删除,
 sessionThreeDot.optionsAria,Session options,tooltip,SessionThreeDotMenu.tsx,Default aria-label for the menu trigger,会话选项,
-folderPicker.shortcut.home,Home,nav,FolderPickerModal.tsx,Home shortcut (from backend folder name),主目录,Backend supplies display_name; may not be translatable client-side.
-folderPicker.shortcut.desktop,Desktop,nav,FolderPickerModal.tsx,Desktop shortcut,桌面,Same caveat — backend-supplied name.
-folderPicker.shortcut.documents,Documents,nav,FolderPickerModal.tsx,Documents shortcut,文档,Backend-supplied name.
-folderPicker.shortcut.downloads,Downloads,nav,FolderPickerModal.tsx,Downloads shortcut,下载,Backend-supplied name.
 folderPicker.thisPc,This PC,nav,FolderPickerModal.tsx,Windows root shortcut label,此电脑,
 folderPicker.root,Root /,nav,FolderPickerModal.tsx,Unix root shortcut label,根目录 /,
 folderPicker.empty,No folders here.,empty_state,FolderPickerModal.tsx,Shown when a directory has no subfolders,这里没有文件夹。,
@@ -592,6 +588,7 @@ chat.subActivity.sent,sent: {preview},status,ChatView.tsx,Sub-agent lifecycle ma
 chat.subActivity.completed,completed: {summary},status,ChatView.tsx,Sub-agent lifecycle marker: completed,已完成：{summary},Summary may be empty.
 chat.subActivity.failed,failed: {error},status,ChatView.tsx,Sub-agent lifecycle marker: failed,失败：{error},Error may be empty.
 chat.subActivity.error,stopped with error: {error},status,ChatView.tsx,Sub-agent lifecycle marker: on_error (backlog #23 D2),因错误停止：{error},Error may be empty.
+chat.subActivity.queueDropped,queued message never sent: {reason},status,ChatView.tsx,Sub-agent lifecycle marker: on_queue_dropped (backlog #35),排队的消息未发出：{reason},Warning not error — nothing was dispatched and nothing malfunctioned.
 chat.result.firstChars,first {n} chars · result is {total} chars total,status,chatTransform.ts (truncateResult),Footer when tool result truncated by chars,前 {n} 个字符 · 结果共 {total} 个字符,
 chat.result.firstLines,first {n} lines · result is {total} lines total,status,chatTransform.ts (truncateResult),Footer when tool result truncated by lines,前 {n} 行 · 结果共 {total} 行,
 activity.read,Read {path},status,chatTransform.ts,Activity capsule label: file read,读取 {path},Verb forms; {path} is a file path.

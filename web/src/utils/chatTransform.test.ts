@@ -897,6 +897,40 @@ describe('transformChatHistory — producer/renderer marker parity fixture', () 
     ]);
     expect(items).toHaveLength(0);
   });
+
+  it('a dropped queued message carries its reason without the trailing period', () => {
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code queued message dropped: transport ended before dispatch.',
+        TS,
+      ),
+    ]);
+    const activity = items.find(i => i.type === 'sub_agent_activity');
+    expect(activity).toBeDefined();
+    if (activity?.type !== 'sub_agent_activity') return;
+    expect(activity.action).toBe('queue_dropped');
+    expect(activity.handle).toBe('claude-code');
+    // The producer's sentence-ending period belongs to the marker, not the
+    // reason — the label re-punctuates around it.
+    expect(activity.reason).toBe('transport ended before dispatch');
+  });
+
+  it('a drop recorded by a pre-#35 build still renders, as the failure it was written as', () => {
+    // Sessions on disk keep whatever their build wrote. #26 wrote these
+    // through on_failed, and re-labelling that text now would claim the old
+    // build said something it did not — so the old rule keeps it.
+    const items = transformChatHistory([
+      sys(
+        '[Sub-agent] claude-code failed: queued message dropped: agent stopped ' +
+          'before dispatch. The dispatched task did not complete.',
+        TS,
+      ),
+    ]);
+    const activity = items.find(i => i.type === 'sub_agent_activity');
+    expect(activity).toBeDefined();
+    if (activity?.type !== 'sub_agent_activity') return;
+    expect(activity.action).toBe('failed');
+  });
 });
 
 describe('transformChatHistory — FE-A3 agent header for content-null turns', () => {

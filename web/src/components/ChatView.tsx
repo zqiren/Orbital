@@ -2878,6 +2878,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                     return item.prompt
                       ? t('chat.subActivity.interactionRequired', { prompt: item.prompt })
                       : t('chat.subActivity.interactionRequired', { prompt: '' }).replace(/[:：]\s*$/, '');
+                  case 'queue_dropped':
+                    // backlog #35a: this is what the exhaustive switch is
+                    // for. Under the old ternary chain a new action fell
+                    // through to the `failed` branch, which is exactly the
+                    // lie #26 shipped by borrowing on_failed's shape.
+                    return item.reason
+                      ? t('chat.subActivity.queueDropped', { reason: item.reason })
+                      : t('chat.subActivity.queueDropped', { reason: '' }).replace(/[:：]\s*$/, '');
                   default: {
                     // Unreachable while the switch stays exhaustive (this
                     // assignment is the compile-time proof). It still runs
@@ -2895,11 +2903,17 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               // user's own deliberate action — a plain stop is not a fault,
               // but one that killed live background work is amber, because
               // that part they did not ask for.
+              //
+              // 'queue_dropped' is amber, not red (backlog #35a): a message
+              // the user sent was thrown away, which they need to know, but
+              // the most common cause is their own stop and nothing
+              // malfunctioned.
               const tone =
                 item.action === 'failed' || item.action === 'error'
                   ? 'text-error/80'
                   : item.action === 'background_lost' ||
                       item.action === 'interrupted' ||
+                      item.action === 'queue_dropped' ||
                       (item.action === 'stopped' && !!item.count)
                     ? 'text-warning'
                     : item.action === 'interaction_required'

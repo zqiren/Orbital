@@ -91,7 +91,8 @@ export type DisplayItem =
         | 'stopped'
         | 'interrupted'
         | 'background_lost'
-        | 'interaction_required';
+        | 'interaction_required'
+        | 'queue_dropped';
       handle: string;
       timestamp: string;
       /** Present for action='completed'. Trimmed; may be empty. */
@@ -113,6 +114,12 @@ export type DisplayItem =
        * inside the command list would read twice.
        */
       detail?: string;
+      /**
+       * Present for action='queue_dropped'. Why the queued message never
+       * dispatched, in the producer's own words (backlog #35a) — a stop, a
+       * dead transport, an earlier send or dispatch that failed.
+       */
+      reason?: string;
       /** Present for action='interaction_required'. The interaction kind. */
       kind?: string;
       /**
@@ -367,6 +374,12 @@ const SUB_AGENT_FAILED_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+failed:\s*([\s\S]*)$/;
 // at all, so the durable error row rendered as nothing — the contract
 // drifted when on_error was added alongside on_failed's "failed:" shape.
 const SUB_AGENT_ERROR_RE = /^\[Sub-agent\]\s+([\w.-]+)\s+stopped with error:\s*([\s\S]*)$/;
+// backlog #35: a queued message discarded before it ever dispatched. #26 wrote
+// these through on_failed, so sessions recorded by builds before #35 still
+// read "[Sub-agent] h failed: queued message dropped: …" and still match the
+// failed rule above — correct for them, since that IS what that build wrote.
+const SUB_AGENT_QUEUE_DROPPED_RE =
+  /^\[Sub-agent\]\s+([\w.-]+)\s+queued message dropped:\s*([\s\S]*)$/;
 // backlog #27: the same drift, four more times. on_user_stopped,
 // on_turn_interrupted, on_background_work_lost and on_interaction_required
 // each write a durable [Sub-agent] marker that no rule below matched, so all
@@ -491,6 +504,15 @@ function parseSubAgentSystemMessage(
       action: 'error',
       handle: m[1],
       error: m[2].trim(),
+      timestamp,
+    };
+  }
+  if ((m = content.match(SUB_AGENT_QUEUE_DROPPED_RE))) {
+    return {
+      type: 'sub_agent_activity',
+      action: 'queue_dropped',
+      handle: m[1],
+      reason: m[2].replace(/\.\s*$/, '').trim(),
       timestamp,
     };
   }
