@@ -241,4 +241,35 @@ describe('PricingEditor', () => {
       expect(screen.getByText('Retry')).toBeInTheDocument(),
     );
   });
+
+  // Bug #36: a 200 with an EMPTY providers map (what every packaged build
+  // served while the providers.json path was broken) rendered a blank body —
+  // no rows, no message, a permanently-disabled Save. Explain it instead.
+  it('explains an empty pricing table instead of rendering a blank body', async () => {
+    apiFn.mockResolvedValueOnce({
+      override_path: '/data/pricing-overrides.json',
+      providers: {},
+    } as PricingTable);
+    render(<PricingEditor />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('No pricing data available. The built-in rate table could not be loaded.'),
+      ).toBeInTheDocument(),
+    );
+    // The retry affordance is offered, and the dead Save button is gone.
+    expect(screen.getByText('Retry')).toBeInTheDocument();
+    expect(screen.queryByText('Save pricing')).toBeNull();
+  });
+
+  it('re-fetches the table when retrying from the empty state', async () => {
+    apiFn
+      .mockResolvedValueOnce({ override_path: '/data/o.json', providers: {} } as PricingTable)
+      .mockResolvedValueOnce(makeTable());
+    render(<PricingEditor />);
+    await waitFor(() => expect(screen.getByText('Retry')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Retry'));
+    await waitFor(() => expect(screen.getByText('openai')).toBeInTheDocument());
+  });
 });

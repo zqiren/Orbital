@@ -98,7 +98,16 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-_PROVIDERS_JSON = os.path.join(os.path.dirname(__file__), "..", "config", "providers.json")
+# Collapsed LEXICALLY (dirname twice) rather than with a ".." component: in a
+# PyInstaller build this module lives inside the PYZ archive, so `agent_os/agent/`
+# has no on-disk directory and POSIX cannot resolve `agent_os/agent/../config`.
+# Only `agent_os/config/` is physically collected into the bundle (see the specs'
+# datas lists), and that is exactly what this resolves to. See bug #36.
+_PROVIDERS_JSON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config",
+    "providers.json",
+)
 
 # Global fallback when provider has no pricing data at all
 _GLOBAL_DEFAULT_INPUT_PER_1M = 3.0
@@ -126,7 +135,15 @@ def _load_pricing() -> dict:
             pricing = provider_info.get("pricing", {})
             if pricing:
                 _pricing_cache[provider_key] = pricing
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # Caching {} here silently reprices every model at the global fallback,
+        # so leave a trace — this is how bug #36 hid in packaged builds.
+        logger.warning(
+            "Could not load pricing defaults from %s (%s); "
+            "all costs will use the global fallback rates.",
+            _PROVIDERS_JSON,
+            exc,
+        )
         _pricing_cache = {}
     return _pricing_cache
 
@@ -156,7 +173,15 @@ def _load_full_providers() -> dict:
                 "currency": provider_info.get("currency", _GLOBAL_DEFAULT_CURRENCY),
                 "pricing": provider_info.get("pricing", {}),
             }
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # An empty cache here empties GET /api/v2/pricing (blank rate editor)
+        # AND drops every model to the global fallback rates — bug #36.
+        logger.warning(
+            "Could not load providers.json from %s (%s); "
+            "the pricing table will be empty and costs will use fallback rates.",
+            _PROVIDERS_JSON,
+            exc,
+        )
         _full_providers_cache = {}
     return _full_providers_cache
 

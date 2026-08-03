@@ -85,6 +85,7 @@ settings.subAgents.deploymentInstructions.label,Sub-agent deployment instruction
 settings.subAgents.deploymentInstructions.hint,Optional instructions for when and how the management agent should delegate work in this project. Leave blank to let it decide.,description,SettingsView.tsx,Explains the optional deployment-instructions field,可选：说明管理Agent在本项目中应于何时、以何种方式派发任务。留空则由管理Agent自行决定。,
 settings.subAgents.deploymentInstructions.placeholder,"Example: Use Gemini for research, Claude Code for planning and review, and Codex for implementation. Continue existing sessions unless the task is unrelated.",placeholder,SettingsView.tsx,Example project-specific sub-agent deployment policy,示例：使用 Gemini 进行调研，Claude Code 负责规划和审查，Codex 负责实现。除非任务无关，否则继续使用现有会话。,"Do not translate Gemini, Claude Code, or Codex."
 settings.subAgents.installHint,Install an agent's CLI on your machine to use it here.,empty_state,SettingsView.tsx,Shown when no installed sub-agents are available,在本机安装Agent的 CLI 后即可在此使用。,Keep CLI.
+settings.subAgents.loading,Checking installed sub-agents…,status,SettingsView.tsx,Shown while GET /settings/sub-agents is in flight (bug #36 — the empty state used to stand in for this),正在检查已安装的子Agent…,
 settings.subAgents.saveReminder,Remember to Save enablement and deployment-instruction changes below. Memory edits save immediately.,description,SettingsView.tsx,Italic reminder describing form-save and immediate-save behavior,请在下方保存启用状态和派发指示的更改。记忆编辑会立即保存。,
 settings.subAgentMemories.label,Sub-Agent Memories,label,SettingsView.tsx,Section label for per-sub-agent memory,子Agent记忆,
 settings.subAgentMemories.labelSuffix,— long-term memory per sub-agent for this project,label,SettingsView.tsx,Inline secondary label,— 本项目空间中每个子Agent的长期记忆,
@@ -137,6 +138,8 @@ settings.budget.breakdown.cached,Cached,label,BudgetSection.tsx,Breakdown table 
 settings.budget.breakdown.output,Output,label,BudgetSection.tsx,Breakdown table column header,输出,
 settings.budget.breakdown.cost,Cost,label,BudgetSection.tsx,Breakdown table column header,费用,
 settings.budget.breakdown.empty,No usage recorded yet this period.,description,BudgetSection.tsx,Empty state for the breakdown table,本周期暂无使用记录。,
+settings.budget.meter.loading,Loading spend…,status,BudgetSection.tsx,Replaces the spend meter line while GET /cost is in flight (bug #36),正在加载花费…,
+settings.budget.meter.loadError,Could not load spend.,message_error,BudgetSection.tsx,Replaces the spend meter line when GET /cost fails (bug #36),无法加载花费数据。,
 settings.budget.breakdown.subscription,subscription,label,BudgetSection.tsx,Cost cell for a subscription-auth sub-agent (no reported cost),订阅,
 settings.budget.aria.currency,Budget currency,label,BudgetSection.tsx,Accessibility label for the currency select,预算货币,
 settings.budget.aria.period,Budget period,label,BudgetSection.tsx,Accessibility label for the period select,预算周期,
@@ -658,6 +661,7 @@ pricing.back,Back to settings,pricing-editor,PricingEditor.tsx,Pricing-table edi
 pricing.intro,Rates are per 1M tokens. Edited fields override the built-in defaults; revert any field to fall back to the default.,pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),费率以每 100 万 token 计。编辑后的字段会覆盖内置默认值；可将任意字段还原为默认值。,
 pricing.loading,Loading pricing…,pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),正在加载定价…,
 pricing.loadError,Could not load the pricing table.,pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),无法加载定价表。,
+pricing.empty,No pricing data available. The built-in rate table could not be loaded.,empty_state,PricingEditor.tsx,Shown when GET /pricing returns an empty providers map (bug #36 — used to render a blank page),暂无定价数据。无法加载内置费率表。,
 pricing.retry,Retry,pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),重试,
 pricing.currency.label,Currency,pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),货币,
 pricing.currency.aria,Currency for {provider},pricing-editor,PricingEditor.tsx,Pricing-table editor (P3-I),{provider} 的货币,
