@@ -47,12 +47,19 @@ class _Lifecycle:
     def __init__(self):
         self.routed = []
         self.failed = []
+        # backlog #35a: dropped queued prompts no longer borrow on_failed —
+        # they have their own amber shape, and keeping the two lists apart is
+        # the point (a drop must not be counted as a failure).
+        self.dropped = []
 
     async def on_message_routed(self, *args, **kwargs):
         self.routed.append((args, kwargs))
 
     async def on_failed(self, project_id, handle, reason, **kwargs):
         self.failed.append((project_id, handle, reason, kwargs))
+
+    async def on_queue_dropped(self, project_id, handle, *, why, **kwargs):
+        self.dropped.append((project_id, handle, why, kwargs))
 
 
 @pytest.mark.asyncio
@@ -169,6 +176,12 @@ class TestDroppedQueuedPromptsLeaveMarkers:
     the prompt actually fires. Every drop path therefore stranded a "You ->
     handle" bubble with nothing after it. Each drop must now leave a durable
     marker row explaining what became of the message.
+
+    backlog #35a moved these rows off ``on_failed`` onto their own
+    ``on_queue_dropped`` shape, so the assertions below check ``dropped`` and
+    deliberately check that ``failed`` stays empty: nothing was dispatched and
+    nothing malfunctioned, and a drop reported as a failure is the exact lie
+    the borrowed shape told.
     """
 
     @staticmethod
@@ -194,13 +207,14 @@ class TestDroppedQueuedPromptsLeaveMarkers:
 
         # One marker per dropped message — each has its own orphaned user
         # bubble upstream, so an aggregate row would leave one unexplained.
-        assert len(lifecycle.failed) == 2
-        for project_id, handle, reason, kwargs in lifecycle.failed:
+        assert len(lifecycle.dropped) == 2
+        for project_id, handle, why, kwargs in lifecycle.dropped:
             assert (project_id, handle) == ("p1", "cursor")
             assert kwargs["session_id"] == "s1"
             # A user-initiated stop is not a malfunction: the text has to read
             # as an explanation, not an error.
-            assert reason == "queued message dropped: agent stopped before dispatch"
+            assert why == "agent stopped before dispatch"
+        assert lifecycle.failed == []
 
     @pytest.mark.asyncio
     async def test_stop_with_empty_queue_marks_nothing(self, monkeypatch):
@@ -215,6 +229,7 @@ class TestDroppedQueuedPromptsLeaveMarkers:
         monkeypatch.setattr(manager, "_kill_confirm_and_release", _stopped)
         await manager.stop("p1", "cursor", session_id="s1")
 
+        assert lifecycle.dropped == []
         assert lifecycle.failed == []
 
     @pytest.mark.asyncio
@@ -233,9 +248,9 @@ class TestDroppedQueuedPromptsLeaveMarkers:
 
         assert adapter._broken is True
         assert key not in manager._prompt_queues
-        assert len(lifecycle.failed) == 1
-        assert lifecycle.failed[0][2] == (
-            "queued message dropped: transport ended before dispatch")
+        assert len(lifecycle.dropped) == 1
+        assert lifecycle.dropped[0][2] == "transport ended before dispatch"
+        assert lifecycle.failed == []
 
     @pytest.mark.asyncio
     async def test_broken_adapter_at_boundary_marks_dropped_queue(self):
@@ -254,16 +269,17 @@ class TestDroppedQueuedPromptsLeaveMarkers:
             "p1", "cursor", session_id="s1", cause="success")
 
         assert key not in manager._prompt_queues
-        assert len(lifecycle.failed) == 2
-        assert lifecycle.failed[0][2] == (
-            "queued message dropped: the sub-agent was no longer available "
-            "before dispatch")
+        assert len(lifecycle.dropped) == 2
+        assert lifecycle.dropped[0][2] == (
+            "the sub-agent was no longer available before dispatch")
+        assert lifecycle.failed == []
 
     @pytest.mark.asyncio
     async def test_background_send_exception_marks_dropped_queue(self):
-        """The fifth drop site: a blocking-transport send that raises pops
-        the waiting FIFO — the send itself already gets on_failed, but the
-        prompts queued behind it must each get their own dropped row."""
+        """A blocking-transport send that raises pops the waiting FIFO — the
+        send itself already gets on_failed (it really did fail), but the
+        prompts queued behind it never dispatched, so they get the dropped
+        shape instead. Both markers, each honest about its own event."""
         pm = _ProcessManager()
         lifecycle = _Lifecycle()
         manager = SubAgentManager(pm, lifecycle_observer=lifecycle)
@@ -284,10 +300,9 @@ class TestDroppedQueuedPromptsLeaveMarkers:
 
         key = ("p1", "s1", "cursor")
         assert key not in manager._prompt_queues
-        reasons = [entry[2] for entry in lifecycle.failed]
-        assert "background_send_exception" in reasons
-        assert ("queued message dropped: a prior send failed before dispatch"
-                in reasons)
+        assert "background_send_exception" in [e[2] for e in lifecycle.failed]
+        assert ("a prior send failed before dispatch"
+                in [e[2] for e in lifecycle.dropped])
 
     @pytest.mark.asyncio
     async def test_normal_drain_marks_nothing(self):
@@ -307,6 +322,7 @@ class TestDroppedQueuedPromptsLeaveMarkers:
         await pm.turn_closed("p1", "cursor", session_id="s1", cause="success")
 
         assert transport.messages == ["first", "second"]
+        assert lifecycle.dropped == []
         assert lifecycle.failed == []
         assert len(lifecycle.routed) == 2
 
@@ -369,9 +385,18 @@ async def test_dropped_queued_mention_lands_a_durable_row_in_session_jsonl(tmp_p
         f"expected exactly one dropped-mention marker, got rows: {rows}")
     row = dropped_rows[0]
     assert row["role"] == "system"
-    # Reuses on_failed's already-rendered shape, so chatTransform's existing
-    # SUB_AGENT_FAILED_RE picks it up with no frontend change.
-    assert row["content"].startswith("[Sub-agent] cursor failed:")
+    # backlog #35a: its own shape now, matched by chatTransform's
+    # SUB_AGENT_QUEUE_DROPPED_RE. No "failed:" and no second colon, because
+    # nothing was dispatched and nothing malfunctioned.
+    assert row["content"] == (
+        "[Sub-agent] cursor queued message dropped: transport ended before "
+        "dispatch.")
+    assert "failed" not in row["content"]
+    assert "The dispatched task did not complete" not in row["content"]
+    # The wake tag survives the reshape: a manager awaiting this very message
+    # has to hear that it is never coming (backlog #23 D1).
+    assert row["_meta"]["event"] == "sub_agent_terminal"
+    assert row["_meta"]["kind"] == "queue_dropped"
     assert "transport ended before dispatch" in row["content"]
 
 

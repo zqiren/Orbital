@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '../types';
 import { LocaleProvider } from '../i18n/LocaleContext';
@@ -101,5 +101,72 @@ describe('SettingsView sub-agent deployment instructions', () => {
       '示例：使用 Gemini 进行调研，Claude Code 负责规划和审查，Codex 负责实现。除非任务无关，否则继续使用现有会话。',
     );
     expect(screen.getByText(/留空则由管理Agent自行决定/)).toBeInTheDocument();
+  });
+});
+
+// Bug #36: GET /api/v2/settings/sub-agents took a measured 7.28 s on a cold
+// packaged daemon, and for all 7 s the section claimed the user had no
+// sub-agents installed. The empty state must not stand in for "still checking".
+describe('SettingsView sub-agents loading state', () => {
+  const INSTALL_HINT = "Install an agent's CLI on your machine to use it here.";
+  const CHECKING = 'Checking installed sub-agents…';
+
+  let settleSubAgents: {
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    mockApi.mockReset();
+    mockApi.mockImplementation((path: string) => {
+      if (path === '/api/v2/settings/sub-agents') {
+        return new Promise((resolve, reject) => {
+          settleSubAgents = { resolve, reject };
+        });
+      }
+      if (path === '/api/v2/providers') return Promise.resolve({});
+      if (path === '/api/v2/projects/project-1') return Promise.resolve({ ...project });
+      return Promise.resolve([]);
+    });
+  });
+
+  it('shows a checking message instead of the install hint while the probe is in flight', async () => {
+    render(<SettingsView project={project} onSave={vi.fn()} onDelete={vi.fn()} />);
+
+    expect(screen.getByText(CHECKING)).toBeInTheDocument();
+    expect(screen.queryByText(INSTALL_HINT)).toBeNull();
+
+    await act(async () => {
+      settleSubAgents.resolve([]);
+    });
+
+    await waitFor(() => expect(screen.getByText(INSTALL_HINT)).toBeInTheDocument());
+    expect(screen.queryByText(CHECKING)).toBeNull();
+  });
+
+  it('clears the checking message when the probe fails, so the section never wedges', async () => {
+    render(<SettingsView project={project} onSave={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByText(CHECKING)).toBeInTheDocument();
+
+    await act(async () => {
+      settleSubAgents.reject(new Error('probe failed'));
+    });
+
+    await waitFor(() => expect(screen.getByText(INSTALL_HINT)).toBeInTheDocument());
+    expect(screen.queryByText(CHECKING)).toBeNull();
+  });
+
+  it('renders the installed list, not the checking message, once the probe resolves', async () => {
+    render(<SettingsView project={project} onSave={vi.fn()} onDelete={vi.fn()} />);
+
+    await act(async () => {
+      settleSubAgents.resolve([
+        { slug: 'codex', name: 'Codex', installed: true, ready: true },
+      ]);
+    });
+
+    await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
+    expect(screen.getByText(/Remember to Save enablement/)).toBeInTheDocument();
   });
 });

@@ -310,6 +310,47 @@ class LifecycleObserver:
             "session_id": session_id,
         })
 
+    async def on_queue_dropped(self, project_id: str, handle: str, *,
+                               why: str,
+                               session_id: str | None = None) -> None:
+        """A queued prompt was discarded before it ever reached the sub-agent.
+
+        Backlog #35a. These rows used to be written through ``on_failed``,
+        which was honest in the reason text and wrong in everything around
+        it: red failure chrome for what is usually the user's own stop, a
+        hardcoded "The dispatched task did not complete." tail claiming a
+        dispatch that never happened, and a second colon from nesting one
+        reason inside another. Nothing was dispatched and nothing
+        malfunctioned — the message simply never left the queue, which is a
+        warning, not a failure.
+
+        The reason half is composed by ``SubAgentManager``'s drop sites; the
+        parity guard discovers them from source and pins the text this
+        produces (``test_every_queue_drop_site_is_marked_and_pinned``).
+
+        Routes through ``_absorb_terminal`` like the other negative terminals
+        so a fanout worker's dropped queue still lands in the group's join
+        summary rather than a per-worker session it no longer owns; kind maps
+        to the same task status ``failed`` did, so the join is unchanged.
+        """
+        content = f"[Sub-agent] {handle} queued message dropped: {why}."
+        absorbed = self._absorb_terminal(
+            project_id, handle, session_id, kind="queue_dropped",
+            summary=f"queued message dropped: {why}", transcript_path="",
+        )
+        if not absorbed:
+            # Same wake tag the terminal above carries (backlog #23 D1): the
+            # management agent may be awaiting this very message, and a drop
+            # it never hears about is the silent-hang class again. No WS
+            # broadcast — the drop always rides along with an event that
+            # already broadcast the handle's new state (stop, send failure,
+            # transport end), and the handle's live status is unchanged by
+            # it either way.
+            await self._inject(
+                project_id, content, session_id=session_id,
+                meta={"event": "sub_agent_terminal", "kind": "queue_dropped"},
+            )
+
     async def on_user_stopped(self, project_id: str, handle: str, *,
                               terminated: list[str] | None = None,
                               session_id: str | None = None) -> None:

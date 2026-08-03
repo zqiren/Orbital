@@ -224,6 +224,23 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
       </div>
     );
   }
+  // A 200 carrying an empty providers map (what a broken built-in rate table
+  // looks like from here — see bug #36) would otherwise render an explanation-
+  // free blank body with a permanently-disabled Save.
+  if (providerNames.length === 0) {
+    return (
+      <div className="px-6 py-8">
+        <p className="text-sm text-secondary mb-3">{t('pricing.empty')}</p>
+        <button
+          type="button"
+          onClick={() => void fetchTable()}
+          className="text-sm font-medium text-accent hover:underline"
+        >
+          {t('pricing.retry')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-[860px] mx-auto py-6 px-6 max-md:px-4">

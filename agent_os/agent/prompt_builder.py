@@ -793,7 +793,7 @@ class PromptBuilder:
         lines = ["## Sub-Agent Coordination\n"]
         lines.append("You coordinate sub-agents via the agent_message tool. Key behaviors:")
         lines.append("- agent_message(send) returns IMMEDIATELY and ENDS YOUR TURN. You cannot send another message or poll in the same turn.")
-        lines.append("- After dispatching, WAIT. You are AUTOMATICALLY RESUMED with a [Sub-agent] system message when the sub-agent completes or errors — you do not need to (and cannot) poll for it.")
+        lines.append("- After dispatching, WAIT. You are AUTOMATICALLY RESUMED with a [Sub-agent] message when the sub-agent completes or errors — you do not need to (and cannot) poll for it.")
         lines.append("- The sub-agent's full final message is shown to the user in chat as its own bubble (with its tool activity) — the user has ALREADY read it. In your conversation you receive only a short, capped [Sub-agent] ... completed. Summary: ... marker; that marker is for YOU, not a draft to relay back to the user.")
         lines.append("- Do NOT restate or re-summarize what a sub-agent did — the user already sees it, so repeating it is noise. After a sub-agent completes, ADD VALUE instead: silently verify the work (read files / run checks), then take the next action or reply only with what's NEW (a problem you found, a decision you need, or a one-line confirmation). If the sub-agent produced no final message, briefly tell the user the outcome yourself.")
         lines.append('- Do NOT call agent_message(action="status") in a loop to wait — that does nothing useful and wastes a turn. Use status only if the user explicitly asks about progress.')
@@ -869,7 +869,11 @@ class PromptBuilder:
         )
 
     def _context_budget(self, context: PromptContext) -> str:
-        pct = int(context.context_usage_pct * 100)
+        # Quantized to 5% steps for DISPLAY only: a per-percent figure rewrote
+        # the runtime block on most calls for no decision-relevant gain. The
+        # thresholds below still read the raw value, so the nudges fire at
+        # exactly the same points they always did.
+        pct = int(context.context_usage_pct * 100) // 5 * 5
         lines = [f"Context usage: ~{pct}%."]
         if context.context_usage_pct > 0.70:
             lines.append(
@@ -907,10 +911,13 @@ class PromptBuilder:
                 "Use the checkpoint_state tool only when a [MEMORY HYGIENE] flag "
                 "shows a memory file is over its soft budget."
             )
+        # No per-turn delta here: "N turns ago" changed the block's bytes on
+        # every call while saying nothing the agent acts on (checkpoint_state is
+        # gated on [MEMORY HYGIENE] flags, not on elapsed turns). The line is
+        # now a pure function of checkpoint state.
         lines = [
             f"State checkpoint: last at turn {context.last_state_update_turn} "
-            f"({context.last_state_update_ts}), "
-            f"{context.turns_since_last_update} turns ago."
+            f"({context.last_state_update_ts})."
         ]
         if context.last_state_update_outcome in ("backstop_only", "failed"):
             lines.append(

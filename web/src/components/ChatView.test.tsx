@@ -2415,4 +2415,34 @@ describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
     expect(byAction['interrupted']).toContain('text-warning');
     expect(byAction['error']).toContain('text-error');
   });
+
+  // backlog #35a: the three things the borrowed `failed` shape got wrong.
+  it('a dropped queued message warns in amber and claims no failed dispatch', async () => {
+    chatInitialResponse = {
+      data: [
+        sysRow(
+          '[Sub-agent] claude-code queued message dropped: agent stopped before dispatch.',
+        ),
+      ],
+      total: 1,
+    };
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    const row = container.querySelector('[data-testid="sub-agent-activity"]');
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute('data-action')).toBe('queue_dropped');
+    // Amber, not red: the user's own stop is the usual cause and nothing
+    // malfunctioned — but a message of theirs was thrown away, so not neutral.
+    expect(row!.className).toContain('text-warning');
+    expect(row!.className).not.toContain('text-error');
+
+    const text = row!.textContent ?? '';
+    expect(text).toContain('agent stopped before dispatch');
+    expect(text).not.toMatch(/fail/i);
+    // on_failed's hardcoded tail claimed a dispatch that never happened.
+    expect(text).not.toContain('The dispatched task did not complete');
+    // "failed: queued message dropped: …" rendered two colons in a row.
+    expect(text).not.toMatch(/:\s*[^:]*:\s/);
+  });
 });

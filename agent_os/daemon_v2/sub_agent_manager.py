@@ -1106,30 +1106,32 @@ class SubAgentManager:
         nothing after it — no trace in the session JSONL of what became of the
         mention.
 
-        Reuses ``on_failed`` rather than inventing a marker shape: its
-        ``[Sub-agent] {handle} failed: {reason}`` text already has both a
-        renderer rule and a marker-parity fixture, so a dropped prompt renders
-        with no frontend change. ``reason`` carries the honest attribution —
-        a user-initiated stop is not a malfunction, so the text must read as
-        an explanation rather than an error.
+        ``why`` carries the honest attribution — a user-initiated stop is not
+        a malfunction, so the text must read as an explanation rather than an
+        error. #26 borrowed ``on_failed`` to say it because that shape already
+        had a renderer rule; backlog #35a gives the event its own amber
+        ``on_queue_dropped`` shape, so the chrome around the reason stops
+        contradicting it.
 
         One marker per dropped prompt, not one per drop: each queued entry has
         its own orphaned user bubble upstream, and an aggregate row would
         leave all but one of them unexplained.
+
+        Every ``_prompt_queues`` pop must reach here or be provably empty —
+        the marker-parity guard discovers the drop sites from this module's
+        AST and fails on any that does neither.
         """
         if not dropped or self._lifecycle_observer is None:
             return
         for _prompt in dropped:
             try:
-                await self._lifecycle_observer.on_failed(
-                    project_id, handle,
-                    reason=f"queued message dropped: {why}",
-                    session_id=session_id,
+                await self._lifecycle_observer.on_queue_dropped(
+                    project_id, handle, why=why, session_id=session_id,
                 )
             except Exception:
                 logger.exception(
-                    "lifecycle_observer.on_failed raised while marking a "
-                    "dropped queued prompt for project=%s handle=%s",
+                    "lifecycle_observer.on_queue_dropped raised while marking "
+                    "a dropped queued prompt for project=%s handle=%s",
                     project_id, handle,
                 )
 
@@ -1179,7 +1181,7 @@ class SubAgentManager:
                     adapter, prompt, project_id, session_id, handle)
             except Exception:
                 self._prompt_active.discard(key)
-                self._prompt_queues.pop(key, None)
+                dropped = self._prompt_queues.pop(key, None)
                 adapter._broken = True
                 logger.exception(
                     "queued sub-agent dispatch failed for %s/%s", project_id,
@@ -1190,6 +1192,15 @@ class SubAgentManager:
                         project_id, handle, reason="queued_dispatch_exception",
                         session_id=session_id,
                     )
+                # The fifth drop site (backlog #35b). #26 marked four and
+                # missed this one — the on_failed above covers only the prompt
+                # whose dispatch raised, while everything still queued behind
+                # it was popped here and vanished. Found by the new
+                # structural drop-site scan, not by reading.
+                await self._mark_queued_prompts_dropped(
+                    dropped, project_id, handle, session_id=session_id,
+                    why="a prior dispatch failed",
+                )
 
     async def respond_to_interaction(
         self, project_id: str, handle: str, interaction_id: str, *,

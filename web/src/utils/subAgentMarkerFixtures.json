@@ -25,6 +25,31 @@
     "content": "[Sub-agent] claude-code failed: adapter crashed. The dispatched task did not complete."
   },
   {
+    "shape": "queue_dropped_transport_ended",
+    "action": "queue_dropped",
+    "content": "[Sub-agent] claude-code queued message dropped: transport ended before dispatch."
+  },
+  {
+    "shape": "queue_dropped_agent_unavailable",
+    "action": "queue_dropped",
+    "content": "[Sub-agent] claude-code queued message dropped: the sub-agent was no longer available before dispatch."
+  },
+  {
+    "shape": "queue_dropped_prior_dispatch_failed",
+    "action": "queue_dropped",
+    "content": "[Sub-agent] claude-code queued message dropped: a prior dispatch failed."
+  },
+  {
+    "shape": "queue_dropped_prior_send_failed",
+    "action": "queue_dropped",
+    "content": "[Sub-agent] claude-code queued message dropped: a prior send failed before dispatch."
+  },
+  {
+    "shape": "queue_dropped_agent_stopped",
+    "action": "queue_dropped",
+    "content": "[Sub-agent] claude-code queued message dropped: agent stopped before dispatch."
+  },
+  {
     "shape": "stopped_with_error",
     "action": "error",
     "content": "[Sub-agent] claude-code stopped with error: model timed out. Transcript: /tmp/fixture-transcript.jsonl"

@@ -84,7 +84,16 @@ export default function BudgetSection({
   const pid = project.project_id;
 
   const window = periodToWindow(period);
-  const { cost, refresh } = useCost(pid, window, costRefreshKey);
+  const { cost, loading, error, refresh } = useCost(pid, window, costRefreshKey);
+
+  // Until /cost has ever landed, a rendered number would be a fabricated zero
+  // rather than a measurement (bug #36). "Pending" covers the mount frame
+  // BEFORE useCost's effect flips `loading` as well as the in-flight window.
+  // A refresh with `cost` already present keeps showing the last known spend
+  // instead of blinking back to a placeholder.
+  const pendingFirstLoad = !cost && (loading || error == null);
+  const failedWithNoData = !cost && !loading && error != null;
+  const spendUnknown = pendingFirstLoad || failedWithNoData;
 
   const limitNum = limit.trim() !== '' ? parseFloat(limit) : null;
   const validLimit = limitNum != null && !Number.isNaN(limitNum) ? limitNum : null;
@@ -252,8 +261,14 @@ export default function BudgetSection({
 
         {/* Spend meter */}
         <div>
-          <p className={`text-sm font-medium mb-1.5 ${meterTextColor}`}>{meterText}</p>
-          {validLimit != null && (
+          {pendingFirstLoad ? (
+            <p className="text-sm text-secondary mb-1.5">{t('settings.budget.meter.loading')}</p>
+          ) : failedWithNoData ? (
+            <p className="text-sm text-error mb-1.5">{t('settings.budget.meter.loadError')}</p>
+          ) : (
+            <p className={`text-sm font-medium mb-1.5 ${meterTextColor}`}>{meterText}</p>
+          )}
+          {!spendUnknown && validLimit != null && (
             <div className="h-2 w-full bg-sidebar border border-border rounded-full overflow-hidden">
               <div
                 className={`h-full ${barColor} transition-all duration-300`}
@@ -270,7 +285,11 @@ export default function BudgetSection({
         {/* Breakdown table */}
         <div>
           {rows.length === 0 ? (
-            <p className="text-xs text-secondary/60 italic">{t('settings.budget.breakdown.empty')}</p>
+            // "Nothing recorded" is a claim about the data, so it waits for the
+            // data — while /cost is unresolved the meter line carries the state.
+            spendUnknown ? null : (
+              <p className="text-xs text-secondary/60 italic">{t('settings.budget.breakdown.empty')}</p>
+            )
           ) : (
             <table className="w-full text-xs border-collapse">
               <thead>

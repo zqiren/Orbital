@@ -152,6 +152,10 @@ export default function SettingsView({
   // Sub-agent enable/disable state. The list of installed sub-agents is
   // global (one daemon-level binary check); the denylist is per-project.
   const [installedSubAgents, setInstalledSubAgents] = useState<InstalledSubAgent[]>([]);
+  // The binary probe behind GET /settings/sub-agents runs multi-second on a cold
+  // daemon; without this flag the section's empty state doubles as its loading
+  // state and tells the user they have no sub-agents installed (bug #36).
+  const [loadingSubAgents, setLoadingSubAgents] = useState(!project.is_scratch);
   const [disabledSubAgents, setDisabledSubAgents] = useState<string[]>(
     project.disabled_sub_agents ?? [],
   );
@@ -284,8 +288,12 @@ export default function SettingsView({
   // user can enable/disable each for THIS project. Scratch projects don't
   // delegate to sub-agents, so skip.
   useEffect(() => {
-    if (project.is_scratch) return;
+    if (project.is_scratch) {
+      setLoadingSubAgents(false);
+      return;
+    }
     let cancelled = false;
+    setLoadingSubAgents(true);
     api<Array<{ slug: string; name: string; installed: boolean; ready: boolean }>>(
       '/api/v2/settings/sub-agents',
     )
@@ -298,7 +306,12 @@ export default function SettingsView({
         );
       })
       .catch(() => {
-        // Non-fatal — the section just shows its empty state.
+        // Non-fatal — the section falls back to its empty state.
+      })
+      // Must clear on BOTH outcomes or a failed probe wedges the section in
+      // "checking…" forever.
+      .finally(() => {
+        if (!cancelled) setLoadingSubAgents(false);
       });
     return () => { cancelled = true; };
   }, [project.is_scratch]);
@@ -512,7 +525,11 @@ export default function SettingsView({
               <p className="text-xs text-error mb-2">{memoryError}</p>
             )}
 
-            {installedSubAgents.length === 0 ? (
+            {loadingSubAgents ? (
+              <p className="text-xs text-secondary/60 italic">
+                {t('settings.subAgents.loading')}
+              </p>
+            ) : installedSubAgents.length === 0 ? (
               <p className="text-xs text-secondary/60 italic">
                 {t('settings.subAgents.installHint')}
               </p>
