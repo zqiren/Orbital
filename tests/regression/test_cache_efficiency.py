@@ -6,10 +6,18 @@
 
 Verifies:
 1. Dynamic content (runtime, context_budget) is NOT in the first system message
-2. Dynamic content IS in the last system message
+2. Dynamic content rides the FINAL POSITIONAL TURN, never a system row
 3. Non-spec fields are stripped before API call
 4. Cache audit logging is present
 5. Context audit logging is present
+
+On (2): the block used to trail as `role:"system"`, on the assumption that
+appending it last kept everything before it cacheable. That holds for Anthropic
+and MiniMax and is exactly backwards for DeepSeek, which hoists every system row
+to the front of the prompt — the per-call timestamp landed immediately after the
+static prefix and invalidated the entire conversation on every call (backlog #38:
+23.5% hit rate, frozen at the prefix size). It now folds into the final user turn
+(or rides its own user row when the tail is a tool result).
 """
 
 import logging
@@ -75,7 +83,8 @@ def _make_context_manager(tmp_path, prompt_builder=None):
 
 
 class TestDynamicContentPosition:
-    """Verify dynamic_suffix is appended at the end, not concatenated into first system msg."""
+    """Verify dynamic_suffix rides the tail as a positional turn, and is never
+    concatenated into the first (cacheable) system message."""
 
     def test_first_system_message_is_static_only(self, tmp_path):
         """First system message should contain only cached_prefix, no dynamic content."""
@@ -92,42 +101,45 @@ class TestDynamicContentPosition:
         assert "Current time:" not in first_system, "Dynamic timestamp found in cacheable prefix"
         assert "Context usage:" not in first_system, "Dynamic context budget found in cacheable prefix"
 
-    def test_dynamic_content_in_last_system_message(self, tmp_path):
-        """Last system message should contain the dynamic_suffix."""
+    def test_dynamic_content_in_final_positional_turn(self, tmp_path):
+        """The runtime block rides the last message, and that message is a
+        positional turn — a system row here is hoisted to the front of the
+        prompt by DeepSeek and busts the whole conversation's cache (#38)."""
         ctx_mgr = _make_context_manager(tmp_path)
         messages = ctx_mgr.prepare()
 
-        system_messages = [m for m in messages if m["role"] == "system"]
-        last_system = system_messages[-1]["content"]
+        tail = messages[-1]
+        assert tail["role"] == "user"
+        assert "Current time:" in tail["content"], "Dynamic timestamp missing from runtime context"
+        assert "Context usage:" in tail["content"], "Dynamic context budget missing from runtime context"
 
-        assert "Current time:" in last_system, "Dynamic timestamp missing from runtime context"
-        assert "Context usage:" in last_system, "Dynamic context budget missing from runtime context"
+        for msg in messages:
+            if msg["role"] == "system":
+                assert "Current time:" not in msg.get("content", ""), (
+                    "runtime block must never ride a system row"
+                )
 
-    def test_dynamic_suffix_after_conversation_history(self, tmp_path):
-        """The dynamic system message must appear AFTER the conversation history."""
+    def test_dynamic_suffix_rides_the_end_of_the_conversation(self, tmp_path):
+        """The runtime block must sit at or after the last history message."""
         ctx_mgr = _make_context_manager(tmp_path)
         messages = ctx_mgr.prepare()
 
-        # Find the last user/assistant/tool message index
         last_history_idx = -1
+        dynamic_idx = -1
         for i, m in enumerate(messages):
             if m["role"] in ("user", "assistant", "tool"):
                 last_history_idx = i
-
-        # Find the dynamic suffix message index
-        dynamic_idx = -1
-        for i, m in enumerate(messages):
-            if m["role"] == "system" and "Current time:" in m.get("content", ""):
-                dynamic_idx = i
+                if "Current time:" in str(m.get("content", "")):
+                    dynamic_idx = i
 
         assert last_history_idx >= 0, "No conversation history found"
-        assert dynamic_idx >= 0, "No dynamic suffix message found"
-        assert dynamic_idx > last_history_idx, (
-            f"Dynamic suffix (idx={dynamic_idx}) should come after history (idx={last_history_idx})"
+        assert dynamic_idx >= 0, "No runtime block found in the conversation"
+        assert dynamic_idx == last_history_idx == len(messages) - 1, (
+            "The runtime block belongs on the final turn"
         )
 
     def test_message_order_matches_spec(self, tmp_path):
-        """Full message order: static system → layers → history → dynamic runtime."""
+        """Full message order: static system → layers → history → runtime turn."""
         ctx_mgr = _make_context_manager(tmp_path)
         messages = ctx_mgr.prepare()
 
@@ -137,16 +149,18 @@ class TestDynamicContentPosition:
         assert roles[0] == "system"
         assert messages[0]["content"] == "Cached system prompt."
 
-        # Last message is system (dynamic suffix)
-        assert roles[-1] == "system"
+        # Last message is the positional runtime turn
+        assert roles[-1] == "user"
         assert "Current time:" in messages[-1]["content"]
 
-        # Conversation history sits between them
-        history_indices = [i for i, r in enumerate(roles) if r in ("user", "assistant", "tool")]
-        if history_indices:
-            assert all(0 < i < len(messages) - 1 for i in history_indices), (
-                "History messages should be between first and last system messages"
-            )
+        # Every system row precedes every conversation turn.
+        last_system_idx = max(i for i, r in enumerate(roles) if r == "system")
+        first_history_idx = min(
+            i for i, r in enumerate(roles) if r in ("user", "assistant", "tool")
+        )
+        assert last_system_idx < first_history_idx, (
+            "System rows must form an unbroken cacheable prefix"
+        )
 
     def test_empty_dynamic_suffix_not_appended(self, tmp_path):
         """If truly_dynamic is empty, no extra system message should be appended at end."""
@@ -185,7 +199,8 @@ class TestDynamicContentPosition:
         )
 
     def test_three_part_message_structure(self, tmp_path):
-        """Message order: static prefix -> semi-stable -> layers -> history -> truly dynamic."""
+        """Message order: static prefix -> semi-stable -> layers -> history,
+        with the truly-dynamic block folded into that final history turn."""
         ctx_mgr = _make_context_manager(tmp_path)
         messages = ctx_mgr.prepare()
 
@@ -197,8 +212,10 @@ class TestDynamicContentPosition:
         assert messages[1]["role"] == "system"
         assert messages[1]["content"] == "Semi-stable session content."
 
-        # Last message is truly dynamic
-        assert messages[-1]["role"] == "system"
+        # The truly-dynamic block folded into the final user turn — the session
+        # has one user message ("Hello"), which still leads that turn.
+        assert messages[-1]["role"] == "user"
+        assert messages[-1]["content"].startswith("Hello")
         assert "Current time:" in messages[-1]["content"]
         assert "Context usage:" in messages[-1]["content"]
 

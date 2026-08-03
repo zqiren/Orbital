@@ -34,6 +34,24 @@ _LAYER1_FILES: tuple[tuple[str, str], ...] = (
 )
 
 
+# Daemon event rows whose whole point is WHERE they sit in the conversation:
+# a sub-agent finished, or a sub-agent is blocked waiting on an answer. A chat
+# API's system-message *position* is not portable — our own Anthropic adapter
+# hoists every system row into the top-level `system` param, and DeepSeek's
+# serving stack does the equivalent server-side — so these rows ride the wire
+# as positional `user` turns instead (backlog #37). Deliberately narrow:
+# untagged system rows (loop nudges, corrective turns) keep today's encoding.
+_POSITIONAL_EVENT_TAGS: frozenset[str] = frozenset({
+    "sub_agent_terminal",
+    "interaction_required",
+})
+
+# Frame for the per-call runtime block so the model reads it as an injected
+# runtime note rather than something the user typed (backlog #38).
+_RUNTIME_MARKER = "[runtime]"
+_RUNTIME_SEP = "\n\n"
+
+
 class ContextManager:
     """Assembles context for each LLM call: system prompt + layers + sliding window."""
 
@@ -204,7 +222,9 @@ class ContextManager:
         # and threaded in as a plain integer each turn.
         ctx = replace(
             self._base_ctx,
-            datetime_now=datetime.now().isoformat(),
+            # Minute granularity: microseconds served nothing and rewrote the
+            # runtime block on every single call (backlog #38 churn trim).
+            datetime_now=datetime.now().isoformat(timespec="minutes"),
             context_usage_pct=self._last_usage_pct,
             active_sub_agents=active_subs,
             scope_projects=(
@@ -328,6 +348,9 @@ class ContextManager:
         # Remap non-standard roles for LLM compatibility
         sliding_window = self._sanitize_roles(sliding_window)
 
+        # Daemon event rows ride the wire as positional turns
+        sliding_window = self._remap_positional_events(sliding_window)
+
         # Apply tool result pruning on old messages
         sliding_window = self._prune_old_tool_results(sliding_window)
 
@@ -369,10 +392,9 @@ class ContextManager:
                 + "[MEMORY HYGIENE] " + " ".join(soft_flags)
             )
 
-        # Truly dynamic runtime context (timestamps, context budget) — appended
-        # last so it doesn't break prefix caching for everything before it.
-        if truly_dynamic:
-            result.append({"role": "system", "content": truly_dynamic})
+        # Truly dynamic runtime context (timestamps, context budget) rides the
+        # tail as a POSITIONAL turn — see _attach_runtime_block.
+        self._attach_runtime_block(result, truly_dynamic)
 
         # Update usage percentage
         total_tokens = sum(estimate_message_tokens(m) for m in result)
@@ -418,6 +440,68 @@ class ContextManager:
                 )
             # else: drop messages with unknown roles
         return result
+
+    @staticmethod
+    def _remap_positional_events(messages: list[dict]) -> list[dict]:
+        """Emit tagged daemon event rows as positional ``user`` turns.
+
+        A wake event only means what it means WHERE it sits — "your worker just
+        finished" at the end of the conversation. ``role:"system"`` cannot carry
+        that: ``translate_messages_to_anthropic`` hoists every system row into
+        the top-level ``system`` param (position discarded by design), and
+        DeepSeek's serving stack concatenates them at the front too. The event
+        lands in the preamble next to the static prompt, the model's view of the
+        *conversation* still ends at "Dispatched… awaiting completion", and the
+        manager goes back to waiting forever (backlog #37).
+
+        Provider-independent on purpose: one wire shape, both adapters inherit
+        it. Narrow on purpose: only ``_meta.event``-tagged rows move — loop
+        nudges and other untagged system rows keep today's encoding.
+
+        The session row is never touched; only the copy bound for the provider.
+        """
+        remapped: list[dict] = []
+        for msg in messages:
+            meta = msg.get("_meta")
+            if (
+                msg.get("role") == "system"
+                and isinstance(meta, dict)
+                and meta.get("event") in _POSITIONAL_EVENT_TAGS
+            ):
+                msg = {**msg, "role": "user"}
+            remapped.append(msg)
+        return remapped
+
+    @staticmethod
+    def _attach_runtime_block(messages: list[dict], block: str) -> None:
+        """Append the per-call runtime block as a positional turn, in place.
+
+        It used to trail as ``role:"system"``, on the assumption that appending
+        it last kept everything before it cacheable. True for Anthropic and
+        MiniMax, exactly backwards for DeepSeek: hoisted to the front, the
+        per-call timestamp landed immediately after the static prefix and
+        invalidated the entire conversation on every call — a 23.5% hit rate
+        frozen at the prefix size, with a full 60-85K-token re-prefill each time
+        (backlog #38, probe-proven).
+
+        Folds into the final ``user`` turn when there is one, otherwise rides
+        its own ``user`` row (the common tool-result tail). Never a system row.
+        """
+        if not block:
+            return
+        framed = f"{_RUNTIME_MARKER}\n{block}"
+        tail = messages[-1] if messages else None
+        if tail is not None and tail.get("role") == "user":
+            content = tail.get("content")
+            if isinstance(content, list):
+                merged = [*content, {"type": "text", "text": framed}]
+            elif isinstance(content, str) and content:
+                merged = content + _RUNTIME_SEP + framed
+            else:
+                merged = framed
+            messages[-1] = {**tail, "content": merged}
+            return
+        messages.append({"role": "user", "content": framed})
 
     @staticmethod
     def _validate_tool_results(messages: list[dict]) -> list[dict]:
