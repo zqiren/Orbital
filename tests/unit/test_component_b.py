@@ -167,17 +167,23 @@ class TestReadToolBasic:
 
 
 # ===========================================================================
-# AC-4: ReadTool — file > 100K chars truncated with notice
+# AC-4: ReadTool — oversized file truncated with notice
+#
+# The cap is now WINDOW-RELATIVE (10% of context_window * 4 chars/token,
+# floored at 20_000, ceilinged at 400_000). With no context_window the tool
+# falls back to the historical fixed 100_000, so these keep exercising the
+# 100k boundary — via the documented fallback rather than a hard constant.
+# Window-relative behavior itself is covered in test_read_pagination.py.
 # ===========================================================================
 
 class TestReadToolTruncation:
 
-    def test_large_file_truncated_at_100k(self, tmp_path):
+    def test_large_file_truncated_at_default_cap(self, tmp_path):
         workspace = str(tmp_path)
         large_content = "x" * 150_000
         (tmp_path / "large.txt").write_text(large_content, encoding="utf-8")
 
-        tool = ReadTool(workspace=workspace)
+        tool = ReadTool(workspace=workspace)  # no window → 100_000 fallback
         result = tool.execute(path="large.txt")
 
         assert isinstance(result, ToolResult)
@@ -186,19 +192,36 @@ class TestReadToolTruncation:
         # Should contain a truncation notice
         assert "truncat" in result.content.lower() or "TRUNCAT" in result.content
 
-    def test_file_at_100k_not_truncated(self, tmp_path):
+    def test_file_at_default_cap_not_truncated(self, tmp_path):
         workspace = str(tmp_path)
         exact_content = "y" * 100_000
         (tmp_path / "exact.txt").write_text(exact_content, encoding="utf-8")
 
-        tool = ReadTool(workspace=workspace)
+        tool = ReadTool(workspace=workspace)  # no window → 100_000 fallback
         result = tool.execute(path="exact.txt")
 
         assert isinstance(result, ToolResult)
-        # At exactly 100K, should NOT be truncated (boundary: <= 100K is fine)
-        # SPEC AMBIGUITY: "Truncate at 100K" could mean > 100K or >= 100K.
-        # We test that 100K content is returned (no truncation notice expected).
-        assert "y" * 1000 in result.content
+        # At exactly the cap, content is returned whole (boundary is <=).
+        assert result.content == exact_content
+        assert "TRUNCATED" not in result.content
+
+    def test_large_file_truncated_at_window_relative_cap(self, tmp_path):
+        """Same file, a big window → a bigger cap. The cap tracks the model."""
+        workspace = str(tmp_path)
+        # 1000 lines x 200 chars — line-granular so the cap lands on a boundary.
+        content = "".join("z" * 199 + "\n" for _ in range(1000))
+        (tmp_path / "big.txt").write_text(content, encoding="utf-8")
+
+        # 128k window → cap = int(128_000 * 0.10 * 4) = 51_200 chars.
+        small = ReadTool(workspace=workspace, context_window=128_000)
+        small_result = small.execute(path="big.txt")
+        assert "TRUNCATED" in small_result.content
+        assert len(small_result.content) <= 51_200
+
+        # 1M window → cap = 400_000 (ceiling), so 200k of content fits whole.
+        large = ReadTool(workspace=workspace, context_window=1_000_000)
+        large_result = large.execute(path="big.txt")
+        assert large_result.content == content
 
 
 # ===========================================================================

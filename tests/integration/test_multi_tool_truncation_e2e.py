@@ -2,11 +2,11 @@
 # Copyright (C) 2026 Orbital Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Integration: multi-tool truncation end-to-end with real LLM.
+"""Integration: multi-tool result lifecycle end-to-end with real LLM.
 
-Triggers multiple file reads in a single agent run to verify all tool
-results are replaced with honest (non-narration) stubs and all disk backups
-are created.
+Triggers multiple file reads in a single agent run to verify that reads of
+DIFFERENT files all stay live in history (none supersedes another) while every
+one of them is still archived to disk.
 
 Env vars:
     AGENT_OS_TEST_API_KEY: LLM API key (Moonshot)
@@ -32,7 +32,15 @@ skip_no_key = pytest.mark.skipif(
     reason="AGENT_OS_TEST_API_KEY not set — skipping real LLM integration tests",
 )
 
-pytestmark = [skip_no_key, pytest.mark.timeout(120)]
+# The wall-clock a turn needs depends entirely on the model under test, so a
+# hard-coded number is only ever right for one of them. 120s fits the default
+# kimi-k2.5; MiniMax-M3 needs far more, because its reasoning is locked on
+# (model_only — `disable_reasoning` is a no-op) and every iteration pays for a
+# think block. Override with AGENT_OS_TEST_TIMEOUT when pointing these at a
+# slower model, e.g. AGENT_OS_TEST_TIMEOUT=600 for M3.
+TIMEOUT = int(os.environ.get("AGENT_OS_TEST_TIMEOUT", "120"))
+
+pytestmark = [skip_no_key, pytest.mark.timeout(TIMEOUT)]
 
 # ---------------------------------------------------------------------------
 # Imports
@@ -136,11 +144,16 @@ def three_files(workspace):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_multiple_reads_all_stubbed(
+@pytest.mark.timeout(TIMEOUT)
+async def test_multiple_reads_of_distinct_files_all_stay_live(
     agent_loop, session, workspace, three_files,
 ):
-    """LLM reads 3 files → all tool results become stubs after response."""
+    """LLM reads 3 different files → all three results stay in history.
+
+    Three distinct paths are three distinct targets, so nothing supersedes
+    anything. The comparison the model was asked to make needs all three
+    present at once — that is precisely what blanket stubbing broke.
+    """
     await agent_loop.run(
         initial_message=(
             "Read the files alpha.txt, beta.txt, and gamma.txt. "
@@ -155,19 +168,25 @@ async def test_multiple_reads_all_stubbed(
     tool_msgs = [m for m in messages if m.get("role") == "tool"]
     assert len(tool_msgs) >= 3, f"Expected at least 3 tool results, got {len(tool_msgs)}"
 
-    # All large tool results should be stubbed
     stubbed = [m for m in tool_msgs if m.get("_stubbed")]
-    # At least the file read results (>500 chars) should be stubbed
-    large_tool_msgs = [m for m in tool_msgs if len(m.get("content", "")) > 500 or m.get("_stubbed")]
-    assert len(stubbed) >= 1, "Expected at least 1 stubbed tool result"
+    assert not stubbed, (
+        f"Reads of distinct paths must not stub each other, got {len(stubbed)}"
+    )
+
+    # Each file's content is still visible.
+    blob = " ".join(
+        m["content"] for m in tool_msgs if isinstance(m.get("content"), str)
+    )
+    for marker in ("ALPHA", "BETA", "GAMMA"):
+        assert f"the {marker} file" in blob, f"{marker} content missing from history"
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(TIMEOUT)
 async def test_all_disk_backups_created(
     agent_loop, session, workspace, three_files,
 ):
-    """Each stubbed tool result has a corresponding disk backup."""
+    """Every large tool result has a disk archive, stubbed or not."""
     await agent_loop.run(
         initial_message=(
             "Read all three files: alpha.txt, beta.txt, gamma.txt. "
@@ -180,16 +199,22 @@ async def test_all_disk_backups_created(
     )
 
     messages = session.get_messages()
-    stubbed = [m for m in messages if m.get("role") == "tool" and m.get("_stubbed")]
+    large = [
+        m for m in messages
+        if m.get("role") == "tool"
+        and (m.get("_stubbed") or (
+            isinstance(m.get("content"), str) and len(m["content"]) > 500
+        ))
+    ]
 
-    if not stubbed:
-        pytest.skip("No tool results were large enough to trigger truncation")
+    if not large:
+        pytest.skip("No tool results were large enough to trigger archiving")
 
     assert os.path.exists(tool_results_dir), "Tool results directory should exist"
 
     backup_files = os.listdir(tool_results_dir)
-    assert len(backup_files) >= len(stubbed), (
-        f"Expected at least {len(stubbed)} backup files, got {len(backup_files)}"
+    assert len(backup_files) >= len(large), (
+        f"Expected at least {len(large)} backup files, got {len(backup_files)}"
     )
 
     # Verify each backup is valid JSON
@@ -202,12 +227,12 @@ async def test_all_disk_backups_created(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_stubs_are_honest_not_narration(
+@pytest.mark.timeout(TIMEOUT)
+async def test_any_stub_is_a_supersession_stub_and_is_honest(
     agent_loop, session, workspace, three_files,
 ):
-    """Every stubbed tool result carries the honest 'NOT the content' notice and
-    never the model's narration as a faux summary."""
+    """The only stub reachable is the supersession stub, and it must be honest:
+    it leads with the absence and never carries the model's narration."""
     await agent_loop.run(
         initial_message=(
             "Read alpha.txt, beta.txt, and gamma.txt. "
@@ -218,22 +243,30 @@ async def test_stubs_are_honest_not_narration(
     messages = session.get_messages()
     stubbed = [m for m in messages if m.get("role") == "tool" and m.get("_stubbed")]
 
-    if len(stubbed) < 2:
-        pytest.skip("Need at least 2 stubbed results to test stub honesty")
+    if not stubbed:
+        pytest.skip("No result was re-fetched, so nothing was superseded")
+
+    narrations = [
+        m["content"] for m in messages
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str)
+        and m["content"].strip()
+    ]
 
     for msg in stubbed:
         content = msg["content"]
-        assert content.startswith("[Tool:")
+        assert content.startswith("[SUPERSEDED")
         assert "NOT the content" in content
         assert "Agent summary:" not in content
+        for narration in narrations:
+            assert narration[:40] not in content
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_session_jsonl_clean_after_multi_read(
+@pytest.mark.timeout(TIMEOUT)
+async def test_session_jsonl_keeps_content_after_multi_read(
     agent_loop, session, workspace, three_files,
 ):
-    """Session JSONL on disk contains stubs, not full file content."""
+    """Session JSONL on disk keeps the file content for un-superseded reads."""
     await agent_loop.run(
         initial_message="Read alpha.txt and beta.txt. Say 'done' when finished.",
     )
@@ -242,9 +275,18 @@ async def test_session_jsonl_clean_after_multi_read(
     reloaded = Session.load(session._filepath)
     tool_msgs = [m for m in reloaded.get_messages() if m.get("role") == "tool"]
 
+    live_blob = " ".join(
+        m["content"] for m in tool_msgs
+        if not m.get("_stubbed") and isinstance(m.get("content"), str)
+    )
+    for marker in ["ALPHA", "BETA"]:
+        assert f"the {marker} file" in live_blob, (
+            f"{marker} content must survive in the persisted session"
+        )
+
     for msg in tool_msgs:
         if msg.get("_stubbed"):
-            # Verify no raw file content in stubs
-            assert msg["content"].startswith("[Tool:")
+            # A stub never carries file content — that is the whole point.
+            assert msg["content"].startswith("[SUPERSEDED")
             for marker in ["ALPHA", "BETA", "GAMMA"]:
                 assert f"the {marker} file" not in msg["content"]

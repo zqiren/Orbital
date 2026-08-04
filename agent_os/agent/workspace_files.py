@@ -49,6 +49,26 @@ _completed_session_ends: set[str] = set()
 _CLEANUP_MARKER_FILE = ".memory_cleanup.json"
 
 
+# Last mtime THIS daemon produced for a given Layer-1 path, recorded at every
+# WorkspaceFileManager write. Purely diagnostic: it lets an OCC abort say
+# whether the conflicting write came from us or from outside.
+#
+# Without it every abort read "user mid-edit detected", which sent debugging
+# after a human who had done nothing — all four aborts observed in
+# orbital-marketing (2026-07-28/29) were a second consolidation pass colliding
+# with the first. Bounded by Layer-1 file count per project; last-write-wins is
+# sufficient because the comparison is always against the file's CURRENT mtime.
+_LAST_DAEMON_WRITE: dict[str, int] = {}
+
+
+def _record_daemon_write(path: str) -> None:
+    """Remember the mtime we just produced for ``path`` (best effort)."""
+    try:
+        _LAST_DAEMON_WRITE[path] = os.stat(path).st_mtime_ns
+    except OSError:
+        pass
+
+
 def _stat_mtime_ns(path: str) -> int | None:
     """Return st_mtime_ns for path, or None if the file does not exist.
 
@@ -93,16 +113,30 @@ def _occ_write_metadata(
     filepath = workspace_files._file_path(file_key)
     observed_mtime = _stat_mtime_ns(filepath)
     if observed_mtime != baseline_mtime:
+        # Who actually wrote? If the file's current mtime is one we produced,
+        # this is a second consolidation pass colliding with the first — a bug
+        # on our side, not a user edit. Anything else is a genuine outside
+        # writer, which is exactly what OCC exists to protect.
+        self_collision = (
+            observed_mtime is not None
+            and _LAST_DAEMON_WRITE.get(filepath) == observed_mtime
+        )
+        cause = (
+            "concurrent consolidation pass (daemon-authored write — NOT a user edit)"
+            if self_collision else "user mid-edit detected"
+        )
         logger.warning(
-            "session_end: OCC abort on %s — user mid-edit detected "
+            "session_end: OCC abort on %s — %s "
             "(project_id=%s baseline_mtime=%s observed_mtime=%s "
-            "cache_thrash_telemetry=True)",
-            file_key, project_id, baseline_mtime, observed_mtime,
+            "self_collision=%s cache_thrash_telemetry=True)",
+            file_key, cause, project_id, baseline_mtime, observed_mtime,
+            self_collision,
             extra={
                 "project_id": project_id,
                 "file_path": filepath,
                 "baseline_mtime": baseline_mtime,
                 "observed_mtime": observed_mtime,
+                "self_collision": self_collision,
                 "cache_thrash_telemetry": True,
             },
         )
@@ -434,6 +468,7 @@ class WorkspaceFileManager:
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(content)
         _atomic_replace(tmp_path, filepath)
+        _record_daemon_write(filepath)
 
     def append(self, file_key: str, content: str) -> None:
         """Append to a workspace file atomically. Creates file if needed."""
@@ -451,6 +486,7 @@ class WorkspaceFileManager:
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(existing + content)
         _atomic_replace(tmp_path, filepath)
+        _record_daemon_write(filepath)
 
     def read_all(self) -> dict[str, str | None]:
         """Read all 5 files. Returns {key: content_or_None}."""
