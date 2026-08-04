@@ -387,10 +387,14 @@ def test_occ_abort_names_a_concurrent_pass_when_the_daemon_made_the_write(tmp_pa
 def test_occ_abort_still_names_the_user_for_a_real_outside_edit(tmp_path, caplog):
     wf = WorkspaceFileManager(str(tmp_path))
     wf.write("decisions", "## 2026-07-28: A\n")
-    # A writer that is NOT the daemon's write path touches the file.
+    # A writer that is NOT the daemon's write path touches the file. Bump the
+    # mtime explicitly: on NTFS the append can land on the same timestamp tick
+    # as the daemon write above, which reads as a self-collision.
     path = wf._file_path("decisions")
     with open(path, "a", encoding="utf-8") as f:
         f.write("## hand edit\n")
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
 
     with caplog.at_level(logging.WARNING):
         ok = wsf_module._occ_write_metadata(
