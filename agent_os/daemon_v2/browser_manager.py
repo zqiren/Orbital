@@ -332,8 +332,9 @@ class BrowserManager:
                     "Worker browser tier %s unavailable (%s)", channel, _exc_summary(exc)
                 )
         raise RuntimeError(
-            "No browser available for worker contexts. Install Chrome or Edge, "
-            "or run 'python -m patchright install chromium'."
+            "No browser available for worker contexts: the bundled Chromium is "
+            "not installed and no system Chrome or Edge was found. Install "
+            "Microsoft Edge (or Google Chrome), then retry."
         ) from last_exc
 
     async def _get_worker_context(self, scope: str):
@@ -479,7 +480,9 @@ class BrowserManager:
             user_agent=ua_override,
         )
 
-        # Try system Chrome → Edge → WebKit (macOS) → bundled Chromium
+        # Try system Chrome → Edge → bundled Chromium. (There is no WebKit
+        # tier: it needed a Playwright WebKit build nothing ever downloads,
+        # so it could only fail.)
         self._context = None
         channels = [
             ("chrome", "system Chrome"),
@@ -498,48 +501,27 @@ class BrowserManager:
                     label, _exc_summary(exc),
                 )
         else:
-            # macOS: try WebKit (Safari engine) before bundled Chromium
-            if sys.platform == "darwin":
-                try:
-                    webkit_kwargs = dict(
-                        user_data_dir=str(self._profile_dir),
-                        headless=headless,
-                        locale=detected_locale,
-                        timezone_id=detected_timezone,
-                    )
-                    self._context = await self._playwright.webkit.launch_persistent_context(
-                        **webkit_kwargs
-                    )
-                    logger.info("Browser launched using WebKit (Safari)")
-                except Exception as exc:
-                    logger.info(
-                        "WebKit not available, trying bundled Chromium (%s)",
-                        _exc_summary(exc),
-                    )
-                    self._context = None
-
-            if self._context is None:
-                try:
-                    self._context = await self._playwright.chromium.launch_persistent_context(
-                        **launch_kwargs
-                    )
-                    logger.info("Browser launched using bundled Chromium")
-                except Exception as exc:
-                    holder = self._profile_lock_holder()
-                    if holder is not None:
-                        # Every tier failed against a profile another live
-                        # browser holds — "install Chrome" would be a lie.
-                        raise RuntimeError(
-                            f"Browser profile is in use by another browser process "
-                            f"(pid {holder}) — most likely a sign-in browser window "
-                            f"is still open. Finish signing in, fully quit that "
-                            f"browser window, then retry."
-                        ) from exc
+            try:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    **launch_kwargs
+                )
+                logger.info("Browser launched using bundled Chromium")
+            except Exception as exc:
+                holder = self._profile_lock_holder()
+                if holder is not None:
+                    # Every tier failed against a profile another live
+                    # browser holds — "install Chrome" would be a lie.
                     raise RuntimeError(
-                        "No browser available. Install Chrome or Edge, or run "
-                        "'python -m patchright install chromium' to download a "
-                        "bundled browser. On macOS, Safari (WebKit) is also supported."
+                        f"Browser profile is in use by another browser process "
+                        f"(pid {holder}) — most likely a sign-in browser window "
+                        f"is still open. Finish signing in, fully quit that "
+                        f"browser window, then retry."
                     ) from exc
+                raise RuntimeError(
+                    "No browser available: the bundled Chromium is not "
+                    "installed and no system Chrome or Edge was found. "
+                    "Install Microsoft Edge (or Google Chrome), then retry."
+                ) from exc
 
         # NOTE: Do NOT use context.add_init_script() — it breaks DNS
         # resolution on Patchright persistent contexts (Windows).  Stealth
@@ -917,7 +899,8 @@ class BrowserManager:
             timezone_id=_detect_timezone(),
         )
 
-        # Same Chrome -> Edge -> WebKit (macOS) -> bundled Chromium fallback
+        # Same Chrome -> Edge -> bundled Chromium fallback as _launch (and the
+        # same reason there is no WebKit tier: its binary is never installed).
         ctx = None
         channels = [
             ("chrome", "system Chrome"),
@@ -936,30 +919,23 @@ class BrowserManager:
                     label, _exc_summary(exc),
                 )
         else:
-            # macOS: try WebKit (Safari engine) before bundled Chromium
-            if sys.platform == "darwin":
-                try:
-                    webkit_kwargs = dict(
-                        user_data_dir=str(self._profile_dir),
-                        headless=False,
-                        locale=_detect_locale(),
-                        timezone_id=_detect_timezone(),
-                    )
-                    ctx = await pw.webkit.launch_persistent_context(**webkit_kwargs)
-                    logger.info("Warmup browser launched using WebKit (Safari)")
-                except Exception:
-                    logger.info("Warmup: WebKit not available, trying bundled Chromium")
-
-            if ctx is None:
-                try:
-                    ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
-                    logger.info("Warmup browser launched using bundled Chromium")
-                except Exception as exc:
-                    await pw.stop()
+            try:
+                ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
+                logger.info("Warmup browser launched using bundled Chromium")
+            except Exception as exc:
+                await pw.stop()
+                holder = self._profile_lock_holder()
+                if holder is not None:
                     raise RuntimeError(
-                        "No browser available for warmup. Install Chrome or Edge. "
-                        "On macOS, Safari (WebKit) is also supported."
+                        f"Browser profile is in use by another browser process "
+                        f"(pid {holder}). Fully quit that browser window, then "
+                        f"retry the sign-in."
                     ) from exc
+                raise RuntimeError(
+                    "No browser available for sign-in: the bundled Chromium is "
+                    "not installed and no system Chrome or Edge was found. "
+                    "Install Microsoft Edge (or Google Chrome), then retry."
+                ) from exc
 
         # From here on the headed browser holds the profile lock — if we exit
         # without closing it, it stays open forever and the daemon browser can
