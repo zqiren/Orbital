@@ -81,3 +81,25 @@ describe('ApprovalCard — button row layout (FE post-build #1b)', () => {
     expect(container!.className).toContain('md:justify-end');
   });
 });
+
+describe('ApprovalCard — localized what sentence (China i18n)', () => {
+  it('derives the sentence from tool_name/tool_args, not the backend English what', () => {
+    render(
+      <ApprovalCard approval={baseApproval} projectId="p1" sessionId="s1" />,
+    );
+    // activity.ran template ("Ran: {command}"), not the wire prose.
+    expect(screen.getByText('Ran: ls')).toBeTruthy();
+    expect(screen.queryByText('Run a shell command')).toBeNull();
+  });
+
+  it('falls back to the wire what for an unknown tool without args', () => {
+    render(
+      <ApprovalCard
+        approval={{ ...baseApproval, tool_name: 'mystery', tool_args: undefined as never, what: 'Do a mystery thing' }}
+        projectId="p1"
+        sessionId="s1"
+      />,
+    );
+    expect(screen.getByText('Do a mystery thing')).toBeTruthy();
+  });
+});
