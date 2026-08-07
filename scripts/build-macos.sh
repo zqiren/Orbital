@@ -155,15 +155,35 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
     NOTARY_KEY="${ORBITAL_NOTARY_KEY:-}"
     if [[ -n "$NOTARY_KEY" && -f "$NOTARY_KEY" && -n "${ORBITAL_NOTARY_KEY_ID:-}" && -n "${ORBITAL_NOTARY_ISSUER:-}" ]]; then
         echo "[6/6] Notarizing dist/$DMG_NAME (uploads to Apple; can take several minutes)..."
-        xcrun notarytool submit "dist/$DMG_NAME" \
+        # notarytool submit --wait exits 0 even when the result is Invalid, so
+        # never staple blindly — parse the status. Only staple on Accepted.
+        NOTARY_OUT="$(xcrun notarytool submit "dist/$DMG_NAME" \
             --key "$NOTARY_KEY" \
             --key-id "$ORBITAL_NOTARY_KEY_ID" \
             --issuer "$ORBITAL_NOTARY_ISSUER" \
-            --wait
-        echo "[6/6] Stapling notarization ticket..."
-        xcrun stapler staple "dist/$DMG_NAME"
-        xcrun stapler validate "dist/$DMG_NAME"
-        echo "  Notarized + stapled: dist/$DMG_NAME"
+            --wait 2>&1)" || true
+        echo "$NOTARY_OUT"
+        if echo "$NOTARY_OUT" | grep -q "status: Accepted"; then
+            echo "[6/6] Stapling notarization ticket..."
+            xcrun stapler staple "dist/$DMG_NAME"
+            xcrun stapler validate "dist/$DMG_NAME"
+            echo "  Notarized + stapled: dist/$DMG_NAME"
+        else
+            # Fetch the rejection reasons so they're in the build log.
+            SUBMISSION_ID="$(echo "$NOTARY_OUT" | awk '/id:/{print $2; exit}')"
+            if [[ -n "$SUBMISSION_ID" ]]; then
+                echo "  Notarization log for $SUBMISSION_ID:"
+                xcrun notarytool log "$SUBMISSION_ID" \
+                    --key "$NOTARY_KEY" --key-id "$ORBITAL_NOTARY_KEY_ID" \
+                    --issuer "$ORBITAL_NOTARY_ISSUER" 2>&1 | sed 's/^/    /' || true
+            fi
+            if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+                echo "  ERROR: tagged release requires successful notarization (got non-Accepted above)." >&2
+                exit 1
+            fi
+            echo "  WARNING: notarization did not return Accepted — keeping the signed, UN-notarized DMG"
+            echo "           for manual verification (right-click → Open to launch past Gatekeeper)."
+        fi
     else
         echo "[6/6] Signed but no notary credentials — skipping notarization."
         echo "      Set ORBITAL_NOTARY_KEY (path to .p8) + ORBITAL_NOTARY_KEY_ID + ORBITAL_NOTARY_ISSUER to notarize."

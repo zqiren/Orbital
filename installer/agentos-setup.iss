@@ -66,11 +66,9 @@ Type: filesandordirs; Name: "{app}\logs"
 // reported "missing". Per-user installs register under HKCU, machine
 // installs under HKLM (+WOW6432Node).
 function NeedsWebView2(): Boolean;
-const
-  GuidPath = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 begin
   Result := not (
-    RegKeyExists(HKCU, 'SOFTWARE\' + GuidPath) or
-    RegKeyExists(HKLM, 'SOFTWARE\' + GuidPath) or
-    RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\' + GuidPath));
+    RegKeyExists(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'));
 end;

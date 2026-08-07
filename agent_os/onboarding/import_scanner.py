@@ -408,7 +408,9 @@ def _dedupe(candidates: list[ImportCandidate]) -> list[ImportCandidate]:
     """
     merged: dict[str, ImportCandidate] = {}
     for cand in candidates:
-        key = os.path.realpath(cand.path)
+        # normcase folds case + separators on Windows (identity on POSIX), so
+        # C:\Foo and c:/foo collapse to one candidate as they should.
+        key = os.path.normcase(os.path.realpath(cand.path))
         existing = merged.get(key)
         if existing is None:
             merged[key] = ImportCandidate(

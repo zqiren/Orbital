@@ -37,8 +37,13 @@ SECRET_BODY = "SECRET_MESSAGE_BODY_DO_NOT_READ"
 
 def _encode_claude_dir(cwd: str) -> str:
     """Claude Code's lossy dir-name encoding (real path is read from the cwd
-    key, so the exact encoding does not matter — only uniqueness does)."""
-    return cwd.replace("/", "-")
+    key, so the exact encoding does not matter — only uniqueness does).
+
+    Must fold BOTH separators and the Windows drive colon: a raw Windows cwd
+    like ``C:\\Users\\me\\proj`` left unencoded would keep its ``C:`` drive so
+    ``os.path.join(projects_dir, name)`` treats it as absolute and writes
+    outside the fixture (even materializing a supposedly-dead path)."""
+    return cwd.replace("/", "-").replace("\\", "-").replace(":", "-")
 
 
 def _write_claude_project(projects_dir, real_cwd, n_sessions=1, with_body=True):
@@ -298,7 +303,11 @@ def test_symlinked_folder_dedupes_to_real_path(home, tmp_path):
     real = str(tmp_path / "real-target")
     os.makedirs(real)
     link = str(tmp_path / "link-to-target")
-    os.symlink(real, link)
+    try:
+        os.symlink(real, link)
+    except (OSError, NotImplementedError):
+        # Windows without Developer Mode / symlink privilege can't create one.
+        pytest.skip("symlink creation not permitted on this platform")
 
     _write_claude_project(str(home / ".claude" / "projects"), real)
     _write_codex_index(str(home / ".codex"), [(link, 1_777_000_000)])
