@@ -223,6 +223,52 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
   });
 });
 
+// ---- Project mode: saved provider with no endpoint seeds region default ----
+
+describe('LLMProviderSettings — project mode seeds endpoint for saved provider (401 trap)', () => {
+  it('seeds the region-default base_url when a project saved a provider but no endpoint', async () => {
+    mockApi({});
+    const onChange = vi.fn();
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'moonshot', model: 'kimi-k2.5', sdk: 'openai' }}
+        onChange={onChange}
+      />,
+    );
+    // An empty base_url would fall back cross-provider on the backend —
+    // the seed must be the provider's region-default endpoint (China for
+    // dual-endpoint providers, per Spec 17 §9).
+    await waitFor(() => {
+      const calls = onChange.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls[calls.length - 1][0].base_url).toBe('https://api.moonshot.cn/v1');
+    });
+  });
+
+  it('leaves a saved custom endpoint untouched', async () => {
+    mockApi({});
+    const onChange = vi.fn();
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{
+          provider: 'moonshot',
+          model: 'kimi-k2.5',
+          base_url: 'https://my-proxy.example/v1',
+          sdk: 'openai',
+        }}
+        onChange={onChange}
+      />,
+    );
+    await waitFor(() => {
+      const calls = onChange.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls[calls.length - 1][0].base_url).toBe('https://my-proxy.example/v1');
+    });
+  });
+});
+
 // ---- Region defaults to China on new selection ----
 
 describe('LLMProviderSettings — region defaults to China on new selection (Spec 17 §9)', () => {

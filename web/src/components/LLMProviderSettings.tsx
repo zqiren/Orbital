@@ -225,6 +225,7 @@ export default function LLMProviderSettings({
     } else if (mode === 'project') {
       // Populate from project values, fallback to global
       const pv = projectValues;
+      let projectBaseUrlSeed = '';
       if (pv?.provider && pv.provider !== 'custom' && providers[pv.provider]) {
         setProvider(pv.provider);
         resolvedProvider = pv.provider;
@@ -232,6 +233,15 @@ export default function LLMProviderSettings({
         const info = providers[pv.provider];
         if (info.china_base_url && pv.base_url === info.china_base_url) {
           setRegion('china');
+        } else if (!pv.base_url) {
+          // Saved provider with no saved endpoint: seed the provider's
+          // region-default URL instead of leaving it empty — an empty
+          // base_url falls back cross-provider on the backend, pairing
+          // this project's key with another provider's endpoint (the
+          // wrong-region 401 trap).
+          const defaultRegion = regionDefaultForProvider(info);
+          setRegion(defaultRegion);
+          projectBaseUrlSeed = resolveBaseUrl(info, defaultRegion);
         }
       } else if (pv?.provider) {
         // Unknown provider, or the registry's literal 'custom' entry — both
@@ -247,7 +257,7 @@ export default function LLMProviderSettings({
       }
       setModel(pv?.model || '');
       setModelInputValue(pv?.model || '');
-      setBaseUrl(pv?.base_url || '');
+      setBaseUrl(pv?.base_url || projectBaseUrlSeed);
       if (pv?.sdk) setSdk(pv.sdk as 'openai' | 'anthropic');
     }
     // wizard mode: no fields to initialize

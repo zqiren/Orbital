@@ -1458,11 +1458,6 @@ class AgentManager:
         # config; the credential store provides the live global API key.
         global_settings = self._settings_store.get() if self._settings_store else None
         cred_key = self._credential_store.get_api_key() if self._credential_store else None
-        api_key = (project.get("api_key")
-                   or cred_key
-                   or (global_settings.llm.api_key if global_settings else None)
-                   or "")
-        base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
         model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
 
         # Provider must track the model. When the project pins its own model it
@@ -1481,6 +1476,26 @@ class AgentManager:
                 or project.get("provider")
                 or "custom"
             )
+
+        # base_url and api_key must stay within the resolved provider. The
+        # global values belong to the GLOBAL provider — inheriting them into
+        # a project pinned to a different provider pairs a key with another
+        # provider's endpoint (the classic wrong-region/wrong-provider 401,
+        # e.g. a China-region key sent to the intl endpoint). Cross-provider,
+        # a missing base_url resolves from the registry and a missing key
+        # stays empty so the clean "no API key" error surfaces instead.
+        global_provider = global_settings.llm.provider if global_settings else None
+        crosses_provider = bool(project.get("model")) and provider != global_provider
+        if crosses_provider:
+            base_url = (project.get("base_url")
+                        or self._provider_registry.get_provider_data(provider).get("base_url"))
+            api_key = project.get("api_key") or ""
+        else:
+            api_key = (project.get("api_key")
+                       or cred_key
+                       or (global_settings.llm.api_key if global_settings else None)
+                       or "")
+            base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
 
         return AgentConfig(
             workspace=project["workspace"],
