@@ -59,6 +59,9 @@ class AttemptRecord(BaseModel):
     outcome: Optional[AttemptOutcome] = None
     summary: Optional[str] = None
     block_reason: Optional[str] = None
+    # Stable code for the block reason so the frontend can localize it;
+    # ``block_reason`` prose remains the fallback for old rows/agent text.
+    block_reason_code: Optional[str] = None
 
 
 class ItemRecord(BaseModel):

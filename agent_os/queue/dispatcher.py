@@ -162,6 +162,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.INTERRUPTED,
                     block_reason="interrupted by daemon restart",
+                    block_reason_code="daemon_restart",
                 )
             new_count = self._store.increment_interrupted(item.id)
             if new_count >= 2:
@@ -452,6 +453,7 @@ class QueueDispatcher:
                 item_id,
                 outcome=AttemptOutcome.INTERRUPTED,
                 block_reason="inject failed during retry",
+                block_reason_code="inject_failed_retry",
             )
             self._store.set_item_state(item_id, ItemState.BLOCKED)
             raise
@@ -801,6 +803,7 @@ class QueueDispatcher:
                 item.id,
                 outcome=AttemptOutcome.INTERRUPTED,
                 block_reason="inject failed",
+                block_reason_code="inject_failed",
             )
             self._reclaim_interrupted_item(item.id)
             self._idle_event.set()
@@ -970,6 +973,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.INTERRUPTED,
                     block_reason="exceeded runtime cap",
+                    block_reason_code="runtime_cap",
                 )
                 self._log_attempt_close(
                     item.id, "interrupted",
@@ -1017,6 +1021,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.INTERRUPTED,
                     block_reason="cancelled",
+                    block_reason_code="cancelled",
                 )
                 self._log_attempt_close(
                     item.id, "interrupted",
@@ -1058,6 +1063,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.INTERRUPTED,
                     block_reason="budget_blocked",
+                    block_reason_code="budget_blocked",
                 )
                 if action == "stop":
                     # Terminal: mark BLOCKED, do NOT requeue.
@@ -1106,6 +1112,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.BLOCKED,
                     block_reason=exit_block_reason or "",
+                    block_reason_code="agent_declared",
                 )
                 self._log_attempt_close(
                     item.id, "blocked",
@@ -1157,6 +1164,7 @@ class QueueDispatcher:
                         item.id,
                         outcome=AttemptOutcome.INTERRUPTED,
                         block_reason="cancelled",
+                        block_reason_code="cancelled",
                     )
                     self._log_attempt_close(
                         item.id, "interrupted",
@@ -1179,6 +1187,7 @@ class QueueDispatcher:
                     item.id,
                     outcome=AttemptOutcome.INTERRUPTED,
                     block_reason="exceeded hold deadline awaiting continuation",
+                    block_reason_code="hold_deadline",
                 )
                 self._log_attempt_close(
                     item.id, "interrupted",
@@ -1245,6 +1254,7 @@ class QueueDispatcher:
                 item.id,
                 outcome=AttemptOutcome.BLOCKED,
                 block_reason=contract_reason,
+                block_reason_code="contract_violation",
             )
             self._log_attempt_close(
                 item.id, "violation",

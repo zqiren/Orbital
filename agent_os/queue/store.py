@@ -331,6 +331,7 @@ class QueueStore:
         outcome: AttemptOutcome,
         summary: Optional[str] = None,
         block_reason: Optional[str] = None,
+        block_reason_code: Optional[str] = None,
     ) -> None:
         state = self.load()
         with self._lock:
@@ -344,6 +345,8 @@ class QueueStore:
                             latest.summary = summary
                         if block_reason is not None:
                             latest.block_reason = block_reason
+                        if block_reason_code is not None:
+                            latest.block_reason_code = block_reason_code
                         self._save_locked()
                     return
 

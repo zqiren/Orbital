@@ -770,6 +770,9 @@ export interface QueueAttempt {
   outcome: QueueAttemptOutcome | null;
   summary: string | null;
   block_reason: string | null;
+  /** Stable code for localizing block_reason; prose is the fallback for
+   * old rows and agent-declared reasons. */
+  block_reason_code?: string | null;
 }
 
 export interface QueueItem {
