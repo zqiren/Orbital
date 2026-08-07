@@ -55,6 +55,14 @@ mkdir -p "$APP_RESOURCES/assets"
 cp assets/icon.png "$APP_RESOURCES/assets/"
 cp assets/icon.icns "$APP_RESOURCES/assets/"
 
+# 4a2. Bundle Chromium as an opaque archive in Resources so first launch
+# needs no CDN download. Kept as a tarball (not extracted) so the
+# hardened-runtime re-sign below never touches the nested Chromium binaries
+# (signing away their JIT shipped the v0.6.6 SIGTRAP regression). Runtime
+# extracts it to the writable data dir on first launch.
+echo "[4a2/5] Staging bundled Chromium..."
+bash scripts/stage-browsers.sh "$APP_RESOURCES/browsers.tar.gz"
+
 # 4b. Re-sign bundle AFTER SPA/assets are copied in.
 # PyInstaller ad-hoc signs the .app during BUNDLE, but step 4 adds new files
 # that aren't in _CodeSignature/CodeResources. macOS Sequoia's Finder

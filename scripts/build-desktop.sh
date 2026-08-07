@@ -21,6 +21,10 @@ mkdir -p dist/Orbital/assets
 cp assets/icon.png dist/Orbital/assets/
 cp assets/icon.ico dist/Orbital/assets/
 
+# 3b. Bundle Chromium so first launch needs no CDN download (alongside the exe)
+echo "[3b/4] Staging bundled Chromium..."
+bash scripts/stage-browsers.sh dist/Orbital/browsers.tar.gz
+
 # 4. Build installer (if iscc is available)
 if command -v iscc &>/dev/null; then
     echo "[4/4] Building installer with Inno Setup..."

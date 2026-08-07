@@ -112,3 +112,5 @@ docs/screenshots/budget/*
 !docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png
 uploads/
 installer/MicrosoftEdgeWebView2Setup.exe
+dist/Orbital/browsers.tar.gz
+browsers.tar.gz
