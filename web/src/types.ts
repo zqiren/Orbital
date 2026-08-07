@@ -358,6 +358,9 @@ export interface ActivityEvent {
   category: ActivityCategory;
   description: string;
   tool_name: string;
+  /** Parsed tool arguments (newer daemons) — lets the frontend render a
+   * localized description instead of the English `description`. */
+  arguments?: Record<string, unknown>;
   source: string;
   timestamp: string;
 }

@@ -200,3 +200,38 @@ def test_descriptions_survive_session_reload(tmp_path):
 
     assert "_activity_descriptions" in assistant_msg
     assert assistant_msg["_activity_descriptions"]["tc_reload_1"] == "Taking screenshot"
+
+
+def test_activity_broadcast_carries_parsed_arguments():
+    """The agent.activity WS event must ship the parsed tool arguments so the
+    frontend can render a LOCALIZED description; the English `description`
+    stays only as the old-frontend fallback."""
+    ws = MagicMock()
+    translator = ActivityTranslator(ws)
+
+    translator.on_message(
+        {
+            "role": "assistant",
+            "content": None,
+            "source": "management",
+            "tool_calls": [
+                {
+                    "id": "tc_args_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": json.dumps({"path": "notes.md"}),
+                    },
+                }
+            ],
+        },
+        "test_project",
+    )
+
+    activity_events = [
+        c.args[1] for c in ws.broadcast.call_args_list
+        if c.args[1].get("type") == "agent.activity"
+    ]
+    assert len(activity_events) == 1
+    assert activity_events[0]["arguments"] == {"path": "notes.md"}
+    assert activity_events[0]["description"] == "Reading notes.md"

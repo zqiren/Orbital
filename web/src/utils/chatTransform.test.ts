@@ -3,7 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from 'vitest';
-import { transformChatHistory, truncateResult, mergeRecoveredAssistantMessage } from './chatTransform';
+import {
+  transformChatHistory,
+  truncateResult,
+  mergeRecoveredAssistantMessage,
+  describeLiveActivity,
+} from './chatTransform';
+import { translate } from '../i18n/useT';
+import type { ActivityTranslate } from './chatTransform';
 import type { ChatMessage } from '../types';
 import subAgentMarkerFixturesData from './subAgentMarkerFixtures.json';
 
@@ -537,6 +544,73 @@ describe('transformChatHistory — FE-A1 trailing capsule status is render-time,
     if (capsule && capsule.type === 'agent_run') {
       expect(capsule.status).toBe('completed');
     }
+  });
+});
+
+describe('activity descriptions are derived locally, never backend prose (China i18n B1)', () => {
+  const zhTr: ActivityTranslate = (k, v) => translate('zh', k, v);
+
+  it('ignores persisted _activity_descriptions and renders from the tool call', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read', '{"path":"notes.md"}')],
+        _activity_descriptions: { c1: 'Reading notes.md — backend English prose' },
+        timestamp: TS2,
+      }),
+      tool('c1', 'x', TS3),
+      asst({ content: 'done', timestamp: TS4 }),
+    ];
+    const items = transformChatHistory(messages);
+    const capsule = items.find((i) => i.type === 'agent_run');
+    expect(capsule?.type).toBe('agent_run');
+    if (capsule?.type === 'agent_run') {
+      const row = capsule.items.find((x) => x.type === 'tool_call_row');
+      if (row?.type === 'tool_call_row') {
+        expect(row.target_description).toBe('Read notes.md');
+      } else {
+        throw new Error('expected tool_call_row');
+      }
+    }
+  });
+
+  it('renders Chinese with a zh translator even when English prose is persisted', () => {
+    const messages: ChatMessage[] = [
+      user('go', TS),
+      asst({
+        content: null,
+        tool_calls: [tc('c1', 'read', '{"path":"notes.md"}')],
+        _activity_descriptions: { c1: 'Reading notes.md' },
+        timestamp: TS2,
+      }),
+      tool('c1', 'x', TS3),
+      asst({ content: 'done', timestamp: TS4 }),
+    ];
+    const items = transformChatHistory(messages, undefined, zhTr);
+    const capsule = items.find((i) => i.type === 'agent_run');
+    if (capsule?.type === 'agent_run') {
+      const row = capsule.items.find((x) => x.type === 'tool_call_row');
+      if (row?.type === 'tool_call_row') {
+        expect(row.target_description).toBe('读取 notes.md');
+      }
+    }
+  });
+});
+
+describe('describeLiveActivity', () => {
+  const zhTr: ActivityTranslate = (k, v) => translate('zh', k, v);
+
+  it('derives a localized description from live event arguments', () => {
+    expect(
+      describeLiveActivity('shell', { command: 'ls -la' }, undefined, zhTr, 'Running: ls -la'),
+    ).toBe('运行：ls -la');
+  });
+
+  it('falls back to the wire description when the daemon sends no arguments', () => {
+    expect(
+      describeLiveActivity('shell', undefined, undefined, zhTr, 'Running: ls -la'),
+    ).toBe('Running: ls -la');
   });
 });
 

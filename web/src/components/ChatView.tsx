@@ -12,6 +12,7 @@ import {
   transformChatHistory,
   truncateResult,
   mergeRecoveredAssistantMessage,
+  describeLiveActivity,
 } from '../utils/chatTransform';
 import type { DisplayItem } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
@@ -460,6 +461,10 @@ interface PendingApproval {
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
+  // The WS effect's handler closures don't re-subscribe on locale change —
+  // read the live locale through a ref (same staleness fix as sessionIdRef).
+  const localeRef = useRef(locale);
+  useEffect(() => { localeRef.current = locale; }, [locale]);
   // Spec 002: open a clicked workspace path in the FilePreviewDrawer. Provided
   // by ProjectDetail (which owns setRoute); null when no provider is present.
   const onOpenPath = useContext(OpenPathContext) ?? undefined;
@@ -1585,7 +1590,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           {
             type: 'tool_call_row',
             tool_name: e.tool_name,
-            target_description: e.description,
+            // Localized when the daemon ships parsed arguments; the wire
+            // description (backend English) is only the old-daemon fallback.
+            target_description: describeLiveActivity(
+              e.tool_name,
+              e.arguments,
+              project.workspace,
+              (k, v) => translate(localeRef.current, k, v),
+              e.description,
+            ),
             tool_call_id: e.id,
             category: e.category,
             timestamp: e.timestamp,
