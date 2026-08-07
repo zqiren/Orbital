@@ -158,6 +158,7 @@ export const STRINGS = {
   "chat.empty": { en: "No messages yet. Send a message to get started.", zh: "发送消息，开启工作。" },
   "chat.fileTooLarge": { en: "File exceeds 10 MB limit", zh: "文件超过 10 MB 上限" },
   "chat.injectError": { en: "Failed to send message. Please try again.", zh: "发送消息失败。请重试。" },
+  "chat.jumpToLatest": { en: "Jump to latest", zh: "回到最新" },
   "chat.loadEarlier": { en: "Load earlier messages ({n} more)", zh: "加载更早的消息（还有 {n} 条）" },
   "chat.loadingMore": { en: "Loading...", zh: "加载中…" },
   "chat.maxAttachments": { en: "Maximum of {n} attachments per message.", zh: "每条消息最多 {n} 个附件。" },

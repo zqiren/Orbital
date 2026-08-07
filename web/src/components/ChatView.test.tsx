@@ -16,7 +16,7 @@
 // here), mount ChatView, wait for the mount effect, then inspect the call
 // log and rendered DOM.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -2447,5 +2447,145 @@ describe('ChatView: [Sub-agent] lifecycle marker rows (backlog #27)', () => {
     expect(text).not.toContain('The dispatched task did not complete');
     // "failed: queued message dropped: …" rendered two colons in a row.
     expect(text).not.toMatch(/:\s*[^:]*:\s/);
+  });
+});
+
+// backlog #44: during a streaming response the user must be able to scroll up
+// to read earlier content without the transcript snapping back to the bottom on
+// every token. These tests stub the scroll container's geometry (jsdom cannot
+// measure real layout) and drive stream deltas through the existing emitWs bus.
+describe('ChatView: scroll-up during streaming (backlog #44)', () => {
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Run requestAnimationFrame callbacks synchronously so scrollToBottom's
+    // scrollTop write is observable within the same act() flush.
+    rafSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+  });
+
+  afterEach(() => {
+    rafSpy.mockRestore();
+  });
+
+  /** Give the scroll container measurable geometry with a writable scrollTop. */
+  function stubScrollGeometry(
+    el: HTMLElement,
+    scrollHeight: number,
+    clientHeight: number,
+    scrollTop: number,
+  ) {
+    let top = scrollTop;
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => clientHeight });
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
+    });
+  }
+
+  function getScrollEl(): HTMLElement {
+    const el = container.querySelector('div.overflow-y-auto') as HTMLElement | null;
+    expect(el).not.toBeNull();
+    return el!;
+  }
+
+  /** Simulate a genuine user scroll-up. The mount reset arms the ~150ms
+   *  programmatic-scroll guard, so wait past it first — a real user scrolls
+   *  well after the session has settled. */
+  async function userScrollTo(scrollEl: HTMLElement, scrollTop: number) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 160));
+    });
+    scrollEl.scrollTop = scrollTop;
+    await act(async () => {
+      scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+  }
+
+  it('does NOT snap back and surfaces the jump-to-latest pill after the user scrolls up', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    const scrollEl = getScrollEl();
+    // Tall content, short viewport, parked at the very top (user scrolled up).
+    stubScrollGeometry(scrollEl, 1000, 500, 0);
+    await userScrollTo(scrollEl, 0);
+
+    // A stream delta arrives for the viewed session.
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        session_id: 's1',
+        text: 'streamed-token-SCROLL',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    // Content rendered, but the viewport stayed where the user left it.
+    expect(container.textContent ?? '').toContain('streamed-token-SCROLL');
+    expect(scrollEl.scrollTop).toBe(0);
+
+    // The arrow-only pill appears (no count in its label).
+    const pill = container.querySelector('[data-testid="jump-to-latest"]');
+    expect(pill).not.toBeNull();
+    expect(pill!.getAttribute('aria-label')).toBe('Jump to latest');
+    expect(pill!.textContent ?? '').not.toMatch(/\d/);
+  });
+
+  it('clicking the pill jumps to the bottom and resumes auto-follow', async () => {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+
+    const scrollEl = getScrollEl();
+    stubScrollGeometry(scrollEl, 1000, 500, 0);
+    await userScrollTo(scrollEl, 0);
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        session_id: 's1',
+        text: 'first-token',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+
+    const pill = container.querySelector('[data-testid="jump-to-latest"]') as HTMLElement;
+    expect(pill).not.toBeNull();
+
+    // Click the pill -> forced jump to the bottom.
+    await act(async () => {
+      pill.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(scrollEl.scrollTop).toBe(1000);
+    // Follow resumed: the pill is gone.
+    expect(container.querySelector('[data-testid="jump-to-latest"]')).toBeNull();
+
+    // A subsequent delta now keeps the view pinned to the bottom (auto-follow).
+    await act(async () => {
+      emitWs('chat.stream_delta', {
+        type: 'chat.stream_delta',
+        project_id: 'p1',
+        session_id: 's1',
+        text: 'second-token',
+        source: 'assistant',
+        is_final: false,
+      });
+    });
+    expect(scrollEl.scrollTop).toBe(1000);
+    expect(container.querySelector('[data-testid="jump-to-latest"]')).toBeNull();
   });
 });

@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown } from 'lucide-react';
+import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown } from 'lucide-react';
 import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import {
   transformChatHistory,
   truncateResult,
@@ -834,14 +835,25 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       });
   }, [projectId]);
 
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (el) {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
-      });
-    }
-  }, []);
+  // Auto-follow arbiter (backlog #44). scrollToBottom now follows the bottom
+  // only while the user is pinned there; when they scroll up to read earlier
+  // content it no-ops (and surfaces the jump-to-latest pill) instead of yanking
+  // them back on every stream token. Gating lives inside scrollToBottom, so the
+  // ~17 existing call sites keep calling it unchanged — only the user's own
+  // send, the pill, and a session switch pass { force: true }.
+  const {
+    scrollToBottom,
+    onScroll: handleScroll,
+    showJumpButton,
+    reset: resetAutoScroll,
+  } = useAutoScroll(scrollRef);
+
+  // On session switch (and mount), snap to the newest message and re-arm
+  // auto-follow — a freshly opened conversation should start pinned to the
+  // bottom, not wherever the previous session's scroll happened to be.
+  useEffect(() => {
+    resetAutoScroll();
+  }, [sessionId, resetAutoScroll]);
 
   /**
    * Shared approval-recovery fetch used by:
@@ -2489,6 +2501,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         ...(target && { target }),
       },
     ]);
+    // The user's own send always re-arms auto-follow and jumps to the bottom,
+    // even if they had scrolled up to read history before sending.
+    scrollToBottom({ force: true });
 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
@@ -2770,7 +2785,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         />
       ) : (
       <>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-7 py-5 max-md:pb-20 flex flex-col gap-4">
         {loading && (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
@@ -3269,6 +3284,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           />
         )}
       </div>
+
+      {/* backlog #44: jump-to-latest pill. Shown ONLY when the user has
+          scrolled up AND new content has since arrived. Arrow-only, no count —
+          clicking it jumps to the bottom and resumes auto-follow. */}
+      {showJumpButton && (
+        <button
+          type="button"
+          onClick={() => scrollToBottom({ force: true })}
+          aria-label={t('chat.jumpToLatest')}
+          data-testid="jump-to-latest"
+          className="absolute left-1/2 bottom-24 -translate-x-1/2 z-30 flex items-center justify-center w-9 h-9 rounded-full bg-accent text-white shadow-lg hover:opacity-90 transition-opacity"
+        >
+          <ArrowDown size={18} />
+        </button>
+      )}
 
       {agentError && (
         <div className="shrink-0 px-4">
