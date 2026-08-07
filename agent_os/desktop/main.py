@@ -430,9 +430,89 @@ def _os_localization() -> dict | None:
     return None
 
 
+# Correct Evergreen Runtime client GUID — the installer's old probe used
+# {F3017226-FE2A-4295-8BEE-13A6279B0638}, which does not exist, so it
+# always reported the runtime as missing.
+_WEBVIEW2_RUNTIME_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+_WEBVIEW2_DOWNLOAD_URL = "https://developer.microsoft.com/microsoft-edge/webview2/"
+
+
+def _webview2_available() -> bool:
+    """True when a WebView2 runtime (any channel) is registered.
+
+    Without it pywebview silently degrades to the IE11 engine (MSHTML),
+    which cannot execute the SPA bundle — the user gets a blank window
+    with no error. Mirrors pywebview's own registry probe
+    (webview/platforms/winforms.py `_is_chromium`).
+    """
+    if sys.platform != "win32":
+        return True
+    import winreg
+
+    client_guids = [
+        _WEBVIEW2_RUNTIME_GUID,                       # Evergreen runtime
+        "{2CD8A007-E189-409D-A2C8-9AF4EF3C72AA}",     # Beta
+        "{0D50BFEC-CD6A-4F9A-964C-C7416E3ACB10}",     # Dev
+        "{65C35B14-6C1D-4122-AC46-7148CC9D6497}",     # Canary
+    ]
+    roots = [
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"),
+    ]
+    for root, base in roots:
+        for guid in client_guids:
+            try:
+                with winreg.OpenKey(root, base + "\\" + guid) as key:
+                    pv, _ = winreg.QueryValueEx(key, "pv")
+                    if pv and pv != "0.0.0.0":
+                        return True
+            except OSError:
+                continue
+    return False
+
+
+def _fail_missing_webview2() -> None:
+    """Native dialog (bilingual by OS language) + download page, then exit.
+
+    Must not use pywebview for the dialog — pywebview IS the broken layer.
+    """
+    import ctypes
+    import webbrowser
+
+    if _os_localization() is not None:
+        title = "Orbital 需要 WebView2"
+        msg = (
+            "未检测到 Microsoft Edge WebView2 运行时，Orbital 无法显示界面。\n\n"
+            "点击“确定”将打开下载页面，安装后请重新启动 Orbital。"
+        )
+    else:
+        title = "Orbital needs WebView2"
+        msg = (
+            "The Microsoft Edge WebView2 Runtime was not found, so Orbital "
+            "cannot display its interface.\n\n"
+            "Click OK to open the download page, then restart Orbital after "
+            "installing the runtime."
+        )
+    try:
+        ctypes.windll.user32.MessageBoxW(0, msg, title, 0x00000040)  # MB_ICONINFORMATION
+    except Exception:
+        pass
+    try:
+        webbrowser.open(_WEBVIEW2_DOWNLOAD_URL)
+    except Exception:
+        pass
+    sys.exit(1)
+
+
 def open_window(port: int):
     global _window
     import webview
+
+    # Fail LOUDLY when the WebView2 runtime is absent — pywebview would
+    # otherwise fall back to the IE11 engine and show a blank window.
+    if not _webview2_available():
+        _fail_missing_webview2()
 
     # If window already exists (hidden), just show it
     if _window is not None:
@@ -628,6 +708,11 @@ def open_window(port: int):
     localization = _os_localization()
     if localization:
         start_kwargs["localization"] = localization
+    if sys.platform == "win32":
+        # Declare the only renderer that can run the SPA. (pywebview still
+        # falls back to MSHTML internally if WebView2 vanished after the
+        # guard above — the guard is what produces the loud failure.)
+        start_kwargs["gui"] = "edgechromium"
     webview.start(icon=resolve_window_icon_path(), func=_activate_macos, **start_kwargs)
 
 

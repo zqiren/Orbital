@@ -24,6 +24,13 @@ cp assets/icon.ico dist/Orbital/assets/
 # 4. Build installer (if iscc is available)
 if command -v iscc &>/dev/null; then
     echo "[4/4] Building installer with Inno Setup..."
+    # WebView2 Evergreen bootstrapper — referenced by the .iss [Files]
+    # section; the installer runs it when the runtime is missing.
+    WV2="installer/MicrosoftEdgeWebView2Setup.exe"
+    if [ ! -f "$WV2" ]; then
+        echo "Downloading WebView2 Evergreen bootstrapper..."
+        curl -fSL -o "$WV2" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    fi
     iscc installer/agentos-setup.iss
     echo "Installer: installer/Output/Orbital-Setup-0.8.4.exe"
 else
