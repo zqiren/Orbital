@@ -56,3 +56,40 @@ def test_build_rules_handles_none_and_extra():
 def test_build_rules_dedupes():
     rules = build_network_rules(["pypi.org"])  # already a default
     assert rules.domains.count("pypi.org") == 1
+
+
+def _registry_endpoint_hosts():
+    import json
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    registry = Path(__file__).resolve().parents[2] / "agent_os" / "config" / "providers.json"
+    providers = json.loads(registry.read_text())["providers"]
+    hosts = set()
+    for entry in providers.values():
+        for field in ("base_url", "china_base_url"):
+            url = entry.get(field)
+            if url:
+                hosts.add(urlparse(url).hostname)
+    return hosts
+
+
+def test_defaults_cover_every_registry_provider_endpoint():
+    """The allowlist claims to cover every provider the dropdown offers —
+    hold it to that, both regions of every registry endpoint included."""
+    missing = _registry_endpoint_hosts() - set(DEFAULT_ALLOWLIST_DOMAINS)
+    assert not missing, f"provider endpoints missing from DEFAULT_ALLOWLIST_DOMAINS: {sorted(missing)}"
+
+
+def test_defaults_include_china_package_mirrors():
+    """Sandboxed pip/npm/go from mainland China needs the domestic mirrors."""
+    for mirror in (
+        "pypi.tuna.tsinghua.edu.cn",
+        "registry.npmmirror.com",
+        "cdn.npmmirror.com",
+        "mirrors.aliyun.com",
+        "mirrors.ustc.edu.cn",
+        "goproxy.cn",
+        "mirrors.cloud.tencent.com",
+    ):
+        assert mirror in DEFAULT_ALLOWLIST_DOMAINS, mirror
