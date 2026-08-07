@@ -10,6 +10,7 @@ screenshots, and recovers from crashes.
 """
 
 import asyncio
+import json
 import locale as sys_locale
 import logging
 import os
@@ -42,9 +43,12 @@ WORKER_SCOPE_PREFIX = "worker:"
 
 # Stealth init script — injected into every browser context to spoof
 # automation-detection signals that Patchright does not cover natively.
+# navigator.languages is filled in per-launch (see _stealth_js): a pinned
+# ['en-US','en'] beside a zh-CN context locale is itself a fingerprint
+# (plural/singular mismatch), and Chinese sites reading it serve English.
 _STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'languages', {get: () => __LANGUAGES__});
 Object.defineProperty(navigator, 'plugins', {
     get: () => [1, 2, 3, 4, 5]
 });
@@ -52,6 +56,22 @@ window.chrome = window.chrome || {};
 window.chrome.runtime = window.chrome.runtime || {};
 window.chrome.app = {isInstalled: false, InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'}, RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}};
 """
+
+
+def _stealth_languages(locale_code: str) -> list[str]:
+    """navigator.languages consistent with the launch locale, e.g.
+    'zh-CN' → ['zh-CN', 'zh', 'en-US', 'en'], 'en-US' → ['en-US', 'en']."""
+    lang = locale_code.split("-")[0]
+    languages = [locale_code] if locale_code == lang else [locale_code, lang]
+    if lang != "en":
+        languages += ["en-US", "en"]
+    return languages
+
+
+def _stealth_js(locale_code: str | None = None) -> str:
+    """Concrete stealth script for a launch locale (default: detected)."""
+    loc = locale_code or _detect_locale()
+    return _STEALTH_JS.replace("__LANGUAGES__", json.dumps(_stealth_languages(loc)))
 
 # Common Windows timezone key → IANA mappings
 _WIN_TZ_TO_IANA = {
@@ -174,6 +194,18 @@ def _detect_timezone() -> str:
     except Exception:
         pass
 
+    return _fallback_timezone(_detect_locale())
+
+
+def _fallback_timezone(locale_code: str) -> str:
+    """Last-resort timezone consistent with the locale — claiming US
+    Eastern while the context reports zh-CN is a fingerprint mismatch."""
+    loc = locale_code.lower()
+    if loc.startswith("zh"):
+        return {
+            "zh-tw": "Asia/Taipei",
+            "zh-hk": "Asia/Hong_Kong",
+        }.get(loc, "Asia/Shanghai")
     return "America/New_York"
 
 
@@ -624,9 +656,11 @@ class BrowserManager:
         resolution on Patchright persistent contexts (Windows).  Instead we
         inject per-page and re-inject on every ``load`` event.
         """
+        script = _stealth_js()
+
         async def _inject():
             try:
-                await page.evaluate(_STEALTH_JS)
+                await page.evaluate(script)
             except Exception:
                 pass  # page may have closed
 
