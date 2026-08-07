@@ -384,6 +384,51 @@ def _is_foreign_url(url: str | None, port: int) -> bool:
 
 _window = None
 
+# pywebview chrome strings (macOS menu bar, quit dialog, file pickers).
+# Keyed off the OS language — the menu bar should match the system, which
+# is also what the SPA's own zh auto-detect assumes.
+_ZH_LOCALIZATION = {
+    'global.quitConfirmation': '确定要退出吗？',
+    'global.ok': '好',
+    'global.quit': '退出',
+    'global.cancel': '取消',
+    'global.saveFile': '存储文件',
+    'cocoa.menu.about': '关于',
+    'cocoa.menu.services': '服务',
+    'cocoa.menu.view': '显示',
+    'cocoa.menu.edit': '编辑',
+    'cocoa.menu.hide': '隐藏',
+    'cocoa.menu.hideOthers': '隐藏其他',
+    'cocoa.menu.showAll': '全部显示',
+    'cocoa.menu.quit': '退出',
+    'cocoa.menu.fullscreen': '进入全屏幕',
+    'cocoa.menu.cut': '剪切',
+    'cocoa.menu.copy': '拷贝',
+    'cocoa.menu.paste': '粘贴',
+    'cocoa.menu.selectAll': '全选',
+    'windows.fileFilter.allFiles': '所有文件',
+    'windows.fileFilter.otherFiles': '其他文件类型',
+    'linux.openFile': '打开文件',
+    'linux.openFiles': '打开多个文件',
+    'linux.openFolder': '打开文件夹',
+}
+
+
+def _os_localization() -> dict | None:
+    """pywebview localization dict for the OS language (None = English)."""
+    import locale as sys_locale
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            lang = (sys_locale.getdefaultlocale()[0] or "").lower()
+    except Exception:
+        lang = ""
+    if lang.startswith("zh"):
+        return _ZH_LOCALIZATION
+    return None
+
 
 def open_window(port: int):
     global _window
@@ -579,7 +624,11 @@ def open_window(port: int):
     # which is harmless here: a minimized window is never fullscreen.
     window.events.maximized += lambda: _set_chrome_mode("fullscreen")
     window.events.restored += lambda: _set_chrome_mode("mac-inline")
-    webview.start(icon=resolve_window_icon_path(), func=_activate_macos)
+    start_kwargs = {}
+    localization = _os_localization()
+    if localization:
+        start_kwargs["localization"] = localization
+    webview.start(icon=resolve_window_icon_path(), func=_activate_macos, **start_kwargs)
 
 
 def run_sandbox_setup():
