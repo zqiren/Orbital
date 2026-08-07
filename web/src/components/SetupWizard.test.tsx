@@ -338,7 +338,10 @@ describe('SetupWizard — agent browser sign-in group', () => {
       fireEvent.click(screen.getByTestId('wizard-open-browser'));
     });
 
-    expect(apiMock).toHaveBeenCalledWith('/api/v2/platform/browser/warmup', { method: 'POST' });
+    expect(apiMock).toHaveBeenCalledWith('/api/v2/platform/browser/warmup', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://accounts.google.com' }),
+    });
     expect(screen.getByText('Browser open — sign in and close it...')).toBeTruthy();
   });
 });

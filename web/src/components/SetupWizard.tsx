@@ -26,6 +26,7 @@ import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
+import { warmupUrlForLocale } from '../utils/warmupUrl';
 
 type WizardStep = 'api_key' | 'accounts';
 
@@ -91,6 +92,7 @@ function WizardCard({
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const t = useT();
+  const { locale } = useLocale();
   const [step, setStep] = useState<WizardStep>('api_key');
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -200,7 +202,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setBrowserLoading(true);
     setBrowserError(null);
     try {
-      await api('/api/v2/platform/browser/warmup', { method: 'POST' });
+      await api('/api/v2/platform/browser/warmup', {
+        method: 'POST',
+        body: JSON.stringify({ url: warmupUrlForLocale(locale) }),
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('wizard.browser.openFailed');
       setBrowserError(msg);
@@ -221,7 +226,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         // Status endpoint failed — keep polling
       }
     }, 2000);
-  }, [t]);
+  }, [t, locale]);
 
   return (
     // pt-titlebar: this is a full-screen surface rendered outside the app

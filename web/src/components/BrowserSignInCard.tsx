@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Loader2 } from 'lucide-react';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import { warmupUrlForLocale } from '../utils/warmupUrl';
 
 /**
  * Global Settings card: open the headed sign-in browser at any time when no
@@ -15,6 +17,7 @@ import { useT } from '../i18n/useT';
  */
 export default function BrowserSignInCard() {
   const t = useT();
+  const { locale } = useLocale();
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -27,7 +30,10 @@ export default function BrowserSignInCard() {
     setOpening(true);
     setError(null);
     try {
-      await api('/api/v2/platform/browser/warmup', { method: 'POST' });
+      await api('/api/v2/platform/browser/warmup', {
+        method: 'POST',
+        body: JSON.stringify({ url: warmupUrlForLocale(locale) }),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : t('global.browserSignIn.openFailed'));
       setOpening(false);
@@ -46,7 +52,7 @@ export default function BrowserSignInCard() {
         // Status endpoint failed — keep polling
       }
     }, 2000);
-  }, [t]);
+  }, [t, locale]);
 
   return (
     <div>
