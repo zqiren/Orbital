@@ -456,6 +456,15 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     workbench_routes.configure(project_store, agent_manager, calendar_hub)
     app.include_router(workbench_routes.router)
 
+    # 7c5. Onboarding import-discovery routes (backlog #34): read-only scan of
+    # other CLI agents' (Claude Code, Codex) and Obsidian's on-disk project/vault
+    # data, surfaced as ranked candidates the setup wizard confirms one-by-one.
+    # Stateless and metadata-only — creates nothing (confirmed candidates route
+    # back through POST /api/v2/projects).
+    from agent_os.api.routes import onboarding as onboarding_routes
+    onboarding_routes.configure()
+    app.include_router(onboarding_routes.router)
+
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
     # validated override PUT). Stateless — reads providers.json defaults and
     # the module-level override path resolved from AGENT_OS_DATA_DIR.

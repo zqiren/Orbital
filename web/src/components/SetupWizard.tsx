@@ -22,6 +22,7 @@ import { Loader2, Globe, Plug } from 'lucide-react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
+import ImportProjectsStep from './ImportProjectsStep';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
@@ -384,6 +385,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   {t('wizard.openBrowser')}
                 </button>
               )}
+            </div>
+
+            {/* Group (c): import existing projects — a disclose-then-scan,
+                confirm-each list of projects discovered on disk from other CLI
+                agents and Obsidian (backlog #34). Link-only; each confirmed row
+                calls the standard project-creation flow. */}
+            <div className="mt-6 pt-6 border-t border-border">
+              <ImportProjectsStep />
             </div>
 
             <div className="mt-8 flex justify-end gap-3">
