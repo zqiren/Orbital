@@ -36,6 +36,12 @@ export interface UseWorkbenchArgs {
   /** Project lens: fetch only this project's entries (omit for the global,
    *  privacy-filtered surface). */
   projectId?: string;
+  /** Fired when an exit (Done/Delete) fails in a way the user should see: a
+   *  non-409 server error, or an entry with no persisted id (which can never be
+   *  exited server-side). Surfacing lives with the page, not the hook, so the
+   *  hook's returned field set stays stable (bug #45 — this used to revert
+   *  silently). */
+  onExitError?: () => void;
 }
 
 export interface UseWorkbenchResult {
@@ -47,7 +53,7 @@ export interface UseWorkbenchResult {
   refetch: () => Promise<void>;
   exitEntry: (
     projectId: string,
-    memId: string,
+    memId: string | null,
     kind: 'fulfilled' | 'irrelevant',
     reason?: string,
   ) => Promise<void>;
@@ -61,7 +67,7 @@ function workbenchUrl(projectId?: string): string {
     : '/api/v2/workbench';
 }
 
-export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResult {
+export function useWorkbench({ projectId, onExitError }: UseWorkbenchArgs): UseWorkbenchResult {
   const [entries, setEntries] = useState<WorkbenchEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,12 +101,21 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
   }, [fetchAll]);
 
   const exitEntry = useCallback(
-    async (pid: string, memId: string, kind: 'fulfilled' | 'irrelevant', reason = '') => {
+    async (pid: string, memId: string | null, kind: 'fulfilled' | 'irrelevant', reason = '') => {
+      // Defence in depth (bug #45): an entry with no persisted id — null, or
+      // the literal "null" a template-coerced id produces — can never be exited
+      // server-side (its POST hits /entries/null/exit → 404). Surface it rather
+      // than firing a doomed request or silently doing nothing.
+      if (memId == null || memId === 'null') {
+        onExitError?.();
+        return;
+      }
+      const id = memId;
       const prevEntries = entries;
-      setEntries((cur) => cur.filter((e) => !(e.project_id === pid && e.id === memId)));
+      setEntries((cur) => cur.filter((e) => !(e.project_id === pid && e.id === id)));
       try {
         await api(
-          `/api/v2/workbench/${encodeURIComponent(pid)}/entries/${encodeURIComponent(memId)}/exit`,
+          `/api/v2/workbench/${encodeURIComponent(pid)}/entries/${encodeURIComponent(id)}/exit`,
           { method: 'POST', body: JSON.stringify({ kind, reason }) },
         );
         window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
@@ -111,10 +126,14 @@ export function useWorkbench({ projectId }: UseWorkbenchArgs): UseWorkbenchResul
           await fetchAll();
           window.dispatchEvent(new CustomEvent('orbital:workbench-changed'));
           setTimeout(() => setConflict(false), 4000);
+        } else {
+          // Non-409 failure (404/500/network). This used to revert SILENTLY —
+          // a failed delete looked like a no-op (bug #45). Surface it.
+          onExitError?.();
         }
       }
     },
-    [entries, fetchAll],
+    [entries, fetchAll, onExitError],
   );
 
   const migrate = useCallback(async (pid: string): Promise<string> => {

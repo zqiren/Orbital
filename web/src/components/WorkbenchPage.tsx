@@ -29,7 +29,7 @@
  * `route.draft` is consumed once the composer mounts.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { RefreshCw, Inbox } from 'lucide-react';
 import { api } from '../config';
@@ -88,9 +88,14 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
   const [migrateTarget, setMigrateTarget] = useState('');
   // Project filter (round 3, item 2), GLOBAL view only. '' = All projects.
   const [filterProjectId, setFilterProjectId] = useState('');
+  // Delete/exit failure notice (bug #45): the hook signals a failed exit here
+  // (non-409 error, or an id-less entry) so a failed Delete is no longer a
+  // silent no-op. Kept as page state so the hook's returned surface is stable.
+  const [deleteError, setDeleteError] = useState(false);
+  const handleExitError = useCallback(() => setDeleteError(true), []);
 
   const { entries, loading, error, conflict, refetch, exitEntry, migrate } =
-    useWorkbench({ projectId });
+    useWorkbench({ projectId, onExitError: handleExitError });
   const { newSession } = useAgent();
 
   const { start, end } = useMemo(() => todayRangeISO(), []);
@@ -249,7 +254,10 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         )}
         <button
           type="button"
-          onClick={() => refetch()}
+          onClick={() => {
+            setDeleteError(false);
+            refetch();
+          }}
           aria-label={t('workbench.retry')}
           data-testid="workbench-refresh"
           className="inline-flex items-center justify-center rounded-full p-1.5 text-secondary transition-[transform,background-color,color] duration-100 ease-out hover:bg-card-hover hover:text-primary active:scale-[0.92] motion-reduce:transition-none motion-reduce:active:scale-100"
@@ -269,6 +277,14 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
       {openError && (
         <div className="border-b border-error/20 bg-error/5 px-3 py-1.5 text-xs text-error">
           {openError}
+        </div>
+      )}
+      {deleteError && (
+        <div
+          data-testid="workbench-delete-error"
+          className="border-b border-error/20 bg-error/10 px-3 py-1.5 text-xs text-error"
+        >
+          {t('workbench.exit.error')}
         </div>
       )}
 
@@ -393,8 +409,13 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
       ) : (
         <div className="flex-1 min-h-0 overflow-auto px-4 py-3" data-testid="workbench-list">
           <ul className="space-y-2.5">
-            {filteredEntries.map((e) => (
-              <li key={`entry-${e.project_id}-${e.id}`}>
+            {filteredEntries.map((e, i) => (
+              // Fold the list index into the key: a null/absent id (a stale
+              // payload the backend heal didn't reach) would otherwise collapse
+              // every id-less row onto `entry-<project>-null`, and the
+              // duplicate key made React mis-reconcile a delete into a phantom
+              // card (bug #45). The index keeps every key unique.
+              <li key={`entry-${e.project_id}-${e.id ?? 'null'}-${i}`}>
                 <WorkbenchCard
                   entry={e}
                   showProjectChip={showProjectChip}

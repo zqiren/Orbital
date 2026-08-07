@@ -12,7 +12,10 @@
 /** One flagged `[user]` entry, lensed to a project. */
 export interface WorkbenchEntry {
   project_id: string;
-  id: string;
+  /** The daemon-assigned id. The backend heals id-less flagged entries on read
+   *  (bug #45), but a legacy/stale payload can still put `null` on the wire —
+   *  so the frontend must treat this as nullable and never key on it alone. */
+  id: string | null;
   text: string;
   due: string | null;
   created: string | null;

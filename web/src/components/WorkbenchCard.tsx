@@ -39,6 +39,7 @@
  * tab so a link click can't also fire the card's own doorway tap.
  */
 
+import { useId } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import { useT } from '../i18n/useT';
 import { eventColor } from './calendar/color';
@@ -129,7 +130,12 @@ export default function WorkbenchCard({
 }: WorkbenchCardProps) {
   const t = useT();
   const age = ageLabel(t, entry);
-  const testId = `workbench-card-entry-${entry.project_id}-${entry.id}`;
+  // Bug #45: a null id (a legacy/stale payload the backend heal didn't reach)
+  // would collapse every id-less card onto the same testid/key. Fall back to a
+  // per-instance unique token so no two cards ever collide.
+  const instanceId = useId();
+  const idPart = entry.id ?? `null-${instanceId}`;
+  const testId = `workbench-card-entry-${entry.project_id}-${idPart}`;
   // Project prominence (round 3, item 3): only on the global view — the lens
   // view (showProjectChip false) keeps the plain card, unchanged.
   const accent = showProjectChip ? eventColor(entry.project_id) : null;
@@ -141,6 +147,12 @@ export default function WorkbenchCard({
       data-testid={testId}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Only the card itself opens on Enter/Space. Bug #45: keyboard-
+        // activating an inner control (an exit button, or a markdown link)
+        // fires a keydown that bubbles here — without this guard it would ALSO
+        // open the doorway (mint a session + navigate away). The buttons only
+        // stopPropagation on click, so the keydown must be filtered by origin.
+        if (e.currentTarget !== e.target) return;
         if (e.key === 'Enter' || e.key === ' ') onOpen();
       }}
       className="group flex cursor-pointer flex-col gap-2 rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:border-border hover:shadow-[0_2px_6px_rgb(0_0_0/0.06)] active:scale-[0.99] motion-reduce:transition-none motion-reduce:transform-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent/60"

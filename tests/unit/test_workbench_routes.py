@@ -523,6 +523,73 @@ async def test_workbench_exclude_global_persists_via_project_update(tmp_path):
         assert pid_keep in pids
 
 
+# --------------------------------------------------------------------------
+# Lazy id heal (bug #45): a flagged bullet with no id (no mem-comment, or a
+# comment carrying no id:) parses to id=None. That id-less row collapses onto a
+# single React key on the client (duplicate-key phantom card on delete) AND
+# cannot be exited (POST /entries/null/exit 404s). The read path mints and
+# persists a stable id for each such surfaced entry.
+# --------------------------------------------------------------------------
+
+IDLESS_STATE = "\n".join([
+    FORMAT_LINE,
+    "## Focus",
+    "- [user] Approve the Q3 budget before Friday.",
+    "- [user] Send Simon the invoice draft.",
+    "",
+])
+
+
+async def test_get_mints_ids_for_idless_flagged_entries(tmp_path):
+    """A flagged bullet with no mem-comment must NOT surface with id=None — the
+    read path mints a stable id, persists it to PROJECT_STATE.md, and is
+    idempotent across reads."""
+    project = _seed_project(tmp_path, state=IDLESS_STATE)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        body = (await client.get("/api/v2/workbench")).json()
+        ids = [e["id"] for e in body["entries"]]
+        assert len(ids) == 2
+        # Non-null, non-empty, and distinct — no two entries share a key.
+        assert all(i for i in ids), f"expected minted ids, got {ids}"
+        assert len(set(ids)) == 2
+
+        # Persisted to disk — the exit route resolves by the on-file id.
+        disk = open(_state_path(project), encoding="utf-8").read()
+        for i in ids:
+            assert f"id:{i}" in disk
+        # The sentences and flags survive the heal untouched.
+        assert "Approve the Q3 budget before Friday." in disk
+        assert "Send Simon the invoice draft." in disk
+
+        # Idempotent: a second GET returns the SAME ids (no re-mint / churn).
+        body2 = (await client.get("/api/v2/workbench")).json()
+        assert [e["id"] for e in body2["entries"]] == ids
+
+
+async def test_exit_of_idless_entry_heals_then_succeeds(tmp_path):
+    """An exit against a (formerly id-less) flagged entry returns 200 and
+    shrinks the list — because the read path already minted+persisted the id
+    the client posts back."""
+    project = _seed_project(tmp_path, state=IDLESS_STATE)
+    client, *_ = _make_client(tmp_path, [project])
+    async with client:
+        before = (await client.get("/api/v2/workbench")).json()["entries"]
+        assert len(before) == 2
+        target = before[0]["id"]
+        assert target, "read path must have minted a real id"
+
+        r = await client.post(
+            f"/api/v2/workbench/proj_a/entries/{target}/exit",
+            json={"kind": "irrelevant", "reason": "not needed"},
+        )
+        assert r.status_code == 200, r.text
+
+        after = (await client.get("/api/v2/workbench")).json()["entries"]
+        assert len(after) == 1
+        assert target not in {e["id"] for e in after}
+
+
 async def test_get_excludes_flagged_but_resolved_entries(tmp_path):
     """A resolved entry never renders as a card, even if it is still flagged.
 

@@ -925,6 +925,7 @@ export const STRINGS = {
   "workbench.overdue": { en: "Overdue", zh: "已逾期" },
   "workbench.exit.fulfilled": { en: "Done", zh: "已完成" },
   "workbench.exit.irrelevant": { en: "Delete", zh: "删除" },
+  "workbench.exit.error": { en: "Couldn't delete that item — please try again.", zh: "无法删除该条目，请重试。" },
   "workbench.age.waiting.one": { en: "Waiting {n} day", zh: "已等待 {n} 天" },
   "workbench.age.waiting.other": { en: "Waiting {n} days", zh: "已等待 {n} 天" },
   "workbench.age.late.one": { en: "{n} day late", zh: "已逾期 {n} 天" },

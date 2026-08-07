@@ -167,13 +167,50 @@ def _entry_row(project_id: str, e, tz: str, now: datetime) -> dict:
     }
 
 
+def _heal_entry_lines(entry) -> list[str]:
+    """Rebuild an id-less flagged entry's block with a freshly minted id.
+
+    Returns ``[bullet, comment]`` — the bracket tag reconstructed from the
+    parsed ``flagged``/``due`` (never a numbered marker flipped to a dash, per
+    the tag-in-place grammar) and a canonical single-line mem-comment that
+    carries the new id plus whatever fields were already present.
+    """
+    fields = _entry_comment_fields(entry)  # existing fields (id is None → absent)
+    fields["id"] = user_flags.new_entry_id()
+    tag_tokens: list[str] = []
+    if entry.flagged:
+        tag_tokens.append("user")
+    if entry.due:
+        tag_tokens.append(f"due:{entry.due}")
+    bullet = f"{entry.prefix}[{' '.join(tag_tokens)}] {entry.text}"
+    comment = "  " + user_flags.render_comment(fields)
+    return [bullet, comment]
+
+
+def _heal_missing_ids(content: str, surfaced: list) -> str:
+    """Splice a minted id into every surfaced entry whose id is None.
+
+    Bottom-up (highest ``line_start`` first) so replacing a 1-line bullet with
+    a 2-line bullet+comment block never invalidates an earlier entry's indices.
+    """
+    lines = content.split("\n")
+    for entry in sorted(
+        (e for e in surfaced if e.id is None),
+        key=lambda e: e.line_start,
+        reverse=True,
+    ):
+        lines[entry.line_start:entry.line_end + 1] = _heal_entry_lines(entry)
+    return "\n".join(lines)
+
+
 def _collect_project(project: dict, now: datetime) -> list[dict]:
     """Return flagged entry rows for one project."""
     workspace = project.get("workspace", "")
     if not workspace:
         return []
     project_id = project.get("project_id", "")
-    _, content = _load_state(_state_path(workspace))
+    path = _state_path(workspace)
+    _, content = _load_state(path)
     content = content or ""
     parsed = user_flags.parse_entries(content)
     triggers = project.get("triggers", []) or []
@@ -184,8 +221,23 @@ def _collect_project(project: dict, now: datetime) -> list[dict]:
     # before that guard, or by any writer that bypasses it — must still never
     # resurrect a card the user closed with "Done". Read-side guarantee, so
     # the promise holds without waiting for the next write.
-    flagged = [e for e in parsed if e.flagged and not e.resolved]
-    return [_entry_row(project_id, e, tz, now) for e in flagged]
+    surfaced = [e for e in parsed if e.flagged and not e.resolved]
+
+    # Bug #45 — lazy id heal. A flagged bullet written without a mem-comment
+    # (or with one that carries no id:) parses to id=None. An id-less row
+    # collapses onto a single React key on the client (duplicate-key phantom
+    # card on delete) AND can never be exited (its POST hits /entries/null/exit
+    # → 404). Mint a stable id for each such surfaced entry and persist it so
+    # both the wire shape and the exit route have a real id to key on.
+    # Idempotent: only rewrites when at least one id was actually minted, so a
+    # fully-id'd file is never touched and the next read is a no-op.
+    if any(e.id is None for e in surfaced):
+        content = _heal_missing_ids(content, surfaced)
+        _write_state(path, content)
+        parsed = user_flags.parse_entries(content)
+        surfaced = [e for e in parsed if e.flagged and not e.resolved]
+
+    return [_entry_row(project_id, e, tz, now) for e in surfaced]
 
 
 @router.get("")
