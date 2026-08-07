@@ -1163,6 +1163,7 @@ const RESULT_LINE_BOUND = 12;
  */
 export function truncateResult(
   content: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
 ): { text: string; footer: string | null } {
   const totalChars = content.length;
   const lines = content.split('\n');
@@ -1185,12 +1186,12 @@ export function truncateResult(
   if (charBoundFires && (!lineBoundFires || RESULT_CHAR_BOUND <= firstNLinesLen)) {
     return {
       text: content.slice(0, RESULT_CHAR_BOUND) + '…',
-      footer: `first ${RESULT_CHAR_BOUND} chars · result is ${totalChars} chars total`,
+      footer: tr('chat.result.firstChars', { n: RESULT_CHAR_BOUND, total: totalChars }),
     };
   }
   return {
     text: firstNLinesText + '…',
-    footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
+    footer: tr('chat.result.firstLines', { n: RESULT_LINE_BOUND, total: totalLines }),
   };
 }
 

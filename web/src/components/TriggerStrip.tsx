@@ -157,7 +157,7 @@ function TriggerDetail({
                 className="text-xs text-secondary hover:text-primary transition-colors"
                 disabled={deleting}
               >
-                Cancel
+                {t('trigger.delete.cancelBtn')}
               </button>
               <button
                 onClick={handleDelete}
@@ -248,7 +248,7 @@ function BottomSheet({
               className="text-xs text-secondary hover:text-primary transition-colors"
               disabled={deleting}
             >
-              Cancel
+              {t('trigger.delete.cancelBtn')}
             </button>
             <button
               onClick={handleDelete}

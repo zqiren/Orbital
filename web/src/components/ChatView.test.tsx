@@ -894,8 +894,11 @@ describe('ChatView: strict session_id event routing (seam 3 / Phase 3)', () => {
       });
       emitWs('approval.request', {
         type: 'approval.request', project_id: 'p1', session_id: 's1',
+        // shell would render through the localized activity template
+        // ("Ran: {command}") and swallow the marker — use a command arg so
+        // the marker survives the derived sentence.
         what: 'SHOW-APPROVAL-s1', tool_name: 'shell', tool_call_id: 'tc-s1',
-        tool_args: {}, recent_activity: [],
+        tool_args: { command: 'SHOW-APPROVAL-s1' }, recent_activity: [],
       });
       emitWs('agent.notify', {
         type: 'agent.notify', project_id: 'p1', session_id: 's1',

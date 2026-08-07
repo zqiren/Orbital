@@ -247,6 +247,7 @@ type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
 
 function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   const t = useT();
+  const { locale } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const expandable = row.result_status !== 'pending';
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -277,7 +278,7 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
             </div>
           );
         }
-        const { text, footer } = truncateResult(raw);
+        const { text, footer } = truncateResult(raw, (k, v) => translate(locale, k, v));
         return (
           <div className="mt-1 ml-5">
             <pre className="px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
