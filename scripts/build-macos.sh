@@ -62,13 +62,25 @@ mkdir -p "$APP_RESOURCES/assets"
 cp assets/icon.png "$APP_RESOURCES/assets/"
 cp assets/icon.icns "$APP_RESOURCES/assets/"
 
-# 4a2. Bundle Chromium as an opaque archive in Resources so first launch
-# needs no CDN download. Kept as a tarball (not extracted) so the
-# hardened-runtime re-sign below never touches the nested Chromium binaries
-# (signing away their JIT shipped the v0.6.6 SIGTRAP regression). Runtime
-# extracts it to the writable data dir on first launch.
+# 4a2. Bundle Chromium as an archive in Resources so first launch needs no
+# CDN download. Kept as a tarball (not extracted) so the app-bundle signer
+# below doesn't have to reason about a nested browser tree; runtime extracts
+# it to the writable data dir on first launch.
 echo "[4a2/5] Staging bundled Chromium..."
 bash scripts/stage-browsers.sh "$APP_RESOURCES/browsers.tar.gz"
+
+# 4a3. Notarization scans INSIDE tar.gz archives, so the tarball is NOT opaque
+# to Apple: patchright-patched Chromium binaries (broken Google signatures, no
+# hardened runtime, no secure timestamp) made every notarization return
+# Invalid — 44 issues, all under browsers.tar.gz. For Developer ID builds,
+# re-sign the archive contents with our identity + hardened runtime + the same
+# permissive entitlements the rest of the bundle gets (V8 needs allow-jit —
+# the v0.6.6 SIGTRAP lesson), then repack. Ad-hoc builds skip this: unsigned
+# Chromium runs fine without notarization.
+if [[ -n "${ORBITAL_SIGN_IDENTITY:-}" ]]; then
+    echo "[4a3/5] Re-signing bundled Chromium archive for notarization..."
+    bash scripts/sign-browser-archive.sh "$APP_RESOURCES/browsers.tar.gz"
+fi
 
 # 4b. Re-sign bundle AFTER SPA/assets are copied in.
 # PyInstaller ad-hoc signs the .app during BUNDLE, but step 4 adds new files
