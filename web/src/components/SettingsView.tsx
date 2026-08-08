@@ -42,11 +42,6 @@ interface SettingsViewProps {
   /** Navigate to the pricing-table editor. */
   onEditPricing?: () => void;
   /**
-   * Bumped after a pricing-table save so the Budget section's useCost
-   * re-fetches and the meter/breakdown recompute against the new rates.
-   */
-  costRefreshKey?: number;
-  /**
    * Optional section to scroll into view on mount — any `data-settings-section`
    * id (P3-G: the header budget corner deep-links here with 'budget').
    * Consumed once via the shared section-scroll mechanism.
@@ -104,7 +99,6 @@ export default function SettingsView({
   onSave,
   onDelete,
   onEditPricing = () => {},
-  costRefreshKey,
   scrollToSection,
 }: SettingsViewProps) {
   const t = useT();
@@ -739,7 +733,6 @@ export default function SettingsView({
             action={budgetAction}
             onActionChange={setBudgetAction}
             onEditPricing={onEditPricing}
-            costRefreshKey={costRefreshKey}
           />
         </div>
 
