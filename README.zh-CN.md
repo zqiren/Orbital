@@ -354,6 +354,12 @@ Orbital 就是我自己想要的那个东西：一个对整个项目负责的 ag
 
 ---
 
+## 遥测（Telemetry）
+
+Orbital 每天发送**一份匿名汇总**——仅包含计数、枚举和布尔值。绝不包含提示词、文件、路径、模型输出或任何项目/会话标识。在 **设置 → 数据与隐私** 中可逐字查看即将发送的完整 JSON，并可一键关闭。完整的公开 schema 见 [docs/TELEMETRY.md](docs/TELEMETRY.md)。
+
+---
+
 ## License
 
 Orbital 采用 [GNU General Public License v3.0](LICENSE) 协议开源。

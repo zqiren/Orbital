@@ -241,6 +241,16 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           <WizardCard title={t('wizard.welcome')} intro={t('wizard.intro')}>
             <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
 
+            {/* First-run telemetry disclosure (spec 046 §6) — one sentence,
+                non-blocking; the full inspectable payload lives in Global
+                Settings → Data & privacy. */}
+            <p
+              className="mt-4 text-xs text-secondary/80"
+              data-testid="wizard-telemetry-disclosure"
+            >
+              {t('telemetry.wizard.disclosure')}
+            </p>
+
             <div className="mt-6 flex justify-end">
               <button
                 onClick={handleNext}

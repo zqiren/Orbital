@@ -2386,6 +2386,12 @@ class AgentManager:
             project_id, session_id, type(exc).__name__, exc,
             exc_info=exc,
         )
+        # Persist the structured code (spec 046 §4): local-only debugging value,
+        # so it spools even when the telemetry toggle is off (Q2). Code enum
+        # only — never the message, which can carry paths/model names.
+        from agent_os import telemetry
+
+        telemetry.emit("llm_error", {"error_code": code}, always_spool=True)
         self._set_last_terminal_event(
             project_id, session_id, "error", details=message, error_code=code,
         )

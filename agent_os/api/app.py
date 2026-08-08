@@ -389,6 +389,38 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _start_project_store_flush():
         await project_store.start_flush_task()
 
+    # 6d. Telemetry (spec 046): configure the process runtime, record app_start,
+    # and start the sender (startup ping + 6h periodic). Everything behind this
+    # call is never-raise; the toggle is re-read from settings per emit/cycle so
+    # PUT /settings kills emission live.
+    @app.on_event("startup")
+    async def _start_telemetry():
+        from agent_os import telemetry
+        from agent_os.version import get_version
+        import platform as _platform
+
+        sender = telemetry.configure(
+            store_dir,
+            is_enabled=lambda: settings_store.get().telemetry_enabled,
+        )
+        telemetry.emit(
+            "app_start",
+            {
+                "version": get_version(),
+                "os": _platform.system().lower(),
+                "fresh_install": telemetry.was_fresh_install(),
+            },
+        )
+        sender.start()
+
+    @app.on_event("shutdown")
+    async def _stop_telemetry():
+        from agent_os import telemetry
+
+        sender = telemetry.get_sender()
+        if sender is not None:
+            sender.stop()
+
     @app.on_event("shutdown")
     async def _release_pid():
         release_pid_file()

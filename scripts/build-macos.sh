@@ -12,6 +12,13 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
+# 0. Stamp the runtime version (spec 046 §7): agent_os/_version.py is the only
+#    authoritative version source inside the frozen bundle. Derives from
+#    pyproject.toml — no new manual bump location.
+APP_VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+printf '__version__ = "%s"\n' "$APP_VERSION" > agent_os/_version.py
+echo "[0/5] Stamped agent_os/_version.py = $APP_VERSION"
+
 # 1. Build React SPA
 echo "[1/5] Building React SPA..."
 cd web && npm run build && cd ..

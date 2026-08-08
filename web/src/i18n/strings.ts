@@ -943,6 +943,15 @@ export const STRINGS = {
   "settings.workbench.label": { en: "Workbench", zh: "工作台" },
   "settings.workbench.excludeGlobal.label": { en: "Exclude from global Workbench", zh: "从全局工作台中排除" },
   "settings.workbench.excludeGlobal.hint": { en: "The global Workbench shows verbatim quotes across projects — useful to turn off before screen-sharing or if this project is reachable from a shared mobile link.", zh: "全局工作台会显示跨项目的原文引用——在屏幕共享前，或此项目空间可通过共享的移动端链接访问时，你可能希望关闭它。" },
+  "telemetry.heading": { en: "Data & privacy", zh: "数据与隐私" },
+  "telemetry.toggle.label": { en: "Share anonymous usage statistics", zh: "分享匿名使用统计" },
+  "telemetry.toggle.hint": { en: "One daily aggregate — counters only, never prompts, files, paths, or model output. The exact payload is shown below, verbatim.", zh: "每天一份汇总——仅含计数，绝不包含提示词、文件、路径或模型输出。下方可查看逐字发送的完整内容。" },
+  "telemetry.viewer.heading": { en: "Exactly what's sent", zh: "发送内容一览" },
+  "telemetry.viewer.lastSent": { en: "Last sent", zh: "上次发送" },
+  "telemetry.viewer.nextPending": { en: "Next send (preview)", zh: "下次发送（预览）" },
+  "telemetry.viewer.never": { en: "Nothing has been sent yet.", zh: "尚未发送任何数据。" },
+  "telemetry.viewer.error": { en: "Could not load the payload preview.", zh: "无法加载发送内容预览。" },
+  "telemetry.wizard.disclosure": { en: "Orbital sends one anonymous daily usage summary (counters only — never your prompts, files, or paths). Inspect the exact payload or turn it off anytime in Settings → Data & privacy.", zh: "Orbital 每天发送一份匿名使用汇总（仅含计数——绝不包含你的提示词、文件或路径）。可随时在「设置 → 数据与隐私」中查看完整发送内容或关闭。" },
 } as const satisfies Record<string, StringEntry>;
 
 export type StringKey = keyof typeof STRINGS;
