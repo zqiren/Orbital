@@ -399,9 +399,15 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         from agent_os.version import get_version
         import platform as _platform
 
+        # AGENT_OS_TELEMETRY_URL overrides the production ingest endpoint —
+        # used by the release-runbook smoke (point at a local stub and diff
+        # the received payload against the settings viewer).
+        from agent_os.telemetry.sender import DEFAULT_ENDPOINT
+
         sender = telemetry.configure(
             store_dir,
             is_enabled=lambda: settings_store.get().telemetry_enabled,
+            endpoint=os.environ.get("AGENT_OS_TELEMETRY_URL", DEFAULT_ENDPOINT),
         )
         telemetry.emit(
             "app_start",
