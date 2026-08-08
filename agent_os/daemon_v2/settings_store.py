@@ -44,6 +44,11 @@ class GlobalSettings(BaseModel):
     # ConnectorManager's oauth_client_provider reads these at connect time.
     connector_google_client_id: str | None = None
     connector_google_client_secret: str | None = None
+    # Spec 046 — aggregate-only telemetry. Default-on with first-run disclosure
+    # + Global Settings toggle; the tolerant loader means existing installs
+    # pick up the default. Only daily aggregates ever transmit (see
+    # agent_os/telemetry/).
+    telemetry_enabled: bool = True
 
 
 class SettingsStore:

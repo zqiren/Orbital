@@ -261,14 +261,11 @@ function toolCallToActivity(
   workspace?: string,
   tr: ActivityTranslate = EN_ACTIVITY,
 ): Activity {
-  // Check for persisted description first (from JSONL _activity_descriptions).
-  // These are backend-authored English strings; surfaced verbatim.
-  const persisted = message?._activity_descriptions?.[tc.id];
-  if (persisted) {
-    const name = tc.function.name;
-    const category = TOOL_NAME_TO_CATEGORY[name] ?? 'tool_use';
-    return { id: tc.id, category, description: persisted, toolName: name, timestamp };
-  }
+  // NOTE: message._activity_descriptions (backend-authored English prose,
+  // still written to JSONL for rollback safety) is deliberately IGNORED —
+  // rendering from the structured tool call keeps this surface localized,
+  // retroactively for old sessions too.
+  void message;
 
   const name = tc.function.name;
   const category = TOOL_NAME_TO_CATEGORY[name] ?? 'tool_use';
@@ -330,13 +327,30 @@ function toolCallToActivity(
         case 'fill': description = tr('activity.browser.fill'); break;
         case 'search_page': description = tr('activity.browser.searchPage', { text: String(args.text ?? '?').slice(0, 30) }); break;
         case 'fetch': description = tr('activity.browser.fetch', { url: String(args.url ?? '?').slice(0, 60) }); break;
+        case 'press': description = tr('activity.browser.press', { key: String(args.key ?? '?') }); break;
+        case 'hover': description = tr('activity.browser.hover', { ref: String(args.ref ?? '?') }); break;
+        case 'select': description = tr('activity.browser.select', { value: String(args.value ?? '?'), ref: String(args.ref ?? '?') }); break;
+        case 'drag': description = tr('activity.browser.drag'); break;
+        case 'upload_file': description = tr('activity.browser.upload'); break;
+        case 'extract': description = tr('activity.browser.extract', { text: String(args.text ?? '?').slice(0, 50) }); break;
+        case 'evaluate': description = tr('activity.browser.evaluate'); break;
+        case 'go_back': description = tr('activity.browser.back'); break;
+        case 'go_forward': description = tr('activity.browser.forward'); break;
+        case 'reload': description = tr('activity.browser.reload'); break;
+        case 'wait': description = tr('activity.browser.wait'); break;
+        case 'pdf': description = tr('activity.browser.pdf'); break;
+        case 'tab_new': description = tr('activity.browser.tabNew'); break;
+        case 'tab_switch': description = tr('activity.browser.tabSwitch'); break;
+        case 'tab_close': description = tr('activity.browser.tabClose'); break;
         case 'done': description = tr('activity.browser.done'); break;
         default: description = tr('activity.browser.unknown', { action: String(action ?? 'unknown') }); break;
       }
       break;
     }
     default:
-      description = tr('activity.usedTool', { name });
+      description = name === 'request_credential'
+        ? tr('activity.requestedCredential', { domain: String(args.domain ?? 'website') })
+        : tr('activity.usedTool', { name });
   }
 
   return {
@@ -346,6 +360,27 @@ function toolCallToActivity(
     toolName: name,
     timestamp,
   };
+}
+
+/** Localized description for a live agent.activity event. The event's own
+ * `description` is backend-authored English; when the daemon ships the
+ * parsed `arguments` alongside it, derive the description locally with the
+ * same renderer the persisted path uses. Falls back to the wire description
+ * for older daemons that don't send arguments. */
+export function describeLiveActivity(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  workspace: string | undefined,
+  tr: ActivityTranslate,
+  fallback: string,
+): string {
+  if (!args) return fallback;
+  const tc: ToolCall = {
+    id: '',
+    type: 'function',
+    function: { name: toolName, arguments: JSON.stringify(args) },
+  };
+  return toolCallToActivity(tc, '', undefined, workspace, tr).description;
 }
 
 // Reasoning, tool_call_row, and empty-content agent_message markers
@@ -1128,6 +1163,7 @@ const RESULT_LINE_BOUND = 12;
  */
 export function truncateResult(
   content: string,
+  tr: ActivityTranslate = EN_ACTIVITY,
 ): { text: string; footer: string | null } {
   const totalChars = content.length;
   const lines = content.split('\n');
@@ -1150,12 +1186,12 @@ export function truncateResult(
   if (charBoundFires && (!lineBoundFires || RESULT_CHAR_BOUND <= firstNLinesLen)) {
     return {
       text: content.slice(0, RESULT_CHAR_BOUND) + '…',
-      footer: `first ${RESULT_CHAR_BOUND} chars · result is ${totalChars} chars total`,
+      footer: tr('chat.result.firstChars', { n: RESULT_CHAR_BOUND, total: totalChars }),
     };
   }
   return {
     text: firstNLinesText + '…',
-    footer: `first ${RESULT_LINE_BOUND} lines · result is ${totalLines} lines total`,
+    footer: tr('chat.result.firstLines', { n: RESULT_LINE_BOUND, total: totalLines }),
   };
 }
 

@@ -4,9 +4,12 @@
 
 import { useCallback, useState } from 'react';
 import { api } from '../config';
+import { translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
 import type { PlatformStatus, FolderInfo } from '../types';
 
 export function usePlatform() {
+  const { locale } = useLocale();
   const [status, setStatus] = useState<PlatformStatus | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -20,13 +23,13 @@ export function usePlatform() {
       setStatus(data);
       return data;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to get platform status';
+      const msg = e instanceof Error ? e.message : translate(locale, 'platform.error.status');
       setError(msg);
       return null;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [locale]);
 
   const triggerSetup = useCallback(async () => {
     setError(null);
@@ -38,11 +41,11 @@ export function usePlatform() {
       await getStatus();
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Setup failed';
+      const msg = e instanceof Error ? e.message : translate(locale, 'platform.error.setup');
       setError(msg);
       throw e;
     }
-  }, [getStatus]);
+  }, [getStatus, locale]);
 
   const getFolders = useCallback(async () => {
     setLoading(true);
@@ -54,13 +57,13 @@ export function usePlatform() {
       setFolders(data.folders);
       return data.folders;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to get folders';
+      const msg = e instanceof Error ? e.message : translate(locale, 'platform.error.folders');
       setError(msg);
       return [];
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [locale]);
 
   // TODO: Wire to folder management UI when built
   const grantFolderAccess = useCallback(async (path: string, mode: 'read_only' | 'read_write') => {
@@ -73,11 +76,11 @@ export function usePlatform() {
       await getFolders();
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to grant access';
+      const msg = e instanceof Error ? e.message : translate(locale, 'platform.error.grant');
       setError(msg);
       throw e;
     }
-  }, [getFolders]);
+  }, [getFolders, locale]);
 
   // TODO: Wire to folder management UI when built
   const revokeFolderAccess = useCallback(async (path: string) => {
@@ -90,11 +93,11 @@ export function usePlatform() {
       await getFolders();
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to revoke access';
+      const msg = e instanceof Error ? e.message : translate(locale, 'platform.error.revoke');
       setError(msg);
       throw e;
     }
-  }, [getFolders]);
+  }, [getFolders, locale]);
 
   return {
     status, folders, loading, error,

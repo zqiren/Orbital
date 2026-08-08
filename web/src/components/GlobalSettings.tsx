@@ -11,6 +11,8 @@ import BrowserSignInCard from './BrowserSignInCard';
 import PairPhone from './PairPhone';
 import SubAgentSettings from './SubAgentSettings';
 import ConnectorSettings from './ConnectorSettings';
+import TelemetrySettings from './TelemetrySettings';
+import AboutSection from './AboutSection';
 import SettingsRail, { type SettingsRailSection } from './SettingsRail';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
@@ -38,6 +40,8 @@ export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'connectors', labelKey: 'settingsRail.connectors' },
   { id: 'sub-agents', labelKey: 'global.subAgents.heading' },
   { id: 'phone-pairing', labelKey: 'settingsRail.phone' },
+  { id: 'privacy', labelKey: 'telemetry.heading' },
+  { id: 'about', labelKey: 'update.about.heading' },
 ];
 
 export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
@@ -225,6 +229,16 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
         {/* Phone Pairing section */}
         <div data-settings-section="phone-pairing" className="mt-10 pt-8 border-t border-border scroll-mt-4">
           <PairPhone />
+        </div>
+
+        {/* Data & privacy — telemetry toggle + verbatim payload viewer (spec 046 §6) */}
+        <div data-settings-section="privacy" className="mt-10 pt-8 border-t border-border scroll-mt-4">
+          <TelemetrySettings />
+        </div>
+
+        {/* About — running version + manual update check */}
+        <div data-settings-section="about" className="mt-10 pt-8 border-t border-border scroll-mt-4">
+          <AboutSection />
         </div>
       </div>
       </div>

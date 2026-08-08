@@ -75,7 +75,7 @@ export function NetworkAccessSection({
                 </div>
                 <button
                   type="button"
-                  aria-label={`Approve ${req.domain}`}
+                  aria-label={t('settings.network.approveAria', { domain: req.domain })}
                   onClick={() => approve(req)}
                   className="text-xs font-medium text-accent border border-border rounded-lg px-2.5 py-1 hover:bg-accent/5 transition-all duration-150 max-md:min-h-[44px]"
                 >
@@ -83,7 +83,7 @@ export function NetworkAccessSection({
                 </button>
                 <button
                   type="button"
-                  aria-label={`Dismiss ${req.domain}`}
+                  aria-label={t('settings.network.dismissAria', { domain: req.domain })}
                   onClick={() => dismiss(req)}
                   className="text-xs font-medium text-secondary border border-border rounded-lg px-2.5 py-1 hover:bg-secondary/5 transition-all duration-150 max-md:min-h-[44px]"
                 >
@@ -104,7 +104,7 @@ export function NetworkAccessSection({
               <span className="text-sm text-primary flex-1 truncate">{domain}</span>
               <button
                 type="button"
-                aria-label={`Remove ${domain}`}
+                aria-label={t('settings.network.removeAria', { domain })}
                 onClick={() => remove(domain)}
                 className="text-xs font-medium text-error border border-error/40 rounded-lg px-2.5 py-1 hover:bg-error/5 transition-all duration-150 max-md:min-h-[44px]"
               >

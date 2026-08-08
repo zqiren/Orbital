@@ -4,6 +4,8 @@
 
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import { translate } from '../i18n/useT';
+import { readInitialLocale } from '../i18n/LocaleContext';
 
 /**
  * ErrorBoundary — scoped render-error guard.
@@ -58,13 +60,15 @@ export default class ErrorBoundary extends Component<
 
   render(): ReactNode {
     if (this.state.hasError) {
+      // Class component — no useT(); read the persisted locale directly.
+      const locale = readInitialLocale();
       return (
         <div
           data-testid="error-boundary-fallback"
           className="flex flex-col items-center justify-center gap-3 h-full p-8 text-center"
         >
           <p className="text-sm text-secondary">
-            {this.props.message ?? 'Something went wrong displaying this project.'}
+            {this.props.message ?? translate(locale, 'errorBoundary.message')}
           </p>
           <button
             type="button"
@@ -72,7 +76,7 @@ export default class ErrorBoundary extends Component<
             onClick={this.handleRetry}
             className="rounded-sm bg-accent text-on-accent text-sm font-medium px-4 py-1.5 hover:bg-accent/85 cursor-pointer"
           >
-            Try again
+            {translate(locale, 'errorBoundary.retry')}
           </button>
         </div>
       );

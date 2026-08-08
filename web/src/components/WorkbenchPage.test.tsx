@@ -16,11 +16,23 @@
  * entirely.
  */
 
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const apiMock = vi.hoisted(() => vi.fn());
-vi.mock('../config', () => ({ api: apiMock }));
+const { apiMock, MockApiError } = vi.hoisted(() => {
+  class MockApiError extends Error {
+    status: number;
+    detail: string;
+    constructor(status: number, detail: string) {
+      super(detail);
+      this.status = status;
+      this.detail = detail;
+      this.name = 'ApiError';
+    }
+  }
+  return { apiMock: vi.fn(), MockApiError };
+});
+vi.mock('../config', () => ({ api: apiMock, ApiError: MockApiError }));
 
 import WorkbenchPage from './WorkbenchPage';
 
@@ -44,6 +56,9 @@ function mockApi(opts: {
   newSessionId?: string | null;
   /** Simulates the mint POST rejecting (network/server failure). */
   newSessionFails?: boolean;
+  /** When set, the exit POST rejects with an ApiError of this status (bug #45
+   *  non-409 surface test). */
+  exitRejectStatus?: number;
 } = {}) {
   const {
     entries = [],
@@ -52,6 +67,7 @@ function mockApi(opts: {
     calendarEvents = [],
     newSessionId = 'sess-tap-minted',
     newSessionFails = false,
+    exitRejectStatus,
   } = opts;
   apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.includes('/new-session')) {
@@ -66,7 +82,10 @@ function mockApi(opts: {
       return { available: calendarAvailable, sources: [] };
     }
     if (path.startsWith('/api/v2/calendar/events')) return { events: calendarEvents };
-    if (path.includes('/exit')) return { status: 'ok' };
+    if (path.includes('/exit')) {
+      if (exitRejectStatus != null) throw new MockApiError(exitRejectStatus, 'boom');
+      return { status: 'ok' };
+    }
     if (path.includes('/migrate')) return { session_id: 'sess-migrate' };
     return {};
   });
@@ -132,6 +151,90 @@ describe('WorkbenchPage — Done exit', () => {
       kind: 'fulfilled',
       reason: '',
     });
+  });
+});
+
+describe('WorkbenchPage — Delete duplicate-card + error surfacing (bug #45)', () => {
+  it('renders id-less entries with unique testids and Delete removes exactly one card (no phantom)', async () => {
+    // Two entries with id=null used to collapse onto the same React key /
+    // data-testid (`workbench-card-entry-<project>-null`), which is what made a
+    // delete mis-reconcile into a duplicate phantom card.
+    mockApi({
+      entries: [
+        entry({ id: null, text: 'First id-less obligation' }),
+        entry({ id: null, text: 'Second id-less obligation' }),
+        entry({ id: 'keep1', text: 'Has a real id' }),
+      ],
+    });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('workbench-list')).toBeInTheDocument());
+
+    const cards = screen.getAllByTestId(/^workbench-card-entry-/);
+    expect(cards).toHaveLength(3);
+    const testids = cards.map((c) => c.getAttribute('data-testid'));
+    // No two rendered cards share a data-testid — the collision is gone.
+    expect(new Set(testids).size).toBe(testids.length);
+
+    // Deleting the real-id card removes exactly one card, leaving the two
+    // id-less ones — not a phantom-inflated list.
+    const realCard = screen.getByTestId('workbench-card-entry-proj-a-keep1');
+    fireEvent.click(within(realCard).getByTestId('workbench-card-exit-irrelevant'));
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^workbench-card-entry-/)).toHaveLength(2),
+    );
+  });
+
+  it('surfaces a delete-error notice when the exit POST fails (non-409), instead of reverting silently', async () => {
+    mockApi({ entries: [entry({ id: 'e1' })], exitRejectStatus: 500 });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-card-exit-irrelevant')).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId('workbench-card-exit-irrelevant'));
+
+    // The failure is now visible AND the optimistic removal is reverted.
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-delete-error')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('workbench-card-entry-proj-a-e1')).toBeInTheDocument();
+  });
+
+  it('never POSTs /entries/null/exit for an id-less entry — it surfaces the error instead', async () => {
+    mockApi({ entries: [entry({ id: null })] });
+    render(<WorkbenchPage setRoute={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-card-exit-irrelevant')).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId('workbench-card-exit-irrelevant'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-delete-error')).toBeInTheDocument(),
+    );
+    const nullExit = apiMock.mock.calls.filter(([p]) =>
+      (p as string).includes('/entries/null/exit'),
+    );
+    expect(nullExit).toHaveLength(0);
+  });
+
+  it('keyboard-activating a card exit button does NOT also trigger the card doorway (open)', async () => {
+    mockApi({ entries: [entry({ id: 'e1' })] });
+    const setRoute = vi.fn();
+    render(<WorkbenchPage setRoute={setRoute} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-card-exit-irrelevant')).toBeInTheDocument(),
+    );
+
+    fireEvent.keyDown(screen.getByTestId('workbench-card-exit-irrelevant'), { key: 'Enter' });
+    // Flush any microtask the doorway's async mint would have queued.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The doorway must not have fired: no session mint, no navigation.
+    const mintCalls = apiMock.mock.calls.filter(([p]) => (p as string).includes('/new-session'));
+    expect(mintCalls).toHaveLength(0);
+    expect(setRoute).not.toHaveBeenCalled();
   });
 });
 

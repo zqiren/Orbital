@@ -59,7 +59,10 @@ describe('BrowserSignInCard', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(apiFn).toHaveBeenCalledWith('/api/v2/platform/browser/warmup', { method: 'POST' });
+    expect(apiFn).toHaveBeenCalledWith('/api/v2/platform/browser/warmup', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://accounts.google.com' }),
+    });
     expect(screen.queryByRole('button', { name: 'Open Browser' })).not.toBeInTheDocument();
 
     // First poll tick reports the browser closed — card returns to idle

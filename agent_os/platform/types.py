@@ -82,12 +82,24 @@ DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
     "api.moonshot.ai",       # Kimi (intl)
     "api.minimaxi.com",      # MiniMax (China)
     "api.minimax.io",        # MiniMax (intl)
+    "api.z.ai",              # Zhipu/GLM (intl)
+    "open.bigmodel.cn",      # Zhipu/GLM (China)
+    "dashscope-intl.aliyuncs.com",  # Qwen (intl)
+    "dashscope.aliyuncs.com",       # Qwen (China)
+    "api.x.ai",
+    "api.groq.com",
+    "api.together.xyz",
+    "openrouter.ai",
+    "tokendance.space",      # TokenDance router (China, Spec 47)
     # Python
     "pypi.org",
     "files.pythonhosted.org",
+    "pypi.tuna.tsinghua.edu.cn",    # Tsinghua mirror (China)
     # Node
     "registry.npmjs.org",
     "registry.yarnpkg.com",
+    "registry.npmmirror.com",       # npmmirror (China)
+    "cdn.npmmirror.com",            # npmmirror binaries (China)
     # Rust
     "crates.io",
     "static.crates.io",
@@ -95,6 +107,11 @@ DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
     # Go
     "proxy.golang.org",
     "sum.golang.org",
+    "goproxy.cn",                   # Go proxy (China)
+    # General package mirrors (China) — same trust class as the registries above
+    "mirrors.aliyun.com",
+    "mirrors.ustc.edu.cn",
+    "mirrors.cloud.tencent.com",
     # GitHub — wildcard does NOT match the apex, so both forms are needed
     "github.com",
     "*.github.com",

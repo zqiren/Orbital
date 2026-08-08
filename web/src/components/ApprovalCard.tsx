@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAgent } from '../hooks/useAgent';
-import { useT } from '../i18n/useT';
+import { useT, translate } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import { describeLiveActivity } from '../utils/chatTransform';
 
 type TFunc = ReturnType<typeof useT>;
 
@@ -98,6 +100,21 @@ export default function ApprovalCard({
   onResolve,
 }: ApprovalCardProps) {
   const t = useT();
+  const { locale } = useLocale();
+  // approval.what is backend-authored English; the payload carries the
+  // structured tool call, so derive a localized sentence from it and keep
+  // the wire prose only as the unknown-tool fallback.
+  const localizedWhat = useMemo(
+    () =>
+      describeLiveActivity(
+        approval.tool_name,
+        approval.tool_args,
+        undefined,
+        (k, v) => translate(locale, k, v),
+        approval.what,
+      ),
+    [locale, approval],
+  );
   const [replyText, setReplyText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localResolution, setLocalResolution] = useState<'approved' | 'denied' | null>(null);
@@ -117,7 +134,7 @@ export default function ApprovalCard({
         <span className={isApproved ? 'text-success' : 'text-error'}>
           {isApproved ? t('approval.approved') : t('approval.denied')}:
         </span>{' '}
-        <span className="text-secondary">{approval.what}</span>
+        <span className="text-secondary">{localizedWhat}</span>
       </div>
     );
   }
@@ -186,7 +203,7 @@ export default function ApprovalCard({
 
       <div className="px-4 py-3 space-y-3">
         <p className="text-sm font-medium text-primary">
-          {approval.what}
+          {localizedWhat}
         </p>
 
         {approval.reasoning && (

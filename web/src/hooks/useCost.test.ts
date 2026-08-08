@@ -9,12 +9,15 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 
 const onMock = vi.fn();
 const offMock = vi.fn();
+// Mutable so the reconnect tests can flip it between rerenders; the factory
+// reads it on every render.
+let wsConnectionState = 'connected';
 
 vi.mock('./useWebSocket', () => ({
   useWebSocket: () => ({
     on: onMock,
     off: offMock,
-    connectionState: 'connected',
+    connectionState: wsConnectionState,
     subscribe: vi.fn(),
   }),
 }));
@@ -29,6 +32,7 @@ vi.mock('../config', () => ({
 }));
 
 import { useCost } from './useCost';
+import { bumpPricingVersion } from '../budget/pricingVersion';
 import type { CostResponse } from '../budget/types';
 
 function makeCost(amount: number): CostResponse {
@@ -46,6 +50,7 @@ describe('useCost', () => {
     onMock.mockClear();
     offMock.mockClear();
     apiFn = vi.fn();
+    wsConnectionState = 'connected';
   });
 
   it('fetches GET /cost with the window on mount', async () => {
@@ -54,6 +59,18 @@ describe('useCost', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.cost?.converted_total.amount).toBe(1.5);
     expect(apiFn).toHaveBeenCalledWith('/api/v2/projects/p1/cost?window=daily');
+  });
+
+  it('reports loading=true from the FIRST render (no fabricated-$0.00 frame, #40)', () => {
+    apiFn.mockReturnValueOnce(new Promise(() => {})); // never resolves
+    const { result } = renderHook(() => useCost('p1', 'daily'));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.cost).toBeNull();
+  });
+
+  it('reports loading=false from the first render when projectId is null', () => {
+    const { result } = renderHook(() => useCost(null, 'daily'));
+    expect(result.current.loading).toBe(false);
   });
 
   it('passes the configured window through to the query', async () => {
@@ -69,6 +86,36 @@ describe('useCost', () => {
     // Give the effect a tick.
     await act(async () => { await Promise.resolve(); });
     expect(apiFn).not.toHaveBeenCalled();
+  });
+
+  it('clears the previous cost synchronously when the project changes (#40 stale bleed)', async () => {
+    apiFn.mockResolvedValueOnce(makeCost(9));
+    const { result, rerender } = renderHook(
+      ({ pid }: { pid: string }) => useCost(pid, 'daily'),
+      { initialProps: { pid: 'p1' } },
+    );
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(9));
+
+    // Second project's fetch never resolves — the old number must NOT survive.
+    apiFn.mockReturnValueOnce(new Promise(() => {}));
+    rerender({ pid: 'p2' });
+    expect(result.current.cost).toBeNull();
+    expect(result.current.loading).toBe(true);
+  });
+
+  it('keeps the last known cost visible during a same-query re-fetch', async () => {
+    apiFn.mockResolvedValueOnce(makeCost(1));
+    const { result } = renderHook(() => useCost('p1', 'daily'));
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
+
+    apiFn.mockReturnValueOnce(new Promise(() => {}));
+    const handler = onMock.mock.calls.find((c) => c[0] === 'budget.spend_updated')![1] as (e: unknown) => void;
+    await act(async () => {
+      handler({ type: 'budget.spend_updated', project_id: 'p1', window: 'daily', spend: 3, limit: 10, currency: 'USD' });
+    });
+    // Refetch in flight: previous number still shown, not blanked.
+    expect(result.current.cost?.converted_total.amount).toBe(1);
+    expect(result.current.loading).toBe(true);
   });
 
   it('subscribes to budget.spend_updated on mount and unsubscribes on unmount', async () => {
@@ -116,30 +163,43 @@ describe('useCost', () => {
     expect(result.current.cost).toBeNull();
   });
 
-  it('re-fetches when refreshKey changes (pricing-edit recompute trigger)', async () => {
+  it('re-fetches when the pricing version is bumped (pricing-edit recompute, #40)', async () => {
     apiFn.mockResolvedValueOnce(makeCost(1)).mockResolvedValueOnce(makeCost(5));
-    const { result, rerender } = renderHook(
-      ({ key }: { key: number }) => useCost('p1', 'daily', key),
-      { initialProps: { key: 0 } },
-    );
+    const { result } = renderHook(() => useCost('p1', 'daily'));
     await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
     expect(apiFn).toHaveBeenCalledTimes(1);
 
-    // Bump the key as PricingEditor.onSaved would → forces a re-read of /cost
-    // under the new rates.
-    rerender({ key: 1 });
+    // As PricingEditorPage.onSaved does — NO prop threading: every mounted
+    // useCost (corner, queue banner, settings meter) re-reads under new rates.
+    await act(async () => {
+      bumpPricingVersion();
+    });
     await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(5));
     expect(apiFn).toHaveBeenCalledTimes(2);
   });
 
-  it('does NOT re-fetch when refreshKey is unchanged across rerenders', async () => {
+  it('re-fetches when the WS reconnects (missed spend events, #40)', async () => {
+    apiFn.mockResolvedValueOnce(makeCost(1)).mockResolvedValueOnce(makeCost(4));
+    const { result, rerender } = renderHook(() => useCost('p1', 'daily'));
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
+    expect(apiFn).toHaveBeenCalledTimes(1);
+
+    wsConnectionState = 'disconnected';
+    rerender();
+    await act(async () => { await Promise.resolve(); });
+    expect(apiFn).toHaveBeenCalledTimes(1); // going down does not fetch
+
+    wsConnectionState = 'connected';
+    rerender();
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(4));
+    expect(apiFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT re-fetch on rerenders with an unchanged query', async () => {
     apiFn.mockResolvedValue(makeCost(1));
-    const { rerender } = renderHook(
-      ({ key }: { key: number }) => useCost('p1', 'daily', key),
-      { initialProps: { key: 7 } },
-    );
+    const { rerender } = renderHook(() => useCost('p1', 'daily'));
     await waitFor(() => expect(apiFn).toHaveBeenCalledTimes(1));
-    rerender({ key: 7 });
+    rerender();
     await act(async () => { await Promise.resolve(); });
     expect(apiFn).toHaveBeenCalledTimes(1);
   });

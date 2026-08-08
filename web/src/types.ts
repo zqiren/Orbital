@@ -12,6 +12,9 @@ export interface ProviderInfo {
   console_url?: string | null;
   /** True for providers with no native mainland-China endpoint (Spec 17). */
   no_china_endpoint?: boolean;
+  /** True for China-mainland-only providers (Spec 47) — sorted by UI locale
+   * and captioned for non-CN users; a wrong guess only affects sort/caption. */
+  china_only?: boolean;
   supports_model_list: boolean;
   sdk: 'openai' | 'anthropic';
   suggested_models: string[];
@@ -358,6 +361,9 @@ export interface ActivityEvent {
   category: ActivityCategory;
   description: string;
   tool_name: string;
+  /** Parsed tool arguments (newer daemons) — lets the frontend render a
+   * localized description instead of the English `description`. */
+  arguments?: Record<string, unknown>;
   source: string;
   timestamp: string;
 }
@@ -580,6 +586,14 @@ export interface DeviceStatusEvent {
   status: 'online' | 'offline';
 }
 
+// Daemon-global update announce (agent_os/update_check.py) — once per newer
+// released version; the UpdatePill renders it.
+export interface UpdateAvailableEvent {
+  type: 'update.available';
+  version: string;
+  url: string;
+}
+
 export interface TriggerCreatedEvent {
   type: 'trigger.created';
   project_id: string;
@@ -749,7 +763,8 @@ export type WebSocketEvent =
   | BlockedCountChangedEvent
   | FanoutStartedEvent
   | FanoutTaskUpdateEvent
-  | FanoutCompletedEvent;
+  | FanoutCompletedEvent
+  | UpdateAvailableEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';
@@ -767,6 +782,9 @@ export interface QueueAttempt {
   outcome: QueueAttemptOutcome | null;
   summary: string | null;
   block_reason: string | null;
+  /** Stable code for localizing block_reason; prose is the fallback for
+   * old rows and agent-declared reasons. */
+  block_reason_code?: string | null;
 }
 
 export interface QueueItem {

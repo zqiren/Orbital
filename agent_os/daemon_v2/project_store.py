@@ -164,6 +164,14 @@ class ProjectStore:
 
     def create_project(self, config: dict) -> str:
         pid = "proj_" + uuid4().hex[:12]
+        # Telemetry counter (spec 046 §4). Scratch is auto-created on first
+        # run — counting it would make every fresh install look like a user
+        # action, so only real projects count.
+        if not config.get("is_scratch"):
+            from agent_os import telemetry
+
+            telemetry.emit("project_created")
+            telemetry.latch("first_project")
         # Sanitize project name to avoid filesystem issues
         raw_name = config.get("name", "")
         if raw_name:

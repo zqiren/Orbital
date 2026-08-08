@@ -146,6 +146,27 @@ def append_event(project_dir: str, event: LedgerEvent) -> None:
             project_dir, getattr(event, "session_id", "?"),
             exc_info=True,
         )
+        return
+    # Telemetry turn counter (spec 046 §4): this is the single chokepoint every
+    # LLM response crosses (management loop + both sub-agent transports), so
+    # one hook here covers all sources. Counters only — no session/project ids.
+    try:
+        from agent_os import telemetry
+
+        telemetry.emit(
+            "turn_completed",
+            {
+                "provider": event.provider,
+                "source": event.source,
+                "uncached_input": event.usage.uncached_input,
+                "cache_read": event.usage.cache_read,
+                "cache_write": event.usage.cache_write,
+                "output": event.usage.output,
+            },
+        )
+        telemetry.latch("first_turn")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ===========================================================================

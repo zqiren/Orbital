@@ -3,12 +3,12 @@
 
 [Setup]
 AppName=Orbital
-AppVersion=0.8.4
+AppVersion=0.8.5
 AppPublisher=Orbital
 DefaultDirName=C:\Orbital
 DisableDirPage=no
 DefaultGroupName=Orbital
-OutputBaseFilename=Orbital-Setup-0.8.4
+OutputBaseFilename=Orbital-Setup-0.8.5
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=..\assets\icon.ico
@@ -26,6 +26,12 @@ Source: "..\web\dist\*"; DestDir: "{app}\web"; Flags: recursesubdirs ignoreversi
 Source: "..\assets\icon.png"; DestDir: "{app}\assets"
 Source: "..\assets\icon.ico"; DestDir: "{app}\assets"
 
+; WebView2 Evergreen bootstrapper (~2 MB) — downloaded into installer/ by
+; scripts/build-desktop.sh (and CI) before iscc runs. Without the runtime,
+; pywebview silently degrades to the IE11 engine and Orbital shows a blank
+; window.
+Source: "MicrosoftEdgeWebView2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+
 [Icons]
 ; Desktop shortcut
 Name: "{autodesktop}\Orbital"; Filename: "{app}\bin\Orbital.exe"; IconFilename: "{app}\assets\icon.ico"
@@ -34,6 +40,11 @@ Name: "{group}\Orbital"; Filename: "{app}\bin\Orbital.exe"; IconFilename: "{app}
 Name: "{group}\Uninstall Orbital"; Filename: "{uninstallexe}"
 
 [Run]
+; Install the WebView2 runtime FIRST when it's missing — must precede any
+; Orbital launch (the app cannot render without it).
+Filename: "{tmp}\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"; \
+    StatusMsg: "Installing Microsoft Edge WebView2 Runtime..."; \
+    Check: NeedsWebView2; Flags: waituntilterminated
 ; Run sandbox setup with admin privileges (installer is elevated)
 Filename: "{app}\bin\Orbital.exe"; Parameters: "--setup-sandbox"; \
     StatusMsg: "Configuring agent sandbox..."; \
@@ -50,15 +61,14 @@ Filename: "{app}\bin\Orbital.exe"; Parameters: "--teardown-sandbox"; \
 Type: filesandordirs; Name: "{app}\logs"
 
 [Code]
+// Probes the real Evergreen Runtime client GUID — the previous probe used
+// a GUID that does not exist in any WebView2 install, so it always
+// reported "missing". Per-user installs register under HKCU, machine
+// installs under HKLM (+WOW6432Node).
 function NeedsWebView2(): Boolean;
-var
-  RegKey: String;
 begin
-  RegKey := 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BEE-13A6279B0638}';
-  Result := not RegKeyExists(HKLM, RegKey);
-  if Result then
-  begin
-    RegKey := 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BEE-13A6279B0638}';
-    Result := not RegKeyExists(HKLM, RegKey);
-  end;
+  Result := not (
+    RegKeyExists(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'));
 end;

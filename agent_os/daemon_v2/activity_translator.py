@@ -180,6 +180,9 @@ class ActivityTranslator:
                     "category": category,
                     "description": description,
                     "tool_name": tool_name,
+                    # Parsed args let the frontend render a localized
+                    # description; `description` stays for old frontends.
+                    "arguments": args,
                     "source": source,
                     "timestamp": _now(),
                 })

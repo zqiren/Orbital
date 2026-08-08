@@ -16,11 +16,9 @@
 
 Orbital works like Claude Code or Codex: ask it to research, plan, write, run commands, browse the web, or operate your tools.
 
-The difference is that Orbital treats a local folder as a long-running project.
+The difference is that Orbital treats a local folder as a long-running project. It maintains the project's context on its own — where it left off, what's next, and how to do it — as files inside that folder. Every new task starts from everything learned before it, so work compounds instead of resetting to zero.
 
-As it works, Orbital maintains and records the project's current state, decisions, lessons, task queue, and artifacts inside that folder. Every new task starts from the context accumulated by previous work, so the agent's work compounds over time.
-
-Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task, and points it at the relevant project files — so you don't have to explain the project again each time. Orbital watches the run, reads what comes back against the project's context, and writes the outcome into the project.
+Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task and points it at the relevant files — you never re-explain the project. Orbital watches the run, reads the result against the project's context, and writes the outcome back in. The more you delegate, the more it knows.
 
 <p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
 
@@ -170,7 +168,7 @@ You do not begin again with an empty chat. You continue the project.
 
 **Under the hood**
 
-- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
+- **14 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动), plus custom endpoints
 - **Browser automation** — 26 browser actions via Patchright with anti-detection
 
 ---
@@ -439,9 +437,9 @@ The project agent translates this into a `create_trigger` tool call with the app
 <details>
 <summary><strong>LLM Provider Routing & BYOK</strong></summary>
 
-**13 providers** supported out of the box:
+**14 providers** supported out of the box:
 
-Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus a `custom` entry for any OpenAI-compatible endpoint (e.g., Ollama, Azure OpenAI, self-hosted models).
+Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动 — China-mainland model router), plus a `custom` entry for any OpenAI-compatible endpoint (e.g., Ollama, Azure OpenAI, self-hosted models).
 
 - **SDK routing**: Anthropic SDK for Anthropic, OpenAI SDK for OpenAI-compatible providers
 - **Per-model metadata**: Display name, tier, context window, max output, capabilities (vision, tool use, streaming), pricing
@@ -754,6 +752,16 @@ I loved OpenClaw. I hated the lack of control — no budget, no sandbox, no way 
 Orbital is the thing I wanted. One agent accountable for the whole project: the plan, the decisions, the queue, the budget, and the approvals. The phone to check in when I'm not at my desk. Claude Code, Codex, and Gemini CLI as workers it can choose for the job without handing away the project's context.
 
 Built nights and weekends while working full-time. Still very early. Feedback and issues welcome.
+
+---
+
+## Telemetry
+
+Orbital sends **one anonymous aggregate per day** — counters, enums, and
+booleans only. Never prompts, files, paths, model output, or any
+project/session identifier. The exact outbound JSON is inspectable verbatim in
+**Settings → Data & privacy**, where a single toggle turns it off. The full
+published schema is in [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 ---
 

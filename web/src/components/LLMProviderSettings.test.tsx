@@ -10,6 +10,8 @@
  * Covers:
  *  - orderProviders: fixed CN-first order, unknowns after knowns, 'custom'
  *    (registry key and the CUSTOM_PROVIDER_KEY sentinel) always last;
+ *    Spec 47 locale exception: tokendance top for zh, after the
+ *    international block for en;
  *  - regionDefaultForProvider: pure region-default logic;
  *  - default provider resolution: fresh install -> DeepSeek (never Custom),
  *    saved provider wins, unknown-saved provider -> Custom;
@@ -74,6 +76,12 @@ const REGISTRY: ProviderRegistry = {
     console_url: 'https://console.anthropic.com/settings/keys',
     no_china_endpoint: true,
     sdk: 'anthropic',
+  }),
+  tokendance: makeProvider({
+    display_name: 'TokenDance (词元跳动)',
+    base_url: 'https://tokendance.space/gateway/v1',
+    console_url: 'https://tokendance.space/keys',
+    china_only: true,
   }),
   // Production registry shape: GET /api/v2/providers serves a literal 'custom'
   // entry alongside the CUSTOM_PROVIDER_KEY sentinel the picker adds itself.
@@ -153,6 +161,25 @@ describe('orderProviders', () => {
       'deepseek', 'openai', CUSTOM_PROVIDER_KEY,
     ]);
   });
+
+  // Spec 47: the single locale-aware exception for the China-only router.
+  it('en locale (default) sorts tokendance after the international block', () => {
+    expect(orderProviders(['tokendance', 'openai', 'deepseek', 'openrouter'])).toEqual([
+      'deepseek', 'openai', 'openrouter', 'tokendance',
+    ]);
+  });
+
+  it('zh locale sorts tokendance to the top', () => {
+    expect(orderProviders(['openai', 'deepseek', 'tokendance'], 'zh')).toEqual([
+      'tokendance', 'deepseek', 'openai',
+    ]);
+  });
+
+  it('tokendance is a known key in en order: before unknowns, custom still last', () => {
+    expect(orderProviders(['custom', 'brand_new', 'tokendance', 'deepseek'])).toEqual([
+      'deepseek', 'tokendance', 'brand_new', 'custom',
+    ]);
+  });
 });
 
 // ---- regionDefaultForProvider ----
@@ -223,6 +250,52 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
   });
 });
 
+// ---- Project mode: saved provider with no endpoint seeds region default ----
+
+describe('LLMProviderSettings — project mode seeds endpoint for saved provider (401 trap)', () => {
+  it('seeds the region-default base_url when a project saved a provider but no endpoint', async () => {
+    mockApi({});
+    const onChange = vi.fn();
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'moonshot', model: 'kimi-k2.5', sdk: 'openai' }}
+        onChange={onChange}
+      />,
+    );
+    // An empty base_url would fall back cross-provider on the backend —
+    // the seed must be the provider's region-default endpoint (China for
+    // dual-endpoint providers, per Spec 17 §9).
+    await waitFor(() => {
+      const calls = onChange.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls[calls.length - 1][0].base_url).toBe('https://api.moonshot.cn/v1');
+    });
+  });
+
+  it('leaves a saved custom endpoint untouched', async () => {
+    mockApi({});
+    const onChange = vi.fn();
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{
+          provider: 'moonshot',
+          model: 'kimi-k2.5',
+          base_url: 'https://my-proxy.example/v1',
+          sdk: 'openai',
+        }}
+        onChange={onChange}
+      />,
+    );
+    await waitFor(() => {
+      const calls = onChange.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls[calls.length - 1][0].base_url).toBe('https://my-proxy.example/v1');
+    });
+  });
+});
+
 // ---- Region defaults to China on new selection ----
 
 describe('LLMProviderSettings — region defaults to China on new selection (Spec 17 §9)', () => {
@@ -269,6 +342,18 @@ describe('LLMProviderSettings — no-China-endpoint caption + "Get your API key"
     await waitFor(() =>
       expect(
         screen.getByText('No mainland-China endpoint — requires global network access.'),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('shows the China-mainland-only caption for a china_only provider (TokenDance)', async () => {
+    mockApi({
+      settings: { provider: 'tokendance', base_url: 'https://tokendance.space/gateway/v1' },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() =>
+      expect(
+        screen.getByText('China mainland only — may be unreachable outside mainland China.'),
       ).toBeTruthy(),
     );
   });

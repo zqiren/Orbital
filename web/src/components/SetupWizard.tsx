@@ -22,10 +22,12 @@ import { Loader2, Globe, Plug } from 'lucide-react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
+import ImportProjectsStep from './ImportProjectsStep';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
+import { warmupUrlForLocale } from '../utils/warmupUrl';
 
 type WizardStep = 'api_key' | 'accounts';
 
@@ -91,6 +93,7 @@ function WizardCard({
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const t = useT();
+  const { locale } = useLocale();
   const [step, setStep] = useState<WizardStep>('api_key');
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -200,7 +203,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setBrowserLoading(true);
     setBrowserError(null);
     try {
-      await api('/api/v2/platform/browser/warmup', { method: 'POST' });
+      await api('/api/v2/platform/browser/warmup', {
+        method: 'POST',
+        body: JSON.stringify({ url: warmupUrlForLocale(locale) }),
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('wizard.browser.openFailed');
       setBrowserError(msg);
@@ -221,7 +227,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         // Status endpoint failed — keep polling
       }
     }, 2000);
-  }, [t]);
+  }, [t, locale]);
 
   return (
     // pt-titlebar: this is a full-screen surface rendered outside the app
@@ -234,6 +240,16 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         {step === 'api_key' && (
           <WizardCard title={t('wizard.welcome')} intro={t('wizard.intro')}>
             <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
+
+            {/* First-run telemetry disclosure (spec 046 §6) — one sentence,
+                non-blocking; the full inspectable payload lives in Global
+                Settings → Data & privacy. */}
+            <p
+              className="mt-4 text-xs text-secondary/80"
+              data-testid="wizard-telemetry-disclosure"
+            >
+              {t('telemetry.wizard.disclosure')}
+            </p>
 
             <div className="mt-6 flex justify-end">
               <button
@@ -379,6 +395,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   {t('wizard.openBrowser')}
                 </button>
               )}
+            </div>
+
+            {/* Group (c): import existing projects — a disclose-then-scan,
+                confirm-each list of projects discovered on disk from other CLI
+                agents and Obsidian (backlog #34). Link-only; each confirmed row
+                calls the standard project-creation flow. */}
+            <div className="mt-6 pt-6 border-t border-border">
+              <ImportProjectsStep />
             </div>
 
             <div className="mt-8 flex justify-end gap-3">

@@ -8,6 +8,8 @@ import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
 import { useTriggers } from './hooks/useTriggers';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
+import { bumpPricingVersion } from './budget/pricingVersion';
+import UpdatePill from './components/UpdatePill';
 import type {
   AgentRunStatus,
   ApprovalRequestEvent,
@@ -65,11 +67,6 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'list' });
-
-  // Bumped after a pricing-table edit (PUT /pricing/overrides). Threaded into
-  // the settings Budget meter's useCost so historical cost visibly recomputes
-  // against the new rates without polling. See PricingEditor.onSaved.
-  const [costRefreshKey, setCostRefreshKey] = useState(0);
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -476,6 +473,7 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden">
+      <UpdatePill />
       <div className={sidebarHidden ? 'hidden' : 'contents'}>
         <Sidebar
           projects={projects}
@@ -561,13 +559,14 @@ export default function App() {
           >
             {route.pricing ? (
               // Pricing-table editor overlay (P3-I). Back returns to the
-              // settings surface; onSaved bumps the cost-refresh nonce so the
-              // Budget meter recomputes against the new rates on return.
+              // settings surface; onSaved bumps the module-level pricing
+              // version so EVERY mounted useCost (settings meter, header
+              // budget corner, queue banner) recomputes against the new rates.
               <PricingEditorPage
                 onBack={() =>
                   setRoute({ ...route, pricing: false, settings: true, settingsAnchor: 'budget' })
                 }
-                onSaved={() => setCostRefreshKey((k) => k + 1)}
+                onSaved={bumpPricingVersion}
               />
             ) : route.settings ? (
               <SettingsModalPage
@@ -579,7 +578,6 @@ export default function App() {
                 onEditPricing={() =>
                   setRoute({ ...route, settings: false, pricing: true })
                 }
-                costRefreshKey={costRefreshKey}
               />
             ) : (
               <ProjectDetail

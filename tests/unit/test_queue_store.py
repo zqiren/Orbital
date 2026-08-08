@@ -358,3 +358,44 @@ def test_pause_reason_in_snapshot(tmp_path):
     snap = store.snapshot()
     parsed = json.loads(json.dumps(snap))
     assert parsed["pause_reason"] == "budget"
+
+
+def test_block_reason_code_persists_and_old_rows_parse(tmp_path):
+    """block_reason_code round-trips through the store, and rows written
+    before the field existed still parse (frontend falls back to prose)."""
+    store = _store(tmp_path)
+    item = store.add_item("task one")
+    store.append_attempt(item.id, AttemptRecord(session_id="s1"))
+    store.close_latest_attempt(
+        item.id,
+        outcome=AttemptOutcome.BLOCKED,
+        block_reason="exceeded runtime cap",
+        block_reason_code="runtime_cap",
+    )
+
+    reloaded = QueueStore(tmp_path / "queue.json").load().items[0]
+    assert reloaded.attempts[0].block_reason_code == "runtime_cap"
+
+    # Old-format row: no block_reason_code key at all.
+    legacy = AttemptRecord.model_validate(
+        {"session_id": "s2", "started_at": "2026-01-01T00:00:00Z",
+         "outcome": "blocked", "block_reason": "cancelled"}
+    )
+    assert legacy.block_reason_code is None
+
+
+def test_every_dispatcher_block_reason_carries_a_code():
+    """Source-level guard: every close_latest_attempt call in the dispatcher
+    that sets block_reason must also set block_reason_code — otherwise a
+    brand-new row falls back to raw English prose in the UI."""
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parents[2] / "agent_os" / "queue" / "dispatcher.py").read_text()
+    # "block_reason_code=" does not substring-match "block_reason=" (the
+    # next char is '_', not '='), so the two counts are independent.
+    reason_sites = src.count("block_reason=")
+    code_sites = src.count("block_reason_code=")
+    assert reason_sites == code_sites, (
+        f"{reason_sites} block_reason= sites vs {code_sites} "
+        f"block_reason_code= sites in dispatcher.py"
+    )

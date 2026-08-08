@@ -51,6 +51,9 @@ def _make_manager(project=None, projects=None, browser_manager=None):
     provider_registry.get_model_info.return_value = MagicMock(
         max_output=16384, capabilities=None, reasoning=None,
     )
+    # Cross-provider base_url fallback reads the raw registry dict; a bare
+    # MagicMock here would leak into httpx as a URL.
+    provider_registry.get_provider_data.return_value = {}
     mgr = AgentManager(
         project_store=project_store,
         ws_manager=ws,

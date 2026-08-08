@@ -13,6 +13,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from agent_os import telemetry
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2")
@@ -48,6 +50,7 @@ class UpdateSettingsRequest(BaseModel):
     user_preferences_content: str | None = None
     user_preferences_path: str | None = None
     scratch_workspace: str | None = None
+    telemetry_enabled: bool | None = None
 
 
 class SetApiKeyRequest(BaseModel):
@@ -89,6 +92,8 @@ async def update_settings(req: UpdateSettingsRequest):
         current.scratch_workspace = req.scratch_workspace
     if req.user_preferences_path is not None:
         current.user_preferences_path = req.user_preferences_path
+    if req.telemetry_enabled is not None:
+        current.telemetry_enabled = req.telemetry_enabled
 
     # Write user preferences content to file
     if req.user_preferences_content is not None:
@@ -113,6 +118,8 @@ async def set_api_key(req: SetApiKeyRequest):
         result = _credential_store.set_api_key(req.api_key)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    telemetry.emit("key_set", {"provider": _settings_store.get().llm.provider})
+    telemetry.latch("key_set")
     return result
 
 
@@ -121,6 +128,38 @@ async def delete_api_key():
     if _credential_store is None:
         raise HTTPException(status_code=501, detail="Credential store not available")
     return _credential_store.delete_api_key()
+
+
+@router.get("/update-status")
+async def get_update_status():
+    """Current vs latest released version (notify-only update check). The
+    frontend pill renders from the WS announce; this endpoint covers page
+    loads that happen after the announce and the manual re-check button."""
+    from agent_os import update_check
+
+    checker = update_check.get_checker()
+    if checker is None:
+        from agent_os.version import get_version
+
+        return {"current": get_version(), "update_available": False,
+                "latest": None, "url": None}
+    await checker.run_check()
+    return checker.status
+
+
+@router.get("/settings/telemetry-payload")
+async def get_telemetry_payload():
+    """The verbatim telemetry pings for the settings viewer (spec 046 §6):
+    exactly what was last transmitted and exactly what the next send would
+    transmit. This transparency surface is the load-bearing trust feature
+    behind the default-on consent model."""
+    sender = telemetry.get_sender()
+    if sender is None:
+        return {"last_sent": None, "next_pending": None}
+    return {
+        "last_sent": sender.last_sent_payload(),
+        "next_pending": sender.next_pending_payload(),
+    }
 
 
 @router.get("/settings/api-key/status")

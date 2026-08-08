@@ -3,9 +3,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { CheckCheck, Paperclip, User, X, Zap } from 'lucide-react';
-import type { QueueItem } from '../types';
+import type { QueueAttempt, QueueItem } from '../types';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
+
+// Localizable block-reason codes (queue/dispatcher.py). `agent_declared` is
+// deliberately absent — that prose is agent content and renders verbatim.
+const BLOCK_REASON_KEYS: Record<string, StringKey> = {
+  daemon_restart: 'queue.blockReason.daemon_restart',
+  inject_failed: 'queue.blockReason.inject_failed',
+  inject_failed_retry: 'queue.blockReason.inject_failed_retry',
+  runtime_cap: 'queue.blockReason.runtime_cap',
+  cancelled: 'queue.blockReason.cancelled',
+  budget_blocked: 'queue.blockReason.budget_blocked',
+  hold_deadline: 'queue.blockReason.hold_deadline',
+  contract_violation: 'queue.blockReason.contract_violation',
+};
+
+function blockReasonText(latest: QueueAttempt, t: ReturnType<typeof useT>): string {
+  const key = latest.block_reason_code
+    ? BLOCK_REASON_KEYS[latest.block_reason_code]
+    : undefined;
+  return key ? t(key) : (latest.block_reason ?? '');
+}
 
 interface QueueItemCardProps {
   item: QueueItem;
@@ -257,7 +277,9 @@ function BlockedRow({
         </span>
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
-      {latest?.block_reason && <p className="text-[11px] text-warning">{latest.block_reason}</p>}
+      {latest && (latest.block_reason || latest.block_reason_code) && (
+        <p className="text-[11px] text-warning">{blockReasonText(latest, t)}</p>
+      )}
       <TriggerOrigin item={item} />
       <InterruptedNote item={item} />
     </Shell>

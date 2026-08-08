@@ -7,6 +7,8 @@ import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ProviderRegistry, ProviderInfo } from '../types';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
+import { useLocale } from '../i18n/LocaleContext';
+import type { Locale } from '../i18n/locales';
 
 interface LLMSettingsResponse {
   llm: {
@@ -54,20 +56,31 @@ export const CUSTOM_PROVIDER_KEY = '__custom__';
  * networks, single endpoint, nothing to misconfigure. Never 'custom'. */
 const DEFAULT_PROVIDER = 'deepseek';
 
-/** Fixed provider ordering for everyone — CN-friendly providers first, no
- * locale logic (Spec 17 §9, "i dont want to over complicate this"). Unknown
+/** Fixed provider ordering — CN-friendly providers first (Spec 17 §9). Unknown
  * registry keys are appended after the known ones in registry order; any
  * 'custom' entry (registry key or the CUSTOM_PROVIDER_KEY sentinel) is always
- * last. Shared by the dropdown and the wizard's preset cards. */
+ * last. Shared by the dropdown and the wizard's preset cards.
+ *
+ * Spec 47 adds the single locale-aware exception: TokenDance is a
+ * China-mainland-only router, so it sorts to the top for the zh UI locale and
+ * below the international block for en. No geo-detection — a wrong locale
+ * guess only affects sort position, the provider still works if selected. */
 const PROVIDER_ORDER = [
   'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax',
   'openai', 'anthropic', 'google', 'xai', 'mistral', 'groq', 'together', 'openrouter',
 ];
 
-export function orderProviders(keys: string[]): string[] {
+export function providerOrderForLocale(locale: Locale): string[] {
+  return locale === 'zh'
+    ? ['tokendance', ...PROVIDER_ORDER]
+    : [...PROVIDER_ORDER, 'tokendance'];
+}
+
+export function orderProviders(keys: string[], locale: Locale = 'en'): string[] {
+  const order = providerOrderForLocale(locale);
   const isCustom = (k: string) => k === 'custom' || k === CUSTOM_PROVIDER_KEY;
-  const known = PROVIDER_ORDER.filter((k) => keys.includes(k));
-  const unknown = keys.filter((k) => !PROVIDER_ORDER.includes(k) && !isCustom(k));
+  const known = order.filter((k) => keys.includes(k));
+  const unknown = keys.filter((k) => !order.includes(k) && !isCustom(k));
   const custom = keys.filter(isCustom);
   return [...known, ...unknown, ...custom];
 }
@@ -91,6 +104,7 @@ export default function LLMProviderSettings({
   providerPicker = 'dropdown',
 }: LLMProviderSettingsProps) {
   const t = useT();
+  const { locale } = useLocale();
   // Collapsed state for project mode
   const [expanded, setExpanded] = useState(mode !== 'project');
 
@@ -225,6 +239,7 @@ export default function LLMProviderSettings({
     } else if (mode === 'project') {
       // Populate from project values, fallback to global
       const pv = projectValues;
+      let projectBaseUrlSeed = '';
       if (pv?.provider && pv.provider !== 'custom' && providers[pv.provider]) {
         setProvider(pv.provider);
         resolvedProvider = pv.provider;
@@ -232,6 +247,15 @@ export default function LLMProviderSettings({
         const info = providers[pv.provider];
         if (info.china_base_url && pv.base_url === info.china_base_url) {
           setRegion('china');
+        } else if (!pv.base_url) {
+          // Saved provider with no saved endpoint: seed the provider's
+          // region-default URL instead of leaving it empty — an empty
+          // base_url falls back cross-provider on the backend, pairing
+          // this project's key with another provider's endpoint (the
+          // wrong-region 401 trap).
+          const defaultRegion = regionDefaultForProvider(info);
+          setRegion(defaultRegion);
+          projectBaseUrlSeed = resolveBaseUrl(info, defaultRegion);
         }
       } else if (pv?.provider) {
         // Unknown provider, or the registry's literal 'custom' entry — both
@@ -247,7 +271,7 @@ export default function LLMProviderSettings({
       }
       setModel(pv?.model || '');
       setModelInputValue(pv?.model || '');
-      setBaseUrl(pv?.base_url || '');
+      setBaseUrl(pv?.base_url || projectBaseUrlSeed);
       if (pv?.sdk) setSdk(pv.sdk as 'openai' | 'anthropic');
     }
     // wizard mode: no fields to initialize
@@ -308,6 +332,7 @@ export default function LLMProviderSettings({
   // duplicate "Custom / Self-Hosted" chips/options.
   const orderedProviderKeys = orderProviders(
     Object.keys(providers).filter((k) => k !== 'custom'),
+    locale,
   );
 
   function handleProviderChange(key: string) {
@@ -685,6 +710,9 @@ export default function LLMProviderSettings({
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.no_china_endpoint && (
           <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.noChinaEndpoint')}</p>
+        )}
+        {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.china_only && (
+          <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.chinaOnly')}</p>
         )}
       </div>
 

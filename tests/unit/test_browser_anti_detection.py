@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 import pytest
 
 from agent_os.daemon_v2.browser_manager import (
-    BrowserManager, _STEALTH_JS, _detect_locale, _detect_timezone,
+    BrowserManager, _STEALTH_JS, _stealth_js, _stealth_languages,
+    _detect_locale, _detect_timezone, _fallback_timezone,
     _WIN_TZ_TO_IANA, _UTC_OFFSET_TO_IANA,
 )
 
@@ -137,6 +138,29 @@ class TestStealthJS:
     def test_stealth_js_sets_chrome_runtime(self):
         assert "chrome.runtime" in _STEALTH_JS
 
+
+class TestStealthLocaleAlignment:
+    """navigator.languages and the timezone last-resort must agree with the
+    launch locale — a zh-CN context claiming ['en-US','en'] / US Eastern is
+    itself an automation fingerprint."""
+
+    def test_languages_follow_zh_locale(self):
+        assert _stealth_languages("zh-CN") == ["zh-CN", "zh", "en-US", "en"]
+
+    def test_languages_default_en(self):
+        assert _stealth_languages("en-US") == ["en-US", "en"]
+
+    def test_script_interpolates_languages(self):
+        script = _stealth_js("zh-CN")
+        assert '["zh-CN", "zh", "en-US", "en"]' in script
+        assert "__LANGUAGES__" not in script
+
+    def test_timezone_fallback_follows_locale(self):
+        assert _fallback_timezone("zh-CN") == "Asia/Shanghai"
+        assert _fallback_timezone("zh-TW") == "Asia/Taipei"
+        assert _fallback_timezone("zh-HK") == "Asia/Hong_Kong"
+        assert _fallback_timezone("en-US") == "America/New_York"
+
     @pytest.mark.asyncio
     async def test_stealth_js_not_injected_at_context_level(self, tmp_path):
         """_launch() does NOT use context.add_init_script (breaks DNS on Windows).
@@ -172,8 +196,9 @@ class TestStealthJS:
             mock_ap.return_value.start = AsyncMock(return_value=pw)
             result_page = await mgr.get_page("test-project")
 
-        # Stealth JS injected via page.evaluate
-        new_page.evaluate.assert_awaited_once_with(_STEALTH_JS)
+        # Stealth JS injected via page.evaluate (concrete script for the
+        # detected locale — the raw template still has the languages slot)
+        new_page.evaluate.assert_awaited_once_with(_stealth_js())
         # Page gets a "load" event listener for re-injection on navigation
         load_calls = [c for c in new_page.on.call_args_list if c[0][0] == "load"]
         assert len(load_calls) >= 1, "Expected 'load' event listener for stealth re-injection"

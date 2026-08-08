@@ -389,6 +389,61 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _start_project_store_flush():
         await project_store.start_flush_task()
 
+    # 6d. Telemetry (spec 046): configure the process runtime, record app_start,
+    # and start the sender (startup ping + 6h periodic). Everything behind this
+    # call is never-raise; the toggle is re-read from settings per emit/cycle so
+    # PUT /settings kills emission live.
+    @app.on_event("startup")
+    async def _start_telemetry():
+        from agent_os import telemetry
+        from agent_os.version import get_version
+        import platform as _platform
+
+        # AGENT_OS_TELEMETRY_URL overrides the production ingest endpoint —
+        # used by the release-runbook smoke (point at a local stub and diff
+        # the received payload against the settings viewer).
+        from agent_os.telemetry.sender import DEFAULT_ENDPOINT
+
+        sender = telemetry.configure(
+            store_dir,
+            is_enabled=lambda: settings_store.get().telemetry_enabled,
+            endpoint=os.environ.get("AGENT_OS_TELEMETRY_URL", DEFAULT_ENDPOINT),
+        )
+        telemetry.emit(
+            "app_start",
+            {
+                "version": get_version(),
+                "os": _platform.system().lower(),
+                "fresh_install": telemetry.was_fresh_install(),
+            },
+        )
+        sender.start()
+
+    @app.on_event("shutdown")
+    async def _stop_telemetry():
+        from agent_os import telemetry
+
+        sender = telemetry.get_sender()
+        if sender is not None:
+            sender.stop()
+
+    # 6e. Update check (notify-only): startup + 6h against the telemetry
+    # service's /latest proxy. Packaged builds only; anonymous GET,
+    # independent of the telemetry toggle. See agent_os/update_check.py.
+    @app.on_event("startup")
+    async def _start_update_checker():
+        from agent_os import update_check
+
+        update_check.configure(ws_manager).start()
+
+    @app.on_event("shutdown")
+    async def _stop_update_checker():
+        from agent_os import update_check
+
+        checker = update_check.get_checker()
+        if checker is not None:
+            checker.stop()
+
     @app.on_event("shutdown")
     async def _release_pid():
         release_pid_file()
@@ -455,6 +510,15 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     from agent_os.api.routes import workbench as workbench_routes
     workbench_routes.configure(project_store, agent_manager, calendar_hub)
     app.include_router(workbench_routes.router)
+
+    # 7c5. Onboarding import-discovery routes (backlog #34): read-only scan of
+    # other CLI agents' (Claude Code, Codex) and Obsidian's on-disk project/vault
+    # data, surfaced as ranked candidates the setup wizard confirms one-by-one.
+    # Stateless and metadata-only — creates nothing (confirmed candidates route
+    # back through POST /api/v2/projects).
+    from agent_os.api.routes import onboarding as onboarding_routes
+    onboarding_routes.configure()
+    app.include_router(onboarding_routes.router)
 
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
     # validated override PUT). Stateless — reads providers.json defaults and

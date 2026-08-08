@@ -10,6 +10,7 @@ screenshots, and recovers from crashes.
 """
 
 import asyncio
+import json
 import locale as sys_locale
 import logging
 import os
@@ -42,9 +43,12 @@ WORKER_SCOPE_PREFIX = "worker:"
 
 # Stealth init script — injected into every browser context to spoof
 # automation-detection signals that Patchright does not cover natively.
+# navigator.languages is filled in per-launch (see _stealth_js): a pinned
+# ['en-US','en'] beside a zh-CN context locale is itself a fingerprint
+# (plural/singular mismatch), and Chinese sites reading it serve English.
 _STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'languages', {get: () => __LANGUAGES__});
 Object.defineProperty(navigator, 'plugins', {
     get: () => [1, 2, 3, 4, 5]
 });
@@ -52,6 +56,22 @@ window.chrome = window.chrome || {};
 window.chrome.runtime = window.chrome.runtime || {};
 window.chrome.app = {isInstalled: false, InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'}, RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}};
 """
+
+
+def _stealth_languages(locale_code: str) -> list[str]:
+    """navigator.languages consistent with the launch locale, e.g.
+    'zh-CN' → ['zh-CN', 'zh', 'en-US', 'en'], 'en-US' → ['en-US', 'en']."""
+    lang = locale_code.split("-")[0]
+    languages = [locale_code] if locale_code == lang else [locale_code, lang]
+    if lang != "en":
+        languages += ["en-US", "en"]
+    return languages
+
+
+def _stealth_js(locale_code: str | None = None) -> str:
+    """Concrete stealth script for a launch locale (default: detected)."""
+    loc = locale_code or _detect_locale()
+    return _STEALTH_JS.replace("__LANGUAGES__", json.dumps(_stealth_languages(loc)))
 
 # Common Windows timezone key → IANA mappings
 _WIN_TZ_TO_IANA = {
@@ -174,6 +194,18 @@ def _detect_timezone() -> str:
     except Exception:
         pass
 
+    return _fallback_timezone(_detect_locale())
+
+
+def _fallback_timezone(locale_code: str) -> str:
+    """Last-resort timezone consistent with the locale — claiming US
+    Eastern while the context reports zh-CN is a fingerprint mismatch."""
+    loc = locale_code.lower()
+    if loc.startswith("zh"):
+        return {
+            "zh-tw": "Asia/Taipei",
+            "zh-hk": "Asia/Hong_Kong",
+        }.get(loc, "Asia/Shanghai")
     return "America/New_York"
 
 
@@ -332,8 +364,9 @@ class BrowserManager:
                     "Worker browser tier %s unavailable (%s)", channel, _exc_summary(exc)
                 )
         raise RuntimeError(
-            "No browser available for worker contexts. Install Chrome or Edge, "
-            "or run 'python -m patchright install chromium'."
+            "No browser available for worker contexts: the bundled Chromium is "
+            "not installed and no system Chrome or Edge was found. Install "
+            "Microsoft Edge (or Google Chrome), then retry."
         ) from last_exc
 
     async def _get_worker_context(self, scope: str):
@@ -479,7 +512,9 @@ class BrowserManager:
             user_agent=ua_override,
         )
 
-        # Try system Chrome → Edge → WebKit (macOS) → bundled Chromium
+        # Try system Chrome → Edge → bundled Chromium. (There is no WebKit
+        # tier: it needed a Playwright WebKit build nothing ever downloads,
+        # so it could only fail.)
         self._context = None
         channels = [
             ("chrome", "system Chrome"),
@@ -498,48 +533,27 @@ class BrowserManager:
                     label, _exc_summary(exc),
                 )
         else:
-            # macOS: try WebKit (Safari engine) before bundled Chromium
-            if sys.platform == "darwin":
-                try:
-                    webkit_kwargs = dict(
-                        user_data_dir=str(self._profile_dir),
-                        headless=headless,
-                        locale=detected_locale,
-                        timezone_id=detected_timezone,
-                    )
-                    self._context = await self._playwright.webkit.launch_persistent_context(
-                        **webkit_kwargs
-                    )
-                    logger.info("Browser launched using WebKit (Safari)")
-                except Exception as exc:
-                    logger.info(
-                        "WebKit not available, trying bundled Chromium (%s)",
-                        _exc_summary(exc),
-                    )
-                    self._context = None
-
-            if self._context is None:
-                try:
-                    self._context = await self._playwright.chromium.launch_persistent_context(
-                        **launch_kwargs
-                    )
-                    logger.info("Browser launched using bundled Chromium")
-                except Exception as exc:
-                    holder = self._profile_lock_holder()
-                    if holder is not None:
-                        # Every tier failed against a profile another live
-                        # browser holds — "install Chrome" would be a lie.
-                        raise RuntimeError(
-                            f"Browser profile is in use by another browser process "
-                            f"(pid {holder}) — most likely a sign-in browser window "
-                            f"is still open. Finish signing in, fully quit that "
-                            f"browser window, then retry."
-                        ) from exc
+            try:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    **launch_kwargs
+                )
+                logger.info("Browser launched using bundled Chromium")
+            except Exception as exc:
+                holder = self._profile_lock_holder()
+                if holder is not None:
+                    # Every tier failed against a profile another live
+                    # browser holds — "install Chrome" would be a lie.
                     raise RuntimeError(
-                        "No browser available. Install Chrome or Edge, or run "
-                        "'python -m patchright install chromium' to download a "
-                        "bundled browser. On macOS, Safari (WebKit) is also supported."
+                        f"Browser profile is in use by another browser process "
+                        f"(pid {holder}) — most likely a sign-in browser window "
+                        f"is still open. Finish signing in, fully quit that "
+                        f"browser window, then retry."
                     ) from exc
+                raise RuntimeError(
+                    "No browser available: the bundled Chromium is not "
+                    "installed and no system Chrome or Edge was found. "
+                    "Install Microsoft Edge (or Google Chrome), then retry."
+                ) from exc
 
         # NOTE: Do NOT use context.add_init_script() — it breaks DNS
         # resolution on Patchright persistent contexts (Windows).  Stealth
@@ -642,9 +656,11 @@ class BrowserManager:
         resolution on Patchright persistent contexts (Windows).  Instead we
         inject per-page and re-inject on every ``load`` event.
         """
+        script = _stealth_js()
+
         async def _inject():
             try:
-                await page.evaluate(_STEALTH_JS)
+                await page.evaluate(script)
             except Exception:
                 pass  # page may have closed
 
@@ -917,7 +933,8 @@ class BrowserManager:
             timezone_id=_detect_timezone(),
         )
 
-        # Same Chrome -> Edge -> WebKit (macOS) -> bundled Chromium fallback
+        # Same Chrome -> Edge -> bundled Chromium fallback as _launch (and the
+        # same reason there is no WebKit tier: its binary is never installed).
         ctx = None
         channels = [
             ("chrome", "system Chrome"),
@@ -936,30 +953,23 @@ class BrowserManager:
                     label, _exc_summary(exc),
                 )
         else:
-            # macOS: try WebKit (Safari engine) before bundled Chromium
-            if sys.platform == "darwin":
-                try:
-                    webkit_kwargs = dict(
-                        user_data_dir=str(self._profile_dir),
-                        headless=False,
-                        locale=_detect_locale(),
-                        timezone_id=_detect_timezone(),
-                    )
-                    ctx = await pw.webkit.launch_persistent_context(**webkit_kwargs)
-                    logger.info("Warmup browser launched using WebKit (Safari)")
-                except Exception:
-                    logger.info("Warmup: WebKit not available, trying bundled Chromium")
-
-            if ctx is None:
-                try:
-                    ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
-                    logger.info("Warmup browser launched using bundled Chromium")
-                except Exception as exc:
-                    await pw.stop()
+            try:
+                ctx = await pw.chromium.launch_persistent_context(**launch_kwargs)
+                logger.info("Warmup browser launched using bundled Chromium")
+            except Exception as exc:
+                await pw.stop()
+                holder = self._profile_lock_holder()
+                if holder is not None:
                     raise RuntimeError(
-                        "No browser available for warmup. Install Chrome or Edge. "
-                        "On macOS, Safari (WebKit) is also supported."
+                        f"Browser profile is in use by another browser process "
+                        f"(pid {holder}). Fully quit that browser window, then "
+                        f"retry the sign-in."
                     ) from exc
+                raise RuntimeError(
+                    "No browser available for sign-in: the bundled Chromium is "
+                    "not installed and no system Chrome or Edge was found. "
+                    "Install Microsoft Edge (or Google Chrome), then retry."
+                ) from exc
 
         # From here on the headed browser holds the profile lock — if we exit
         # without closing it, it stays open forever and the daemon browser can
