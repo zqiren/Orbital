@@ -10,6 +10,8 @@
  * Covers:
  *  - orderProviders: fixed CN-first order, unknowns after knowns, 'custom'
  *    (registry key and the CUSTOM_PROVIDER_KEY sentinel) always last;
+ *    Spec 47 locale exception: tokendance top for zh, after the
+ *    international block for en;
  *  - regionDefaultForProvider: pure region-default logic;
  *  - default provider resolution: fresh install -> DeepSeek (never Custom),
  *    saved provider wins, unknown-saved provider -> Custom;
@@ -74,6 +76,12 @@ const REGISTRY: ProviderRegistry = {
     console_url: 'https://console.anthropic.com/settings/keys',
     no_china_endpoint: true,
     sdk: 'anthropic',
+  }),
+  tokendance: makeProvider({
+    display_name: 'TokenDance (词元跳动)',
+    base_url: 'https://tokendance.space/gateway/v1',
+    console_url: 'https://tokendance.space/keys',
+    china_only: true,
   }),
   // Production registry shape: GET /api/v2/providers serves a literal 'custom'
   // entry alongside the CUSTOM_PROVIDER_KEY sentinel the picker adds itself.
@@ -151,6 +159,25 @@ describe('orderProviders', () => {
   it('always places the CUSTOM_PROVIDER_KEY sentinel last', () => {
     expect(orderProviders([CUSTOM_PROVIDER_KEY, 'openai', 'deepseek'])).toEqual([
       'deepseek', 'openai', CUSTOM_PROVIDER_KEY,
+    ]);
+  });
+
+  // Spec 47: the single locale-aware exception for the China-only router.
+  it('en locale (default) sorts tokendance after the international block', () => {
+    expect(orderProviders(['tokendance', 'openai', 'deepseek', 'openrouter'])).toEqual([
+      'deepseek', 'openai', 'openrouter', 'tokendance',
+    ]);
+  });
+
+  it('zh locale sorts tokendance to the top', () => {
+    expect(orderProviders(['openai', 'deepseek', 'tokendance'], 'zh')).toEqual([
+      'tokendance', 'deepseek', 'openai',
+    ]);
+  });
+
+  it('tokendance is a known key in en order: before unknowns, custom still last', () => {
+    expect(orderProviders(['custom', 'brand_new', 'tokendance', 'deepseek'])).toEqual([
+      'deepseek', 'tokendance', 'brand_new', 'custom',
     ]);
   });
 });
@@ -315,6 +342,18 @@ describe('LLMProviderSettings — no-China-endpoint caption + "Get your API key"
     await waitFor(() =>
       expect(
         screen.getByText('No mainland-China endpoint — requires global network access.'),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('shows the China-mainland-only caption for a china_only provider (TokenDance)', async () => {
+    mockApi({
+      settings: { provider: 'tokendance', base_url: 'https://tokendance.space/gateway/v1' },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() =>
+      expect(
+        screen.getByText('China mainland only — may be unreachable outside mainland China.'),
       ).toBeTruthy(),
     );
   });

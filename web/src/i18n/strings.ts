@@ -435,6 +435,7 @@ export const STRINGS = {
   "llm.project.usingDefault": { en: "(using {provider} default)", zh: "（使用 {provider} 默认值）" },
   "llm.provider.custom": { en: "Custom / Self-Hosted", zh: "自定义 / 本地模型" },
   "llm.provider.heading": { en: "LLM Provider", zh: "模型提供方" },
+  "llm.provider.chinaOnly": { en: "China mainland only — may be unreachable outside mainland China.", zh: "仅中国大陆可用 — 大陆以外网络可能无法访问。" },
   "llm.provider.noChinaEndpoint": { en: "No mainland-China endpoint — requires global network access.", zh: "无中国大陆端点 — 需要全球网络环境。" },
   "llm.region.china": { en: "China", zh: "中国" },
   "llm.region.global": { en: "Global", zh: "全球" },

@@ -553,12 +553,17 @@ class AgentManager:
                 "No LLM API key configured for this project or globally",
             )
         model_info = self._provider_registry.get_model_info(config.provider, config.model)
+        # Registry-driven static headers (e.g. TokenDance attribution, Spec 47 §3e)
+        def _headers_for(provider_key: str) -> dict | None:
+            return self._provider_registry.get_provider_data(provider_key).get("extra_headers")
+
         provider = LLMProvider(
             config.model, api_key, config.base_url, sdk=config.sdk,
             max_output=model_info.max_output,
             capabilities=model_info.capabilities,
             reasoning=model_info.reasoning,
             provider=config.provider,
+            extra_headers=_headers_for(config.provider),
         )
 
         fallback_providers = []
@@ -572,7 +577,8 @@ class AgentManager:
                             max_output=fb_info.max_output,
                             capabilities=fb_info.capabilities,
                             reasoning=fb_info.reasoning,
-                            provider=getattr(fb, 'provider', 'custom'))
+                            provider=getattr(fb, 'provider', 'custom'),
+                            extra_headers=_headers_for(getattr(fb, 'provider', 'custom')))
             )
 
         if config.utility_model:
@@ -581,6 +587,7 @@ class AgentManager:
                 config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
                 reasoning=utility_info.reasoning,
                 provider=config.provider,
+                extra_headers=_headers_for(config.provider),
             )
         else:
             utility_provider = provider

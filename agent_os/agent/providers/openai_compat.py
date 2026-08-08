@@ -409,7 +409,7 @@ class LLMProvider:
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None, sdk: str = "openai",
                  max_output: int = 16384, capabilities=None, reasoning=None,
-                 provider: str = "unknown"):
+                 provider: str = "unknown", extra_headers: dict | None = None):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
@@ -418,6 +418,10 @@ class LLMProvider:
         self.max_output = max_output
         self.capabilities = capabilities
         self.reasoning = reasoning  # ReasoningInfo | None — echo-back contract per model
+        # Static per-provider headers from the registry's `extra_headers`
+        # (e.g. TokenDance X-App-Name/X-Site-URL attribution, Spec 47 §3e).
+        # Never carries user data.
+        self.extra_headers = dict(extra_headers) if extra_headers else None
 
         if sdk == "anthropic":
             import anthropic
@@ -426,10 +430,12 @@ class LLMProvider:
             # points at it. Omitting it silently sends the router's key to the
             # default api.anthropic.com → 401 "Invalid API key". None keeps the
             # SDK default endpoint.
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
+            self._anthropic_client = anthropic.AsyncAnthropic(
+                api_key=api_key, base_url=base_url, default_headers=self.extra_headers)
             self._openai_client = None
         else:
-            self._openai_client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
+            self._openai_client = openai.AsyncOpenAI(
+                base_url=base_url, api_key=api_key, default_headers=self.extra_headers)
             self._anthropic_client = None
 
     @property
@@ -476,9 +482,11 @@ class LLMProvider:
         self.api_key = new_key
         if self.sdk == "anthropic":
             import anthropic
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=new_key, base_url=self.base_url)
+            self._anthropic_client = anthropic.AsyncAnthropic(
+                api_key=new_key, base_url=self.base_url, default_headers=self.extra_headers)
         else:
-            self._openai_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=new_key)
+            self._openai_client = openai.AsyncOpenAI(
+                base_url=self.base_url, api_key=new_key, default_headers=self.extra_headers)
 
     def _prepare_messages_openai(self, messages: list) -> list:
         """Prepare messages for OpenAI SDK: strip internal fields, handle multimodal

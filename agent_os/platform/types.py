@@ -90,6 +90,7 @@ DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
     "api.groq.com",
     "api.together.xyz",
     "openrouter.ai",
+    "tokendance.space",      # TokenDance router (China, Spec 47)
     # Python
     "pypi.org",
     "files.pythonhosted.org",

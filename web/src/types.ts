@@ -12,6 +12,9 @@ export interface ProviderInfo {
   console_url?: string | null;
   /** True for providers with no native mainland-China endpoint (Spec 17). */
   no_china_endpoint?: boolean;
+  /** True for China-mainland-only providers (Spec 47) — sorted by UI locale
+   * and captioned for non-CN users; a wrong guess only affects sort/caption. */
+  china_only?: boolean;
   supports_model_list: boolean;
   sdk: 'openai' | 'anthropic';
   suggested_models: string[];

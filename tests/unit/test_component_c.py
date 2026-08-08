@@ -107,7 +107,8 @@ class TestProviderRouting:
             model="gpt-4", api_key="sk-test", base_url="https://my-proxy.example.com"
         )
         mock_openai_mod.AsyncOpenAI.assert_called_once_with(
-            base_url="https://my-proxy.example.com", api_key="sk-test"
+            base_url="https://my-proxy.example.com", api_key="sk-test",
+            default_headers=None,
         )
         assert provider.base_url == "https://my-proxy.example.com"
 
@@ -120,7 +121,8 @@ class TestProviderRouting:
             mock_openai_mod.AsyncOpenAI.assert_not_called()
             # base_url is always threaded through (None → SDK default endpoint);
             # dropping it silently routed custom-router traffic to api.anthropic.com.
-            mock_anthropic.assert_called_once_with(api_key="sk-test", base_url=None)
+            mock_anthropic.assert_called_once_with(
+                api_key="sk-test", base_url=None, default_headers=None)
             assert provider.sdk == "anthropic"
             assert provider._openai_client is None
 

@@ -2524,6 +2524,33 @@ class FetchModelsRequest(BaseModel):
     base_url: str | None = None
 
 
+_CHAT_PROTOCOL_PREFIXES = ("openai:chat-completions", "anthropic:messages")
+
+
+def _chat_model_ids(data: dict) -> list[str]:
+    """Extract chat-capable model IDs from a provider /models response.
+
+    Multi-modal routers (TokenDance) list image/video/TTS models alongside
+    chat models and tag every entry with ``supported_protocols``; entries
+    whose protocols include no chat protocol are dropped so the model picker
+    only offers models the chat path can actually call. Entries without the
+    field (every other provider) are kept.
+    """
+    models = []
+    for m in data.get("data", []):
+        model_id = m.get("id", "")
+        if not model_id:
+            continue
+        protos = m.get("supported_protocols")
+        if isinstance(protos, list) and protos and not any(
+            isinstance(p, str) and p.startswith(_CHAT_PROTOCOL_PREFIXES)
+            for p in protos
+        ):
+            continue
+        models.append(model_id)
+    return models
+
+
 @router.post("/providers/models")
 async def fetch_models(req: FetchModelsRequest):
     """Proxy request to provider's /v1/models endpoint."""
@@ -2555,13 +2582,8 @@ async def fetch_models(req: FetchModelsRequest):
             resp = await client.get(models_url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            # Normalize: extract model IDs
-            models = []
-            for m in data.get("data", []):
-                model_id = m.get("id", "")
-                if model_id:
-                    models.append(model_id)
-            return {"models": sorted(models)}
+            # Normalize: extract chat-capable model IDs
+            return {"models": sorted(_chat_model_ids(data))}
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Provider returned {e.response.status_code}")
         except Exception as e:
@@ -2593,7 +2615,10 @@ async def test_connection(req: TestConnectionRequest):
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
 
     try:
-        provider = LLMProvider(req.model, req.api_key, base_url, sdk=sdk)
+        provider = LLMProvider(
+            req.model, req.api_key, base_url, sdk=sdk,
+            extra_headers=provider_info.get("extra_headers") if provider_info else None,
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hi"}],
         )
