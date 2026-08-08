@@ -130,6 +130,23 @@ async def delete_api_key():
     return _credential_store.delete_api_key()
 
 
+@router.get("/update-status")
+async def get_update_status():
+    """Current vs latest released version (notify-only update check). The
+    frontend pill renders from the WS announce; this endpoint covers page
+    loads that happen after the announce and the manual re-check button."""
+    from agent_os import update_check
+
+    checker = update_check.get_checker()
+    if checker is None:
+        from agent_os.version import get_version
+
+        return {"current": get_version(), "update_available": False,
+                "latest": None, "url": None}
+    await checker.run_check()
+    return checker.status
+
+
 @router.get("/settings/telemetry-payload")
 async def get_telemetry_payload():
     """The verbatim telemetry pings for the settings viewer (spec 046 §6):

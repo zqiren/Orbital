@@ -9,6 +9,7 @@ import { useProjects } from './hooks/useProjects';
 import { useTriggers } from './hooks/useTriggers';
 import { useWebSocket, type ConnectionState } from './hooks/useWebSocket';
 import { bumpPricingVersion } from './budget/pricingVersion';
+import UpdatePill from './components/UpdatePill';
 import type {
   AgentRunStatus,
   ApprovalRequestEvent,
@@ -472,6 +473,7 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden">
+      <UpdatePill />
       <div className={sidebarHidden ? 'hidden' : 'contents'}>
         <Sidebar
           projects={projects}

@@ -952,6 +952,15 @@ export const STRINGS = {
   "telemetry.viewer.never": { en: "Nothing has been sent yet.", zh: "尚未发送任何数据。" },
   "telemetry.viewer.error": { en: "Could not load the payload preview.", zh: "无法加载发送内容预览。" },
   "telemetry.wizard.disclosure": { en: "Orbital sends one anonymous daily usage summary (counters only — never your prompts, files, or paths). Inspect the exact payload or turn it off anytime in Settings → Data & privacy.", zh: "Orbital 每天发送一份匿名使用汇总（仅含计数——绝不包含你的提示词、文件或路径）。可随时在「设置 → 数据与隐私」中查看完整发送内容或关闭。" },
+  "update.pill.label": { en: "v{version} available →", zh: "新版本 v{version} →" },
+  "update.pill.dismiss": { en: "Dismiss update notice", zh: "关闭更新提示" },
+  "update.about.heading": { en: "About", zh: "关于" },
+  "update.about.version": { en: "Orbital v{version}", zh: "Orbital v{version}" },
+  "update.about.check": { en: "Check for updates", zh: "检查更新" },
+  "update.about.checking": { en: "Checking…", zh: "检查中…" },
+  "update.about.upToDate": { en: "You're up to date.", zh: "已是最新版本。" },
+  "update.about.available": { en: "v{version} available — open the release page", zh: "新版本 v{version}——打开发布页面" },
+  "update.about.error": { en: "Could not reach the update service.", zh: "无法连接更新服务。" },
 } as const satisfies Record<string, StringEntry>;
 
 export type StringKey = keyof typeof STRINGS;

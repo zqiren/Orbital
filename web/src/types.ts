@@ -583,6 +583,14 @@ export interface DeviceStatusEvent {
   status: 'online' | 'offline';
 }
 
+// Daemon-global update announce (agent_os/update_check.py) — once per newer
+// released version; the UpdatePill renders it.
+export interface UpdateAvailableEvent {
+  type: 'update.available';
+  version: string;
+  url: string;
+}
+
 export interface TriggerCreatedEvent {
   type: 'trigger.created';
   project_id: string;
@@ -752,7 +760,8 @@ export type WebSocketEvent =
   | BlockedCountChangedEvent
   | FanoutStartedEvent
   | FanoutTaskUpdateEvent
-  | FanoutCompletedEvent;
+  | FanoutCompletedEvent
+  | UpdateAvailableEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
 export type QueueItemState = 'queued' | 'running' | 'done' | 'blocked';

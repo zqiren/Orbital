@@ -427,6 +427,23 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         if sender is not None:
             sender.stop()
 
+    # 6e. Update check (notify-only): startup + 6h against the telemetry
+    # service's /latest proxy. Packaged builds only; anonymous GET,
+    # independent of the telemetry toggle. See agent_os/update_check.py.
+    @app.on_event("startup")
+    async def _start_update_checker():
+        from agent_os import update_check
+
+        update_check.configure(ws_manager).start()
+
+    @app.on_event("shutdown")
+    async def _stop_update_checker():
+        from agent_os import update_check
+
+        checker = update_check.get_checker()
+        if checker is not None:
+            checker.stop()
+
     @app.on_event("shutdown")
     async def _release_pid():
         release_pid_file()
