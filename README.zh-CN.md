@@ -133,7 +133,7 @@ Claude Code 跑完后，Orbital 读取它的结论，把其中有用的部分记
 
 **技术细节**
 
-- **内置 13 家 LLM provider** —— Anthropic、OpenAI、DeepSeek、Moonshot (Kimi)、Groq、Google Gemini、xAI、Mistral、Together、OpenRouter、智谱、通义千问，以及任意自定义 endpoint
+- **内置 14 家 LLM provider** —— Anthropic、OpenAI、DeepSeek、Moonshot (Kimi)、Groq、Google Gemini、xAI、Mistral、Together、OpenRouter、智谱、通义千问、词元跳动 (TokenDance)，以及任意自定义 endpoint
 - **浏览器自动化** —— 基于 Patchright 的 26 种浏览器动作，带反检测
 
 ---
