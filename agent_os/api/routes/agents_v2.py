@@ -1596,6 +1596,10 @@ async def new_session(project_id: str, req: SessionScopedRequest | None = None):
     touches no running session. The UI navigates to the new ``session_id`` and
     the session materializes on the first message. The body ``session_id`` is
     accepted for compatibility but ignored — a new session is always fresh."""
+    from agent_os import telemetry
+
+    telemetry.emit("session_created")
+    telemetry.latch("first_session")
     result = await _agent_manager.new_session(
         project_id, session_id=(req.session_id if req else None),
     )

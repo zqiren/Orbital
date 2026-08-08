@@ -755,6 +755,16 @@ Built nights and weekends while working full-time. Still very early. Feedback an
 
 ---
 
+## Telemetry
+
+Orbital sends **one anonymous aggregate per day** — counters, enums, and
+booleans only. Never prompts, files, paths, model output, or any
+project/session identifier. The exact outbound JSON is inspectable verbatim in
+**Settings → Data & privacy**, where a single toggle turns it off. The full
+published schema is in [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
+---
+
 ## License
 
 Orbital is licensed under the [GNU General Public License v3.0](LICENSE).
