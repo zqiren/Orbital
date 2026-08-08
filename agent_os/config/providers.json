@@ -1008,22 +1008,27 @@
       "pricing": {
         "deepseek-chat": {
           "input_per_1m": 0.28,
+          "cached_input_per_1m": 0.028,
           "output_per_1m": 0.42
         },
         "deepseek-reasoner": {
           "input_per_1m": 0.55,
+          "cached_input_per_1m": 0.14,
           "output_per_1m": 2.19
         },
         "_default": {
           "input_per_1m": 0.28,
+          "cached_input_per_1m": 0.028,
           "output_per_1m": 0.42
         },
         "deepseek-v4-flash": {
           "input_per_1m": 0.14,
+          "cached_input_per_1m": 0.0028,
           "output_per_1m": 0.28
         },
         "deepseek-v4-pro": {
           "input_per_1m": 0.435,
+          "cached_input_per_1m": 0.003625,
           "output_per_1m": 0.87
         }
       },
@@ -3080,18 +3085,22 @@
       "pricing": {
         "MiniMax-M3": {
           "input_per_1m": 0.3,
+          "cached_input_per_1m": 0.06,
           "output_per_1m": 1.2
         },
         "MiniMax-M2.7": {
           "input_per_1m": 0.3,
+          "cached_input_per_1m": 0.06,
           "output_per_1m": 1.2
         },
         "MiniMax-M2.5": {
           "input_per_1m": 0.3,
+          "cached_input_per_1m": 0.06,
           "output_per_1m": 1.2
         },
         "_default": {
           "input_per_1m": 0.3,
+          "cached_input_per_1m": 0.06,
           "output_per_1m": 1.2
         }
       },
