@@ -64,7 +64,9 @@ def _registry_endpoint_hosts():
     from urllib.parse import urlparse
 
     registry = Path(__file__).resolve().parents[2] / "agent_os" / "config" / "providers.json"
-    providers = json.loads(registry.read_text())["providers"]
+    # encoding matters: providers.json contains non-ASCII display names
+    # (e.g. TokenDance 词元跳动) and Windows' default is cp1252, not UTF-8.
+    providers = json.loads(registry.read_text(encoding="utf-8"))["providers"]
     hosts = set()
     for entry in providers.values():
         for field in ("base_url", "china_base_url"):
