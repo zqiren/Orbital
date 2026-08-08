@@ -161,7 +161,22 @@ else
     mkdir -p dist/dmg_staging
     ditto dist/Orbital.app dist/dmg_staging/Orbital.app
     ln -sf /Applications dist/dmg_staging/Applications
-    hdiutil create -volname "Orbital" -srcfolder dist/dmg_staging -ov -format UDZO "dist/$DMG_NAME"
+    # hdiutil intermittently fails with "Resource busy" on CI runners
+    # (Spotlight/diskarbitration touching the staging dir) — this killed the
+    # v0.8.5 tag build on the first attempt. Retry a few times before failing.
+    _dmg_ok=""
+    for _attempt in 1 2 3 4; do
+        if hdiutil create -volname "Orbital" -srcfolder dist/dmg_staging -ov -format UDZO "dist/$DMG_NAME"; then
+            _dmg_ok=1
+            break
+        fi
+        echo "  hdiutil create failed (attempt $_attempt) — retrying in 10s..."
+        sleep 10
+    done
+    if [[ -z "$_dmg_ok" ]]; then
+        echo "ERROR: hdiutil create failed after 4 attempts." >&2
+        exit 1
+    fi
     rm -rf dist/dmg_staging
 fi
 
