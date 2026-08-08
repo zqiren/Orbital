@@ -32,11 +32,6 @@ interface BudgetSectionProps {
   onActionChange: (next: 'pause' | 'stop') => void;
   /** Navigate to the pricing editor. */
   onEditPricing: () => void;
-  /**
-   * Bumped after a pricing-table save so useCost re-fetches /cost and the meter
-   * + breakdown recompute historical spend against the new rates.
-   */
-  costRefreshKey?: number;
 }
 
 const PERIOD_OPTIONS: { value: BudgetPeriod; labelKey: StringKey; hintKey: StringKey }[] = [
@@ -77,20 +72,20 @@ export default function BudgetSection({
   action,
   onActionChange,
   onEditPricing,
-  costRefreshKey,
 }: BudgetSectionProps) {
   const t = useT();
   const { locale } = useLocale();
   const pid = project.project_id;
 
   const window = periodToWindow(period);
-  const { cost, loading, error, refresh } = useCost(pid, window, costRefreshKey);
+  const { cost, loading, error, refresh } = useCost(pid, window);
 
   // Until /cost has ever landed, a rendered number would be a fabricated zero
-  // rather than a measurement (bug #36). "Pending" covers the mount frame
-  // BEFORE useCost's effect flips `loading` as well as the in-flight window.
-  // A refresh with `cost` already present keeps showing the last known spend
-  // instead of blinking back to a placeholder.
+  // rather than a measurement (bug #36). useCost now reports loading from the
+  // first render and clears `cost` on any query-identity change (#40), so
+  // "pending" is the loading + never-fetched states; failedWithNoData is the
+  // fetch-error state. A same-window refresh with `cost` already present keeps
+  // showing the last known spend instead of blinking back to a placeholder.
   const pendingFirstLoad = !cost && (loading || error == null);
   const failedWithNoData = !cost && !loading && error != null;
   const spendUnknown = pendingFirstLoad || failedWithNoData;
