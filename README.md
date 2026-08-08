@@ -168,7 +168,7 @@ You do not begin again with an empty chat. You continue the project.
 
 **Under the hood**
 
-- **13 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus custom endpoints
+- **14 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动), plus custom endpoints
 - **Browser automation** — 26 browser actions via Patchright with anti-detection
 
 ---
@@ -437,9 +437,9 @@ The project agent translates this into a `create_trigger` tool call with the app
 <details>
 <summary><strong>LLM Provider Routing & BYOK</strong></summary>
 
-**13 providers** supported out of the box:
+**14 providers** supported out of the box:
 
-Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, plus a `custom` entry for any OpenAI-compatible endpoint (e.g., Ollama, Azure OpenAI, self-hosted models).
+Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动 — China-mainland model router), plus a `custom` entry for any OpenAI-compatible endpoint (e.g., Ollama, Azure OpenAI, self-hosted models).
 
 - **SDK routing**: Anthropic SDK for Anthropic, OpenAI SDK for OpenAI-compatible providers
 - **Per-model metadata**: Display name, tier, context window, max output, capabilities (vision, tool use, streaming), pricing
