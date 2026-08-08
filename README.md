@@ -16,11 +16,9 @@
 
 Orbital works like Claude Code or Codex: ask it to research, plan, write, run commands, browse the web, or operate your tools.
 
-The difference is that Orbital treats a local folder as a long-running project.
+The difference is that Orbital treats a local folder as a long-running project. It maintains the project's context on its own — where it left off, what's next, and how to do it — as files inside that folder. Every new task starts from everything learned before it, so work compounds instead of resetting to zero.
 
-As it works, Orbital maintains and records the project's current state, decisions, lessons, task queue, and artifacts inside that folder. Every new task starts from the context accumulated by previous work, so the agent's work compounds over time.
-
-Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task, and points it at the relevant project files — so you don't have to explain the project again each time. Orbital watches the run, reads what comes back against the project's context, and writes the outcome into the project.
+Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task and points it at the relevant files — you never re-explain the project. Orbital watches the run, reads the result against the project's context, and writes the outcome back in. The more you delegate, the more it knows.
 
 <p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
 
