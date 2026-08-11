@@ -825,7 +825,107 @@ def _get_log_path() -> str:
         return os.path.join(os.path.expanduser("~"), ".orbital", "logs")
 
 
+# Every desktop shell puts its own icon in the Windows notification area, so
+# "one Orbital" has to mean one process (bug #54). The name is unprefixed and
+# therefore lives in the caller's *session* namespace ("Local\"), not "Global\":
+# a second logged-in user (fast user switching, RDP) has their own notification
+# area and must get their own Orbital, not a refusal.
+SINGLE_INSTANCE_MUTEX_NAME = "OrbitalDesktopShell"
+
+# The mutex is owned by its handle, and a kernel mutex dies with the process
+# holding it — that is why this beats the daemon PID file, which needs a
+# liveness dance. Parked in a module global so it is never garbage collected.
+_single_instance_mutex = None
+
+# Flags main() knows how to act on. Anything else must not reach the GUI path.
+_RECOGNIZED_FLAGS = ("--setup-sandbox", "--teardown-sandbox", "--smoke-test")
+
+
+def _unrecognized_args(argv) -> list:
+    """Return the arguments main() does not understand.
+
+    `-psn_*` is what macOS LaunchServices hands a bundled app on launch; it is
+    not a request to do anything and must never keep Orbital from starting.
+    """
+    return [
+        arg for arg in argv
+        if arg not in _RECOGNIZED_FLAGS and not arg.startswith("-psn_")
+    ]
+
+
+def _acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX_NAME) -> bool:
+    """Claim the desktop-shell mutex. True means this process is the only shell.
+
+    Non-Windows platforms and any ctypes failure return True: the guard must
+    never be the reason Orbital refuses to start.
+    """
+    global _single_instance_mutex
+
+    if sys.platform != "win32":
+        return True
+
+    try:
+        import ctypes
+
+        ERROR_ALREADY_EXISTS = 183
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateMutexW(None, False, name)
+        last_error = kernel32.GetLastError()
+        if not handle:
+            return True
+        _single_instance_mutex = handle
+        return last_error != ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
+def _activate_existing_window(title: str = "Orbital") -> bool:
+    """Surface the already-running shell's window. True if one was found.
+
+    The running instance may have been hidden by the close-to-tray path
+    (`window.hide()`), so this both un-hides and un-minimizes it. FindWindowW
+    enumerates by title regardless of visibility.
+    """
+    if sys.platform != "win32":
+        return False
+
+    try:
+        import ctypes
+
+        SW_SHOW = 5
+        SW_RESTORE = 9
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, title)
+        if not hwnd:
+            return False
+        user32.ShowWindow(hwnd, SW_SHOW)
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
+
+
 def main():
+    # Refuse to start the GUI on arguments we do not understand. A stray argv
+    # used to fall straight through to the daemon + window + tray path — which
+    # is how request_elevation()'s re-exec of the frozen exe would have spawned
+    # a second tray icon.
+    unknown = _unrecognized_args(sys.argv[1:])
+    if unknown:
+        try:
+            print(
+                "Orbital: unrecognized argument(s): " + " ".join(unknown),
+                file=sys.stderr,
+            )
+            print(
+                "Usage: Orbital [" + " | ".join(_RECOGNIZED_FLAGS) + "]",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+        sys.exit(2)
+
     # Handle CLI flags before any daemon/GUI setup
     if "--setup-sandbox" in sys.argv:
         run_sandbox_setup()
@@ -837,6 +937,18 @@ def main():
 
     if "--smoke-test" in sys.argv:
         sys.exit(run_smoke_test())
+
+    # Single-instance guard — before any daemon, window, or tray work, because
+    # a second shell means a second tray icon. Deliberately *after* the flag
+    # handlers above: those create no tray, and the installer runs
+    # --setup-sandbox / --teardown-sandbox while an instance may be live, so
+    # they must never be swallowed by this guard.
+    if not _acquire_single_instance():
+        if _activate_existing_window():
+            sys.exit(0)
+        # Fail OPEN: the mutex is held but nothing answers to it — a wedged
+        # instance with no window. Being locked out of Orbital entirely is a
+        # worse bug than the duplicate icon this guard exists to prevent.
 
     from agent_os.desktop.migration import run_migrations
 
@@ -898,6 +1010,13 @@ def main():
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
+        finally:
+            # Any exit from here has to take the icon with it. Windows keeps
+            # showing a dead process's tray icon until the user sweeps the
+            # pointer over it, so an un-deleted icon is a visible ghost.
+            from agent_os.desktop.tray import hide_tray
+
+            hide_tray()
 
 
 if __name__ == "__main__":

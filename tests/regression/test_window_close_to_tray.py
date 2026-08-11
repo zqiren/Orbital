@@ -49,21 +49,35 @@ def test_module_level_window_reference():
 
 
 def test_is_already_running_path_starts_tray():
-    """When daemon is already running, main() must still start the tray.
+    """Whichever shell gets past the guards must own tray AND keep-alive.
 
     The old bug: is_already_running() returned early with just open_window(),
     skipping tray creation and keep-alive loop. The process would exit
     immediately after the window closed — no tray icon, no persistence.
+
+    Bug #54 narrowed what this branch means without changing that invariant.
+    Duplicate *shells* are now stopped earlier, by the single-instance mutex
+    guard, before any tray exists (tests/regression/test_single_instance_tray.py).
+    is_already_running() only answers "is a daemon already listening" — a repo
+    dev daemon, say — and the shell that finds one is still the shell that owns
+    the tray and the keep-alive loop.
     """
     source = inspect.getsource(main_mod.main)
-    # The old pattern: if is_already_running → open_window → return
-    # must NOT have a bare 'return' right after open_window in the
-    # is_already_running block
-    lines = source.split("\n")
-    for i, line in enumerate(lines):
-        if "is_already_running" in line and "if" in line:
-            # Check the next few lines don't have open_window followed by return
-            block = "\n".join(lines[i:i+5])
-            assert not ("open_window" in block and "\n        return" in block), \
-                "is_already_running path must not return early — tray and keep-alive are needed"
-            break
+
+    branch_idx = source.find("if is_already_running(")
+    assert branch_idx > 0, "main() must still branch on is_already_running()"
+
+    # No early return in that branch — it falls through to the shared path.
+    branch_block = "\n".join(source[branch_idx:].split("\n")[:5])
+    assert not ("open_window" in branch_block and "\n        return" in branch_block), \
+        "is_already_running path must not return early — tray and keep-alive are needed"
+
+    # ...and that shared path starts the tray, then keeps the process alive so
+    # the tray outlives the window.
+    tail = source[branch_idx:]
+    tray_idx = tail.find("start_tray")
+    keep_alive_idx = tail.find("while True")
+    assert tray_idx > 0, \
+        "main() must start the tray after the is_already_running branch"
+    assert keep_alive_idx > tray_idx, \
+        "the keep-alive loop must follow tray startup so the tray outlives the window"

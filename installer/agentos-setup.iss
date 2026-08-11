@@ -14,6 +14,10 @@ SolidCompression=yes
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\bin\Orbital.exe
 PrivilegesRequired=admin
+; Must match SINGLE_INSTANCE_MUTEX_NAME in agent_os/desktop/main.py. Makes
+; Setup/Uninstall ask the user to close a running Orbital instead of writing
+; files under a live process and then launching a second copy (line 53).
+AppMutex=OrbitalDesktopShell
 
 [Files]
 ; Application binaries (PyInstaller output)
