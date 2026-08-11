@@ -2519,6 +2519,40 @@ async def list_providers():
     return {}
 
 
+@router.post("/providers/tokendance/signin")
+async def tokendance_signin():
+    """One-click TokenDance key provisioning (Spec 47 Tier 2).
+
+    Blocking: runs the PKCE loopback flow (system browser consent, up to
+    ~300s), validates the minted key against their balance endpoint, and
+    persists it to the credential store. The raw key never leaves the daemon —
+    the response carries only the set-flag and a display mask (same format as
+    ``settings_store.get_masked``).
+    """
+    if _credential_store is None:
+        raise HTTPException(status_code=501, detail="Credential store not available")
+    from agent_os.providers_auth.tokendance import (
+        TokenDanceProvisioningError,
+        provision_api_key,
+    )
+    try:
+        key = await provision_api_key()
+    except TokenDanceProvisioningError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    try:
+        _credential_store.set_api_key(key)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"key was created but could not be stored: {exc}",
+        )
+    from agent_os import telemetry
+    telemetry.emit("key_set", {"provider": "tokendance"})
+    telemetry.latch("key_set")
+    masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "****"
+    return {"api_key_set": True, "api_key_masked": masked}
+
+
 class FetchModelsRequest(BaseModel):
     # `provider` defaults to "custom" so a local OpenAI-compatible server
     # (LM Studio / llama.cpp / Ollama) can be queried with just a base_url —

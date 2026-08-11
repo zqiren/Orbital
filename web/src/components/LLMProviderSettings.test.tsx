@@ -580,3 +580,97 @@ describe('LLMProviderSettings — hint paragraphs collapse by default (bug #49)'
     expect(details.open).toBe(true);
   });
 });
+
+// ---- Spec 47 Tier 2: TokenDance one-click signin ----
+
+describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)', () => {
+  const TD_SETTINGS = {
+    provider: 'tokendance',
+    base_url: 'https://tokendance.space/gateway/v1',
+  };
+
+  function mockApiWithSignin(signinImpl: () => Promise<unknown>) {
+    apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
+      if (path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST') {
+        return signinImpl();
+      }
+      if (path === '/api/v2/settings') {
+        return { llm: { api_key_set: false, api_key_masked: '', model: null, sdk: 'openai', ...TD_SETTINGS } };
+      }
+      if (path === '/api/v2/providers') return REGISTRY;
+      if (path === '/api/v2/settings/api-key/status') return { configured: false, source: 'none' };
+      return {};
+    });
+  }
+
+  it('renders the signin button for tokendance in global mode only', async () => {
+    mockApi({ settings: TD_SETTINGS });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByTestId('tokendance-signin')).toBeTruthy());
+  });
+
+  it('does not render the button for other providers', async () => {
+    mockApi({ settings: { provider: 'deepseek', base_url: 'https://api.deepseek.com' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('deepseek');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it('does not render the button in project mode', async () => {
+    mockApi({});
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'tokendance', model: 'deepseek-v4-pro', sdk: 'openai' }}
+        onChange={vi.fn()}
+      />,
+    );
+    // Project mode renders collapsed — expand the section once it loads.
+    fireEvent.click(await screen.findByRole('button', { name: /LLM Provider/ }));
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('tokendance');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it('click → POST, busy state disables the button, success shows the masked key', async () => {
+    let release!: (v: unknown) => void;
+    mockApiWithSignin(() => new Promise((res) => { release = res; }));
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+
+    fireEvent.click(btn);
+    // In flight: disabled + browser hint visible.
+    await waitFor(() => expect((btn as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.getByText(/browser window that just opened/)).toBeTruthy();
+    expect(apiMock).toHaveBeenCalledWith(
+      '/api/v2/providers/tokendance/signin',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    release({ api_key_set: true, api_key_masked: 'sk-t...9876' });
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    // The stored-key line reflects the mask without a page reload.
+    expect(screen.getByText(/sk-t\.\.\.9876/)).toBeTruthy();
+  });
+
+  it('failure surfaces the backend error message', async () => {
+    mockApiWithSignin(() =>
+      Promise.reject(new Error('sign-in timed out waiting for the browser redirect')),
+    );
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(
+        screen.getByText('sign-in timed out waiting for the browser redirect'),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByTestId('tokendance-signin-msg').className).toContain('text-error');
+  });
+});

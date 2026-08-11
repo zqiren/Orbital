@@ -555,6 +555,41 @@ export default function LLMProviderSettings({
     }
   }
 
+  // TokenDance one-click key provisioning (Spec 47 Tier 2). Blocking POST:
+  // the daemon opens the system browser for consent (up to ~5 min) and the
+  // response arrives only after the key is minted, validated, and stored.
+  const [tokendanceSigninBusy, setTokendanceSigninBusy] = useState(false);
+  const [tokendanceSigninMsg, setTokendanceSigninMsg] =
+    useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  async function handleTokendanceSignin() {
+    setTokendanceSigninBusy(true);
+    setTokendanceSigninMsg(null);
+    try {
+      const res = await api<{ api_key_set: boolean; api_key_masked: string }>(
+        '/api/v2/providers/tokendance/signin',
+        { method: 'POST' },
+      );
+      setApiKeyStatus({ configured: true, source: 'keyring' });
+      setGlobalSettings(prev =>
+        prev
+          ? { ...prev, api_key_set: true, api_key_masked: res.api_key_masked }
+          : prev,
+      );
+      setApiKey('');
+      setTokendanceSigninMsg({ kind: 'ok', text: t('llm.tokendance.signin.success') });
+    } catch (err: unknown) {
+      setTokendanceSigninMsg({
+        kind: 'err',
+        text: err instanceof Error && err.message
+          ? err.message
+          : t('llm.tokendance.signin.failed'),
+      });
+    } finally {
+      setTokendanceSigninBusy(false);
+    }
+  }
+
   // Core save logic (shared between form submit and external saveRef)
   async function doSave(): Promise<boolean> {
     setSaving(true);
@@ -772,6 +807,33 @@ export default function LLMProviderSettings({
       {/* API Key */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
+        {provider === 'tokendance' && mode === 'global' && (
+          <div className="mb-2">
+            <button
+              type="button"
+              data-testid="tokendance-signin"
+              onClick={handleTokendanceSignin}
+              disabled={tokendanceSigninBusy}
+              className="inline-flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 bg-accent text-white hover:bg-accent/90 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+            >
+              {tokendanceSigninBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {tokendanceSigninBusy
+                ? t('llm.tokendance.signin.waiting')
+                : t('llm.tokendance.signin.button')}
+            </button>
+            {tokendanceSigninBusy && (
+              <p className="text-xs text-secondary mt-1">{t('llm.tokendance.signin.hint')}</p>
+            )}
+            {tokendanceSigninMsg && (
+              <p
+                data-testid="tokendance-signin-msg"
+                className={`text-xs mt-1 ${tokendanceSigninMsg.kind === 'ok' ? 'text-success' : 'text-error'}`}
+              >
+                {tokendanceSigninMsg.text}
+              </p>
+            )}
+          </div>
+        )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.console_url && (
           <HintDetails className="mb-1.5">
             <a
