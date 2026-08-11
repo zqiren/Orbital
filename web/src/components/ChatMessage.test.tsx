@@ -101,14 +101,13 @@ describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
     expect(screen.getByText('you → @researcher')).toBeInTheDocument();
   });
 
-  it('agent message renders the ◐ avatar glyph, "agent" sender·time, and content with NO bubble', () => {
+  it('agent message renders the Orbital avatar, "agent" sender·time, and content with NO bubble', () => {
     const { container } = render(<ChatMessage message={agentMsg('agent reply here')} />);
 
     const avatar = container.querySelector('[data-testid="message-avatar"]');
     expect(avatar?.getAttribute('data-variant')).toBe('agent');
-    expect(avatar?.textContent).toBe('◐');
-    expect(avatar?.className).toContain('border');
-    expect(avatar?.className).not.toContain('bg-primary');
+    expect(avatar?.tagName).toBe('IMG');
+    expect(avatar?.getAttribute('src')).toBe('/icon-192.png');
 
     expect(screen.getByText('agent')).toBeInTheDocument();
     expect(screen.getByText('agent reply here')).toBeInTheDocument();

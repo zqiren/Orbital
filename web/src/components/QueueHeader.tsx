@@ -172,7 +172,7 @@ export default function QueueHeader({
             data-testid="queue-resume-btn"
             className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
           >
-            <Play className="w-3.5 h-3.5" /> {t('queue.resume')}
+            <Play className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.resume')}
           </button>
         ) : isIdle ? (
           counts.queued > 0 ? (
@@ -182,7 +182,7 @@ export default function QueueHeader({
               data-testid="queue-start-btn"
               className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] bg-success text-on-accent hover:bg-success/90"
             >
-              <Play className="w-3.5 h-3.5" /> {t('queue.start')}
+              <Play className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.start')}
             </button>
           ) : null
         ) : (
@@ -195,7 +195,7 @@ export default function QueueHeader({
               data-testid="queue-stop-btn"
               className="flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] border border-border text-secondary hover:text-warning hover:border-warning/40"
             >
-              <Pause className="w-3.5 h-3.5" /> {t('queue.stop')}
+              <Pause className="w-3.5 h-3.5" fill="currentColor" /> {t('queue.stop')}
             </button>
             {menuOpen && (
               <>
