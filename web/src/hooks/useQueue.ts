@@ -64,12 +64,18 @@ export function useQueue(projectId: string | null) {
   }, [projectId, refresh, ws]);
 
   const addItem = useCallback(
-    async (content: string, opts?: { priority?: number; review?: boolean }) => {
+    async (
+      content: string,
+      opts?: { priority?: number; review?: boolean; fileRefs?: string[] },
+    ) => {
       if (!projectId) return;
       await api(`/api/v2/projects/${projectId}/queue/items`, {
         method: 'POST',
         body: JSON.stringify({
           content,
+          // Bare content + paths: the dispatcher renders the <attached_files>
+          // block from these at dispatch time.
+          file_refs: opts?.fileRefs ?? [],
           priority: opts?.priority ?? 0,
           review_before_advance: opts?.review ?? false,
         }),

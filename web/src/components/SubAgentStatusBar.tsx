@@ -63,11 +63,18 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
   const { on, off } = useWebSocket();
   const alive = useRef(true);
 
+  const abortRef = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
+    // Bug #48 (fix C): a session switch re-fires this; abort the superseded
+    // request instead of letting discarded responses pile up.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
       const data = await api<{ session_id: string | null; agents: SubAgentInfo[] }>(
         `/api/v2/agents/${projectId}/sub-agents/status${qs}`,
+        { signal: controller.signal },
       );
       if (alive.current) {
         // Fanout workers (spec 009 §0.5) get their own live surface —
@@ -102,6 +109,7 @@ export default function SubAgentStatusBar({ projectId, sessionId }: Props) {
     events.forEach((ev) => on(ev, handler));
     return () => {
       alive.current = false;
+      abortRef.current?.abort();
       events.forEach((ev) => off(ev, handler));
     };
   }, [projectId, on, off, refresh]);

@@ -33,6 +33,7 @@
  *                       route and persists.
  */
 
+import { useCallback, useMemo } from 'react';
 import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
@@ -64,41 +65,56 @@ export function SessionSidebar({
 
   // One unified list of ALL sessions, sorted by last-activity descending
   // (most recent first). Null/missing timestamps sort last. Sort a copy so we
-  // never mutate the hook's array.
-  const sortedSessions: SessionListEntry[] = [...sessions].sort((a, b) => {
-    const ta = a.last_activity_at ? Date.parse(a.last_activity_at) : NaN;
-    const tb = b.last_activity_at ? Date.parse(b.last_activity_at) : NaN;
-    const va = Number.isNaN(ta) ? -Infinity : ta;
-    const vb = Number.isNaN(tb) ? -Infinity : tb;
-    return vb - va;
-  });
+  // never mutate the hook's array. Bug #48 (fix D): memoized (with stable
+  // useCallback handlers below) so an agent.status-triggered refresh doesn't
+  // re-sort and re-render every row on unrelated parent renders.
+  const sortedSessions: SessionListEntry[] = useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        const ta = a.last_activity_at ? Date.parse(a.last_activity_at) : NaN;
+        const tb = b.last_activity_at ? Date.parse(b.last_activity_at) : NaN;
+        const va = Number.isNaN(ta) ? -Infinity : ta;
+        const vb = Number.isNaN(tb) ? -Infinity : tb;
+        return vb - va;
+      }),
+    [sessions],
+  );
 
-  function handleSelect(session: SessionListEntry) {
-    onSessionSelect?.(session.session_id);
-  }
+  const handleSelect = useCallback(
+    (sessionId: string) => {
+      onSessionSelect?.(sessionId);
+    },
+    [onSessionSelect],
+  );
 
-  async function handleRename(sessionId: string, name: string) {
-    try {
-      await renameSession(sessionId, name);
-    } catch (e) {
-      console.error('Failed to rename session', e);
-    }
-  }
+  const handleRename = useCallback(
+    async (sessionId: string, name: string) => {
+      try {
+        await renameSession(sessionId, name);
+      } catch (e) {
+        console.error('Failed to rename session', e);
+      }
+    },
+    [renameSession],
+  );
 
-  async function handleDelete(sessionId: string) {
-    try {
-      await deleteSession(sessionId);
-      // Compute the remaining set (sorted, most-recent first) so ChatTab can
-      // navigate to the most recent remaining session if the deleted one was
-      // being viewed.
-      const remaining = sortedSessions.filter((s) => s.session_id !== sessionId);
-      onSessionDeleted?.(sessionId, remaining);
-    } catch (e) {
-      // 409 (running session) or network error — surface to console; the row
-      // stays put because deleteSession only prunes on success.
-      console.error('Failed to delete session', e);
-    }
-  }
+  const handleDelete = useCallback(
+    async (sessionId: string) => {
+      try {
+        await deleteSession(sessionId);
+        // Compute the remaining set (sorted, most-recent first) so ChatTab can
+        // navigate to the most recent remaining session if the deleted one was
+        // being viewed.
+        const remaining = sortedSessions.filter((s) => s.session_id !== sessionId);
+        onSessionDeleted?.(sessionId, remaining);
+      } catch (e) {
+        // 409 (running session) or network error — surface to console; the row
+        // stays put because deleteSession only prunes on success.
+        console.error('Failed to delete session', e);
+      }
+    },
+    [deleteSession, onSessionDeleted, sortedSessions],
+  );
 
   return (
     <aside
@@ -150,7 +166,7 @@ export function SessionSidebar({
             key={session.session_uuid ?? session.session_id}
             session={session}
             selected={selectedSessionId === session.session_id}
-            onSelect={() => handleSelect(session)}
+            onSelect={handleSelect}
             onRename={handleRename}
             onDelete={handleDelete}
           />

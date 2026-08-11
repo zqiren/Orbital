@@ -153,8 +153,13 @@ export default function QueueTab({ projectId, project }: QueueTabProps) {
         </section>
       </div>
       <QueueComposer
+        projectId={projectId}
         onSubmit={(content, opts) =>
-          addItem(content, { priority: opts.priority, review: opts.review })
+          addItem(content, {
+            priority: opts.priority,
+            review: opts.review,
+            fileRefs: opts.fileRefs,
+          })
         }
         hint={
           isPaused

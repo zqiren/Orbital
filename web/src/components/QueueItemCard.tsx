@@ -123,6 +123,34 @@ function SourceChip({ source }: { source: QueueItem['source'] }) {
   );
 }
 
+/** Last path segment of a workspace-relative file ref. */
+function basename(ref: string): string {
+  const parts = ref.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1] || ref;
+}
+
+/**
+ * Attached filenames, so an item composed with files shows what it carries.
+ * Paths are backend data — rendered verbatim, never translated.
+ */
+function AttachedFiles({ item }: { item: QueueItem }) {
+  const refs = item.file_refs ?? [];
+  if (refs.length === 0) return null;
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 ${META}`}
+      data-testid="queue-item-file-refs"
+    >
+      <Paperclip className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+      {refs.map((ref) => (
+        <span key={ref} className="truncate max-w-[180px]" title={ref}>
+          {basename(ref)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TriggerOrigin({ item }: { item: QueueItem }) {
   const t = useT();
   if (!isTriggerItem(item)) return null;
@@ -220,6 +248,7 @@ function RunningCard({
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
       <p className="text-[13px] text-primary whitespace-pre-wrap break-words">{item.content}</p>
+      <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
       <InterruptedNote item={item} />
     </Shell>
@@ -251,6 +280,7 @@ function QueuedRow({
         {added && <span className={`shrink-0 font-mono tabular-nums ${META}`}>{added}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
+      <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
       <InterruptedNote item={item} />
     </Shell>
@@ -280,6 +310,7 @@ function BlockedRow({
       {latest && (latest.block_reason || latest.block_reason_code) && (
         <p className="text-[11px] text-warning">{blockReasonText(latest, t)}</p>
       )}
+      <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
       <InterruptedNote item={item} />
     </Shell>
@@ -315,6 +346,7 @@ function DoneRow({
         {when && <span className={`shrink-0 font-mono tabular-nums ${META}`}>{when}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>
+      <AttachedFiles item={item} />
       <TriggerOrigin item={item} />
     </Shell>
   );

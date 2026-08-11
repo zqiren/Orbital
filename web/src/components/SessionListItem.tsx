@@ -22,7 +22,7 @@
  * Active row: white bg + subtle shadow + font-weight 500.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { SessionListEntry } from '../types';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
 import { getStatusDisplay } from './sessionStatus';
@@ -31,7 +31,8 @@ import { useT } from '../i18n/useT';
 export interface SessionListItemProps {
   session: SessionListEntry;
   selected: boolean;
-  onSelect: () => void;
+  /** Select this session. Receives the sessionId (stable-callback friendly). */
+  onSelect: (sessionId: string) => void;
   /** Persist a renamed display label. Receives (sessionId, newName). */
   onRename?: (sessionId: string, name: string) => void | Promise<void>;
   /** Delete this session. Receives the sessionId. */
@@ -72,7 +73,7 @@ function displayLabel(session: SessionListEntry): string {
   return session.session_id;
 }
 
-export function SessionListItem({
+function SessionListItemBase({
   session,
   selected,
   onSelect,
@@ -160,13 +161,13 @@ export function SessionListItem({
       data-testid={`session-list-item-${session.session_id}`}
       onClick={() => {
         if (editing) return;
-        onSelect();
+        onSelect(session.session_id);
       }}
       onKeyDown={(e) => {
         if (editing) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onSelect();
+          onSelect(session.session_id);
         }
       }}
       onContextMenu={(e) => {
@@ -361,6 +362,11 @@ export function SessionListItem({
     </div>
   );
 }
+
+// Bug #48 (fix D): memoized so an agent.status-triggered session-list refresh
+// re-renders only rows whose props actually changed, not the whole list.
+// Effective only because SessionSidebar passes stable (useCallback) handlers.
+export const SessionListItem = memo(SessionListItemBase);
 
 /**
  * Mix a hex color toward gray (#A1A1AA) by `amount` (0–1).

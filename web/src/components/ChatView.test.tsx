@@ -27,6 +27,12 @@ import { createRoot, type Root } from 'react-dom/client';
 const apiCalls: string[] = [];
 const apiWithTotalCalls: string[] = [];
 
+// Bug #48 (fix C): per-request capture of the AbortSignal handed to
+// apiWithTotal, plus an optional gate that holds /chat responses open so
+// tests can assert in-flight behavior (cached paint, abort-on-switch).
+const apiWithTotalSignals: (AbortSignal | undefined)[] = [];
+let chatResponseGate: Promise<void> | null = null;
+
 // Configurable /chat responses keyed by whether the request is the initial
 // page (no offset) or a "Load earlier" page (offset present). Tests set these
 // to drive ChatView's transform-once history rendering (FE-1/FE-2/FE-3).
@@ -62,11 +68,13 @@ vi.mock('../config', () => ({
     // /chat?limit=1 (REST fallback) and anything else → empty list.
     return [];
   }),
-  apiWithTotal: vi.fn(async (path: string) => {
+  apiWithTotal: vi.fn(async (path: string, opts?: { signal?: AbortSignal }) => {
     apiWithTotalCalls.push(path);
+    apiWithTotalSignals.push(opts?.signal);
     // /chat?limit=... is the history fetch. An `offset=` param marks a
     // "Load earlier" page; otherwise it's the initial page.
     if (path.includes('/chat?limit=')) {
+      if (chatResponseGate) await chatResponseGate;
       if (path.includes('offset=')) return chatOlderResponse;
       return chatInitialResponse;
     }
@@ -195,7 +203,19 @@ vi.mock('../hooks/useQueue', () => ({
   }),
 }));
 
-import ChatView, { appendLiveReasoning } from './ChatView';
+// Composer attachments upload through the shared useAttachments hook. Stub the
+// network call only — humanSize stays real (AttachmentChip renders with it).
+let uploadFileMock: (...args: unknown[]) => Promise<{ path: string; size: number }> =
+  async () => ({ path: 'uploads/notes.txt', size: 4 });
+vi.mock('../lib/attachment-upload', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/attachment-upload')>();
+  return { ...actual, uploadFile: (...args: unknown[]) => uploadFileMock(...args) };
+});
+
+import ChatView, {
+  appendLiveReasoning,
+  __clearChatHistoryCacheForTests,
+} from './ChatView';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
 // Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
@@ -219,6 +239,9 @@ let root: Root;
 beforeEach(() => {
   apiCalls.length = 0;
   apiWithTotalCalls.length = 0;
+  apiWithTotalSignals.length = 0;
+  chatResponseGate = null;
+  __clearChatHistoryCacheForTests();
   injectCalls.length = 0;
   startAgentCalls.length = 0;
   cancelMessageCalls.length = 0;
@@ -961,6 +984,79 @@ describe('ChatView: fanout worker messages do not leak into main chat (spec 009 
     });
 
     expect(container.textContent ?? '').toContain('CLAUDE-CODE-REPLY visible text');
+  });
+});
+
+// The chat composer's attachment machinery lives in the shared
+// useAttachments hook (spec 053). These guard the ChatView side of that
+// extraction: the chips still render, send is still gated on in-flight
+// uploads, and the uploaded path still ships inline as an <attached_files>
+// block — chat's wire format, which the queue path deliberately does NOT use.
+describe('ChatView composer attachments', () => {
+  /** Pick a file through the hidden composer file input. */
+  function pickFile(name = 'notes.txt') {
+    const input = container.querySelector(
+      '[data-testid="attachment-file-input"]',
+    ) as HTMLInputElement;
+    const file = new File(['abcd'], name, { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  it('renders a chip and sends the uploaded path inline as an attachments block', async () => {
+    uploadFileMock = async () => ({ path: 'uploads/notes.txt', size: 4 });
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      pickFile();
+    });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="chip-strip"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="chip-check"]')).toBeTruthy();
+
+    await act(async () => {
+      typeInComposer('look at this');
+    });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId)
+    expect(injectCalls[0][4]).toEqual([
+      { path: 'uploads/notes.txt', mime: 'text/plain', size: 4 },
+    ]);
+    // Composer chips clear on send, and the optimistic bubble renders the
+    // attachment — which only happens if the client-built block went inline.
+    expect(container.querySelector('[data-testid="chip-strip"]')).toBeNull();
+    expect(container.textContent ?? '').toContain('notes.txt');
+  });
+
+  it('disables Send while an upload is in flight', async () => {
+    uploadFileMock = () => new Promise(() => {}); // never settles
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('waiting on the upload');
+    });
+    await act(async () => {
+      pickFile();
+    });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="chip-spinner"]')).toBeTruthy();
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    expect(injectCalls.length).toBe(0);
   });
 });
 
@@ -2587,5 +2683,89 @@ describe('ChatView: scroll-up during streaming (backlog #44)', () => {
     });
     expect(scrollEl.scrollTop).toBe(1000);
     expect(container.querySelector('[data-testid="jump-to-latest"]')).toBeNull();
+  });
+});
+
+describe('Bug #48: session-switch history cache + fetch abort', () => {
+  const S1_MSG = {
+    role: 'user',
+    content: 'cached-s1-message',
+    source: 'user',
+    timestamp: '2026-08-11T00:00:00.000Z',
+  };
+
+  function renderSession(sessionId: string) {
+    return act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus="idle"
+          mentionAgents={[]}
+          sessionId={sessionId}
+        />,
+      );
+    });
+  }
+
+  it('switch-back paints cached history immediately (no skeleton) and revalidates in the background', async () => {
+    chatInitialResponse = { data: [S1_MSG], total: 1 };
+    await renderSession('s1');
+    await flushEffects();
+    expect(container.textContent).toContain('cached-s1-message');
+
+    // Switch away to s2 (empty history) — s1's transcript leaves the DOM.
+    chatInitialResponse = { data: [], total: 0 };
+    await renderSession('s2');
+    await flushEffects();
+    expect(container.textContent).not.toContain('cached-s1-message');
+
+    // Hold the revalidate fetch open, then switch back to s1: the cached
+    // transcript must already be visible while the refetch is in flight
+    // (i.e. no loading skeleton replacing the pane).
+    let releaseChat!: () => void;
+    chatResponseGate = new Promise<void>((r) => {
+      releaseChat = r;
+    });
+    chatInitialResponse = { data: [S1_MSG], total: 1 };
+    await renderSession('s1');
+    expect(container.textContent).toContain('cached-s1-message');
+
+    // Release the gate — the background revalidate for s1 must have fired
+    // (initial load + revalidate = exactly two s1 history fetches).
+    releaseChat();
+    chatResponseGate = null;
+    await flushEffects();
+    const s1Fetches = apiWithTotalCalls.filter(
+      (p) => p.includes('/chat?limit=') && p.includes('session_id=s1'),
+    );
+    expect(s1Fetches.length).toBe(2);
+    expect(container.textContent).toContain('cached-s1-message');
+  });
+
+  it('switching away aborts the in-flight history fetch', async () => {
+    let releaseChat!: () => void;
+    chatResponseGate = new Promise<void>((r) => {
+      releaseChat = r;
+    });
+    chatInitialResponse = { data: [S1_MSG], total: 1 };
+    await renderSession('s1');
+
+    const s1Index = apiWithTotalCalls.findIndex(
+      (p) => p.includes('/chat?limit=') && p.includes('session_id=s1'),
+    );
+    expect(s1Index).toBeGreaterThanOrEqual(0);
+    const s1Signal = apiWithTotalSignals[s1Index];
+    expect(s1Signal).toBeDefined();
+    expect(s1Signal!.aborted).toBe(false);
+
+    // Switching sessions must abort the superseded request, not merely
+    // ignore its result.
+    await renderSession('s2');
+    expect(s1Signal!.aborted).toBe(true);
+
+    releaseChat();
+    chatResponseGate = null;
+    await flushEffects();
   });
 });

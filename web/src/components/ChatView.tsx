@@ -4,7 +4,7 @@
 
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown } from 'lucide-react';
-import { api, apiWithTotal, BASE_URL, isRelayMode } from '../config';
+import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
 import { useQueue } from '../hooks/useQueue';
@@ -21,35 +21,13 @@ import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
 import { parseProviderError, providerErrorKey } from '../utils/providerError';
 import AttachmentChip from './AttachmentChip';
-import { uploadFile } from '../lib/attachment-upload';
+import { useAttachments } from '../hooks/useAttachments';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
 import { budgetTimelineText } from '../budget/timelineText';
-
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_ATTACHMENTS = 10;
-
-interface PendingAttachment {
-  id: string;
-  file: File;
-  filename: string;
-  mime: string;
-  size: number;
-  status: 'pending' | 'uploading' | 'done' | 'error';
-  uploadedPath?: string;
-  thumbnailUrl?: string;
-  errorMessage?: string;
-}
-
-function genId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
 type CapsuleChild = AgentRunItem['items'][number];
@@ -334,6 +312,24 @@ function markLatestLiveCallResultReceived(
 // markdown bubbles, well within the already-reachable full-session ceiling.
 const CHAT_PAGE_SIZE = 100;
 const REST_FALLBACK_DELAY_MS = 500;
+
+// Bug #48 (fix C): per-session chat-history cache, mirroring useSessions'
+// module-level `sessionsCache`. Switching back to a recently-viewed session
+// paints its last-known transcript immediately (no skeleton flash) while a
+// background refetch revalidates. Never authoritative — every hit still
+// refetches; the cache only removes the blank-first-paint. Keyed
+// `${projectId}:${sessionId}` (session ids are only unique per project).
+interface ChatHistoryCacheEntry {
+  messages: ChatMessageType[];
+  total: number;
+  loadedOffset: number;
+}
+const chatHistoryCache = new Map<string, ChatHistoryCacheEntry>();
+
+/** Test-only: the module-level cache would otherwise leak between mounts. */
+export function __clearChatHistoryCacheForTests() {
+  chatHistoryCache.clear();
+}
 const SLASH_COMMANDS = [
   { name: '/new', description: 'Start a fresh session' },
 ];
@@ -551,7 +547,20 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // Workspace CLAUDE.md interference banner: latest unhandled warning
   // for this project (cleared on dismiss).
   const [claudemdWarning, setClaudemdWarning] = useState<ClaudemdWarning | null>(null);
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  // Composer attachments live in a shared hook (the queue composer stages
+  // files the same way). Cap-exceeded copy lands in the inject-error banner.
+  const {
+    attachments,
+    anyUploading,
+    anyDone,
+    allError,
+    removeAttachment,
+    retryAttachment,
+    clearAttachments,
+    handleFilePickerChange,
+    handlePaste,
+    handleDrop: dropAttachments,
+  } = useAttachments(projectId, { onError: setInjectError });
   const [dragCounter, setDragCounter] = useState(0);
   // Stop-button optimistic state. Set true synchronously on click so the
   // input row immediately shows a loading affordance; cleared when
@@ -920,7 +929,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
    * appended to the viewed conversation (see viewingHolder above). Fetched on
    * mount, on agentStatus/sessionId change, and via the existing 5s poll.
    */
+  const holderAbortRef = useRef<AbortController | null>(null);
   const fetchHolder = useCallback(() => {
+    // Bug #48 (fix C): rapid session switching re-fires this on every switch.
+    // Abort the superseded request so responses can't pile up or resolve out
+    // of order (a slow older response would overwrite a newer holder value).
+    holderAbortRef.current?.abort();
+    const controller = new AbortController();
+    holderAbortRef.current = controller;
     const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
     api<{
       project_id: string;
@@ -931,7 +947,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         details?: string | null;
         error_code?: string;
       } | null;
-    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/run-status${qs}`)
+    }>(`/api/v2/agents/${encodeURIComponent(projectId)}/run-status${qs}`, {
+      signal: controller.signal,
+    })
       .then((result) => {
         setHolderSessionId(result.current_holder_session_id ?? null);
         // Hydrate a classified error after reload (the agent.status broadcast
@@ -1119,6 +1137,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // resolved) — the empty state renders until one arrives.
   useEffect(() => {
     let cancelled = false;
+    // Bug #48 (fix C): abort the in-flight history fetch when the user
+    // switches away — the `cancelled` boolean only suppressed the setState,
+    // leaving discarded requests executing against the backend.
+    const controller = new AbortController();
 
     // Reset the "was running while viewed" latch on every session (re)load so a
     // stale latch from a previous session can't trigger a full-history
@@ -1140,17 +1162,39 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
 
     const sessionParam = `&session_id=${encodeURIComponent(sessionId)}`;
+    const cacheKey = `${projectId}:${sessionId}`;
 
     async function loadData() {
-      setLoading(true);
+      // Bug #48 (fix C): on a cache hit, paint the last-known transcript
+      // immediately and revalidate in the background — no skeleton flash on
+      // switch-back. On a miss, keep the original loading gate.
+      const cached = chatHistoryCache.get(cacheKey);
+      if (cached) {
+        setRawMessages(cached.messages);
+        if (cached.messages.length === 0) setItems([]);
+        setTotalMessages(cached.total);
+        setLoadedOffset(cached.loadedOffset);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       // Clear prior session's live state so it never bleeds into the new one.
       setStream(null);
       setApprovals(new Map());
       try {
+        // Refetch enough to cover any "Load earlier" pages the user had
+        // already opened (same idiom as the catch-up refetch above).
+        const targetLimit = cached
+          ? Math.max(cached.loadedOffset, CHAT_PAGE_SIZE)
+          : CHAT_PAGE_SIZE;
         const chatResult = await apiWithTotal<ChatMessageType[]>(
-          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${CHAT_PAGE_SIZE}${sessionParam}`,
+          `/api/v2/agents/${encodeURIComponent(projectId)}/chat?limit=${targetLimit}${sessionParam}`,
+          { signal: controller.signal },
         ).catch((err) => {
-          console.error('[ChatView] Failed to load chat history:', err);
+          // Abort = the user switched away; not a failure worth logging.
+          if ((err as Error)?.name !== 'AbortError') {
+            console.error('[ChatView] Failed to load chat history:', err);
+          }
           return null;
         });
         if (cancelled) return;
@@ -1164,8 +1208,15 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           // here explicitly. Non-empty history is seeded by the effect.
           if (messages.length === 0) setItems([]);
           setTotalMessages(total);
-          setLoadedOffset(CHAT_PAGE_SIZE);
-        } else {
+          setLoadedOffset(targetLimit);
+          chatHistoryCache.set(cacheKey, {
+            messages,
+            total,
+            loadedOffset: targetLimit,
+          });
+        } else if (!cached) {
+          // Fetch failed with nothing cached — show the empty state. On a
+          // cache hit, keep the stale transcript instead of blanking it.
           setRawMessages([]);
           setItems([]);
         }
@@ -1183,6 +1234,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     loadData();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [projectId, sessionId, project.workspace, reconcilePending]);
 
@@ -1217,6 +1269,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       pendingPrependPrevHeightRef.current = prevHeight;
       setRawMessages(prev => [...messages, ...prev]);
       setLoadedOffset(prev => prev + CHAT_PAGE_SIZE);
+      // Bug #48 (fix C): remember the deeper pagination so a switch-back
+      // revalidates the full loaded range, not just the first page.
+      const cacheKey = `${projectId}:${sessionId}`;
+      const entry = chatHistoryCache.get(cacheKey);
+      if (entry) {
+        chatHistoryCache.set(cacheKey, {
+          ...entry,
+          loadedOffset: entry.loadedOffset + CHAT_PAGE_SIZE,
+        });
+      }
     } catch (err) {
       console.error('[ChatView] Failed to load older messages:', err);
     } finally {
@@ -2239,158 +2301,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     setTimeout(() => handleSend(), 0);
   }
 
-  // ---- Attachment helpers ------------------------------------------------
-
-  const uploadAttachment = useCallback(
-    async (att: PendingAttachment) => {
-      setAttachments((prev) =>
-        prev.map((a) =>
-          a.id === att.id ? { ...a, status: 'uploading' as const } : a,
-        ),
-      );
-      try {
-        const baseUrl = isRelayMode ? window.location.origin : BASE_URL;
-        const { path, size } = await uploadFile({
-          projectId,
-          file: att.file,
-          baseUrl,
-          isRelayMode,
-        });
-        setAttachments((prev) =>
-          prev.map((a) =>
-            a.id === att.id
-              ? { ...a, status: 'done' as const, uploadedPath: path, size }
-              : a,
-          ),
-        );
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : t('chat.uploadError');
-        setAttachments((prev) =>
-          prev.map((a) =>
-            a.id === att.id
-              ? { ...a, status: 'error' as const, errorMessage: message }
-              : a,
-          ),
-        );
-      }
-    },
-    [projectId],
-  );
-
-  const addAttachments = useCallback(
-    (files: File[]) => {
-      if (files.length === 0) return;
-      setAttachments((prev) => {
-        const room = MAX_ATTACHMENTS - prev.length;
-        if (room <= 0) {
-          setInjectError(t('chat.maxAttachments', { n: MAX_ATTACHMENTS }));
-          return prev;
-        }
-        const usable = files.slice(0, room);
-        if (files.length > usable.length) {
-          setInjectError(t('chat.onlyNAllowed', { n: MAX_ATTACHMENTS }));
-        }
-        const additions: PendingAttachment[] = usable.map((file) => {
-          const id = genId();
-          const isImage = file.type.startsWith('image/');
-          const thumbnailUrl = isImage ? URL.createObjectURL(file) : undefined;
-          const tooBig = file.size > MAX_ATTACHMENT_BYTES;
-          const att: PendingAttachment = {
-            id,
-            file,
-            filename: file.name,
-            mime: file.type || 'application/octet-stream',
-            size: file.size,
-            status: tooBig ? 'error' : 'pending',
-            thumbnailUrl,
-            errorMessage: tooBig
-              ? t('chat.fileTooLarge')
-              : undefined,
-          };
-          return att;
-        });
-
-        // Kick off uploads for the valid ones on the next tick so React has
-        // committed the new chip state.
-        setTimeout(() => {
-          for (const a of additions) {
-            if (a.status === 'pending') {
-              uploadAttachment(a);
-            }
-          }
-        }, 0);
-
-        return [...prev, ...additions];
-      });
-    },
-    [uploadAttachment],
-  );
-
-  const removeAttachment = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.id === id);
-      if (target?.thumbnailUrl) {
-        try {
-          URL.revokeObjectURL(target.thumbnailUrl);
-        } catch {
-          // ignore
-        }
-      }
-      return prev.filter((a) => a.id !== id);
-    });
-  }, []);
-
-  const retryAttachment = useCallback(
-    (id: string) => {
-      setAttachments((prev) => {
-        const target = prev.find((a) => a.id === id);
-        if (!target) return prev;
-        const reset: PendingAttachment = {
-          ...target,
-          status: 'pending',
-          errorMessage: undefined,
-        };
-        setTimeout(() => uploadAttachment(reset), 0);
-        return prev.map((a) => (a.id === id ? reset : a));
-      });
-    },
-    [uploadAttachment],
-  );
-
-  const clearAttachments = useCallback(() => {
-    setAttachments((prev) => {
-      for (const a of prev) {
-        if (a.thumbnailUrl) {
-          try {
-            URL.revokeObjectURL(a.thumbnailUrl);
-          } catch {
-            // ignore
-          }
-        }
-      }
-      return [];
-    });
-  }, []);
-
-  function handleFilePickerChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length > 0) addAttachments(files);
-    e.target.value = '';
-  }
-
-  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const items = Array.from(e.clipboardData?.items ?? []);
-    const files = items
-      .filter((it) => it.kind === 'file')
-      .map((it) => it.getAsFile())
-      .filter((f): f is File => f !== null);
-    if (files.length > 0) {
-      e.preventDefault();
-      addAttachments(files);
-    }
-  }
-
   function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
     if (!e.dataTransfer?.types?.includes('Files')) return;
     e.preventDefault();
@@ -2408,16 +2318,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
     setDragCounter(0);
-    const files = Array.from(e.dataTransfer?.files ?? []);
-    if (files.length > 0) addAttachments(files);
+    dropAttachments(e);
   }
 
-  const anyUploading = attachments.some((a) => a.status === 'uploading');
-  const anyDone = attachments.some((a) => a.status === 'done');
-  const allError =
-    attachments.length > 0 && attachments.every((a) => a.status === 'error');
   const hasText = inputText.trim().length > 0;
   // Send is enabled when there is text OR a done chip, AND no chip is uploading.
   const canSend =
