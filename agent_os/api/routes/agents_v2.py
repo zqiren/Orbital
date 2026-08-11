@@ -2652,9 +2652,20 @@ async def test_connection(req: TestConnectionRequest):
     from agent_os.agent.providers.openai_compat import LLMProvider
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
 
+    # An empty api_key with a saved global key means "test the stored key":
+    # the frontend clears the field once a key is persisted (paste-and-save,
+    # or the TokenDance one-click flow), so fall back to the credential store
+    # rather than constructing a keyless client — the raw SDK otherwise
+    # surfaces "Missing credentials … set OPENAI_API_KEY". Custom/local
+    # servers that genuinely need no key are unaffected: with no stored
+    # global key the fallback resolves to "" exactly as before.
+    api_key = req.api_key
+    if not api_key.strip() and _credential_store is not None:
+        api_key = _credential_store.get_api_key() or ""
+
     try:
         provider = LLMProvider(
-            req.model, req.api_key, base_url, sdk=sdk,
+            req.model, api_key, base_url, sdk=sdk,
             extra_headers=provider_info.get("extra_headers") if provider_info else None,
         )
         result = await provider.complete(
