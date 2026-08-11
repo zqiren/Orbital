@@ -1475,7 +1475,10 @@ async def list_project_sessions(project_id: str):
     if _project_store is not None:
         if _project_store.get_project(project_id) is None:
             raise HTTPException(status_code=404, detail="Project not found")
-    sessions = _agent_manager.list_sessions(project_id)
+    # Offloaded: list_sessions() scans + parses every on-disk session JSONL
+    # that has no live handle, which must not run on the event loop (this
+    # endpoint is refetched on every agent.status WS event).
+    sessions = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
     return {"project_id": project_id, "sessions": sessions}
 
 
@@ -2356,9 +2359,10 @@ async def chat_history(
         # stopped/popped sessions the handle is gone but the JSONL still
         # exists on disk — fall back to scanning the JSONL content for a
         # matching session_id field (offloaded to a thread; it does blocking
-        # disk I/O and must not run on the event loop).
+        # disk I/O and must not run on the event loop).  list_sessions itself
+        # scans + parses the session directory, so it is offloaded too.
         session_uuid: str | None = None
-        for entry in _agent_manager.list_sessions(project_id):
+        for entry in await asyncio.to_thread(_agent_manager.list_sessions, project_id):
             if entry["session_id"] == session_id:
                 session_uuid = entry["session_uuid"]
                 break
