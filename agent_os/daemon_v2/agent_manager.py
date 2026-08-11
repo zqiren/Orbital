@@ -1516,7 +1516,19 @@ class AgentManager:
                        or cred_key
                        or (global_settings.llm.api_key if global_settings else None)
                        or "")
-            base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+            # Same invariant, inherit direction: a project that inherits the
+            # global model/provider AND the global key must inherit the global
+            # endpoint too. Project rows snapshot base_url verbatim at
+            # creation, so a project created under an earlier global provider
+            # carries a stale endpoint that would pair the CURRENT global key
+            # with the OLD provider's URL (observed: scratch project with an
+            # api.openai.com snapshot sending a TokenDance key to OpenAI →
+            # 401). A project with its OWN key keeps its own base_url — that
+            # pairing is deliberate (BYOK against a specific endpoint).
+            if project.get("api_key"):
+                base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+            else:
+                base_url = (global_settings.llm.base_url if global_settings else None) or project.get("base_url")
 
         return AgentConfig(
             workspace=project["workspace"],
