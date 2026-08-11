@@ -187,14 +187,17 @@ function SessionListItemBase({
         selected ? 'font-medium' : 'hover:bg-card-hover',
       ].join(' ')}
     >
-      {/* Status glyph */}
+      {/* Status glyph — only differentiating states (running/waiting/blocked/
+          starting) light up; idle rows stay clean. The fixed-width slot is
+          always reserved so names align across mixed-state lists. */}
       <span
         aria-hidden="true"
         data-testid="session-status-glyph"
         data-origin={isQueue ? 'queue' : 'manual'}
+        className="w-[14px] text-center"
         style={{ color: dotColor, fontSize: '13px', lineHeight: 1, flexShrink: 0 }}
       >
-        {display.glyph}
+        {display.resting ? '' : display.glyph}
       </span>
 
       {/* Session name + time (or inline rename input) */}

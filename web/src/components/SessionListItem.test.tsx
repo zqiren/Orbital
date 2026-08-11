@@ -71,7 +71,7 @@ describe('SessionListItem — status glyph rendering', () => {
     expect(glyph).toHaveStyle({ color: '#F59E0B' });
   });
 
-  it('idle → glyph ⏸ with muted color', () => {
+  it('idle → no glyph (the slot stays empty so rows read clean)', () => {
     render(
       <SessionListItem
         session={makeSession({ session_id: 'sess-idle', status: 'idle' })}
@@ -80,8 +80,7 @@ describe('SessionListItem — status glyph rendering', () => {
       />,
     );
     const glyph = screen.getByTestId('session-status-glyph');
-    expect(glyph.textContent).toBe('⏸');
-    expect(glyph).toHaveStyle({ color: '#A1A1AA' });
+    expect(glyph.textContent).toBe('');
   });
 });
 

@@ -17,7 +17,7 @@ describe('MessageAvatar', () => {
     expect(box?.className).toContain('text-white');
     expect(box?.className).toContain('w-[26px]');
     expect(box?.className).toContain('h-[26px]');
-    expect(box?.className).toContain('rounded-sm');
+    expect(box?.className).toContain('rounded-md');
   });
 
   it('user variant falls back to "ME" when no label is given', () => {
@@ -25,35 +25,36 @@ describe('MessageAvatar', () => {
     expect(container.querySelector('[data-testid="message-avatar"]')?.textContent).toBe('ME');
   });
 
-  it('agent variant with no handle renders the Orbital logo (ignores label)', () => {
+  it('agent variant with no handle renders the Orbital logo (ignores label) in a bordered box', () => {
     const { container } = render(<MessageAvatar variant="agent" label="XX" />);
     const box = container.querySelector('[data-testid="message-avatar"]');
     expect(box?.getAttribute('data-variant')).toBe('agent');
-    expect(box?.tagName).toBe('IMG');
-    expect(box?.getAttribute('src')).toBe('/icon-192.png');
+    expect(box?.className).toContain('rounded-md');
+    const img = box?.querySelector('img');
+    expect(img?.getAttribute('src')).toBe('/icon-192.png');
     expect(box?.textContent).toBe('');
   });
 
   it('agent variant with a known handle renders that vendor mark', () => {
     const { container } = render(<MessageAvatar variant="agent" agentHandle="claude-code" />);
     const box = container.querySelector('[data-testid="message-avatar"]');
-    expect(box?.getAttribute('src')).toBe('/agents/claude-code.svg');
+    expect(box?.querySelector('img')?.getAttribute('src')).toBe('/agents/claude-code.svg');
     expect(box?.getAttribute('data-agent-handle')).toBe('claude-code');
   });
 
   it('agent variant with an unknown handle renders the monogram badge', () => {
     const { container } = render(<MessageAvatar variant="agent" agentHandle="researcher" />);
     const box = container.querySelector('[data-testid="message-avatar"]');
-    expect(box?.tagName).toBe('DIV');
+    expect(box?.querySelector('img')).toBeNull();
     expect(box?.textContent).toBe('RE');
   });
 
   it('falls back to the monogram badge when the image fails to load', () => {
     const { container } = render(<MessageAvatar variant="agent" agentHandle="claude-code" />);
-    fireEvent.error(container.querySelector('[data-testid="message-avatar"]')!);
+    fireEvent.error(container.querySelector('[data-testid="message-avatar"] img')!);
 
     const box = container.querySelector('[data-testid="message-avatar"]');
-    expect(box?.tagName).toBe('DIV');
+    expect(box?.querySelector('img')).toBeNull();
     expect(box?.textContent).toBe('CC');
   });
 });

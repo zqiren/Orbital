@@ -23,6 +23,15 @@ interface MessageAvatarProps {
 }
 
 /**
+ * Every avatar shares one container: 26×26, rounded-md, flex-centered. The
+ * variants differ only in fill — solid primary with initials (user), a white
+ * bordered box with the vendor mark inset (agent), or a brand-coloured
+ * monogram badge (unknown handle / failed image) — so the three read as one
+ * family rather than three visual systems.
+ */
+const AVATAR_BOX = 'shrink-0 w-[26px] h-[26px] rounded-md flex items-center justify-center';
+
+/**
  * The 26×26 avatar box that leads each message row in the flat avatar-log
  * layout (Design §5). User avatars are a solid primary square with initials;
  * every agent — Orbital itself included — shows its own mark, falling back to a
@@ -38,7 +47,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
       <div
         data-testid="message-avatar"
         data-variant="user"
-        className="shrink-0 w-[26px] h-[26px] rounded-sm flex items-center justify-center font-mono text-2xs font-semibold bg-primary text-white"
+        className={`${AVATAR_BOX} text-2xs font-semibold bg-primary text-white`}
       >
         {label ?? t('chat.avatar.me')}
       </div>
@@ -50,15 +59,19 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
 
   if (icon.src && !imageFailed) {
     return (
-      <img
-        src={icon.src}
-        alt={agentHandle ?? 'Orbital'}
-        onError={() => setImageFailed(true)}
+      <div
         data-testid="message-avatar"
         data-variant="agent"
         data-agent-handle={agentHandle}
-        className="shrink-0 w-[26px] h-[26px] rounded-sm object-contain"
-      />
+        className={`${AVATAR_BOX} bg-card border border-border/60 p-[3px] overflow-hidden`}
+      >
+        <img
+          src={icon.src}
+          alt={agentHandle ?? 'Orbital'}
+          onError={() => setImageFailed(true)}
+          className="w-full h-full object-contain"
+        />
+      </div>
     );
   }
 
@@ -67,7 +80,7 @@ export default function MessageAvatar({ variant, label, agentHandle }: MessageAv
       data-testid="message-avatar"
       data-variant="agent"
       data-agent-handle={agentHandle}
-      className="shrink-0 w-[26px] h-[26px] rounded-sm flex items-center justify-center font-mono text-3xs font-bold text-white"
+      className={`${AVATAR_BOX} text-3xs font-semibold text-white`}
       style={{ backgroundColor: icon.color }}
     >
       {icon.monogram}

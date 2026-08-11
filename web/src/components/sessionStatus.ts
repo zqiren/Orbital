@@ -21,6 +21,13 @@ export interface StatusDisplay {
   color: string;
   /** Human-readable label (used for aria and text). */
   label: string;
+  /**
+   * True for the resting state (idle, and the unknown-status fallback).
+   * List rows render no glyph for resting sessions — a repeated ⏸ on every
+   * idle row conveys nothing and reads as noise; only differentiating states
+   * (running / waiting / blocked / starting / error) light up.
+   */
+  resting?: boolean;
 }
 
 /**
@@ -38,12 +45,12 @@ const STATUS_DISPLAY_MAP: Record<AgentRunStatus, StatusDisplay> = {
   waiting: { glyph: '⟳', color: '#6366F1', label: 'Waiting' },
   // pending_approval is rendered as "Blocked" in ALL UI copy per spec.
   pending_approval: { glyph: '⚠', color: '#F59E0B', label: 'Blocked' },
-  idle: { glyph: '⏸', color: '#A1A1AA', label: 'Idle' },
+  idle: { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true },
   new_session: { glyph: '◐', color: '#6366F1', label: 'Starting' },
   error: { glyph: '⚠', color: '#F59E0B', label: 'Error' },
 };
 
-const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 'Idle' };
+const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true };
 
 export function getStatusDisplay(status: AgentRunStatus): StatusDisplay {
   return STATUS_DISPLAY_MAP[status] ?? FALLBACK_STATUS;
