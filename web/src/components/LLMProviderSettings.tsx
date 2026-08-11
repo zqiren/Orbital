@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ProviderRegistry, ProviderInfo } from '../types';
 import { api } from '../config';
@@ -93,6 +93,22 @@ export function regionDefaultForProvider(
   info: Pick<ProviderInfo, 'china_base_url'> | undefined,
 ): 'global' | 'china' {
   return info?.china_base_url ? 'china' : 'global';
+}
+
+/** Collapsed-by-default wrapper for the long explanatory hint paragraphs
+ * (bug #49). Native <details> keeps it state-free — this file already carries
+ * three useState toggles, and the disclosure needs no programmatic control.
+ * Short safety captions (china-only / no-China-endpoint) stay outside it. */
+function HintDetails({ className = '', children }: { className?: string; children: ReactNode }) {
+  const t = useT();
+  return (
+    <details className={`text-xs ${className}`}>
+      <summary className="cursor-pointer text-secondary hover:text-primary">
+        {t('llm.hints.details')}
+      </summary>
+      <div className="mt-1">{children}</div>
+    </details>
+  );
 }
 
 export default function LLMProviderSettings({
@@ -647,9 +663,11 @@ export default function LLMProviderSettings({
   const globalHeader = mode === 'global' ? (
     <div className="mb-4">
       <h2 className="text-sm font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
-      <p className="text-xs text-secondary">
-        {t('llm.global.subhead')}
-      </p>
+      <HintDetails>
+        <p className="text-xs text-secondary">
+          {t('llm.global.subhead')}
+        </p>
+      </HintDetails>
     </div>
   ) : null;
 
@@ -657,9 +675,11 @@ export default function LLMProviderSettings({
   const fieldsJSX = (
     <div className="space-y-5">
       {mode === 'project' && (
-        <p className="text-xs text-secondary -mt-2">
-          {t('llm.project.overrideHint')}
-        </p>
+        <HintDetails className="-mt-2">
+          <p className="text-xs text-secondary">
+            {t('llm.project.overrideHint')}
+          </p>
+        </HintDetails>
       )}
 
       {/* Provider */}
@@ -706,7 +726,9 @@ export default function LLMProviderSettings({
           </select>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
-          <p className="text-xs text-secondary mt-1">{providers[provider].notes}</p>
+          <HintDetails className="mt-1">
+            <p className="text-xs text-secondary">{providers[provider].notes}</p>
+          </HintDetails>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.no_china_endpoint && (
           <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.noChinaEndpoint')}</p>
@@ -751,7 +773,7 @@ export default function LLMProviderSettings({
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.console_url && (
-          <div className="mb-1.5">
+          <HintDetails className="mb-1.5">
             <a
               href={providers[provider].console_url!}
               target="_blank"
@@ -761,7 +783,7 @@ export default function LLMProviderSettings({
               {t('llm.apiKey.getKey')}
             </a>
             <p className="text-xs text-secondary/70 mt-0.5">{t('llm.apiKey.howTo')}</p>
-          </div>
+          </HintDetails>
         )}
         <input
           type="password"
@@ -858,20 +880,14 @@ export default function LLMProviderSettings({
                 </li>
               </ul>
             )}
-            {modelSource === 'api' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.api')}
-              </p>
-            )}
-            {modelSource === 'suggested' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.suggested')}
-              </p>
-            )}
-            {modelSource === 'freetext' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.freetext')}
-              </p>
+            {modelSource !== 'none' && (
+              <HintDetails className="mt-1">
+                <p className="text-xs text-secondary">
+                  {modelSource === 'api' && t('llm.model.source.api')}
+                  {modelSource === 'suggested' && t('llm.model.source.suggested')}
+                  {modelSource === 'freetext' && t('llm.model.source.freetext')}
+                </p>
+              </HintDetails>
             )}
           </div>
         )}

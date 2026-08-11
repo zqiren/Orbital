@@ -421,6 +421,7 @@ export const STRINGS = {
   "llm.field.sdk": { en: "SDK", zh: "SDK" },
   "llm.global.heading": { en: "Default LLM Settings", zh: "默认大模型设置" },
   "llm.global.subhead": { en: "Used by all projects unless overridden in project settings.", zh: "除非在项目空间中额外配置，否则所有项目空间都将使用这些设置。" },
+  "llm.hints.details": { en: "Details", zh: "详情" },
   "llm.loading": { en: "Loading LLM settings...", zh: "正在加载大模型配置…" },
   "llm.model.enterCustom": { en: "Enter custom model name…", zh: "输入自定义模型名称…" },
   "llm.model.fetching": { en: "Fetching available models...", zh: "正在获取可用模型…" },
