@@ -427,6 +427,10 @@ export const STRINGS = {
   "llm.tokendance.signin.hint": { en: "Complete the sign-in and confirmation in the browser window that just opened.", zh: "请在刚打开的浏览器窗口中完成登录和授权确认。" },
   "llm.tokendance.signin.success": { en: "API key created and saved.", zh: "API Key 已创建并保存。" },
   "llm.tokendance.signin.waiting": { en: "Waiting for browser sign-in…", zh: "等待浏览器授权…" },
+  "llm.tokendance.sponsor": { en: "Powered by Watcha (观猹)", zh: "由观猹 (Watcha) 提供支持" },
+  "llm.tokendance.summary.title": { en: "TokenDance is ready", zh: "TokenDance 已连接就绪" },
+  "llm.tokendance.summary.body": { en: "Signed in — default model {model} is configured, so you're ready to go.", zh: "已登录，默认模型 {model} 已配置，开箱即用。" },
+  "llm.tokendance.summary.change": { en: "Adjust settings", zh: "修改设置" },
   "llm.loading": { en: "Loading LLM settings...", zh: "正在加载大模型配置…" },
   "llm.model.enterCustom": { en: "Enter custom model name…", zh: "输入自定义模型名称…" },
   "llm.model.fetching": { en: "Fetching available models...", zh: "正在获取可用模型…" },
@@ -891,6 +895,7 @@ export const STRINGS = {
   "wizard.next": { en: "Next →", zh: "下一步 →" },
   "wizard.openBrowser": { en: "Open Browser", zh: "打开浏览器" },
   "wizard.skip": { en: "Skip", zh: "跳过" },
+  "wizard.sponsor": { en: "Orbital is sponsored by Watcha (观猹)", zh: "Orbital 由观猹 (Watcha) 赞助支持" },
   "wizard.welcome": { en: "Welcome to Orbital", zh: "欢迎使用 Orbital" },
 
   // workspace — two-zone sidebar Workspace zone + calendar surface (spec 011 §0.5)

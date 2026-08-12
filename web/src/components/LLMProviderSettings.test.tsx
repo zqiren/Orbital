@@ -82,6 +82,8 @@ const REGISTRY: ProviderRegistry = {
     base_url: 'https://tokendance.space/gateway/v1',
     console_url: 'https://tokendance.space/keys',
     china_only: true,
+    default_model: 'deepseek-v4-flash',
+    models: { 'deepseek-v4-flash': { display_name: 'DeepSeek V4 Flash' } },
   }),
   // Production registry shape: GET /api/v2/providers serves a literal 'custom'
   // entry alongside the CUSTOM_PROVIDER_KEY sentinel the picker adds itself.
@@ -594,6 +596,20 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
       if (path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST') {
         return signinImpl();
       }
+      if (path === '/api/v2/settings' && opts?.method === 'PUT') {
+        // Echo the persisted values back like the real settings route.
+        const body = JSON.parse(String(opts.body));
+        return {
+          llm: {
+            api_key_set: true,
+            api_key_masked: 'sk-t...9876',
+            base_url: body.llm_base_url ?? null,
+            model: body.llm_model ?? null,
+            sdk: body.llm_sdk ?? 'openai',
+            provider: body.llm_provider ?? '',
+          },
+        };
+      }
       if (path === '/api/v2/settings') {
         return { llm: { api_key_set: false, api_key_masked: '', model: null, sdk: 'openai', ...TD_SETTINGS } };
       }
@@ -601,6 +617,13 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
       if (path === '/api/v2/settings/api-key/status') return { configured: false, source: 'none' };
       return {};
     });
+  }
+
+  function settingsPutBody(): Record<string, unknown> | null {
+    const call = apiMock.mock.calls.find(
+      ([path, opts]) => path === '/api/v2/settings' && (opts as RequestInit)?.method === 'PUT',
+    );
+    return call ? JSON.parse(String((call[1] as RequestInit).body)) : null;
   }
 
   it('renders the signin button for tokendance in global mode only', async () => {
@@ -637,7 +660,7 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     expect(screen.queryByTestId('tokendance-signin')).toBeNull();
   });
 
-  it('click → POST, busy state disables the button, success shows the masked key', async () => {
+  it('click → POST, busy state disables the button, success persists defaults and retires the button', async () => {
     let release!: (v: unknown) => void;
     mockApiWithSignin(() => new Promise((res) => { release = res; }));
     render(<LLMProviderSettings mode="global" />);
@@ -654,9 +677,83 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
 
     release({ api_key_set: true, api_key_masked: 'sk-t...9876' });
     await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
-    expect((btn as HTMLButtonElement).disabled).toBe(false);
-    // The stored-key line reflects the mask without a page reload.
+    // One tap lands in a usable configuration: provider + the registry's
+    // default model persisted in a single settings write.
+    expect(settingsPutBody()).toMatchObject({
+      llm_provider: 'tokendance',
+      llm_model: 'deepseek-v4-flash',
+      llm_base_url: 'https://tokendance.space/gateway/v1',
+    });
+    // The saved TokenDance key retires the one-click button; the stored-key
+    // line reflects the mask without a page reload.
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
     expect(screen.getByText(/sk-t\.\.\.9876/)).toBeTruthy();
+  });
+
+  it('an explicit model choice survives signin — no default clobber', async () => {
+    mockApiWithSignin(async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }));
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+    // Fixture catalog has no suggested_models → free-text model input.
+    fireEvent.change(screen.getByPlaceholderText(/Type model name/), {
+      target: { value: 'glm-5.2' },
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    expect(settingsPutBody()).toMatchObject({ llm_model: 'glm-5.2' });
+  });
+
+  it('button is absent when the saved provider is tokendance with a key set', async () => {
+    mockApi({ settings: { ...TD_SETTINGS, api_key_set: true, api_key_masked: 'sk-t...1111' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('tokendance');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it("still offers signin when another provider's key occupies the global slot", async () => {
+    mockApi({
+      settings: {
+        provider: 'deepseek',
+        base_url: 'https://api.deepseek.com',
+        api_key_set: true,
+        api_key_masked: 'sk-d...2222',
+      },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getAllByRole('combobox')[0]).toBeTruthy());
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'tokendance' } });
+    await waitFor(() => expect(screen.getByTestId('tokendance-signin')).toBeTruthy());
+  });
+
+  it('shows the Watcha sponsor caption under the signin button', async () => {
+    mockApi({ settings: TD_SETTINGS });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByTestId('tokendance-sponsor')).toBeTruthy());
+  });
+
+  it('cards mount folds into the ready-to-use summary after signin; Adjust reopens the form', async () => {
+    mockApiWithSignin(async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }));
+    render(<LLMProviderSettings mode="global" providerPicker="cards" hideSaveButton />);
+    fireEvent.click(await screen.findByTestId('tokendance-signin'));
+
+    const summary = await screen.findByTestId('tokendance-signin-summary');
+    // Shows the working default by its catalog display name + the masked key.
+    expect(summary.textContent).toContain('DeepSeek V4 Flash');
+    expect(summary.textContent).toContain('sk-t...9876');
+    // The form (and its signin button) is folded away.
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('tokendance-summary-change'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('tokendance-signin-summary')).toBeNull(),
+    );
+    // Reopened form is populated with the persisted default model.
+    expect(
+      (screen.getByDisplayValue('deepseek-v4-flash') as HTMLInputElement).value,
+    ).toBe('deepseek-v4-flash');
   });
 
   it('failure surfaces the backend error message', async () => {

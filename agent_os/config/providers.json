@@ -3195,6 +3195,7 @@
       "china_only": true,
       "currency": "CNY",
       "supports_model_list": true,
+      "default_model": "deepseek-v4-flash",
       "sdk": "openai",
       "extra_headers": {
         "X-App-Name": "Orbital",

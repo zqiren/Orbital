@@ -28,6 +28,7 @@ import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
 import { warmupUrlForLocale } from '../utils/warmupUrl';
+import watchaLogo from '../assets/watcha-logo.png';
 
 type WizardStep = 'api_key' | 'accounts';
 
@@ -79,6 +80,7 @@ function WizardCard({
   intro: string;
   children: ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="bg-card border border-border rounded-lg p-8">
       <div className="flex items-start justify-between gap-4 mb-3">
@@ -87,6 +89,15 @@ function WizardCard({
       </div>
       <p className="text-secondary text-sm leading-relaxed mb-6">{intro}</p>
       {children}
+      {/* Sponsorship credit (Spec 47 partner ask) — onboarding-wide, not tied
+          to selecting the TokenDance card. */}
+      <div
+        className="mt-6 pt-4 border-t border-border flex items-center justify-center gap-2"
+        data-testid="wizard-sponsor"
+      >
+        <img src={watchaLogo} alt="Watcha (观猹)" className="w-4 h-4 rounded-full" />
+        <span className="text-xs text-secondary/70">{t('wizard.sponsor')}</span>
+      </div>
     </div>
   );
 }

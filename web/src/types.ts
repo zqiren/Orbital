@@ -16,8 +16,13 @@ export interface ProviderInfo {
    * and captioned for non-CN users; a wrong guess only affects sort/caption. */
   china_only?: boolean;
   supports_model_list: boolean;
+  /** Model auto-selected after one-click key provisioning (Spec 47) — a
+   * provider opt-in; absent means signin leaves the model choice alone. */
+  default_model?: string | null;
   sdk: 'openai' | 'anthropic';
   suggested_models: string[];
+  /** Per-model catalog metadata; only display_name is consumed by the UI. */
+  models?: Record<string, { display_name?: string }>;
   notes: string;
 }
 
