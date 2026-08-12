@@ -242,93 +242,103 @@ describe('SessionListItem — active highlight', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Queue-origin hue variation
+// Machine-session kind chips (queue / triggers / attachments)
 // ---------------------------------------------------------------------------
 
-describe('SessionListItem — queue-origin hue variation', () => {
-  it('queue-origin session: status dot has data-origin="queue"', () => {
+describe('SessionListItem — kind chips and cleaned labels', () => {
+  it('queue-origin session renders the queue chip at the front, no name text', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'sess-q', status: 'running', origin: 'queue' })}
+        session={makeSession({
+          session_id: 'sess-q',
+          status: 'running',
+          origin: 'queue',
+          name: '[QUEUE ITEM | id=item_ab12 | attempt=1] You are…',
+        })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
-    const glyph = screen.getByTestId('session-status-glyph');
-    expect(glyph).toHaveAttribute('data-origin', 'queue');
+    expect(screen.getByTestId('session-kind-chip')).toHaveTextContent('Queue task');
+    expect(screen.getByTestId('session-name')).toHaveTextContent('');
   });
 
-  it('manual-origin session: status dot has data-origin="manual"', () => {
+  it('renamed queue session keeps the chip and shows the renamed text', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'sess-m', status: 'running', origin: 'manual' })}
+        session={makeSession({
+          session_id: 'sess-qr',
+          status: 'running',
+          origin: 'queue',
+          name: 'Weekly digest run',
+        })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
-    const glyph = screen.getByTestId('session-status-glyph');
-    expect(glyph).toHaveAttribute('data-origin', 'manual');
+    expect(screen.getByTestId('session-kind-chip')).toHaveTextContent('Queue task');
+    expect(screen.getByTestId('session-name')).toHaveTextContent('Weekly digest run');
   });
 
-  it('undefined-origin session: treated as manual (data-origin="manual")', () => {
+  it('schedule-trigger session: chip + extracted trigger name + tooltip detail', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'sess-u', status: 'running' })}
+        session={makeSession({
+          session_id: 'sess-t',
+          name: "[Triggered by schedule 'Daily check' (every d…",
+        })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
-    const glyph = screen.getByTestId('session-status-glyph');
-    expect(glyph).toHaveAttribute('data-origin', 'manual');
+    const chip = screen.getByTestId('session-kind-chip');
+    expect(chip).toHaveTextContent('Scheduled');
+    expect(chip).toHaveAttribute('title', "schedule 'Daily check'");
+    expect(screen.getByTestId('session-name')).toHaveTextContent('Daily check');
   });
 
-  it('queue-origin dot color differs from manual-origin dot color (desaturated toward gray)', () => {
-    const { unmount } = render(
-      <SessionListItem
-        session={makeSession({ session_id: 'sess-qc', status: 'running', origin: 'queue' })}
-        selected={false}
-        onSelect={vi.fn()}
-      />,
-    );
-    const queueGlyph = screen.getByTestId('session-status-glyph');
-    const queueColor = queueGlyph.style.color;
-    unmount();
-
+  it('file_watch-trigger session renders the file-watch chip', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'sess-mc', status: 'running', origin: 'manual' })}
+        session={makeSession({
+          session_id: 'sess-w',
+          name: "[Triggered by file_watch 'specs watcher']\nChang…",
+        })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
-    const manualGlyph = screen.getByTestId('session-status-glyph');
-    const manualColor = manualGlyph.style.color;
-
-    // Colors must differ (queue is desaturated toward gray)
-    expect(queueColor).not.toBe(manualColor);
+    expect(screen.getByTestId('session-kind-chip')).toHaveTextContent('File watch');
+    expect(screen.getByTestId('session-name')).toHaveTextContent('specs watcher');
   });
 
-  it('queue-origin hue variation also applies to a non-running status (waiting)', () => {
-    const { unmount } = render(
-      <SessionListItem
-        session={makeSession({ session_id: 'sess-qw', status: 'waiting', origin: 'queue' })}
-        selected={false}
-        onSelect={vi.fn()}
-      />,
-    );
-    const queueColor = screen.getByTestId('session-status-glyph').style.color;
-    unmount();
-
+  it('attachment-first session: NO chip, basename as the label', () => {
     render(
       <SessionListItem
-        session={makeSession({ session_id: 'sess-mw', status: 'waiting', origin: 'manual' })}
+        session={makeSession({
+          session_id: 'sess-a',
+          name: '<attached_files>\n- /uploads/2026-08-12T053000-report.pdf (app…',
+        })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
-    const manualColor = screen.getByTestId('session-status-glyph').style.color;
+    expect(screen.queryByTestId('session-kind-chip')).toBeNull();
+    expect(screen.getByTestId('session-name')).toHaveTextContent('report.pdf');
+  });
 
-    expect(queueColor).not.toBe(manualColor);
+  it('plain session renders no chip and the verbatim name (status color intact)', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-p', status: 'running', name: 'write an essay' })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('session-kind-chip')).toBeNull();
+    expect(screen.getByTestId('session-name')).toHaveTextContent('write an essay');
+    // The old queue-origin desaturation is retired: status color is the token value.
+    expect(screen.getByTestId('session-status-glyph')).toHaveStyle({ color: '#22C55E' });
   });
 });
 

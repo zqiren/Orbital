@@ -6,9 +6,12 @@
  * SessionListItem — one row in the Chat-tab session sidebar.
  *
  * Renders:
- *   - Status glyph (◐/⟳/⚠/⏸) in the status color, with a subtle
- *     hue variation when origin === 'queue' (desaturated/alternate tint).
- *   - Display name (session.name → session_id fallback chain).
+ *   - Status glyph (◐/⟳/⚠/⏸) in the status color.
+ *   - Kind chip at the FRONT of the name for machine-originated sessions
+ *     (queue / schedule trigger / file-watch trigger), classified from the
+ *     auto-derived name + origin field by lib/sessionLabel.ts. Attachment-
+ *     first sessions get no chip — their label becomes the file basename.
+ *   - Display name (cleaned label → per-kind fallback → session_id).
  *   - last_activity_at as a short relative time (or "—" if null).
  *   - SessionStatusGlyph error indicator (amber ⚠ when last_terminal_event.type === 'error').
  *   - Hover-revealed three-dot menu with Rename + Delete (real handlers).
@@ -22,10 +25,12 @@
  * Active row: white bg + subtle shadow + font-weight 500.
  */
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionListEntry } from '../types';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
 import { getStatusDisplay } from './sessionStatus';
+import { classifySessionName, type SessionKind } from '../lib/sessionLabel';
+import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 
 export interface SessionListItemProps {
@@ -62,16 +67,12 @@ function formatRelativeTime(
   return t('sessionItem.relTime.days', { n: diffDay });
 }
 
-/**
- * Resolve the display label. Fallback chain: name → session_id. (A truncated
- * first-message fallback is unnecessary — the backend already derives the name
- * from the first user message, so `name` IS that truncation when available.)
- */
-function displayLabel(session: SessionListEntry): string {
-  const name = session.name;
-  if (name && name.trim()) return name;
-  return session.session_id;
-}
+/** i18n key for each machine-session chip; attachment/plain render no chip. */
+const KIND_CHIP_KEY: Partial<Record<SessionKind, StringKey>> = {
+  queue: 'sessionItem.kind.queue',
+  schedule: 'sessionItem.kind.schedule',
+  file_watch: 'sessionItem.kind.fileWatch',
+};
 
 function SessionListItemBase({
   session,
@@ -90,16 +91,22 @@ function SessionListItemBase({
   const t = useT();
   const display = getStatusDisplay(session.status);
 
-  const label = displayLabel(session);
-
-  // Queue-origin hue variation: use a slightly desaturated/alternate tint
-  // when origin === 'queue'. The base status color is applied normally for
-  // manual sessions (undefined → treat as manual).
-  const isQueue = session.origin === 'queue';
-  // Desaturate the queue-origin dot by blending toward gray (#A1A1AA) at 35%.
-  const dotColor = isQueue
-    ? mixColorTowardGray(display.color, 0.35)
-    : display.color;
+  const labelInfo = useMemo(
+    () => classifySessionName(session.name, session.origin),
+    [session.name, session.origin],
+  );
+  const chipKey = KIND_CHIP_KEY[labelInfo.kind];
+  const chipText = chipKey ? t(chipKey) : null;
+  // Fallback chain: cleaned label → "Attachment" for basename-less attachment
+  // sessions → '' for chip-carried machine sessions → session_id for plain.
+  const label =
+    labelInfo.displayName ??
+    (labelInfo.kind === 'attachment'
+      ? t('sessionItem.kind.attachment')
+      : chipText
+        ? ''
+        : session.session_id);
+  const ariaLabel = chipText ? `${chipText} ${label}`.trim() : label;
 
   // Focus the rename input when editing starts.
   useEffect(() => {
@@ -157,7 +164,7 @@ function SessionListItemBase({
       role="button"
       tabIndex={0}
       aria-selected={selected}
-      aria-label={t('sessionItem.aria', { label })}
+      aria-label={t('sessionItem.aria', { label: ariaLabel })}
       data-testid={`session-list-item-${session.session_id}`}
       onClick={() => {
         if (editing) return;
@@ -193,15 +200,26 @@ function SessionListItemBase({
       <span
         aria-hidden="true"
         data-testid="session-status-glyph"
-        data-origin={isQueue ? 'queue' : 'manual'}
         className="w-[14px] text-center"
-        style={{ color: dotColor, fontSize: '13px', lineHeight: 1, flexShrink: 0 }}
+        style={{ color: display.color, fontSize: '13px', lineHeight: 1, flexShrink: 0 }}
       >
         {display.resting ? '' : display.glyph}
       </span>
 
-      {/* Session name + time (or inline rename input) */}
+      {/* Session name + time (or inline rename input). Machine-originated
+          sessions (queue / triggers) carry a quiet kind chip at the FRONT of
+          the name; when nothing human-readable survived the machine prefix
+          the chip carries the row alone. */}
       <span className="flex-1 min-w-0 flex items-baseline gap-1.5">
+        {!editing && chipText && (
+          <span
+            data-testid="session-kind-chip"
+            title={labelInfo.detail}
+            className="text-2xs text-secondary border border-border rounded px-1 shrink-0"
+          >
+            {chipText}
+          </span>
+        )}
         {editing ? (
           <input
             ref={inputRef}
@@ -264,7 +282,7 @@ function SessionListItemBase({
         >
           <button
             type="button"
-            aria-label={t('sessionItem.optionsAria', { label })}
+            aria-label={t('sessionItem.optionsAria', { label: ariaLabel })}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             data-testid="session-three-dot-trigger"
@@ -370,19 +388,3 @@ function SessionListItemBase({
 // re-renders only rows whose props actually changed, not the whole list.
 // Effective only because SessionSidebar passes stable (useCallback) handlers.
 export const SessionListItem = memo(SessionListItemBase);
-
-/**
- * Mix a hex color toward gray (#A1A1AA) by `amount` (0–1).
- * amount=0 → original color, amount=1 → gray.
- * Used for queue-origin status dot hue variation.
- */
-function mixColorTowardGray(hex: string, amount: number): string {
-  const gray = { r: 0xa1, g: 0xa1, b: 0xaa };
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const mr = Math.round(r + (gray.r - r) * amount);
-  const mg = Math.round(g + (gray.g - g) * amount);
-  const mb = Math.round(b + (gray.b - b) * amount);
-  return `rgb(${mr}, ${mg}, ${mb})`;
-}

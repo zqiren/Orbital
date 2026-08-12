@@ -188,7 +188,7 @@ describe('SessionSidebar — ALL sessions included regardless of origin', () => 
       makeSession({
         session_id: 'sess-manual',
         status: 'idle',
-        origin: 'manual',
+        origin: 'chat',
         session_uuid: 'um',
       }),
       makeSession({
