@@ -895,7 +895,6 @@ export const STRINGS = {
   "wizard.next": { en: "Next →", zh: "下一步 →" },
   "wizard.openBrowser": { en: "Open Browser", zh: "打开浏览器" },
   "wizard.skip": { en: "Skip", zh: "跳过" },
-  "wizard.sponsor": { en: "Orbital is sponsored by Watcha (观猹)", zh: "Orbital 由观猹 (Watcha) 赞助支持" },
   "wizard.welcome": { en: "Welcome to Orbital", zh: "欢迎使用 Orbital" },
 
   // workspace — two-zone sidebar Workspace zone + calendar surface (spec 011 §0.5)

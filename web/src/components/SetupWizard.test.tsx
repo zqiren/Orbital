@@ -145,21 +145,6 @@ describe('SetupWizard — step flow', () => {
   });
 });
 
-describe('SetupWizard — Watcha sponsorship credit (Spec 47)', () => {
-  it('renders the sponsor footer on the api_key step', async () => {
-    mockApi({ apiKeySet: false });
-    render(<SetupWizard onComplete={vi.fn()} />);
-    expect(screen.getByTestId('wizard-sponsor').textContent).toContain('Watcha');
-  });
-
-  it('renders the sponsor footer on the accounts step too', async () => {
-    mockApi({ apiKeySet: true });
-    render(<SetupWizard onComplete={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Connect Your Accounts')).toBeTruthy());
-    expect(screen.getByTestId('wizard-sponsor')).toBeTruthy();
-  });
-});
-
 describe('SetupWizard — sandbox step is gone', () => {
   it('never touches the platform sandbox endpoints while advancing', async () => {
     mockApi({ apiKeySet: true, connectors: [makeConnector()] });
