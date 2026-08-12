@@ -55,7 +55,7 @@ describe('SessionListItem — status glyph rendering', () => {
     );
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('⟳');
-    expect(glyph).toHaveStyle({ color: '#6366F1' });
+    expect(glyph).toHaveStyle({ color: '#539AF8' });
   });
 
   it('pending_approval (Blocked) → glyph ⚠ with warning color', () => {
