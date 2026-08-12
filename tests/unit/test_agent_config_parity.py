@@ -73,3 +73,64 @@ def test_auto_start_config_non_scratch_stays_false():
     # agent_name falls back to the project name, matching the /agents/start route
     assert cfg.agent_name == "Hn-daily"
     assert cfg.sub_agent_deployment_instructions == "Use Codex for implementation."
+
+
+# ---- Stale project base_url vs inherited global provider (Spec 47 fallout) ----
+#
+# Project rows snapshot base_url verbatim at creation, so a project created
+# under an earlier global provider carries a stale endpoint. Observed on a real
+# install: a scratch project with an api.openai.com snapshot inherited the
+# freshly-provisioned global TokenDance key and sent it to OpenAI → 401.
+# Invariant (same as the crosses_provider comment in the source): base_url and
+# api_key must stay within the resolved provider.
+
+
+def _manager_with_global(projects: dict) -> AgentManager:
+    """_manager_with, plus real-looking global settings + a stored global key
+    (the state after the TokenDance one-click flow + wizard save)."""
+    mgr = _manager_with(projects)
+    gs = MagicMock()
+    gs.llm.provider = "tokendance"
+    gs.llm.base_url = "https://tokendance.space/gateway/v1"
+    gs.llm.model = "deepseek-v4-flash"
+    gs.llm.api_key = None
+    mgr._settings_store.get = MagicMock(return_value=gs)
+    mgr._credential_store.get_api_key = MagicMock(return_value="sk-td-global")
+    return mgr
+
+
+def test_stale_project_base_url_ignored_when_inheriting_global_key():
+    """No model pin + no own key = full inherit: the stale base_url snapshot
+    must not pair the global key with the old provider's endpoint."""
+    stale = {**SCRATCH, "model": "", "api_key": "",
+             "base_url": "https://api.openai.com/v1"}
+    mgr = _manager_with_global({"p_s": stale})
+    cfg = mgr._build_agent_config_from_project("p_s")
+    assert cfg.api_key == "sk-td-global"
+    assert cfg.base_url == "https://tokendance.space/gateway/v1"
+    assert cfg.provider == "tokendance"
+    assert cfg.model == "deepseek-v4-flash"
+
+
+def test_byok_project_keeps_its_own_base_url():
+    """A project with its OWN key keeps its own endpoint — that pairing is
+    deliberate (BYOK against a specific endpoint), not a stale snapshot."""
+    byok = {**NORMAL, "model": "", "api_key": "sk-own-key",
+            "base_url": "https://proxy.example/v1"}
+    mgr = _manager_with_global({"p_n": byok})
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.api_key == "sk-own-key"
+    assert cfg.base_url == "https://proxy.example/v1"
+
+
+def test_cross_provider_pinned_project_unchanged():
+    """A model-pinned project (crosses_provider branch) keeps its own trio —
+    guard that the inherit-branch fix didn't leak into it."""
+    pinned = {**NORMAL, "model": "deepseek-chat", "provider": "deepseek",
+              "api_key": "sk-ds-key", "base_url": "https://api.deepseek.com"}
+    mgr = _manager_with_global({"p_n": pinned})
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.api_key == "sk-ds-key"
+    assert cfg.base_url == "https://api.deepseek.com"
+    assert cfg.provider == "deepseek"
+    assert cfg.model == "deepseek-chat"

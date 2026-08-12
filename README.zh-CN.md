@@ -352,6 +352,16 @@ Orbital 就是我自己想要的那个东西：一个对整个项目负责的 ag
 
 ---
 
+## 赞助致谢
+
+<p align="center">
+  <a href="https://watcha.cn"><img src="docs/screenshots/watcha-logo.png" alt="观猹 (Watcha)" width="96"></a>
+</p>
+
+Orbital 由 **[观猹 (Watcha)](https://watcha.cn)** 赞助支持。观猹是 Orbital 内置的中国大陆模型路由 **[词元跳动 (TokenDance)](https://tokendance.space)** 背后的团队。得益于这次赞助，中国大陆的新用户在引导页即可一键登录词元跳动、免费领取 Token、立即开始使用——无需手动配置 API Key。
+
+---
+
 ## 遥测（Telemetry）
 
 Orbital 每天发送**一份匿名汇总**——仅包含计数、枚举和布尔值。绝不包含提示词、文件、路径、模型输出或任何项目/会话标识。在 **设置 → 数据与隐私** 中可逐字查看即将发送的完整 JSON，并可一键关闭。完整的公开 schema 见 [docs/TELEMETRY.md](docs/TELEMETRY.md)。

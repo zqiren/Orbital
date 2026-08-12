@@ -1475,7 +1475,10 @@ async def list_project_sessions(project_id: str):
     if _project_store is not None:
         if _project_store.get_project(project_id) is None:
             raise HTTPException(status_code=404, detail="Project not found")
-    sessions = _agent_manager.list_sessions(project_id)
+    # Offloaded: list_sessions() scans + parses every on-disk session JSONL
+    # that has no live handle, which must not run on the event loop (this
+    # endpoint is refetched on every agent.status WS event).
+    sessions = await asyncio.to_thread(_agent_manager.list_sessions, project_id)
     return {"project_id": project_id, "sessions": sessions}
 
 
@@ -2356,9 +2359,10 @@ async def chat_history(
         # stopped/popped sessions the handle is gone but the JSONL still
         # exists on disk — fall back to scanning the JSONL content for a
         # matching session_id field (offloaded to a thread; it does blocking
-        # disk I/O and must not run on the event loop).
+        # disk I/O and must not run on the event loop).  list_sessions itself
+        # scans + parses the session directory, so it is offloaded too.
         session_uuid: str | None = None
-        for entry in _agent_manager.list_sessions(project_id):
+        for entry in await asyncio.to_thread(_agent_manager.list_sessions, project_id):
             if entry["session_id"] == session_id:
                 session_uuid = entry["session_uuid"]
                 break
@@ -2515,6 +2519,40 @@ async def list_providers():
     return {}
 
 
+@router.post("/providers/tokendance/signin")
+async def tokendance_signin():
+    """One-click TokenDance key provisioning (Spec 47 Tier 2).
+
+    Blocking: runs the PKCE loopback flow (system browser consent, up to
+    ~300s), validates the minted key against their balance endpoint, and
+    persists it to the credential store. The raw key never leaves the daemon —
+    the response carries only the set-flag and a display mask (same format as
+    ``settings_store.get_masked``).
+    """
+    if _credential_store is None:
+        raise HTTPException(status_code=501, detail="Credential store not available")
+    from agent_os.providers_auth.tokendance import (
+        TokenDanceProvisioningError,
+        provision_api_key,
+    )
+    try:
+        key = await provision_api_key()
+    except TokenDanceProvisioningError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    try:
+        _credential_store.set_api_key(key)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"key was created but could not be stored: {exc}",
+        )
+    from agent_os import telemetry
+    telemetry.emit("key_set", {"provider": "tokendance"})
+    telemetry.latch("key_set")
+    masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "****"
+    return {"api_key_set": True, "api_key_masked": masked}
+
+
 class FetchModelsRequest(BaseModel):
     # `provider` defaults to "custom" so a local OpenAI-compatible server
     # (LM Studio / llama.cpp / Ollama) can be queried with just a base_url —
@@ -2614,9 +2652,20 @@ async def test_connection(req: TestConnectionRequest):
     from agent_os.agent.providers.openai_compat import LLMProvider
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
 
+    # An empty api_key with a saved global key means "test the stored key":
+    # the frontend clears the field once a key is persisted (paste-and-save,
+    # or the TokenDance one-click flow), so fall back to the credential store
+    # rather than constructing a keyless client — the raw SDK otherwise
+    # surfaces "Missing credentials … set OPENAI_API_KEY". Custom/local
+    # servers that genuinely need no key are unaffected: with no stored
+    # global key the fallback resolves to "" exactly as before.
+    api_key = req.api_key
+    if not api_key.strip() and _credential_store is not None:
+        api_key = _credential_store.get_api_key() or ""
+
     try:
         provider = LLMProvider(
-            req.model, req.api_key, base_url, sdk=sdk,
+            req.model, api_key, base_url, sdk=sdk,
             extra_headers=provider_info.get("extra_headers") if provider_info else None,
         )
         result = await provider.complete(

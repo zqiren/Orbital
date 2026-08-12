@@ -119,6 +119,7 @@ export class ApiError extends Error {
 /** Fetch JSON with X-Total-Count header (for paginated endpoints). */
 export async function apiWithTotal<T = unknown>(
   path: string,
+  options?: { signal?: AbortSignal },
 ): Promise<{ data: T; total: number }> {
   const url = isRelayMode ? window.location.origin + path : BASE_URL + path;
   const headers: Record<string, string> = {};
@@ -131,7 +132,7 @@ export async function apiWithTotal<T = unknown>(
     const sep = finalUrl.includes('?') ? '&' : '?';
     finalUrl += `${sep}_t=${Date.now()}`;
   }
-  const fetchOpts: RequestInit = { headers };
+  const fetchOpts: RequestInit = { headers, signal: options?.signal };
   if (isRelayMode) fetchOpts.cache = 'no-store';
 
   const response = await fetch(finalUrl, fetchOpts);

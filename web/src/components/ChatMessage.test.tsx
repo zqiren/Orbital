@@ -73,7 +73,7 @@ describe('ChatMessage — user_message with <attached_files> block', () => {
 });
 
 describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
-  it('user message renders a user avatar (initials), sender·time, and content with NO bubble', () => {
+  it('user message renders a user avatar (initials), sender·time, and content in a faint tint block', () => {
     const { container } = render(<ChatMessage message={userMsg('hello world')} />);
 
     // Avatar: user variant, shows the "ME" placeholder initials.
@@ -87,13 +87,12 @@ describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
     expect(screen.getByText('you')).toBeInTheDocument();
     expect(screen.getByText(/^· \d{2}:\d{2}$/)).toBeInTheDocument();
 
-    // Content present.
-    expect(screen.getByText('hello world')).toBeInTheDocument();
-
-    // No bubble bg / border / rounded box from the old layout.
-    expect(container.querySelector('.bg-card-hover')).toBeNull();
+    // Content sits in a subtle left-aligned tint block (no border, never
+    // right-aligned like the old bubble layout).
+    const content = screen.getByText('hello world');
+    expect(content.className).toContain('bg-sidebar');
     expect(container.querySelector('.justify-end')).toBeNull();
-    expect(container.querySelector('.rounded-lg')).toBeNull();
+    expect(container.querySelector('.border.rounded-lg')).toBeNull();
   });
 
   it('user message targeting a sub-agent shows "you → @target" in the label', () => {
@@ -101,14 +100,12 @@ describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
     expect(screen.getByText('you → @researcher')).toBeInTheDocument();
   });
 
-  it('agent message renders the ◐ avatar glyph, "agent" sender·time, and content with NO bubble', () => {
+  it('agent message renders the Orbital avatar, "agent" sender·time, and content with NO bubble', () => {
     const { container } = render(<ChatMessage message={agentMsg('agent reply here')} />);
 
     const avatar = container.querySelector('[data-testid="message-avatar"]');
     expect(avatar?.getAttribute('data-variant')).toBe('agent');
-    expect(avatar?.textContent).toBe('◐');
-    expect(avatar?.className).toContain('border');
-    expect(avatar?.className).not.toContain('bg-primary');
+    expect(avatar?.querySelector('img')?.getAttribute('src')).toBe('/icon-192.png');
 
     expect(screen.getByText('agent')).toBeInTheDocument();
     expect(screen.getByText('agent reply here')).toBeInTheDocument();

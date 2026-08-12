@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
 import { useT } from '../i18n/useT';
@@ -28,6 +28,10 @@ export default function FallbackModelsEditor({
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<FallbackModelEntry>({ ...EMPTY_ENTRY });
   const t = useT();
+  // Unique per mounted editor — global and project settings can both be on
+  // screen, and two <datalist> elements sharing an id would cross-wire.
+  const modelListId = `${useId()}fallback-model-options`;
+  const suggestedModels = providers[draft.provider]?.suggested_models ?? [];
 
   function handleAdd() {
     if (!draft.model.trim()) return;
@@ -140,6 +144,7 @@ export default function FallbackModelsEditor({
                 </label>
                 <input
                   type="text"
+                  list={modelListId}
                   value={draft.model}
                   onChange={(e) =>
                     setDraft({ ...draft, model: e.target.value })
@@ -147,6 +152,13 @@ export default function FallbackModelsEditor({
                   placeholder={t('fallback.model.placeholder')}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
                 />
+                {/* Curated per-provider list; the input stays free-text so an
+                    unlisted or newer model ID is still enterable. */}
+                <datalist id={modelListId}>
+                  {suggestedModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
               </div>
 
               {/* API Key (optional) */}

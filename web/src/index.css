@@ -12,9 +12,9 @@
      Material weight now encodes hierarchy (Apple HIG: heavier materials
      separate structural regions, lighter ones carry content):
 
-       nav       #E9E9EF   global nav column — heaviest chrome
-       sidebar   #F1F1F5   secondary list column (sessions) + subtle fills
-       background#F4F4F6   canvas — the surface card-lists sit ON
+       nav       #E8EBF0   global nav column — heaviest chrome
+       sidebar   #F0F3F7   secondary list column (sessions) + subtle fills
+       background#F4F6F9   canvas — the surface card-lists sit ON
        card      #FFFFFF   content — lifts off the canvas; also chat "paper"
        elevated  #FFFFFF   modals/popovers — above a scrim, not the canvas
 
@@ -29,22 +29,27 @@
 
      `card` and `elevated` are the same value in light mode but are kept
      distinct: they answer to different backdrops (canvas vs. scrim) and are
-     the hook a dark theme would diverge on. */
-  --color-nav: #E9E9EF;
-  --color-background: #F4F4F6;
-  --color-sidebar: #F1F1F5;
+     the hook a dark theme would diverge on.
+
+     The chrome greys carry a deliberate slate (blue) cast — R < G < B — to
+     harmonize with the blue accent. The previous set was violet-cast
+     (R = G < B, e.g. nav #E9E9EF), which read purple next to any true blue.
+     Keep the R < G < B ordering when retuning any surface below. */
+  --color-nav: #E8EBF0;
+  --color-background: #F4F6F9;
+  --color-sidebar: #F0F3F7;
   --color-card: #FFFFFF;
   --color-elevated: #FFFFFF;
   /* Row hover/selection tints. Each must read clearly against the surface it
      sits on, so the nav column needs its own: `card-hover` is only ~3 levels
      off `nav` and would be invisible there. Used at full strength for the
      selected row and at /50 for hover, matching the existing pattern. */
-  --color-card-hover: #E6E6EC;
-  --color-nav-hover: #DCDCE6;
-  --color-border: #E4E4E7;
+  --color-card-hover: #E4E8EE;
+  --color-nav-hover: #DAE0E9;
+  --color-border: #E1E5EA;
 
   /* ------------------------------------------------------------------- text
-     A three-step ladder with checked contrast against the canvas (#F4F4F6):
+     A three-step ladder with checked contrast against the canvas (#F4F6F9):
        primary   #18181B   15.9:1  — body and headings
        secondary #6E6E78    4.6:1  — AA for normal text (was #71717A = 4.2:1,
                                      which failed AA even on the old lighter
@@ -56,7 +61,12 @@
   --color-secondary: #6E6E78;
   --color-muted: #8A8A94;
 
-  --color-accent: #6366F1;
+  /* Codex-style azure. Deliberately bright: it carries fills (buttons, pills,
+     badges) well but is only ~2.9:1 on white as TEXT — if small accent links
+     ever need a boost, the fix is a darker text-accent token (two-tone, the
+     way ChatGPT pairs #539AF8 fills with darker link text), not darkening
+     this fill value. */
+  --color-accent: #539AF8;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
   --color-error: #EF4444;

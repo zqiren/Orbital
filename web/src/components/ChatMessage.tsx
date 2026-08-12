@@ -97,7 +97,9 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
             <span className="text-secondary">{senderLabel}</span>
             {time && <span className="text-muted"> · {time}</span>}
           </div>
-          <div className="text-[13px] leading-[1.55] text-primary whitespace-pre-wrap break-words">
+          {/* User content gets a faint tint block (agent rows stay flat) so
+              the conversation's turn-taking rhythm is scannable at a glance. */}
+          <div className="inline-block max-w-full rounded-lg rounded-tl-sm bg-sidebar px-3 py-2 text-[13px] leading-[1.55] text-primary whitespace-pre-wrap break-words">
             {hasChips && (
               <div className="flex flex-wrap gap-2 mb-2">
                 {attachments.map((a, i) => (

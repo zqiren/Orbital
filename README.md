@@ -755,6 +755,16 @@ Built nights and weekends while working full-time. Still very early. Feedback an
 
 ---
 
+## Sponsors
+
+<p align="center">
+  <a href="https://watcha.cn"><img src="docs/screenshots/watcha-logo.png" alt="Watcha (观猹)" width="96"></a>
+</p>
+
+Orbital is proudly sponsored by **[Watcha (观猹)](https://watcha.cn)** — the team behind **[TokenDance (词元跳动)](https://tokendance.space)**, the China-mainland LLM router built into Orbital. Thanks to this sponsorship, new users in mainland China can sign in to TokenDance with one tap during onboarding, claim free tokens, and start working immediately — no manual API-key setup.
+
+---
+
 ## Telemetry
 
 Orbital sends **one anonymous aggregate per day** — counters, enums, and

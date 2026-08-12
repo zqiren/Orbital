@@ -177,6 +177,20 @@ class AgentManager:
         # own read_write portal.
         self._scratch_read_portals: dict[SessionKey, set[str]] = {}
 
+        # ── Disk-session scan cache (bug #48) ──────────────────────────────
+        # ``_disk_session_entries`` re-parses every idle session's full JSONL
+        # on every call, and it is called on every session switch and on every
+        # agent.status broadcast. Idle sessions don't change, so memoize each
+        # file's derived entry keyed on its mtime: (sessions_dir, fname) ->
+        # (st_mtime, entry | None), where None records a "skip this file"
+        # verdict (empty/meta-only log, or a fanout worker thread). Deleted
+        # files need no eviction — os.listdir stops returning them, so the
+        # stale key is simply never looked up again. Runs under
+        # asyncio.to_thread, so concurrent calls may interleave; get/set of
+        # immutable tuples is atomic enough under the GIL, and the worst
+        # interleaving is a redundant re-parse.
+        self._disk_entry_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+
         # Ids currently being delivered inside ``_fire``.
         self._pending_dispatching: set[str] = set()
         # Ids cancelled mid-flight — ``_fire`` skips them; a lost slot-race
@@ -1502,7 +1516,19 @@ class AgentManager:
                        or cred_key
                        or (global_settings.llm.api_key if global_settings else None)
                        or "")
-            base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+            # Same invariant, inherit direction: a project that inherits the
+            # global model/provider AND the global key must inherit the global
+            # endpoint too. Project rows snapshot base_url verbatim at
+            # creation, so a project created under an earlier global provider
+            # carries a stale endpoint that would pair the CURRENT global key
+            # with the OLD provider's URL (observed: scratch project with an
+            # api.openai.com snapshot sending a TokenDance key to OpenAI →
+            # 401). A project with its OWN key keeps its own base_url — that
+            # pairing is deliberate (BYOK against a specific endpoint).
+            if project.get("api_key"):
+                base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
+            else:
+                base_url = (global_settings.llm.base_url if global_settings else None) or project.get("base_url")
 
         return AgentConfig(
             workspace=project["workspace"],
@@ -3485,6 +3511,27 @@ class AgentManager:
                 # A friendly-looking symlink must not hide a legacy worker
                 # filename that predates durable session_kind metadata.
                 continue
+            # Unchanged file → reuse the parsed result instead of re-reading
+            # the whole log (bug #48). Keyed on the LISTDIR name, not the
+            # realpath: a symlink and its target share content but carry
+            # different session ids. ``scope`` is deliberately not cached —
+            # it comes from live in-memory state that changes without
+            # touching the file.
+            cache_key = (sessions_dir, fname)
+            try:
+                mtime = os.stat(candidate).st_mtime
+            except OSError:
+                continue  # deleted between listdir and stat
+            cached = self._disk_entry_cache.get(cache_key)
+            if cached is not None and cached[0] == mtime:
+                cached_entry = cached[1]
+                if cached_entry is None:
+                    continue  # remembered skip verdict (meta-only / worker log)
+                entries.append({
+                    **cached_entry,
+                    "scope": self.get_session_scope(project_id, uuid),
+                })
+                continue
             last_activity_at = None
             stored_name = None  # name on the session_start meta, if present
             origin = "chat"  # session_start meta origin; legacy logs → chat
@@ -3527,21 +3574,31 @@ class AgentManager:
             except OSError:
                 continue
             if first_real is None:
-                continue  # empty / meta-only log — not a materialized session
+                # empty / meta-only log — not a materialized session
+                self._disk_entry_cache[cache_key] = (mtime, None)
+                continue
             if is_worker:
-                continue  # worker thread — excluded from the session sidebar
+                # worker thread — excluded from the session sidebar
+                self._disk_entry_cache[cache_key] = (mtime, None)
+                continue
             if last_real is not None:
                 last_activity_at = last_real.get("timestamp")
-            # Name: stored meta name wins; else derive from first user message
-            # (lazy backfill, in-memory only — no file rewrite); else None.
-            from agent_os.agent.session import _derive_name
-            name = stored_name if stored_name is not None else _derive_name(first_user_content)
+            # Name: stored meta name wins — unless it is machine markup from
+            # the pre-strip auto-namer ("[QUEUE ITEM…", "<attached_files>…"),
+            # which is ignored so legacy sessions heal (mirrors Session.load);
+            # else derive from first user message (lazy backfill, in-memory
+            # only — no file rewrite); else None.
+            from agent_os.agent.session import _derive_name, is_machine_derived_name
+            if stored_name is not None and not is_machine_derived_name(stored_name):
+                name = stored_name
+            else:
+                name = _derive_name(first_user_content)
             # Address a disk-only session by its unique session_uuid: the F1
             # session_id on disk is often "default" and not unique across many
             # prior logs, which would shadow the active session and break the
             # chat endpoint's F1→F2 fast-path mapping. The uuid is unique and is
             # what callers use to load/act on (hydrate) the disk-only session.
-            entries.append({
+            derived = {
                 "session_id": uuid,
                 "status": "idle",
                 "session_uuid": uuid,
@@ -3549,6 +3606,12 @@ class AgentManager:
                 "name": name,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,
+            }
+            self._disk_entry_cache[cache_key] = (mtime, derived)
+            # Fresh dict per call: the cached one must never be handed to a
+            # caller that could mutate it.
+            entries.append({
+                **derived,
                 "scope": self.get_session_scope(project_id, uuid),
             })
         return entries

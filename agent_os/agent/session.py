@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -29,17 +30,88 @@ def _now() -> str:
 
 _NAME_MAX_LEN = 50
 
+# Machine prefixes stamped into first user messages, which must never become
+# the display name. Shapes mirror their producers — keep in sync:
+#   - <attached_files> block: agent_os/api/routes/_attachment_formatter.py
+#   - queue wrapper: agent_os/queue/dispatcher.py (bracket header + the
+#     HEADER_CONTRACT paragraph; the START/END markers below are that
+#     contract's first and last sentences)
+#   - the frontend classifier reads the same shapes: web/src/lib/sessionLabel.ts
+# The trigger prefix ("[Triggered by …") is deliberately NOT stripped — the
+# frontend extracts the trigger's own name from it.
+_ATTACHED_BLOCK_RE = re.compile(r"^<attached_files>\n([\s\S]*?)\n</attached_files>\n\n?")
+_QUEUE_BRACKET_RE = re.compile(r"^\[QUEUE ITEM \|[^\]\n]*\]\n")
+_QUEUE_CONTRACT_START = "You are working on a queue item."
+_QUEUE_CONTRACT_END = "Do not end with plain text.\n"
+# Chat-composer uploads are timestamp-prefixed (web/src/lib/attachment-upload.ts).
+_UPLOAD_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{6}-")
+
+
+def _strip_machine_prefixes(text: str) -> tuple[str, str | None]:
+    """Strip leading machine blocks from a first user message.
+
+    Returns ``(remainder, attachment_fallback)`` where the fallback is the
+    first attached file's basename (upload timestamp stripped) — used as the
+    name when nothing human-typed remains. Dispatcher order for queue items
+    with staged files is attach block first, then the queue wrapper.
+    """
+    fallback = None
+    m = _ATTACHED_BLOCK_RE.match(text)
+    if m:
+        for line in m.group(1).split("\n"):
+            line = line.strip()
+            if not line.startswith("- "):
+                continue
+            path = line[2:]
+            paren = path.rfind(" (")
+            if paren > 0:
+                path = path[:paren]
+            base = _UPLOAD_TS_RE.sub("", path.rsplit("/", 1)[-1]).strip()
+            if base:
+                fallback = base
+            break
+        text = text[m.end():]
+    b = _QUEUE_BRACKET_RE.match(text)
+    if b:
+        text = text[b.end():]
+        # The header contract follows the bracket line. If its wording ever
+        # drifts and the markers stop matching, we degrade to naming from the
+        # contract head (same visibility as before this fix), never crash.
+        if text.startswith(_QUEUE_CONTRACT_START):
+            end = text.find(_QUEUE_CONTRACT_END)
+            if end >= 0:
+                text = text[end + len(_QUEUE_CONTRACT_END):]
+    return text, fallback
+
+
+def is_machine_derived_name(name) -> bool:
+    """True when a stored display name is machine markup, not user text.
+
+    Pre-fix sessions auto-named from the RAW first message stamped names like
+    ``"<attached_files>\\n-…"`` or ``"[QUEUE ITEM | id=…"`` into their meta.
+    Readers ignore such stored names and re-derive from the first user message
+    instead (display-only; the file is not rewritten). A user rename could
+    theoretically collide with these prefixes and be overridden — accepted.
+    """
+    if not isinstance(name, str):
+        return False
+    return name.startswith("<attached_files>") or name.startswith("[QUEUE ITEM")
+
 
 def _derive_name(content) -> str | None:
     """Derive a session display name from a user message's content.
 
-    Truncates to ``_NAME_MAX_LEN`` characters, word-boundary-aware, appending
-    an ellipsis (``…``) when truncated. Returns ``None`` for content that is
-    not a non-empty string (e.g. multimodal list content with no usable text).
+    Machine prefixes (attachment block, queue wrapper) are stripped first so
+    the name is the user's actual text; an attachment-only message falls back
+    to the file's basename. Truncates to ``_NAME_MAX_LEN`` characters,
+    word-boundary-aware, appending an ellipsis (``…``) when truncated.
+    Returns ``None`` for content that is not a non-empty string (e.g.
+    multimodal list content with no usable text).
     """
     if not isinstance(content, str):
         return None
-    text = content.strip()
+    text, attachment_fallback = _strip_machine_prefixes(content)
+    text = text.strip() or (attachment_fallback or "")
     if not text:
         return None
     if len(text) <= _NAME_MAX_LEN:
@@ -317,13 +389,16 @@ class Session:
 
             # Name resolution (display label):
             #   1. Stored name on the session_start meta wins (explicit rename
-            #      or a previously persisted auto-name).
+            #      or a previously persisted auto-name) — UNLESS it is machine
+            #      markup stamped by the pre-strip auto-namer ("[QUEUE ITEM…",
+            #      "<attached_files>…"), which is ignored and re-derived so
+            #      legacy sessions heal without a migration.
             #   2. Otherwise derive lazily from the first user message — legacy
             #      sessions and meta-records-without-name. This is IN-MEMORY
             #      ONLY: we do NOT rewrite the JSONL on load (avoid touching
             #      every legacy file). It persists on the next append/rename.
             #   3. Else None (headless / no user message — DATA-1).
-            if stored_name is not None:
+            if stored_name is not None and not is_machine_derived_name(stored_name):
                 session.name = stored_name
             else:
                 for m in session._messages:

@@ -8,7 +8,7 @@
  * These glyphs/colors come from the V1 mockup. The color tokens are defined in
  * web/src/index.css under @theme:
  *   success → #22C55E   (running)
- *   accent  → #6366F1   (waiting)
+ *   accent  → #539AF8   (waiting)
  *   warning → #F59E0B   (pending_approval / Blocked)
  *   idle    → #A1A1AA   (idle)
  */
@@ -21,6 +21,13 @@ export interface StatusDisplay {
   color: string;
   /** Human-readable label (used for aria and text). */
   label: string;
+  /**
+   * True for the resting state (idle, and the unknown-status fallback).
+   * List rows render no glyph for resting sessions — a repeated ⏸ on every
+   * idle row conveys nothing and reads as noise; only differentiating states
+   * (running / waiting / blocked / starting / error) light up.
+   */
+  resting?: boolean;
 }
 
 /**
@@ -35,15 +42,15 @@ export interface StatusDisplay {
  */
 const STATUS_DISPLAY_MAP: Record<AgentRunStatus, StatusDisplay> = {
   running: { glyph: '◐', color: '#22C55E', label: 'Running' },
-  waiting: { glyph: '⟳', color: '#6366F1', label: 'Waiting' },
+  waiting: { glyph: '⟳', color: '#539AF8', label: 'Waiting' },
   // pending_approval is rendered as "Blocked" in ALL UI copy per spec.
   pending_approval: { glyph: '⚠', color: '#F59E0B', label: 'Blocked' },
-  idle: { glyph: '⏸', color: '#A1A1AA', label: 'Idle' },
-  new_session: { glyph: '◐', color: '#6366F1', label: 'Starting' },
+  idle: { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true },
+  new_session: { glyph: '◐', color: '#539AF8', label: 'Starting' },
   error: { glyph: '⚠', color: '#F59E0B', label: 'Error' },
 };
 
-const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 'Idle' };
+const FALLBACK_STATUS: StatusDisplay = { glyph: '⏸', color: '#A1A1AA', label: 'Idle', resting: true };
 
 export function getStatusDisplay(status: AgentRunStatus): StatusDisplay {
   return STATUS_DISPLAY_MAP[status] ?? FALLBACK_STATUS;

@@ -82,6 +82,8 @@ const REGISTRY: ProviderRegistry = {
     base_url: 'https://tokendance.space/gateway/v1',
     console_url: 'https://tokendance.space/keys',
     china_only: true,
+    default_model: 'deepseek-v4-flash',
+    models: { 'deepseek-v4-flash': { display_name: 'DeepSeek V4 Flash' } },
   }),
   // Production registry shape: GET /api/v2/providers serves a literal 'custom'
   // entry alongside the CUSTOM_PROVIDER_KEY sentinel the picker adds itself.
@@ -490,5 +492,282 @@ describe('LLMProviderSettings — wizard mode gating (backlog #25)', () => {
     await waitFor(() => {
       expect(screen.getByText(/No LLM provider configured yet/)).toBeTruthy();
     });
+  });
+});
+
+// ---- Collapsed hint paragraphs (bug #49) ----
+//
+// The long explanatory paragraphs now sit inside native <details> closed by
+// default; the short china-only / no-China-endpoint safety captions stay
+// always-visible. jsdom keeps <details> children in the DOM either way, so
+// these assert the wrapper and its `open` state rather than text presence.
+
+describe('LLMProviderSettings — hint paragraphs collapse by default (bug #49)', () => {
+  function closedDetailsFor(text: string | RegExp): HTMLDetailsElement {
+    const details = screen.getByText(text).closest('details');
+    expect(details).toBeTruthy();
+    expect((details as HTMLDetailsElement).open).toBe(false);
+    return details as HTMLDetailsElement;
+  }
+
+  it('collapses the global subhead, the API-key how-to and the model-source explainer', async () => {
+    mockApi({ settings: { provider: 'deepseek', base_url: 'https://api.deepseek.com' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByText('Get your API key ↗')).toBeTruthy());
+
+    closedDetailsFor('Used by all projects unless overridden in project settings.');
+    closedDetailsFor(/Create an account/);
+    // Empty suggested_models in the fixture -> modelSource 'freetext'.
+    closedDetailsFor('Enter the model identifier to use with this provider.');
+
+    // Every collapsed block is labelled with the shared summary string.
+    expect(screen.getAllByText('Details').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('collapses the provider notes blurb', async () => {
+    mockApi({
+      settings: { provider: 'deepseek', base_url: 'https://api.deepseek.com' },
+      providers: {
+        ...REGISTRY,
+        deepseek: makeProvider({
+          display_name: 'DeepSeek',
+          base_url: 'https://api.deepseek.com',
+          notes: 'Cheap and fast; reasoning model available.',
+        }),
+      },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() =>
+      expect(screen.getByText('Cheap and fast; reasoning model available.')).toBeTruthy(),
+    );
+    closedDetailsFor('Cheap and fast; reasoning model available.');
+  });
+
+  it('collapses the project-mode override hint', async () => {
+    mockApi({});
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'deepseek', model: 'deepseek-chat', sdk: 'openai' }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByText('LLM Provider'));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Leave blank to use global defaults. Only fill in to override for this project.'),
+      ).toBeTruthy(),
+    );
+    closedDetailsFor(
+      'Leave blank to use global defaults. Only fill in to override for this project.',
+    );
+  });
+
+  it('keeps the region-availability warnings outside the disclosure', async () => {
+    mockApi({ settings: { provider: 'openai', base_url: 'https://api.openai.com/v1' } });
+    render(<LLMProviderSettings mode="global" />);
+    const caption = await screen.findByText(
+      'No mainland-China endpoint — requires global network access.',
+    );
+    expect(caption.closest('details')).toBeNull();
+  });
+
+  it('opens on demand, revealing the hint text', async () => {
+    mockApi({ settings: { provider: 'deepseek', base_url: 'https://api.deepseek.com' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByText('Get your API key ↗')).toBeTruthy());
+
+    const details = closedDetailsFor(/Create an account/);
+    fireEvent.click(details.querySelector('summary')!);
+    expect(details.open).toBe(true);
+  });
+});
+
+// ---- Spec 47 Tier 2: TokenDance one-click signin ----
+
+describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)', () => {
+  const TD_SETTINGS = {
+    provider: 'tokendance',
+    base_url: 'https://tokendance.space/gateway/v1',
+  };
+
+  function mockApiWithSignin(signinImpl: () => Promise<unknown>) {
+    apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
+      if (path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST') {
+        return signinImpl();
+      }
+      if (path === '/api/v2/settings' && opts?.method === 'PUT') {
+        // Echo the persisted values back like the real settings route.
+        const body = JSON.parse(String(opts.body));
+        return {
+          llm: {
+            api_key_set: true,
+            api_key_masked: 'sk-t...9876',
+            base_url: body.llm_base_url ?? null,
+            model: body.llm_model ?? null,
+            sdk: body.llm_sdk ?? 'openai',
+            provider: body.llm_provider ?? '',
+          },
+        };
+      }
+      if (path === '/api/v2/settings') {
+        return { llm: { api_key_set: false, api_key_masked: '', model: null, sdk: 'openai', ...TD_SETTINGS } };
+      }
+      if (path === '/api/v2/providers') return REGISTRY;
+      if (path === '/api/v2/settings/api-key/status') return { configured: false, source: 'none' };
+      return {};
+    });
+  }
+
+  function settingsPutBody(): Record<string, unknown> | null {
+    const call = apiMock.mock.calls.find(
+      ([path, opts]) => path === '/api/v2/settings' && (opts as RequestInit)?.method === 'PUT',
+    );
+    return call ? JSON.parse(String((call[1] as RequestInit).body)) : null;
+  }
+
+  it('renders the signin button for tokendance in global mode only', async () => {
+    mockApi({ settings: TD_SETTINGS });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByTestId('tokendance-signin')).toBeTruthy());
+  });
+
+  it('does not render the button for other providers', async () => {
+    mockApi({ settings: { provider: 'deepseek', base_url: 'https://api.deepseek.com' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('deepseek');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it('does not render the button in project mode', async () => {
+    mockApi({});
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'tokendance', model: 'deepseek-v4-pro', sdk: 'openai' }}
+        onChange={vi.fn()}
+      />,
+    );
+    // Project mode renders collapsed — expand the section once it loads.
+    fireEvent.click(await screen.findByRole('button', { name: /LLM Provider/ }));
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('tokendance');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it('click → POST, busy state disables the button, success persists defaults and retires the button', async () => {
+    let release!: (v: unknown) => void;
+    mockApiWithSignin(() => new Promise((res) => { release = res; }));
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+
+    fireEvent.click(btn);
+    // In flight: disabled + browser hint visible.
+    await waitFor(() => expect((btn as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.getByText(/browser window that just opened/)).toBeTruthy();
+    expect(apiMock).toHaveBeenCalledWith(
+      '/api/v2/providers/tokendance/signin',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    release({ api_key_set: true, api_key_masked: 'sk-t...9876' });
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    // One tap lands in a usable configuration: provider + the registry's
+    // default model persisted in a single settings write.
+    expect(settingsPutBody()).toMatchObject({
+      llm_provider: 'tokendance',
+      llm_model: 'deepseek-v4-flash',
+      llm_base_url: 'https://tokendance.space/gateway/v1',
+    });
+    // The saved TokenDance key retires the one-click button; the stored-key
+    // line reflects the mask without a page reload.
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+    expect(screen.getByText(/sk-t\.\.\.9876/)).toBeTruthy();
+  });
+
+  it('an explicit model choice survives signin — no default clobber', async () => {
+    mockApiWithSignin(async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }));
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+    // Fixture catalog has no suggested_models → free-text model input.
+    fireEvent.change(screen.getByPlaceholderText(/Type model name/), {
+      target: { value: 'glm-5.2' },
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    expect(settingsPutBody()).toMatchObject({ llm_model: 'glm-5.2' });
+  });
+
+  it('button is absent when the saved provider is tokendance with a key set', async () => {
+    mockApi({ settings: { ...TD_SETTINGS, api_key_set: true, api_key_masked: 'sk-t...1111' } });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('tokendance');
+    });
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+  });
+
+  it("still offers signin when another provider's key occupies the global slot", async () => {
+    mockApi({
+      settings: {
+        provider: 'deepseek',
+        base_url: 'https://api.deepseek.com',
+        api_key_set: true,
+        api_key_masked: 'sk-d...2222',
+      },
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getAllByRole('combobox')[0]).toBeTruthy());
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'tokendance' } });
+    await waitFor(() => expect(screen.getByTestId('tokendance-signin')).toBeTruthy());
+  });
+
+  it('shows the Watcha sponsor caption under the signin button', async () => {
+    mockApi({ settings: TD_SETTINGS });
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(screen.getByTestId('tokendance-sponsor')).toBeTruthy());
+  });
+
+  it('cards mount folds into the ready-to-use summary after signin; Adjust reopens the form', async () => {
+    mockApiWithSignin(async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }));
+    render(<LLMProviderSettings mode="global" providerPicker="cards" hideSaveButton />);
+    fireEvent.click(await screen.findByTestId('tokendance-signin'));
+
+    const summary = await screen.findByTestId('tokendance-signin-summary');
+    // Shows the working default by its catalog display name + the masked key.
+    expect(summary.textContent).toContain('DeepSeek V4 Flash');
+    expect(summary.textContent).toContain('sk-t...9876');
+    // The form (and its signin button) is folded away.
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('tokendance-summary-change'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('tokendance-signin-summary')).toBeNull(),
+    );
+    // Reopened form is populated with the persisted default model.
+    expect(
+      (screen.getByDisplayValue('deepseek-v4-flash') as HTMLInputElement).value,
+    ).toBe('deepseek-v4-flash');
+  });
+
+  it('failure surfaces the backend error message', async () => {
+    mockApiWithSignin(() =>
+      Promise.reject(new Error('sign-in timed out waiting for the browser redirect')),
+    );
+    render(<LLMProviderSettings mode="global" />);
+    const btn = await screen.findByTestId('tokendance-signin');
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(
+        screen.getByText('sign-in timed out waiting for the browser redirect'),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByTestId('tokendance-signin-msg').className).toContain('text-error');
   });
 });

@@ -2,13 +2,14 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ProviderRegistry, ProviderInfo } from '../types';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { Locale } from '../i18n/locales';
+import watchaLogo from '../assets/watcha-logo.png';
 
 interface LLMSettingsResponse {
   llm: {
@@ -93,6 +94,22 @@ export function regionDefaultForProvider(
   info: Pick<ProviderInfo, 'china_base_url'> | undefined,
 ): 'global' | 'china' {
   return info?.china_base_url ? 'china' : 'global';
+}
+
+/** Collapsed-by-default wrapper for the long explanatory hint paragraphs
+ * (bug #49). Native <details> keeps it state-free — this file already carries
+ * three useState toggles, and the disclosure needs no programmatic control.
+ * Short safety captions (china-only / no-China-endpoint) stay outside it. */
+function HintDetails({ className = '', children }: { className?: string; children: ReactNode }) {
+  const t = useT();
+  return (
+    <details className={`text-xs ${className}`}>
+      <summary className="cursor-pointer text-secondary hover:text-primary">
+        {t('llm.hints.details')}
+      </summary>
+      <div className="mt-1">{children}</div>
+    </details>
+  );
 }
 
 export default function LLMProviderSettings({
@@ -326,6 +343,14 @@ export default function LLMProviderSettings({
   const currentProviderHasChinaUrl =
     provider !== CUSTOM_PROVIDER_KEY && !!providers[provider]?.china_base_url;
 
+  // Once a TokenDance key is saved (saved provider is tokendance and the
+  // global slot holds a key), the one-click button retires — TokenDance then
+  // behaves like every other provider; top-up happens on their site via the
+  // regular console link. Browsing to the card while another provider's key
+  // occupies the slot still offers the one-click signin.
+  const tokendanceKeyActive =
+    globalSettings?.provider === 'tokendance' && !!globalSettings?.api_key_set;
+
   // Fixed order, shared by the dropdown and the wizard's preset cards. The
   // registry's literal 'custom' entry is excluded — the CUSTOM_PROVIDER_KEY
   // sentinel below is the single Custom affordance; rendering both produced
@@ -539,6 +564,77 @@ export default function LLMProviderSettings({
     }
   }
 
+  // TokenDance one-click key provisioning (Spec 47 Tier 2). Blocking POST:
+  // the daemon opens the system browser for consent (up to ~5 min) and the
+  // response arrives only after the key is minted, validated, and stored.
+  const [tokendanceSigninBusy, setTokendanceSigninBusy] = useState(false);
+  const [tokendanceSigninMsg, setTokendanceSigninMsg] =
+    useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // Post-signin collapsed summary (wizard mount only): after a successful
+  // one-click signin the full form folds into a "ready to use" card so the
+  // user sees the working defaults instead of a wall of fields.
+  const [postSigninCollapsed, setPostSigninCollapsed] = useState(false);
+
+  async function handleTokendanceSignin() {
+    setTokendanceSigninBusy(true);
+    setTokendanceSigninMsg(null);
+    try {
+      const res = await api<{ api_key_set: boolean; api_key_masked: string }>(
+        '/api/v2/providers/tokendance/signin',
+        { method: 'POST' },
+      );
+      setApiKeyStatus({ configured: true, source: 'keyring' });
+      setApiKey('');
+      // The key slot now holds a TokenDance key, so persist the provider and
+      // the registry's default model (unless the user already picked one) —
+      // one tap must land in a fully usable configuration (Spec 47 §3d).
+      // Values are computed from click-time state, never read back from
+      // state set inside this handler (React 19 batching).
+      const info = providers['tokendance'];
+      const chosenModel =
+        model.trim() || modelInputValue.trim() || info?.default_model || '';
+      try {
+        const data = await api<LLMSettingsResponse>('/api/v2/settings', {
+          method: 'PUT',
+          body: JSON.stringify({
+            llm_provider: 'tokendance',
+            llm_base_url: baseUrl.trim() || info?.base_url || '',
+            llm_sdk: info?.sdk ?? 'openai',
+            llm_model: chosenModel,
+          }),
+        });
+        setGlobalSettings({
+          ...data.llm,
+          api_key_set: true,
+          api_key_masked: res.api_key_masked,
+        });
+        if (chosenModel) {
+          setModel(chosenModel);
+          setModelInputValue(chosenModel);
+        }
+        if (providerPicker === 'cards') setPostSigninCollapsed(true);
+      } catch {
+        // Key is stored even if the settings write failed — keep the success
+        // state and let the user persist provider/model via Save.
+        setGlobalSettings(prev =>
+          prev
+            ? { ...prev, api_key_set: true, api_key_masked: res.api_key_masked }
+            : prev,
+        );
+      }
+      setTokendanceSigninMsg({ kind: 'ok', text: t('llm.tokendance.signin.success') });
+    } catch (err: unknown) {
+      setTokendanceSigninMsg({
+        kind: 'err',
+        text: err instanceof Error && err.message
+          ? err.message
+          : t('llm.tokendance.signin.failed'),
+      });
+    } finally {
+      setTokendanceSigninBusy(false);
+    }
+  }
+
   // Core save logic (shared between form submit and external saveRef)
   async function doSave(): Promise<boolean> {
     setSaving(true);
@@ -647,9 +743,11 @@ export default function LLMProviderSettings({
   const globalHeader = mode === 'global' ? (
     <div className="mb-4">
       <h2 className="text-sm font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
-      <p className="text-xs text-secondary">
-        {t('llm.global.subhead')}
-      </p>
+      <HintDetails>
+        <p className="text-xs text-secondary">
+          {t('llm.global.subhead')}
+        </p>
+      </HintDetails>
     </div>
   ) : null;
 
@@ -657,9 +755,11 @@ export default function LLMProviderSettings({
   const fieldsJSX = (
     <div className="space-y-5">
       {mode === 'project' && (
-        <p className="text-xs text-secondary -mt-2">
-          {t('llm.project.overrideHint')}
-        </p>
+        <HintDetails className="-mt-2">
+          <p className="text-xs text-secondary">
+            {t('llm.project.overrideHint')}
+          </p>
+        </HintDetails>
       )}
 
       {/* Provider */}
@@ -706,7 +806,9 @@ export default function LLMProviderSettings({
           </select>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
-          <p className="text-xs text-secondary mt-1">{providers[provider].notes}</p>
+          <HintDetails className="mt-1">
+            <p className="text-xs text-secondary">{providers[provider].notes}</p>
+          </HintDetails>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.no_china_endpoint && (
           <p className="text-xs text-secondary/70 mt-1">{t('llm.provider.noChinaEndpoint')}</p>
@@ -750,8 +852,52 @@ export default function LLMProviderSettings({
       {/* API Key */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
+        {provider === 'tokendance' && mode === 'global' &&
+          (!tokendanceKeyActive || tokendanceSigninMsg) && (
+          <div className="mb-2">
+            {!tokendanceKeyActive && (
+              <>
+                <button
+                  type="button"
+                  data-testid="tokendance-signin"
+                  onClick={handleTokendanceSignin}
+                  disabled={tokendanceSigninBusy}
+                  className="inline-flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 bg-card text-primary border border-border hover:border-[#8bdc7e] hover:shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+                >
+                  {tokendanceSigninBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <img
+                      src={watchaLogo}
+                      alt=""
+                      className="w-5 h-5 rounded-full"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {tokendanceSigninBusy
+                    ? t('llm.tokendance.signin.waiting')
+                    : t('llm.tokendance.signin.button')}
+                </button>
+                <p className="text-xs text-secondary/70 mt-1" data-testid="tokendance-sponsor">
+                  {t('llm.tokendance.sponsor')}
+                </p>
+              </>
+            )}
+            {tokendanceSigninBusy && (
+              <p className="text-xs text-secondary mt-1">{t('llm.tokendance.signin.hint')}</p>
+            )}
+            {tokendanceSigninMsg && (
+              <p
+                data-testid="tokendance-signin-msg"
+                className={`text-xs mt-1 ${tokendanceSigninMsg.kind === 'ok' ? 'text-success' : 'text-error'}`}
+              >
+                {tokendanceSigninMsg.text}
+              </p>
+            )}
+          </div>
+        )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.console_url && (
-          <div className="mb-1.5">
+          <HintDetails className="mb-1.5">
             <a
               href={providers[provider].console_url!}
               target="_blank"
@@ -761,7 +907,7 @@ export default function LLMProviderSettings({
               {t('llm.apiKey.getKey')}
             </a>
             <p className="text-xs text-secondary/70 mt-0.5">{t('llm.apiKey.howTo')}</p>
-          </div>
+          </HintDetails>
         )}
         <input
           type="password"
@@ -858,20 +1004,14 @@ export default function LLMProviderSettings({
                 </li>
               </ul>
             )}
-            {modelSource === 'api' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.api')}
-              </p>
-            )}
-            {modelSource === 'suggested' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.suggested')}
-              </p>
-            )}
-            {modelSource === 'freetext' && (
-              <p className="text-xs text-secondary mt-1">
-                {t('llm.model.source.freetext')}
-              </p>
+            {modelSource !== 'none' && (
+              <HintDetails className="mt-1">
+                <p className="text-xs text-secondary">
+                  {modelSource === 'api' && t('llm.model.source.api')}
+                  {modelSource === 'suggested' && t('llm.model.source.suggested')}
+                  {modelSource === 'freetext' && t('llm.model.source.freetext')}
+                </p>
+              </HintDetails>
             )}
           </div>
         )}
@@ -979,12 +1119,57 @@ export default function LLMProviderSettings({
     </div>
   );
 
+  // ---- Post-signin summary (wizard mount) ----
+  // After one-click provisioning the form folds into a "ready to use" card:
+  // the defaults are already persisted, so the user only needs to know it
+  // works — and where to click if they want something different.
+  const summaryModel = globalSettings?.model || '';
+  const summaryModelLabel =
+    providers['tokendance']?.models?.[summaryModel]?.display_name || summaryModel;
+  const signinSummaryJSX = (
+    <div
+      data-testid="tokendance-signin-summary"
+      className="border border-success/30 bg-success/5 rounded-lg p-4"
+    >
+      <div className="flex items-start gap-3">
+        <img
+          src={watchaLogo}
+          alt=""
+          className="w-8 h-8 rounded-full shrink-0"
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-primary">
+            <Check className="w-4 h-4 text-success shrink-0" />
+            {t('llm.tokendance.summary.title')}
+          </p>
+          <p className="text-xs text-secondary mt-1">
+            {t('llm.tokendance.summary.body', { model: summaryModelLabel })}
+          </p>
+          {globalSettings?.api_key_masked && (
+            <p className="text-xs text-secondary/70 mt-1">
+              {t('llm.apiKey.current', { masked: globalSettings.api_key_masked })}
+            </p>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="tokendance-summary-change"
+        onClick={() => setPostSigninCollapsed(false)}
+        className="mt-3 text-xs text-accent hover:underline"
+      >
+        {t('llm.tokendance.summary.change')}
+      </button>
+    </div>
+  );
+
   // ---- Render ----
   if (mode === 'global') {
     return (
       <form onSubmit={handleGlobalSave}>
         {globalHeader}
-        {fieldsJSX}
+        {postSigninCollapsed ? signinSummaryJSX : fieldsJSX}
       </form>
     );
   }

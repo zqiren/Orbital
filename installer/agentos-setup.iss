@@ -3,17 +3,21 @@
 
 [Setup]
 AppName=Orbital
-AppVersion=0.8.5
+AppVersion=0.8.6
 AppPublisher=Orbital
 DefaultDirName=C:\Orbital
 DisableDirPage=no
 DefaultGroupName=Orbital
-OutputBaseFilename=Orbital-Setup-0.8.5
+OutputBaseFilename=Orbital-Setup-0.8.6
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\bin\Orbital.exe
 PrivilegesRequired=admin
+; Must match SINGLE_INSTANCE_MUTEX_NAME in agent_os/desktop/main.py. Makes
+; Setup/Uninstall ask the user to close a running Orbital instead of writing
+; files under a live process and then launching a second copy (line 53).
+AppMutex=OrbitalDesktopShell
 
 [Files]
 ; Application binaries (PyInstaller output)

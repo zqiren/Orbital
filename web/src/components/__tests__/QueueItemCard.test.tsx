@@ -104,3 +104,35 @@ describe('QueueItemCard', () => {
     expect(screen.getByText(/Interrupted 2/)).toBeTruthy();
   });
 });
+
+describe('QueueItemCard — attached files', () => {
+  it('renders the basename of each file_ref on a queued item', () => {
+    render(
+      <QueueItemCard
+        item={makeItem({
+          file_refs: ['uploads/2026-08-11T101010-shot.png', 'uploads/notes.txt'],
+        })}
+      />,
+    );
+    const strip = screen.getByTestId('queue-item-file-refs');
+    expect(strip.textContent).toContain('2026-08-11T101010-shot.png');
+    expect(strip.textContent).toContain('notes.txt');
+    // Directory components are dropped from the label but kept in the title.
+    expect(strip.textContent).not.toContain('uploads/');
+    expect(screen.getByTitle('uploads/notes.txt')).toBeTruthy();
+  });
+
+  it('renders nothing when file_refs is empty', () => {
+    render(<QueueItemCard item={makeItem()} />);
+    expect(screen.queryByTestId('queue-item-file-refs')).toBeNull();
+  });
+
+  it('renders attached files on a running item too', () => {
+    render(
+      <QueueItemCard
+        item={makeItem({ state: 'running', file_refs: ['uploads/a.png'] })}
+      />,
+    );
+    expect(screen.getByTestId('queue-item-file-refs').textContent).toContain('a.png');
+  });
+});
