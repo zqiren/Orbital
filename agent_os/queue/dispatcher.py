@@ -854,6 +854,12 @@ class QueueDispatcher:
     # First-turn signal rate is 0% under either placement on ambiguous
     # tasks, so the corrective turn does the load-bearing work; the header
     # makes the corrective injection legible to the model when it fires.
+    #
+    # COUPLING: session auto-naming strips this paragraph by matching its
+    # first sentence and final "Do not end with plain text.\n" (see
+    # _QUEUE_CONTRACT_START/_END in agent_os/agent/session.py). If either
+    # sentence is reworded, update those markers + the derivation tests, or
+    # queue session names degrade to showing this contract's head.
     HEADER_CONTRACT = (
         "You are working on a queue item. When you finish, call "
         "mark_task_complete(summary). If you cannot proceed — stuck, "

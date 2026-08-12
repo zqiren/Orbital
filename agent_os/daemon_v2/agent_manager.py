@@ -3583,10 +3583,16 @@ class AgentManager:
                 continue
             if last_real is not None:
                 last_activity_at = last_real.get("timestamp")
-            # Name: stored meta name wins; else derive from first user message
-            # (lazy backfill, in-memory only — no file rewrite); else None.
-            from agent_os.agent.session import _derive_name
-            name = stored_name if stored_name is not None else _derive_name(first_user_content)
+            # Name: stored meta name wins — unless it is machine markup from
+            # the pre-strip auto-namer ("[QUEUE ITEM…", "<attached_files>…"),
+            # which is ignored so legacy sessions heal (mirrors Session.load);
+            # else derive from first user message (lazy backfill, in-memory
+            # only — no file rewrite); else None.
+            from agent_os.agent.session import _derive_name, is_machine_derived_name
+            if stored_name is not None and not is_machine_derived_name(stored_name):
+                name = stored_name
+            else:
+                name = _derive_name(first_user_content)
             # Address a disk-only session by its unique session_uuid: the F1
             # session_id on disk is often "default" and not unique across many
             # prior logs, which would shadow the active session and break the
