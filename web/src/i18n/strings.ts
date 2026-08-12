@@ -422,7 +422,7 @@ export const STRINGS = {
   "llm.global.heading": { en: "Default LLM Settings", zh: "默认大模型设置" },
   "llm.global.subhead": { en: "Used by all projects unless overridden in project settings.", zh: "除非在项目空间中额外配置，否则所有项目空间都将使用这些设置。" },
   "llm.hints.details": { en: "Details", zh: "详情" },
-  "llm.tokendance.signin.button": { en: "Sign in to TokenDance — get a free key", zh: "一键登录，免费领取 Token" },
+  "llm.tokendance.signin.button": { en: "Sign in to TokenDance", zh: "一键登录" },
   "llm.tokendance.signin.failed": { en: "Sign-in failed.", zh: "登录失败。" },
   "llm.tokendance.signin.hint": { en: "Complete the sign-in and confirmation in the browser window that just opened.", zh: "请在刚打开的浏览器窗口中完成登录和授权确认。" },
   "llm.tokendance.signin.success": { en: "API key created and saved.", zh: "API Key 已创建并保存。" },
