@@ -765,7 +765,10 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
   const [providerKeyAvailable, setProviderKeyAvailable] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    api<{ llm?: { provider?: string; api_key_set?: boolean } }>('/api/v2/settings')
+    // Promise.resolve: harness-proof against api() doubles that return a bare
+    // value (single-shot test mocks fall through to undefined) — an unhandled
+    // .then here is a teardown-timing flake, not a render failure.
+    Promise.resolve(api<{ llm?: { provider?: string; api_key_set?: boolean } }>('/api/v2/settings'))
       .then(d => {
         if (cancelled) return;
         setProviderKeyAvailable(d?.llm?.provider === 'deepseek' && d?.llm?.api_key_set === true);
