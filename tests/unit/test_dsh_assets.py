@@ -40,6 +40,24 @@ EXPECTED_DEPENDENCIES = {
     "@deepseek-ai/dsh-tool-fs",
 }
 
+# Task 7's composition-local shims. These are OURS — sources under
+# ``assets/dsh/shims/``, installed by ``npm ci`` as ``file:`` links so the
+# composition can name them as bare specifiers (the per-spawn rendered
+# cordis.yml lives in the workspace, so a relative plugin name would resolve
+# against the wrong directory). They are deliberately exempt from the
+# exact-version pin rule below and nothing else; a registry dependency that
+# tried to hide here would still have to be listed by name.
+LOCAL_SHIM_DEPENDENCIES = {
+    "@orbital/dsh-acp-activity-shim": "file:./shims/activity",
+}
+
+# Everything the installer stages into the user's data dir. The leak scan runs
+# over all of it, shim sources included — they ship exactly like the manifest.
+SHIPPED_FILES = sorted(
+    p for p in ASSETS_DIR.rglob("*")
+    if p.is_file() and "node_modules" not in p.parts
+)
+
 EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
 # A key-shaped literal: an sk- prefix followed by enough payload to be real.
@@ -73,21 +91,54 @@ class TestPackageJson:
 
     def test_declares_all_nine_plugins(self, package_json):
         deps = package_json.get("dependencies", {})
-        assert set(deps) == EXPECTED_DEPENDENCIES, (
-            "dependencies must name all nine composition plugins exactly; "
-            f"missing={sorted(EXPECTED_DEPENDENCIES - set(deps))} "
-            f"unexpected={sorted(set(deps) - EXPECTED_DEPENDENCIES)}"
+        expected = EXPECTED_DEPENDENCIES | set(LOCAL_SHIM_DEPENDENCIES)
+        assert set(deps) == expected, (
+            "dependencies must name all nine composition plugins plus the "
+            "composition-local shims exactly; "
+            f"missing={sorted(expected - set(deps))} "
+            f"unexpected={sorted(set(deps) - expected)}"
         )
 
-    def test_every_dependency_is_pinned_exactly(self, package_json):
+    def test_every_upstream_dependency_is_pinned_exactly(self, package_json):
         """No ^ or ~ anywhere — every dsh package depends on siblings via ^ ranges."""
         deps = package_json.get("dependencies", {})
         floating = {
             name: spec
             for name, spec in deps.items()
-            if not EXACT_VERSION_RE.match(spec)
+            if name not in LOCAL_SHIM_DEPENDENCIES
+            and not EXACT_VERSION_RE.match(spec)
         }
         assert not floating, f"dependencies must be exact-pinned, found ranges: {floating}"
+
+    def test_local_shims_are_declared_as_file_dependencies(self, package_json):
+        """A shim must resolve from the install dir, and only from there.
+
+        A shim that drifted to a registry spec would be fetched from npm — a
+        supply-chain surface for code we wrote ourselves.
+        """
+        deps = package_json.get("dependencies", {})
+        for name, spec in LOCAL_SHIM_DEPENDENCIES.items():
+            assert deps.get(name) == spec, (
+                f"{name} must be declared as {spec!r}, found {deps.get(name)!r}"
+            )
+
+    def test_every_local_shim_source_is_actually_shipped(self, package_json):
+        """``npm ci`` hard-fails on a ``file:`` target that is not there."""
+        for name, spec in LOCAL_SHIM_DEPENDENCIES.items():
+            shim_dir = ASSETS_DIR / spec.removeprefix("file:")
+            assert shim_dir.is_dir(), (
+                f"{name} points at {shim_dir}, which does not exist — "
+                f"npm ci would fail on a fresh install"
+            )
+            manifest = shim_dir / "package.json"
+            assert manifest.is_file(), f"{shim_dir} has no package.json"
+            declared = json.loads(manifest.read_text(encoding="utf-8"))
+            assert declared.get("name") == name, (
+                f"{shim_dir}/package.json declares {declared.get('name')!r}, "
+                f"but package.json depends on {name!r}"
+            )
+            entry = shim_dir / declared.get("main", "index.js")
+            assert entry.is_file(), f"{name} declares a missing entrypoint: {entry}"
 
     def test_is_private_and_not_publishable(self, package_json):
         assert package_json.get("private") is True, (
@@ -111,11 +162,34 @@ class TestPackageLock:
     def test_locked_versions_match_the_pins(self, package_json, package_lock):
         packages = package_lock.get("packages", {})
         for name, pinned in sorted(package_json.get("dependencies", {}).items()):
+            if name in LOCAL_SHIM_DEPENDENCIES:
+                continue
             entry = packages.get(f"node_modules/{name}")
             assert entry is not None, f"{name} is pinned but absent from the lockfile tree"
             assert entry.get("version") == pinned, (
                 f"{name}: package.json pins {pinned} but the lockfile resolves "
                 f"{entry.get('version')}"
+            )
+
+    def test_local_shims_are_locked_as_links_to_the_shipped_source(
+        self, package_lock
+    ):
+        """A ``file:`` dep locks as a link plus an entry for the target dir."""
+        packages = package_lock.get("packages", {})
+        for name, spec in LOCAL_SHIM_DEPENDENCIES.items():
+            target = spec.removeprefix("file:").removeprefix("./")
+            entry = packages.get(f"node_modules/{name}")
+            assert entry is not None, (
+                f"{name} is declared but absent from the lockfile — regenerate it"
+            )
+            assert entry.get("link") is True, (
+                f"{name} must lock as a link to the in-tree source, got {entry}"
+            )
+            assert entry.get("resolved") == target, (
+                f"{name} links to {entry.get('resolved')!r}, expected {target!r}"
+            )
+            assert packages.get(target, {}).get("name") == name, (
+                f"the lockfile has no source entry for {target!r} — regenerate it"
             )
 
     def test_lockfile_root_mirrors_the_manifest(self, package_json, package_lock):
@@ -215,7 +289,7 @@ class TestCordisTemplate:
 
 class TestNoLeakedSecretsOrPaths:
     @pytest.mark.parametrize(
-        "path", [PACKAGE_JSON, PACKAGE_LOCK, CORDIS_TEMPLATE], ids=lambda p: p.name
+        "path", SHIPPED_FILES, ids=lambda p: str(p.relative_to(ASSETS_DIR))
     )
     def test_no_key_material(self, path):
         raw = path.read_text(encoding="utf-8")
@@ -226,7 +300,7 @@ class TestNoLeakedSecretsOrPaths:
         )
 
     @pytest.mark.parametrize(
-        "path", [PACKAGE_JSON, PACKAGE_LOCK, CORDIS_TEMPLATE], ids=lambda p: p.name
+        "path", SHIPPED_FILES, ids=lambda p: str(p.relative_to(ASSETS_DIR))
     )
     def test_no_absolute_developer_paths(self, path):
         raw = path.read_text(encoding="utf-8")

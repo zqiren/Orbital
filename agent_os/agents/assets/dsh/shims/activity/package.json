@@ -1,0 +1,12 @@
+{
+  "name": "@orbital/dsh-acp-activity-shim",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ORBITAL TEMPORARY SHIM — emits standard ACP tool_call session updates for dsh tool activity. Delete when upstream dsh-acp forwards tool events natively.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  }
+}

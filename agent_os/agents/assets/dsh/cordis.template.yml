@@ -54,3 +54,28 @@
       maxBytes: 65536
     persona: |                   # renderer overwrites with the real rendered sub-agent prompt
       You are a coding assistant operating inside an Orbital project workspace.
+
+# ORBITAL TEMPORARY SHIM — remove when upstream dsh-acp forwards tool activity
+# natively (upstream PR: not yet filed — see docs/superpowers/plans/
+# 2026-08-13-deepseek-harness-subagent.md, Task 7). Removal procedure: delete
+# this block, drop the @orbital/dsh-acp-activity-shim dependency from
+# package.json, refresh package-lock.json, re-run the Task 8 smoke. No Orbital
+# code changes. INVARIANT: no Orbital Python may reference this id.
+# The only contract is standard ACP (session/update tool_call notifications).
+#
+# dsh-acp forwards no tool events ("committed answers only"), so a turn that
+# ran five commands reaches Orbital as one bubble. The core records them all;
+# this observes them and emits the standard ACP updates Orbital's transport is
+# already listening for.
+- id: orbital-acp-activity
+  name: '@orbital/dsh-acp-activity-shim'
+
+# There is deliberately NO `orbital-acp-resume` block. Restart-resume was
+# assessed in the same spike and dropped: the ACP `loadSession` capability flag
+# and the SDK's `agent.loadSession` dispatch both live inside dsh-acp's closure,
+# which publishes no Cordis service, so no sibling plugin can supply them. The
+# core is ready (`ctx.agents.resume()` already does persistence-prepare plus
+# session reconstruction and IS reachable from a sibling) — the gap is purely
+# dsh-acp's adapter, which makes it a small upstream PR rather than a fork we
+# carry. v1 ships the verified honest degradation instead: Orbital's transport
+# reports ('fresh', 'resume_unsupported') when the capability is absent.

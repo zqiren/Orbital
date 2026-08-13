@@ -192,8 +192,13 @@ class TestShippedTemplate:
             "Orbital sub-agent prompt."
         )
         assert os.path.isabs(blocks["acp-agent"]["config"]["persistenceRoot"])
-        # Every shipped plugin must survive the round-trip.
-        assert len(blocks) == 9
+        # Every shipped plugin must survive the round-trip — including blocks
+        # the renderer knows nothing about, like Task 7's activity shim.
+        # Compared against the template rather than a hardcoded count, so
+        # adding a plugin does not fail a test that is about preservation.
+        with open(SHIPPED_TEMPLATE, "r", encoding="utf-8") as f:
+            shipped = yaml.safe_load(f)
+        assert set(blocks) == {b["id"] for b in shipped}
 
 
 class TestRenderErrors:
