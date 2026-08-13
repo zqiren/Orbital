@@ -35,6 +35,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 
@@ -677,6 +678,13 @@ class TestInstallRoute:
         assert resp.status_code == 400
         assert "windows" in resp.json()["detail"]
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="dsh declares no Windows auto_detect path by design (install "
+               "is platform-gated off Windows), so resolve_binary can never "
+               "report the planted binary and the 'installed' state is "
+               "unreachable here",
+    )
     def test_install_lifecycle_is_refresh_safe(self, client, tmp_path,
                                                monkeypatch):
         """202 immediately; a page refresh mid-install reads ``installing``

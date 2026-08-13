@@ -202,7 +202,12 @@ class SetupEngine:
             # environment variable, and dev daemons never export one.
             substituted = raw_path.replace(
                 ORBITAL_DATA_DIR_TOKEN, self._data_dir)
-            expanded = os.path.expandvars(os.path.expanduser(substituted))
+            # normpath: manifests write auto_detect entries with forward
+            # slashes while the substituted data dir is OS-native, so the
+            # joined path is mixed-separator on Windows. isfile() tolerates
+            # that; the spawn command and path comparisons should not.
+            expanded = os.path.normpath(
+                os.path.expandvars(os.path.expanduser(substituted)))
             if os.path.isfile(expanded):
                 self._resolved_paths[manifest.slug] = expanded
                 return expanded
