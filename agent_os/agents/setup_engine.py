@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 # action that could change the result (install, login, refresh).
 CHECK_ALL_CACHE_TTL_SECONDS = 60
 
+# The one placeholder in the manifest system, expanded in ``setup.auto_detect``
+# entries only. Agents Orbital installs itself land under the daemon's data dir,
+# whose location is a runtime fact (dev daemons, the packaged app, and tests all
+# differ) and so cannot be written into the read-only bundled manifest.
+# ``runtime.command`` and ``runtime.args`` stay strict passthrough.
+ORBITAL_DATA_DIR_TOKEN = "${ORBITAL_DATA_DIR}"
+
 
 class SetupEngine:
     """Probes the system for agent readiness based on manifest metadata."""
@@ -38,10 +45,14 @@ class SetupEngine:
         registry: AgentRegistry,
         credential_store=None,
         sub_agent_config_store=None,
+        data_dir: str = "orbital-data",
     ) -> None:
         self._registry = registry
         self._credential_store = credential_store
         self._sub_agent_config_store = sub_agent_config_store
+        # Absolutised once: auto_detect probes and the composition renderer
+        # both need a path that survives a cwd change mid-daemon.
+        self._data_dir = os.path.abspath(data_dir)
         self._resolved_paths: dict[str, str] = {}  # slug -> resolved binary path
         # In-memory cache of the last check_all() result. Tuple of
         # (results, expires_at_monotonic). None when empty or invalidated.
@@ -50,6 +61,16 @@ class SetupEngine:
     def set_sub_agent_config_store(self, store) -> None:
         """Late-bind the sub-agent config store (called by app factory)."""
         self._sub_agent_config_store = store
+
+    @property
+    def data_dir(self) -> str:
+        """Absolute path of the daemon's data dir (where agents are installed)."""
+        return self._data_dir
+
+    @property
+    def sub_agent_config_store(self):
+        """The bound sub-agent config store, or None."""
+        return self._sub_agent_config_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -166,7 +187,11 @@ class SetupEngine:
         current_os = detect_os()
         auto_paths = manifest.setup.auto_detect.get(current_os, [])
         for raw_path in auto_paths:
-            expanded = os.path.expandvars(os.path.expanduser(raw_path))
+            # ${ORBITAL_DATA_DIR} is resolved before expandvars: it is not an
+            # environment variable, and dev daemons never export one.
+            substituted = raw_path.replace(
+                ORBITAL_DATA_DIR_TOKEN, self._data_dir)
+            expanded = os.path.expandvars(os.path.expanduser(substituted))
             if os.path.isfile(expanded):
                 self._resolved_paths[manifest.slug] = expanded
                 return expanded

@@ -341,6 +341,54 @@ class SubAgentManager:
                 return args[i + 1]
         return None
 
+    def _render_spawn_composition(self, manifest, handle: str, workspace: str,
+                                  persona: str | None) -> str:
+        """Render this spawn's composition file and return its absolute path.
+
+        One file per spawn, uniquely named, under the workspace's sub-agent
+        dir. Same-slug dispatch is unrestricted across projects and sessions,
+        so a shared config file would be a race by construction.
+
+        ``persona=None`` (the prompt render failed upstream) leaves the
+        template's own persona in place rather than blanking it.
+        """
+        from agent_os.agents.composition import gc_stale, render_composition
+        from agent_os.daemon_v2.sub_agent_config_store import resolve_params
+
+        if not workspace:
+            raise ValueError(
+                f"'{handle}' needs a project workspace to render its "
+                f"configuration into"
+            )
+        data_dir = getattr(self._setup_engine, "data_dir", None)
+        if not data_dir:
+            raise ValueError(
+                "setup engine has no data dir; cannot locate the installed "
+                f"composition template for '{handle}'"
+            )
+        template_path = os.path.join(
+            data_dir, "agents", manifest.slug, manifest.runtime.config_template,
+        )
+
+        out_dir = ProjectPaths(workspace).sub_agent_dir(handle)
+        # Opportunistic: renders whose adapter never reached the stop path
+        # (daemon crash, unkillable slot) would otherwise accumulate here.
+        gc_stale(out_dir)
+
+        params = resolve_params(
+            manifest.slug,
+            getattr(self._setup_engine, "sub_agent_config_store", None),
+        )
+        return render_composition(
+            template_path,
+            model=params.get("model"),
+            sandbox_mode=params.get("permission-mode"),
+            persona=persona,
+            persistence_root=os.path.join(
+                out_dir, f"{manifest.slug}-sessions"),
+            out_dir=out_dir,
+        )
+
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
                            resume_record: dict | None = None):
         """Resolve the appropriate transport for a manifest.
@@ -856,6 +904,25 @@ class SubAgentManager:
                 type(transport).__name__,
             )
 
+        # Composition rendering: a manifest declaring runtime.config_template
+        # configures itself through a file, not argv. The persona it carries is
+        # the sub-agent prompt rendered above — for an acp-sdk agent, which
+        # never receives ``system_prompt``, this file is that prompt's ONLY
+        # route. Rendered last so no earlier bail-out leaks a file.
+        rendered_config: str | None = None
+        if manifest.runtime.config_template:
+            try:
+                rendered_config = self._render_spawn_composition(
+                    manifest, handle, workspace, system_prompt,
+                )
+            except Exception as e:
+                logger.exception(
+                    "composition rendering failed for project=%s handle=%s",
+                    project_id, handle,
+                )
+                return f"Error: composition rendering failed: {e}"
+            config.args = list(config.args or []) + ["--config", rendered_config]
+
         adapter = CLIAdapter(
             handle=handle,
             display_name=manifest.name,
@@ -867,6 +934,9 @@ class SubAgentManager:
             session_id_pattern=manifest.runtime.session_id_pattern,
             transport=transport,
         )
+        # Travels with the adapter so the stop path can delete it; a rendered
+        # composition outlives nothing but its own spawn.
+        adapter._rendered_config_path = rendered_config
 
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
@@ -877,6 +947,8 @@ class SubAgentManager:
                     await adapter.stop()
                 except Exception:
                     pass
+                from agent_os.agents.composition import unlink_rendered
+                unlink_rendered(rendered_config)
                 return f"Error: adapter start failed: {e}"
             if sk not in self._adapters:
                 self._adapters[sk] = {}
@@ -1774,6 +1846,12 @@ class SubAgentManager:
                 adapters.pop(handle, None)
                 if not adapters:
                     self._adapters.pop(sk, None)
+                # The per-spawn composition dies with the spawn that read it.
+                # Only once the process is CONFIRMED dead: an unkillable slot
+                # keeps its file, and the spawn-time gc_stale sweeps it later.
+                from agent_os.agents.composition import unlink_rendered
+                unlink_rendered(
+                    getattr(adapter, "_rendered_config_path", None))
                 if isinstance(registry, BackgroundWorkRegistry):
                     registry.clear(project_id, session_id, handle)
             else:
