@@ -178,8 +178,12 @@ async def get_api_key_status():
 #
 # Single write surface for managing sub-agents at the daemon level: install
 # status, auth status, model/effort/permission-mode overrides, and login
-# trigger. Tokens stay in the CLI's own location (``~/.claude/``,
-# ``~/.codex/``, etc.) — Orbital never stores sub-agent credentials.
+# trigger. For agents that ship a credential store of their own, tokens stay
+# there (``~/.claude/``, ``~/.codex/``, etc.) and never enter Orbital's
+# storage. Agents with no such store (dsh) are the documented exception:
+# their API key is held in a dedicated keychain service via
+# ``SubAgentCredentialStore`` and written through the ``/credential`` routes
+# below. Either way the raw key never appears in a response.
 # ---------------------------------------------------------------------------
 
 
@@ -408,8 +412,9 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
 
     Captures stdout+stderr line by line and emits ``login.progress`` events
     over WebSocket. Final ``login.complete`` or ``login.failed`` carries the
-    return code. Tokens never enter Orbital's storage — the CLI writes them
-    to its own location.
+    return code. Tokens from this flow never enter Orbital's storage — the CLI
+    writes them to its own location. (Agents with no credential store of their
+    own don't come through here at all; they use the ``/credential`` routes.)
     """
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -467,8 +472,10 @@ async def trigger_sub_agent_login(slug: str):
     Returns immediately with a ``job_id``; progress streams over WebSocket
     via ``login.progress`` / ``login.complete`` / ``login.failed`` events.
 
-    Orbital does NOT capture or store the resulting credentials — the CLI
-    writes them to its own location (``~/.claude/``, ``~/.codex/``, etc.).
+    Orbital does NOT capture or store the credentials this flow produces — the
+    CLI writes them to its own location (``~/.claude/``, ``~/.codex/``, etc.).
+    Agents that ship no such store use ``/credential`` instead, which holds the
+    key in a dedicated keychain service.
     """
     command = _resolve_setup_command(slug, "login")
     if not command:
@@ -519,6 +526,114 @@ async def trigger_sub_agent_logout(slug: str):
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+
+
+class SubAgentCredentialRequest(BaseModel):
+    # Exactly one of ``value`` / ``use_llm_provider_key`` must be supplied.
+    key: str
+    value: str | None = None
+    use_llm_provider_key: bool = False
+
+
+def _mask_secret(value: str) -> str:
+    """first4...last4 — the only form a stored key may take in a response."""
+    if len(value) <= 8:
+        return "****"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _sub_agent_manifest(slug: str):
+    """Return the manifest for ``slug`` or raise the matching HTTPException."""
+    if _setup_engine is None:
+        raise HTTPException(status_code=503, detail="Setup engine not available")
+    registry = getattr(_setup_engine, "_registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Agent registry not available")
+    manifest = registry.get(slug)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {slug}")
+    return manifest
+
+
+def _validate_credential_key(manifest, key: str) -> None:
+    """Reject keys the agent's manifest doesn't declare."""
+    declared = [c.key for c in manifest.setup.credentials]
+    if key not in declared:
+        raise HTTPException(status_code=400, detail=(
+            f"unknown credential '{key}' for sub-agent '{manifest.slug}'. "
+            f"Declared credentials: {declared}"))
+
+
+def _sub_agent_credential_store():
+    """The dedicated keychain store SetupEngine resolves credentials from."""
+    store = getattr(_setup_engine, "_credential_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503, detail="Sub-agent credential store not available")
+    return store
+
+
+@router.post("/settings/sub-agents/{slug}/credential")
+async def set_sub_agent_credential(slug: str, req: SubAgentCredentialRequest):
+    """Store one manifest-declared credential for a sub-agent.
+
+    For agents that ship no credential store of their own. The value lands in
+    a dedicated OS keychain service and is injected into the spawn env by
+    SetupEngine. The response carries a mask only — never the raw key.
+
+    ``use_llm_provider_key: true`` copies the global LLM key server-side
+    instead of taking one in the body, so the client never has to hold key
+    text it already can't read back.
+    """
+    manifest = _sub_agent_manifest(slug)
+    _validate_credential_key(manifest, req.key)
+    store = _sub_agent_credential_store()
+
+    supplied = (req.value or "").strip()
+    if bool(supplied) == req.use_llm_provider_key:
+        raise HTTPException(status_code=400, detail=(
+            "supply exactly one of 'value' (non-empty) or "
+            "'use_llm_provider_key: true'"))
+
+    if req.use_llm_provider_key:
+        provider = _settings_store.get().llm.provider
+        if provider != "deepseek":
+            raise HTTPException(status_code=409, detail=(
+                f"the global LLM key belongs to provider '{provider}', not "
+                f"deepseek — paste the key for '{slug}' directly instead"))
+        if _credential_store is None:
+            raise HTTPException(status_code=503,
+                                detail="Credential store not available")
+        supplied = (_credential_store.get_api_key() or "").strip()
+        if not supplied:
+            raise HTTPException(status_code=409,
+                                detail="no global LLM API key is configured")
+
+    try:
+        store.set(req.key, supplied)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if hasattr(_setup_engine, "invalidate_cache"):
+        _setup_engine.invalidate_cache()
+
+    return {"slug": slug, "key": req.key, "set": True,
+            "masked": _mask_secret(supplied)}
+
+
+@router.delete("/settings/sub-agents/{slug}/credential/{key}")
+async def delete_sub_agent_credential(slug: str, key: str):
+    """Remove a stored sub-agent credential from the keychain."""
+    manifest = _sub_agent_manifest(slug)
+    _validate_credential_key(manifest, key)
+    _sub_agent_credential_store().delete(key)
+
+    if hasattr(_setup_engine, "invalidate_cache"):
+        _setup_engine.invalidate_cache()
+
+    return {"slug": slug, "key": key, "set": False}
 
 
 class SetSubAgentApiKeyRequest(BaseModel):
