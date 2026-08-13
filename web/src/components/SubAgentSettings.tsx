@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../config';
+import { useWebSocket } from '../hooks/useWebSocket';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
+import type { WebSocketEvent } from '../types';
 
 // ---------------------------------------------------------------------------
 // Types — wire shape of /api/v2/settings/sub-agents
@@ -16,6 +18,33 @@ interface ParamSchemaEntry {
   allowed: string[] | null;
   /** Effective runtime value when no override has been persisted. */
   default?: string | null;
+}
+
+/** Orbital-managed install state for one agent. `supported` is false both for
+ *  agents Orbital can't install at all and for a platform the install isn't
+ *  wired up on yet. Optional for backward-compat with older daemons. */
+interface InstallInfo {
+  supported: boolean;
+  state: 'installed' | 'installing' | 'failed' | 'not_installed';
+  job_id?: string | null;
+  /** Platforms the manifest declares an Orbital install for. Present only on
+   *  daemons that echo it; it is what lets an unsupported platform explain
+   *  itself instead of the agent silently vanishing from the list. */
+  platforms?: string[];
+}
+
+/** One manifest-declared credential. Emitted per entry by newer daemons; when
+ *  absent we fall back to `missing_credentials` (required-and-missing keys
+ *  only), which is enough to offer the field that unblocks the agent. */
+interface CredentialSpec {
+  key: string;
+  label?: string | null;
+  type?: string | null;
+  required?: boolean;
+  configured?: boolean;
+  /** True when the agent's own CLI ingests this credential (`codex login`),
+   *  which is a different mechanism from a key Orbital holds. */
+  has_setup_command?: boolean;
 }
 
 interface SubAgentEntry {
@@ -36,6 +65,13 @@ interface SubAgentEntry {
   setup_actions: Array<{ action: string; label: string; command: string | null; blocking: boolean }>;
   config: Record<string, string>;
   param_schema: Record<string, ParamSchemaEntry>;
+  /** Orbital-managed install; absent on daemons without the install route. */
+  install?: InstallInfo;
+  /** False for agents whose transport reports no tool rows at all — the card
+   *  says so instead of letting the silence read as a hang. */
+  emits_tool_activity?: boolean;
+  /** Manifest-declared credentials, when the daemon reports them. */
+  credentials?: CredentialSpec[];
 }
 
 // Map daemon param names (kebab-case) to camelCase request body fields.
@@ -71,6 +107,50 @@ function paramOptionLabel(
 
 // Sub-agents that accept an API key via stdin (vs. an interactive OAuth flow).
 const API_KEY_LOGIN_SLUGS = new Set<string>(['codex']);
+
+// The credential key that can be copied from the global LLM provider settings
+// server-side. Keyed on the credential, not on a slug: any agent declaring it
+// gets the checkbox, and the daemon 409s if the provider isn't DeepSeek.
+const PROVIDER_KEY_CREDENTIAL = 'DEEPSEEK_API_KEY';
+
+// Extra guidance for specific credential keys (not slugs — a key means the
+// same thing wherever it is declared).
+const CREDENTIAL_HINT_KEY: Record<string, StringKey> = {
+  'DEEPSEEK_BASE_URL': 'subAgentCard.cred.baseUrlHint',
+};
+
+/** Whether this agent gets a row on the daemon-level list.
+ *
+ *  Installed agents always show. A not-installed agent shows only when Orbital
+ *  can install it itself (or is mid-install / just failed one) — otherwise the
+ *  row would offer nothing but a status pill, which is why the list was
+ *  installed-only before the install route existed. */
+function isVisibleEntry(entry: SubAgentEntry): boolean {
+  if (entry.installed === true) return true;
+  // A non-empty `platforms` list — echoed from the manifest — is the daemon's
+  // "Orbital installs this agent" signal; `[]` means bring-your-own, which
+  // stays hidden exactly as it was before the install route existed.
+  // `supported` then narrows that to this host, and an excluded host gets an
+  // explanation on the card rather than a vanished row.
+  return (entry.install?.platforms?.length ?? 0) > 0;
+}
+
+/** The credentials this card can take a value for: manifest-declared secrets
+ *  the agent's own CLI does not ingest. Falls back to the required-and-missing
+ *  keys on daemons that don't declare credentials — enough to offer the field
+ *  that unblocks the agent, though optional ones stay invisible there. */
+function credentialFieldsFor(entry: SubAgentEntry): CredentialSpec[] {
+  if (entry.credentials && entry.credentials.length > 0) {
+    return entry.credentials.filter(
+      c => (c.type ?? 'secret') === 'secret' && c.has_setup_command !== true,
+    );
+  }
+  return (entry.missing_credentials ?? []).map(key => ({
+    key,
+    required: true,
+    configured: false,
+  }));
+}
 
 interface Props {
   /** When true, render as a standalone full-height page with header/back button.
@@ -119,13 +199,14 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
     }
   }, []);
 
-  // This daemon-level screen lists ONLY installed sub-agents. Agents whose
-  // CLI isn't on the machine are hidden; the helper line tells the user how to
+  // This daemon-level screen lists installed sub-agents plus the ones Orbital
+  // can install for the user. Agents whose CLI isn't on the machine and can't
+  // be installed from here are hidden; the helper line tells the user how to
   // surface one. (The /settings/sub-agents payload still includes them — other
   // screens consume the full list — so we filter here in the frontend.)
-  const installedEntries = entries === null
+  const visibleEntries = entries === null
     ? null
-    : entries.filter(e => e.installed === true);
+    : entries.filter(isVisibleEntry);
 
   const inner = (
     <>
@@ -173,15 +254,15 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
         <div className="text-sm text-secondary">{t('subAgentSettings.loading')}</div>
       )}
 
-      {installedEntries !== null && installedEntries.length === 0 && (
+      {visibleEntries !== null && visibleEntries.length === 0 && (
         <div className="text-sm text-secondary">
           {t('subAgentSettings.noInstalled')}
         </div>
       )}
 
-      {installedEntries !== null && installedEntries.length > 0 && (
+      {visibleEntries !== null && visibleEntries.length > 0 && (
         <div className="flex flex-col gap-4">
-          {installedEntries.map(entry => (
+          {visibleEntries.map(entry => (
             <SubAgentCard
               key={entry.slug}
               entry={entry}
@@ -216,6 +297,7 @@ interface CardProps {
 
 function SubAgentCard({ entry, onChanged }: CardProps) {
   const t = useT();
+  const ws = useWebSocket();
   // Local copy of the config so the form is editable before save.
   const [draft, setDraft] = useState<Record<string, string>>({ ...entry.config });
   const [saving, setSaving] = useState(false);
@@ -225,6 +307,12 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [showApiKeyForm, setShowApiKeyForm] = useState(false);
+  // Install: `installing` starts from the entry so a page refresh mid-install
+  // resumes the progress display without waiting for the next WS line.
+  const [installing, setInstalling] = useState(entry.install?.state === 'installing');
+  const [installBusy, setInstallBusy] = useState(false);
+  const [installLine, setInstallLine] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const paramKeys = Object.keys(entry.param_schema);
   const isApiKeyFlow = API_KEY_LOGIN_SLUGS.has(entry.slug);
@@ -233,6 +321,78 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   // daemon payloads keep the previous behavior. The API-key flow has its own
   // "Set API Key" button below, so it's never affected by this gate.
   const supportsLogin = entry.supports_login !== false;
+
+  const credentialFields = useMemo(() => credentialFieldsFor(entry), [entry]);
+  // Orbital holds the key itself for agents with no login flow and no CLI
+  // credential store of their own. Driven by the entry's declared credentials,
+  // never by a slug list — the codex stdin path above is a different mechanism
+  // and keeps its own branch.
+  const usesManagedCredentials =
+    !supportsLogin && !isApiKeyFlow && credentialFields.length > 0;
+
+  const canInstall = entry.install?.supported === true;
+  const installUnsupported = entry.install !== undefined && !canInstall;
+  const installFailed = installError !== null || entry.install?.state === 'failed';
+
+  // Keep the local install view in step with a refetched entry (resume after
+  // refresh, and the settled state once a job ends).
+  const entryInstallState = entry.install?.state;
+  useEffect(() => {
+    if (entryInstallState === 'installing') setInstalling(true);
+    else if (entryInstallState === 'installed') setInstalling(false);
+  }, [entryInstallState]);
+
+  // Install job events are daemon-global and carry the slug, so one handler per
+  // card filtering on it is enough — the route 409s a second job for the same
+  // slug, so there is never more than one in flight to confuse.
+  useEffect(() => {
+    const onProgress = (event: WebSocketEvent) => {
+      if (event.type !== 'sub_agent_install_progress') return;
+      if (event.slug !== entry.slug) return;
+      setInstalling(true);
+      setInstallError(null);
+      setInstallLine(event.line);
+    };
+    const onDone = (event: WebSocketEvent) => {
+      if (event.type !== 'sub_agent_install_done') return;
+      if (event.slug !== entry.slug) return;
+      setInstalling(false);
+      setInstallLine(null);
+      setInstallError(null);
+      void onChanged();
+    };
+    const onFailed = (event: WebSocketEvent) => {
+      if (event.type !== 'sub_agent_install_failed') return;
+      if (event.slug !== entry.slug) return;
+      setInstalling(false);
+      setInstallError(event.error);
+    };
+    ws.on('sub_agent_install_progress', onProgress);
+    ws.on('sub_agent_install_done', onDone);
+    ws.on('sub_agent_install_failed', onFailed);
+    return () => {
+      ws.off('sub_agent_install_progress', onProgress);
+      ws.off('sub_agent_install_done', onDone);
+      ws.off('sub_agent_install_failed', onFailed);
+    };
+  }, [ws, entry.slug, onChanged]);
+
+  const handleInstall = async () => {
+    setInstallBusy(true);
+    setInstallError(null);
+    setInstallLine(null);
+    try {
+      await api(`/api/v2/settings/sub-agents/${encodeURIComponent(entry.slug)}/install`, {
+        method: 'POST',
+      });
+      // 202 — the job streams over the WS from here.
+      setInstalling(true);
+    } catch (e) {
+      setInstallError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInstallBusy(false);
+    }
+  };
 
   const handleChange = (paramKey: string, value: string) => {
     setSaved(false);
@@ -338,9 +498,88 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
         </div>
       </div>
 
+      {entry.emits_tool_activity === false && (
+        <p
+          data-testid={`sub-agent-silent-note-${entry.slug}`}
+          className="text-xs text-secondary mt-2"
+        >
+          {t('subAgentCard.silentUntilDone')}
+        </p>
+      )}
+
       {!entry.installed && entry.missing_dependencies.length > 0 && (
         <p className="text-xs text-secondary mt-1 mb-2">
           {t('subAgentCard.missingDeps', { list: entry.missing_dependencies.join(', ') })}
+        </p>
+      )}
+
+      {/* Orbital-managed install */}
+      {!entry.installed && canInstall && (
+        <div
+          data-testid={`sub-agent-install-${entry.slug}`}
+          className="flex flex-col gap-2 mt-3 mb-3"
+        >
+          {installing ? (
+            <div className="flex items-center gap-2 text-xs text-secondary">
+              <span
+                data-testid={`sub-agent-install-spinner-${entry.slug}`}
+                className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin"
+                aria-hidden="true"
+              />
+              <span>{t('subAgentCard.installing')}</span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleInstall}
+                disabled={installBusy}
+                className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+              >
+                {installBusy
+                  ? t('subAgentCard.installStarting')
+                  : installFailed
+                    ? t('subAgentCard.installRetry')
+                    : t('subAgentCard.install')}
+              </button>
+              <span className="text-xs text-secondary">{t('subAgentCard.installHint')}</span>
+            </div>
+          )}
+          {installLine && (
+            // Raw installer (npm) output — dynamic, never translated.
+            <p
+              data-testid={`sub-agent-install-progress-${entry.slug}`}
+              className="text-[11px] font-mono text-secondary/80 truncate"
+            >
+              {installLine}
+            </p>
+          )}
+          {installError ? (
+            <p
+              data-testid={`sub-agent-install-error-${entry.slug}`}
+              className="text-xs text-warning"
+            >
+              {t('subAgentCard.installFailed', { error: installError })}
+            </p>
+          ) : entryInstallState === 'failed' ? (
+            // A job that failed before this page loaded: the entry keeps the
+            // outcome but not the message, so say that much rather than
+            // offering a bare Retry with no explanation.
+            <p
+              data-testid={`sub-agent-install-error-${entry.slug}`}
+              className="text-xs text-warning"
+            >
+              {t('subAgentCard.installFailedEarlier')}
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      {!entry.installed && installUnsupported && (
+        <p
+          data-testid={`sub-agent-install-unsupported-${entry.slug}`}
+          className="text-xs text-secondary mt-3 mb-3"
+        >
+          {t('subAgentCard.installUnsupported')}
         </p>
       )}
 
@@ -364,7 +603,9 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             {t('subAgentCard.setApiKey')}
           </button>
         )}
-        {entry.credentials_configured && (
+        {/* Logout drives the agent's own CLI logout command; agents whose key
+            Orbital holds have a per-credential Remove instead. */}
+        {entry.credentials_configured && !usesManagedCredentials && (
           <button
             onClick={handleLogout}
             disabled={logoutBusy}
@@ -403,6 +644,14 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
             </button>
           </div>
         </div>
+      )}
+
+      {usesManagedCredentials && (
+        <ManagedCredentials
+          slug={entry.slug}
+          fields={credentialFields}
+          onChanged={onChanged}
+        />
       )}
 
       {/* Configuration */}
@@ -482,6 +731,162 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
       {actionError && (
         <p className="text-xs text-warning mt-2">{actionError}</p>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Managed credentials — write-only key fields for agents Orbital holds the
+// credential for (no interactive login, no CLI credential store of their own).
+// Values go out over POST /credential and never come back: the card shows
+// "stored" and a Remove button, never key text.
+// ---------------------------------------------------------------------------
+
+interface ManagedCredentialsProps {
+  slug: string;
+  fields: CredentialSpec[];
+  onChanged: () => void | Promise<void>;
+}
+
+function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps) {
+  const t = useT();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [useProviderKey, setUseProviderKey] = useState(false);
+
+  const setError = (key: string, message: string) =>
+    setErrors(prev => ({ ...prev, [key]: message }));
+
+  const handleSave = async (key: string) => {
+    const viaProvider = key === PROVIDER_KEY_CREDENTIAL && useProviderKey;
+    const value = (drafts[key] ?? '').trim();
+    if (!viaProvider && !value) return;
+    setBusyKey(key);
+    setError(key, '');
+    try {
+      await api(`/api/v2/settings/sub-agents/${encodeURIComponent(slug)}/credential`, {
+        method: 'POST',
+        // The provider-key path copies the global LLM key server-side, so the
+        // client never has to hold text it can't read back. The daemon 409s
+        // when that provider isn't DeepSeek or has no key.
+        body: JSON.stringify(viaProvider ? { key, use_llm_provider_key: true } : { key, value }),
+      });
+      setDrafts(d => ({ ...d, [key]: '' }));
+      setUseProviderKey(false);
+      await onChanged();
+    } catch (e) {
+      setError(key, e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const handleRemove = async (key: string) => {
+    setBusyKey(key);
+    setError(key, '');
+    try {
+      await api(
+        `/api/v2/settings/sub-agents/${encodeURIComponent(slug)}/credential/${encodeURIComponent(key)}`,
+        { method: 'DELETE' },
+      );
+      await onChanged();
+    } catch (e) {
+      setError(key, e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  return (
+    <div
+      data-testid={`sub-agent-credentials-${slug}`}
+      className="border-t border-border pt-3 mt-1 flex flex-col gap-3"
+    >
+      <div>
+        <h3 className="text-xs font-medium text-primary">{t('subAgentCard.cred.heading')}</h3>
+        <p className="text-xs text-secondary">{t('subAgentCard.cred.note')}</p>
+      </div>
+
+      {fields.map(field => {
+        const isProviderKey = field.key === PROVIDER_KEY_CREDENTIAL;
+        const viaProvider = isProviderKey && useProviderKey;
+        const busy = busyKey === field.key;
+        const hintKey = CREDENTIAL_HINT_KEY[field.key];
+        const draft = drafts[field.key] ?? '';
+        return (
+          <div key={field.key} className="flex flex-col gap-1">
+            <label htmlFor={`cred-${slug}-${field.key}`} className="text-xs font-medium text-primary">
+              {/* Manifest-supplied label — backend copy, left untranslated. */}
+              {field.label || field.key}{' '}
+              <span className="font-normal text-secondary">
+                {field.required === false
+                  ? t('subAgentCard.cred.optional')
+                  : t('subAgentCard.cred.required')}
+              </span>
+            </label>
+
+            {field.configured && (
+              <div className="flex items-center gap-2">
+                <StatusPill label={t('subAgentCard.cred.stored')} variant="success" />
+                <button
+                  data-testid={`sub-agent-cred-remove-${field.key}`}
+                  onClick={() => handleRemove(field.key)}
+                  disabled={busy}
+                  className="text-xs text-secondary hover:text-primary disabled:opacity-50"
+                >
+                  {t('subAgentCard.cred.remove')}
+                </button>
+              </div>
+            )}
+
+            {isProviderKey && (
+              <label className="flex items-center gap-2 text-xs text-secondary">
+                <input
+                  type="checkbox"
+                  data-testid={`sub-agent-cred-provider-${slug}`}
+                  checked={useProviderKey}
+                  onChange={e => setUseProviderKey(e.target.checked)}
+                />
+                {t('subAgentCard.cred.useProviderKey')}
+              </label>
+            )}
+
+            <input
+              id={`cred-${slug}-${field.key}`}
+              data-testid={`sub-agent-cred-input-${field.key}`}
+              type="password"
+              value={draft}
+              disabled={viaProvider}
+              onChange={e => setDrafts(d => ({ ...d, [field.key]: e.target.value }))}
+              placeholder={t('subAgentCard.cred.placeholder')}
+              className="text-sm font-mono bg-sidebar border border-border rounded px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent disabled:opacity-50"
+            />
+
+            {hintKey && <p className="text-xs text-secondary">{t(hintKey)}</p>}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                data-testid={`sub-agent-cred-save-${field.key}`}
+                onClick={() => handleSave(field.key)}
+                disabled={busy || (!viaProvider && !draft.trim())}
+                className="text-xs bg-accent text-white rounded px-3 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
+              >
+                {busy ? t('subAgentCard.sending') : t('subAgentCard.save')}
+              </button>
+            </div>
+
+            {errors[field.key] && (
+              <p
+                data-testid={`sub-agent-cred-error-${field.key}`}
+                className="text-xs text-warning"
+              >
+                {errors[field.key]}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

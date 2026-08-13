@@ -601,6 +601,31 @@ export interface UpdateAvailableEvent {
   url: string;
 }
 
+// Daemon-global sub-agent install job events (agent_os/agents/installer.py),
+// broadcast while a POST /settings/sub-agents/{slug}/install job runs. The
+// sub-agent settings card is the consumer; `line` is raw installer output
+// (npm), so it is displayed verbatim and never translated.
+export interface SubAgentInstallProgressEvent {
+  type: 'sub_agent_install_progress';
+  slug: string;
+  job_id: string;
+  line: string;
+}
+
+export interface SubAgentInstallDoneEvent {
+  type: 'sub_agent_install_done';
+  slug: string;
+  job_id: string;
+  version: string;
+}
+
+export interface SubAgentInstallFailedEvent {
+  type: 'sub_agent_install_failed';
+  slug: string;
+  job_id: string;
+  error: string;
+}
+
 export interface TriggerCreatedEvent {
   type: 'trigger.created';
   project_id: string;
@@ -771,6 +796,9 @@ export type WebSocketEvent =
   | FanoutStartedEvent
   | FanoutTaskUpdateEvent
   | FanoutCompletedEvent
+  | SubAgentInstallProgressEvent
+  | SubAgentInstallDoneEvent
+  | SubAgentInstallFailedEvent
   | UpdateAvailableEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)
