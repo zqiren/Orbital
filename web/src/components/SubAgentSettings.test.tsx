@@ -312,6 +312,9 @@ describe('SubAgentSettings — Orbital-managed install', () => {
   function mockList(...responses: Entry[][]) {
     const queue = [...responses];
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) return queue.length > 1 ? queue.shift()! : queue[0];
       if (path.endsWith('/install')) return { job_id: 'job-1', slug: 'dsh', state: 'installing' };
       throw new Error(`unexpected api call: ${path}`);
@@ -486,6 +489,9 @@ describe('SubAgentSettings — Orbital-managed install', () => {
 
   it('surfaces a rejected install request inline', async () => {
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) return [makeDshEntry()];
       throw new Error('install already running for dsh');
     });
@@ -592,6 +598,9 @@ describe('SubAgentSettings — managed credentials', () => {
 
   it('POSTs a typed key as a write-only value', async () => {
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) return [installedDsh()];
       return { slug: 'dsh', key: 'DEEPSEEK_API_KEY', set: true, masked: 'sk-1...cdef' };
     });
@@ -613,6 +622,9 @@ describe('SubAgentSettings — managed credentials', () => {
 
   it('sends use_llm_provider_key instead of a value when the box is checked', async () => {
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) return [installedDsh()];
       return { slug: 'dsh', key: 'DEEPSEEK_API_KEY', set: true, masked: 'sk-1...cdef' };
     });
@@ -631,6 +643,9 @@ describe('SubAgentSettings — managed credentials', () => {
 
   it('surfaces a 409 from the provider-key path inline', async () => {
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) return [installedDsh()];
       throw new Error("the global LLM key belongs to provider 'kimi', not deepseek");
     });
@@ -665,6 +680,9 @@ describe('SubAgentSettings — managed credentials', () => {
 
   it('offers removal of a stored credential and no CLI logout', async () => {
     api.mockImplementation(async (path: string) => {
+      // The managed-credentials form probes the global LLM settings to decide
+      // whether the provider-key checkbox can work at all.
+      if (path === '/api/v2/settings') return { llm: { provider: 'deepseek', api_key_set: true } };
       if (path === LIST_PATH) {
         return [installedDsh({
           credentials_configured: true,

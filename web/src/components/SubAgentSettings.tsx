@@ -758,6 +758,21 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [useProviderKey, setUseProviderKey] = useState(false);
+  // The server-side copy path only means anything when the global LLM
+  // provider is DeepSeek with a key saved — otherwise the daemon 409s. Hide
+  // the checkbox entirely when it can't work; on fetch failure it stays
+  // hidden and manual paste remains.
+  const [providerKeyAvailable, setProviderKeyAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api<{ llm?: { provider?: string; api_key_set?: boolean } }>('/api/v2/settings')
+      .then(d => {
+        if (cancelled) return;
+        setProviderKeyAvailable(d?.llm?.provider === 'deepseek' && d?.llm?.api_key_set === true);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const setError = (key: string, message: string) =>
     setErrors(prev => ({ ...prev, [key]: message }));
@@ -844,7 +859,7 @@ function ManagedCredentials({ slug, fields, onChanged }: ManagedCredentialsProps
               </div>
             )}
 
-            {isProviderKey && (
+            {isProviderKey && providerKeyAvailable && (
               <label className="flex items-center gap-2 text-xs text-secondary">
                 <input
                   type="checkbox"
