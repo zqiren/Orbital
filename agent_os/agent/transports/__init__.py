@@ -6,7 +6,6 @@
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
 from agent_os.agent.transports.pipe_transport import PipeTransport
 from agent_os.agent.transports.pty_transport import PTYTransport
-from agent_os.agent.transports.acp_transport import ACPTransport
 from agent_os.agent.transports.codex_transport import CodexTransport
 from agent_os.agent.transports.acp_sdk_transport import ACPSDKTransport
 
@@ -14,7 +13,6 @@ __all__ = [
     "AgentTransport", "TransportEvent",
     "PipeTransport",
     "PTYTransport",
-    "ACPTransport",
     "CodexTransport",
     "ACPSDKTransport",
 ]

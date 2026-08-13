@@ -157,51 +157,12 @@ class TestTransportEventToChunk:
 from unittest.mock import AsyncMock
 
 
-class TestACPWiring:
-    """Test SubAgentManager wiring for ACP transport.
+class TestProcessManagerWiring:
+    """Test SubAgentManager wiring of the streaming consumer.
 
-    NOTE: ACP transport is for gemini-cli / other ACP-compliant agents,
-    not claude-code. These tests use ``command="gemini"`` (or similar) to
-    represent a hypothetical ACP-compliant agent.
+    PTY and the legacy path need ``process_manager`` to drain
+    ``read_stream()``; Pipe answers through ``send()`` and skips it.
     """
-
-    @pytest.mark.asyncio
-    async def test_acp_skips_process_manager(self):
-        """ACP agents handle responses via send() — process_manager.start() should NOT be called."""
-        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
-        from agent_os.agents.manifest import AgentManifest, ManifestRuntime
-
-        mock_pm = MagicMock()
-        mock_pm.start = AsyncMock()
-
-        mock_registry = MagicMock()
-        manifest = AgentManifest(
-            manifest_version="1", name="Gemini", slug="gemini-cli", description="",
-            author="", version="1.0.0",
-            runtime=ManifestRuntime(adapter="cli", command="gemini", transport="acp", args=["acp"]),
-        )
-        mock_registry.get.return_value = manifest
-
-        mock_setup = MagicMock()
-        mock_setup.get_adapter_config.return_value = {
-            "command": "gemini", "args": ["acp"], "workspace": "/tmp",
-            "approval_patterns": [], "env": {}, "network_domains": [],
-        }
-
-        mgr = SubAgentManager(
-            process_manager=mock_pm, registry=mock_registry,
-            setup_engine=mock_setup, project_store=MagicMock(get_project=MagicMock(return_value={"workspace": "/tmp"})),
-        )
-
-        # Patch adapter.start to not actually spawn a process
-        with patch("agent_os.daemon_v2.sub_agent_manager.CLIAdapter") as MockAdapter:
-            mock_adapter = MagicMock()
-            mock_adapter.start = AsyncMock()
-            MockAdapter.return_value = mock_adapter
-            await mgr._start_from_registry("proj1", "gemini-cli", session_id=SID)
-
-        # process_manager.start should NOT have been called for ACP
-        mock_pm.start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_pty_calls_process_manager(self):
@@ -282,21 +243,6 @@ class TestCLIAdapterWithTransport:
 
 
 class TestTransportResolution:
-    def test_acp_manifest_gets_acp_transport(self):
-        # ACP is for gemini-cli / other ACP-compliant agents — not claude-code
-        # (claude-code has no ACP server mode and is rejected by the guard
-        # in _resolve_transport).
-        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
-        from agent_os.agents.manifest import AgentManifest, ManifestRuntime
-        mgr = SubAgentManager(process_manager=MagicMock())
-        manifest = AgentManifest(
-            manifest_version="1", name="Gemini", slug="gemini-cli", description="", author="", version="1.0.0",
-            runtime=ManifestRuntime(adapter="cli", command="gemini", transport="acp"),
-        )
-        t = mgr._resolve_transport(manifest, {})
-        from agent_os.agent.transports.acp_transport import ACPTransport
-        assert isinstance(t, ACPTransport)
-
     def test_interactive_manifest_gets_pty(self):
         from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
         from agent_os.agents.manifest import AgentManifest, ManifestRuntime
@@ -394,44 +340,8 @@ class TestTransportResolution:
         assert isinstance(t, PipeTransport)
 
 
-class TestACPTransportResolution:
-    def test_acp_manifest_gets_acp_transport(self):
-        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
-        from agent_os.agents.manifest import AgentManifest, ManifestRuntime
-        mgr = SubAgentManager(process_manager=MagicMock())
-        manifest = AgentManifest(
-            manifest_version="1", name="T", slug="t", description="", author="", version="1.0.0",
-            runtime=ManifestRuntime(adapter="cli", command="t", transport="acp"),
-        )
-        t = mgr._resolve_transport(manifest, {})
-        from agent_os.agent.transports.acp_transport import ACPTransport
-        assert isinstance(t, ACPTransport)
-
-
-class TestClaudeACPGuard:
-    """Regression: claude-code with transport: acp must be rejected.
-
-    claude-code 2.1.x has no ACP server mode (rejects ``claude acp`` with
-    ``unknown command "acp"``). The guard in ``_resolve_transport`` treats
-    this as a user manifest error rather than silently falling back to SDK.
-    """
-
-    def test_claude_with_acp_transport_is_rejected(self):
-        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
-        from agent_os.agents.manifest import AgentManifest, ManifestRuntime
-        mgr = SubAgentManager(process_manager=MagicMock())
-        manifest = AgentManifest(
-            manifest_version="1", name="Claude Code", slug="claude-code",
-            description="", author="", version="1.0.0",
-            runtime=ManifestRuntime(adapter="cli", command="claude", transport="acp"),
-        )
-        with pytest.raises(ValueError) as excinfo:
-            mgr._resolve_transport(manifest, {})
-        msg = str(excinfo.value)
-        assert "ACP transport is not supported by claude-code" in msg
-        assert "gemini-cli" in msg
-        # Manifest path should be in the message so the user can self-correct
-        assert "manifests" in msg and ".yaml" in msg
+class TestClaudeTransportResolution:
+    """claude-code resolves to the SDK transport on the `auto` hint."""
 
     def test_claude_with_auto_transport_resolves_to_sdk(self):
         from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
@@ -448,16 +358,3 @@ class TestClaudeACPGuard:
         )
         t = mgr._resolve_transport(manifest, {})
         assert isinstance(t, SDKTransport)
-
-    def test_other_command_with_acp_transport_unaffected(self):
-        from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
-        from agent_os.agents.manifest import AgentManifest, ManifestRuntime
-        from agent_os.agent.transports.acp_transport import ACPTransport
-        mgr = SubAgentManager(process_manager=MagicMock())
-        manifest = AgentManifest(
-            manifest_version="1", name="Gemini", slug="gemini-cli",
-            description="", author="", version="1.0.0",
-            runtime=ManifestRuntime(adapter="cli", command="gemini", transport="acp"),
-        )
-        t = mgr._resolve_transport(manifest, {})
-        assert isinstance(t, ACPTransport)

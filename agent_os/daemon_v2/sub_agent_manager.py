@@ -349,33 +349,9 @@ class SubAgentManager:
         support it (SDK, Pipe). PTYTransport does not currently support
         --append-system-prompt-file injection; the caller is responsible
         for the degraded first-turn injection path.
-
-        Raises:
-            ValueError: if a claude-code manifest requests ``transport: acp``.
-                claude-code has no ACP server mode (the binary rejects
-                ``claude acp`` with "unknown command"); ACP is for gemini-cli
-                and other ACP-compliant agents. See
-                ``docs/investigations/FINDINGS-sub-agent-context-and-persistence.md``
-                Q4. We refuse silently redirecting to SDK because the user
-                wrote ``acp`` deliberately and a silent swap masks the
-                misconfiguration.
         """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
-        command = getattr(manifest.runtime, 'command', None) or ""
-
-        # Guard: ACP transport is not supported by claude-code.
-        # Treat as a user manifest error, not a silent redirect.
-        if transport_hint == "acp" and command.startswith("claude"):
-            manifest_path = f"agent_os/agents/manifests/{manifest.slug.replace('-', '_')}.yaml"
-            msg = (
-                "ACP transport is not supported by claude-code. "
-                "Use 'auto' or 'sdk' transport for claude. "
-                "ACP is for gemini-cli and other ACP-compliant agents. "
-                f"Edit manifest: {manifest_path}"
-            )
-            logger.warning(msg)
-            raise ValueError(msg)
 
         # Determine effective transport type
         if transport_hint == "auto":
@@ -446,9 +422,6 @@ class SubAgentManager:
                 autonomy=autonomy,
                 resume_record=resume_record,
             )
-        elif transport_type == "acp":
-            from agent_os.agent.transports.acp_transport import ACPTransport
-            return ACPTransport()
         else:
             # Fallback: no transport, use legacy CLIAdapter path
             return None
@@ -798,7 +771,7 @@ class SubAgentManager:
                 runtime_mode = getattr(manifest.runtime, "mode", None)
                 skips_system_prompt = (
                     transport_hint in (
-                        "pty", "acp", "acp-sdk", "codex-appserver")
+                        "pty", "acp-sdk", "codex-appserver")
                     or (transport_hint == "auto" and runtime_mode != "pipe")
                 )
                 if skips_system_prompt:
@@ -857,8 +830,11 @@ class SubAgentManager:
                 workspace, project_id, handle, session_id,
             )
 
-        # Resolve transport from manifest. May raise ValueError for invalid
-        # manifest combinations (e.g. claude-code with transport: acp).
+        # Resolve transport from manifest. An unrecognised transport hint
+        # falls through to None and downgrades to the legacy adapter path;
+        # the catch is the general guard for a ValueError out of transport
+        # construction (e.g. a malformed pipe config), so a bad manifest
+        # surfaces as a dispatch error string instead of an unhandled raise.
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
@@ -924,11 +900,13 @@ class SubAgentManager:
                 workspace, handle, fresh=fresh)
             self._transcripts[(project_id, session_id, handle)] = transcript
 
-        # ACP and Pipe handle responses via send() return value — no streaming consumer needed
+        # Pipe handles responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
-        from agent_os.agent.transports.acp_transport import ACPTransport
+        # ACPSDKTransport is deliberately NOT in this tuple: its
+        # permission-request events are drained by the streaming consumer
+        # (process_manager.py:429-430), so skipping it would hang approvals.
         from agent_os.agent.transports.pipe_transport import PipeTransport
-        if not isinstance(transport, (ACPTransport, PipeTransport)):
+        if not isinstance(transport, (PipeTransport,)):
             await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
