@@ -490,7 +490,9 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
               variant={entry.installed ? 'success' : 'warning'}
             />
             <StatusPill
-              label={entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn')}
+              label={usesManagedCredentials
+                ? (entry.credentials_configured ? t('subAgentCard.keySaved') : t('subAgentCard.keyNeeded'))
+                : (entry.credentials_configured ? t('subAgentCard.loggedIn') : t('subAgentCard.notLoggedIn'))}
               variant={entry.credentials_configured ? 'success' : 'warning'}
             />
             {entry.version && (

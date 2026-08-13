@@ -819,6 +819,8 @@ export const STRINGS = {
   "subAgentCard.installed": { en: "Installed", zh: "已安装" },
   "subAgentCard.installing": { en: "Installing...", zh: "正在安装…" },
   "subAgentCard.loggedIn": { en: "Logged in", zh: "已登录" },
+  "subAgentCard.keySaved": { en: "API key saved", zh: "密钥已保存" },
+  "subAgentCard.keyNeeded": { en: "API key needed", zh: "待填密钥" },
   "subAgentCard.loggingOut": { en: "Logging out...", zh: "正在退出登录…" },
   "subAgentCard.login": { en: "Login", zh: "登录" },
   "subAgentCard.logout": { en: "Logout", zh: "退出登录" },
