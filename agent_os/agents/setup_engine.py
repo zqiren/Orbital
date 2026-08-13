@@ -159,6 +159,17 @@ class SetupEngine:
         """
         self._check_all_cache = None
 
+    def invalidate_resolved_path(self, slug: str) -> None:
+        """Forget the cached binary path for one agent.
+
+        ``resolve_binary`` caches for the daemon's whole lifetime and nothing
+        else ever drops an entry, so an agent that gains (or loses) a binary
+        mid-run keeps reporting the stale answer — the same shape as the
+        claude-code stale-binary-path issue. Call this after any action that
+        changes what is on disk for ``slug``.
+        """
+        self._resolved_paths.pop(slug, None)
+
     def resolve_binary(self, manifest: AgentManifest) -> str | None:
         """Find the agent binary.
 
