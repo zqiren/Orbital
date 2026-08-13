@@ -32,6 +32,9 @@ a = Analysis(
     binaries=_httptools_binaries,
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
+        # Composition assets for Orbital-installed sub-agents (dsh): the
+        # on-demand installer copies these out of the bundle at install time.
+        (os.path.join(project_root, 'agent_os', 'agents', 'assets'), 'agent_os/agents/assets'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
         (os.path.join(project_root, 'agent_os', 'default_skills'), 'agent_os/default_skills'),
         (os.path.join(project_root, 'agent_os', 'vendor', 'rg', 'rg.exe'), 'agent_os/vendor/rg'),
