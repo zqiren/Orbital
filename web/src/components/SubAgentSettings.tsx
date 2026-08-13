@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
+import MessageAvatar from './MessageAvatar';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 import type { WebSocketEvent } from '../types';
@@ -479,6 +480,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
           <div className="flex items-center gap-2">
+            <MessageAvatar variant="agent" agentHandle={entry.slug} />
             <h2 className="text-base font-medium text-primary">{entry.name}</h2>
             <code className="text-xs text-secondary/80 font-mono">{entry.slug}</code>
           </div>
