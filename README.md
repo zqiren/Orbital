@@ -2,7 +2,7 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-> 🔥 **Aug 13, 2026** — DeepSeek's official harness (**dsh**) launched today; Orbital dispatched it as a sub-agent **within 3 hours** — same project memory, same queue, same files. Full integration (one-click install, key management, tool capsules) built in **5½ hours** that night. <!-- TODO: retarget to the demo video when recorded --> [Watch the demo →](https://github.com/zqiren/Orbital/releases/tag/v0.9.0)
+> 🔥 **Aug 13, 2026** — DeepSeek's official harness (**dsh**) launched today; Orbital dispatched it as a sub-agent **within 3 hours** — same project memory, same queue, same files. Full integration (one-click install, key management, tool capsules) built in **5 hours** that night. <!-- TODO: retarget to the demo video when recorded --> [Watch the demo →](https://github.com/zqiren/Orbital/releases/tag/v0.9.0)
 
 <p align="center"><img src="docs/screenshots/hero-competitor-investigation.gif" alt="Orbital running a competitor investigation inside a marketing project — researching the brief itself, dispatching the deep-dive to Claude Code, then reading the findings against the project's own decisions and lessons" width="100%"></p>
 
