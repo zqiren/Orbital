@@ -341,6 +341,54 @@ class SubAgentManager:
                 return args[i + 1]
         return None
 
+    def _render_spawn_composition(self, manifest, handle: str, workspace: str,
+                                  persona: str | None) -> str:
+        """Render this spawn's composition file and return its absolute path.
+
+        One file per spawn, uniquely named, under the workspace's sub-agent
+        dir. Same-slug dispatch is unrestricted across projects and sessions,
+        so a shared config file would be a race by construction.
+
+        ``persona=None`` (the prompt render failed upstream) leaves the
+        template's own persona in place rather than blanking it.
+        """
+        from agent_os.agents.composition import gc_stale, render_composition
+        from agent_os.daemon_v2.sub_agent_config_store import resolve_params
+
+        if not workspace:
+            raise ValueError(
+                f"'{handle}' needs a project workspace to render its "
+                f"configuration into"
+            )
+        data_dir = getattr(self._setup_engine, "data_dir", None)
+        if not data_dir:
+            raise ValueError(
+                "setup engine has no data dir; cannot locate the installed "
+                f"composition template for '{handle}'"
+            )
+        template_path = os.path.join(
+            data_dir, "agents", manifest.slug, manifest.runtime.config_template,
+        )
+
+        out_dir = ProjectPaths(workspace).sub_agent_dir(handle)
+        # Opportunistic: renders whose adapter never reached the stop path
+        # (daemon crash, unkillable slot) would otherwise accumulate here.
+        gc_stale(out_dir)
+
+        params = resolve_params(
+            manifest.slug,
+            getattr(self._setup_engine, "sub_agent_config_store", None),
+        )
+        return render_composition(
+            template_path,
+            model=params.get("model"),
+            sandbox_mode=params.get("permission-mode"),
+            persona=persona,
+            persistence_root=os.path.join(
+                out_dir, f"{manifest.slug}-sessions"),
+            out_dir=out_dir,
+        )
+
     def _resolve_transport(self, manifest, config_dict, autonomy=None, system_prompt: str | None = None,
                            resume_record: dict | None = None):
         """Resolve the appropriate transport for a manifest.
@@ -349,33 +397,9 @@ class SubAgentManager:
         support it (SDK, Pipe). PTYTransport does not currently support
         --append-system-prompt-file injection; the caller is responsible
         for the degraded first-turn injection path.
-
-        Raises:
-            ValueError: if a claude-code manifest requests ``transport: acp``.
-                claude-code has no ACP server mode (the binary rejects
-                ``claude acp`` with "unknown command"); ACP is for gemini-cli
-                and other ACP-compliant agents. See
-                ``docs/investigations/FINDINGS-sub-agent-context-and-persistence.md``
-                Q4. We refuse silently redirecting to SDK because the user
-                wrote ``acp`` deliberately and a silent swap masks the
-                misconfiguration.
         """
         transport_hint = getattr(manifest.runtime, 'transport', 'auto')
         mode = manifest.runtime.mode
-        command = getattr(manifest.runtime, 'command', None) or ""
-
-        # Guard: ACP transport is not supported by claude-code.
-        # Treat as a user manifest error, not a silent redirect.
-        if transport_hint == "acp" and command.startswith("claude"):
-            manifest_path = f"agent_os/agents/manifests/{manifest.slug.replace('-', '_')}.yaml"
-            msg = (
-                "ACP transport is not supported by claude-code. "
-                "Use 'auto' or 'sdk' transport for claude. "
-                "ACP is for gemini-cli and other ACP-compliant agents. "
-                f"Edit manifest: {manifest_path}"
-            )
-            logger.warning(msg)
-            raise ValueError(msg)
 
         # Determine effective transport type
         if transport_hint == "auto":
@@ -446,9 +470,6 @@ class SubAgentManager:
                 autonomy=autonomy,
                 resume_record=resume_record,
             )
-        elif transport_type == "acp":
-            from agent_os.agent.transports.acp_transport import ACPTransport
-            return ACPTransport()
         else:
             # Fallback: no transport, use legacy CLIAdapter path
             return None
@@ -798,7 +819,7 @@ class SubAgentManager:
                 runtime_mode = getattr(manifest.runtime, "mode", None)
                 skips_system_prompt = (
                     transport_hint in (
-                        "pty", "acp", "acp-sdk", "codex-appserver")
+                        "pty", "acp-sdk", "codex-appserver")
                     or (transport_hint == "auto" and runtime_mode != "pipe")
                 )
                 if skips_system_prompt:
@@ -857,8 +878,11 @@ class SubAgentManager:
                 workspace, project_id, handle, session_id,
             )
 
-        # Resolve transport from manifest. May raise ValueError for invalid
-        # manifest combinations (e.g. claude-code with transport: acp).
+        # Resolve transport from manifest. An unrecognised transport hint
+        # falls through to None and downgrades to the legacy adapter path;
+        # the catch is the general guard for a ValueError out of transport
+        # construction (e.g. a malformed pipe config), so a bad manifest
+        # surfaces as a dispatch error string instead of an unhandled raise.
         try:
             transport = self._resolve_transport(
                 manifest, config_dict, autonomy=autonomy, system_prompt=system_prompt,
@@ -880,6 +904,25 @@ class SubAgentManager:
                 type(transport).__name__,
             )
 
+        # Composition rendering: a manifest declaring runtime.config_template
+        # configures itself through a file, not argv. The persona it carries is
+        # the sub-agent prompt rendered above — for an acp-sdk agent, which
+        # never receives ``system_prompt``, this file is that prompt's ONLY
+        # route. Rendered last so no earlier bail-out leaks a file.
+        rendered_config: str | None = None
+        if manifest.runtime.config_template:
+            try:
+                rendered_config = self._render_spawn_composition(
+                    manifest, handle, workspace, system_prompt,
+                )
+            except Exception as e:
+                logger.exception(
+                    "composition rendering failed for project=%s handle=%s",
+                    project_id, handle,
+                )
+                return f"Error: composition rendering failed: {e}"
+            config.args = list(config.args or []) + ["--config", rendered_config]
+
         adapter = CLIAdapter(
             handle=handle,
             display_name=manifest.name,
@@ -891,6 +934,9 @@ class SubAgentManager:
             session_id_pattern=manifest.runtime.session_id_pattern,
             transport=transport,
         )
+        # Travels with the adapter so the stop path can delete it; a rendered
+        # composition outlives nothing but its own spawn.
+        adapter._rendered_config_path = rendered_config
 
         lock = self._get_lock(project_id, session_id=session_id)
         async with lock:
@@ -901,6 +947,8 @@ class SubAgentManager:
                     await adapter.stop()
                 except Exception:
                     pass
+                from agent_os.agents.composition import unlink_rendered
+                unlink_rendered(rendered_config)
                 return f"Error: adapter start failed: {e}"
             if sk not in self._adapters:
                 self._adapters[sk] = {}
@@ -924,11 +972,13 @@ class SubAgentManager:
                 workspace, handle, fresh=fresh)
             self._transcripts[(project_id, session_id, handle)] = transcript
 
-        # ACP and Pipe handle responses via send() return value — no streaming consumer needed
+        # Pipe handles responses via send() return value — no streaming consumer needed
         # PTY and legacy paths need process_manager to consume read_stream()
-        from agent_os.agent.transports.acp_transport import ACPTransport
+        # ACPSDKTransport is deliberately NOT in this tuple: its
+        # permission-request events are drained by the streaming consumer
+        # (process_manager.py:429-430), so skipping it would hang approvals.
         from agent_os.agent.transports.pipe_transport import PipeTransport
-        if not isinstance(transport, (ACPTransport, PipeTransport)):
+        if not isinstance(transport, (PipeTransport,)):
             await self._process_manager.start(project_id, handle, adapter, transcript=transcript, session_id=session_id)
 
         if self._lifecycle_observer:
@@ -1796,6 +1846,12 @@ class SubAgentManager:
                 adapters.pop(handle, None)
                 if not adapters:
                     self._adapters.pop(sk, None)
+                # The per-spawn composition dies with the spawn that read it.
+                # Only once the process is CONFIRMED dead: an unkillable slot
+                # keeps its file, and the spawn-time gc_stale sweeps it later.
+                from agent_os.agents.composition import unlink_rendered
+                unlink_rendered(
+                    getattr(adapter, "_rendered_config_path", None))
                 if isinstance(registry, BackgroundWorkRegistry):
                     registry.clear(project_id, session_id, handle)
             else:

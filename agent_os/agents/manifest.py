@@ -34,9 +34,15 @@ class ManifestRuntime:
     prompt_flag: str = "-p"             # flag to pass prompt text
     resume_flag: str = "--resume"       # flag to resume session
     session_id_pattern: str = ""        # regex to extract session_id from output
-    transport: str = "auto"             # "sdk" | "acp" | "pipe" | "pty" | "codex-appserver" | "auto"
+    transport: str = "auto"             # "sdk" | "acp-sdk" | "pipe" | "pty" | "codex-appserver" | "auto"
     approval_patterns: list[dict] = field(default_factory=list)
     activity_patterns: list[dict] = field(default_factory=list)
+    # Filename of a composition template inside the agent's installed
+    # directory (``<data_dir>/agents/<slug>/``). When set, Orbital renders a
+    # per-spawn copy of it (model, permission mode, persona, session root) and
+    # appends ``--config <rendered>`` to the spawn args. Empty = argv-only
+    # configuration, which is every other agent today.
+    config_template: str = ""
 
 
 @dataclass
@@ -62,12 +68,27 @@ class ManifestCredential:
 
 
 @dataclass
+class ManifestOrbitalInstall:
+    """Declared only by agents Orbital installs itself into its data dir.
+
+    ``platforms`` is the honest statement of where that install is supported.
+    An empty list means the agent is not Orbital-installable at all — the user
+    brings their own binary, which is every other agent today. An agent that
+    names its platforms is not expected to carry ``auto_detect`` entries for
+    the ones it left out.
+    """
+    platforms: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ManifestSetup:
     dependencies: list[ManifestDependency] = field(default_factory=list)
     install_command: str | None = None    # "npm install -g @anthropic-ai/claude-code"
     check_command: str | None = None      # "claude --version"
     auto_detect: dict = field(default_factory=dict)  # {"windows": [...], "macos": [...]}
     credentials: list[ManifestCredential] = field(default_factory=list)
+    orbital_install: ManifestOrbitalInstall = field(
+        default_factory=ManifestOrbitalInstall)
 
 
 @dataclass
@@ -79,6 +100,11 @@ class ManifestCapabilities:
     routing_hint: str = ""
     needs_shell: bool = False
     needs_network: bool = False
+    # Whether the agent reports tool activity back to Orbital at all. False
+    # means its turns are silent until the final answer — the UI says so
+    # rather than showing a "working…" affordance it cannot back up.
+    # Defaults True: every pre-existing agent reports something.
+    emits_tool_activity: bool = True
 
 
 @dataclass
@@ -204,6 +230,7 @@ class ManifestLoader:
             transport=runtime_data.get("transport", "auto"),
             approval_patterns=runtime_data.get("approval_patterns", []),
             activity_patterns=runtime_data.get("activity_patterns", []),
+            config_template=runtime_data.get("config_template", ""),
         )
 
         # Setup
@@ -236,6 +263,10 @@ class ManifestLoader:
             check_command=setup_data.get("check_command"),
             auto_detect=setup_data.get("auto_detect", {}),
             credentials=credentials,
+            orbital_install=ManifestOrbitalInstall(
+                platforms=(setup_data.get("orbital_install") or {}).get(
+                    "platforms", []),
+            ),
         )
 
         # Capabilities
@@ -248,6 +279,7 @@ class ManifestLoader:
             routing_hint=cap_data.get("routing_hint", ""),
             needs_shell=cap_data.get("needs_shell", False),
             needs_network=cap_data.get("needs_network", False),
+            emits_tool_activity=cap_data.get("emits_tool_activity", True),
         )
 
         # Permissions

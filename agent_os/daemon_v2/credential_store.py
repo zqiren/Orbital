@@ -84,6 +84,69 @@ class ApiKeyStore:
         return "none"
 
 
+_SUBAGENT_SERVICE_NAME = "agent-os-subagent-creds"
+
+
+class SubAgentCredentialStore:
+    """Keychain storage for sub-agent API credentials, keyed by credential key.
+
+    Sub-agents normally keep their own credentials (``~/.claude/``,
+    ``~/.codex/``). Agents that ship no credential store of their own are the
+    documented exception: their key is held here and injected into the spawn
+    env by ``SetupEngine`` (which calls ``get(cred.key)``).
+
+    Deliberately NOT ``UserCredentialStore``: that one is enumerated by
+    ``GET /credentials`` and resolvable through the agent's ``<secret:...>``
+    substitution, which would make sub-agent keys agent-reachable.
+
+    Keychain-only, no JSON fallback. A machine without a keyring configures
+    these through environment variables instead — a path ``SetupEngine``'s
+    resolution chain already covers.
+    """
+
+    def get(self, key: str) -> str | None:
+        """Return the stored value for ``key``, or None."""
+        if not key or not _KEYRING_AVAILABLE:
+            return None
+        try:
+            return keyring.get_password(_SUBAGENT_SERVICE_NAME, key)
+        except Exception:
+            logger.warning(
+                "keyring.get_password failed for sub-agent credential %s",
+                key, exc_info=True,
+            )
+            return None
+
+    def set(self, key: str, value: str) -> None:
+        """Store ``value`` under ``key`` in the OS keychain."""
+        if not key or not key.strip():
+            raise ValueError("credential key must be non-empty")
+        if not value or not value.strip():
+            raise ValueError("credential value must be non-empty")
+        if not _KEYRING_AVAILABLE:
+            raise RuntimeError("keyring package not available")
+        try:
+            keyring.set_password(_SUBAGENT_SERVICE_NAME, key, value)
+        except Exception as exc:
+            raise RuntimeError(f"keyring.set_password failed: {exc}") from exc
+        if keyring.get_password(_SUBAGENT_SERVICE_NAME, key) != value:
+            raise RuntimeError(
+                "Keychain write verification failed: stored value does not match"
+            )
+
+    def delete(self, key: str) -> None:
+        """Remove ``key`` from the OS keychain. Absent keys are a no-op."""
+        if not key or not _KEYRING_AVAILABLE:
+            return
+        try:
+            keyring.delete_password(_SUBAGENT_SERVICE_NAME, key)
+        except Exception:
+            logger.warning(
+                "keyring.delete_password failed for sub-agent credential %s",
+                key, exc_info=True,
+            )
+
+
 _CRED_SERVICE_NAME = "agent-os-creds"
 
 

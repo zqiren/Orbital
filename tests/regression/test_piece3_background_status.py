@@ -285,14 +285,14 @@ async def test_windows_gate_degrades_explicitly(registry):
 async def test_sdk_transport_declares_capability():
     """The capability flag lives on SDKTransport; degraded transports lack it."""
     from agent_os.agent.transports.pipe_transport import PipeTransport
-    from agent_os.agent.transports.acp_transport import ACPTransport
+    from agent_os.agent.transports.acp_sdk_transport import ACPSDKTransport
     try:
         from agent_os.agent.transports.sdk_transport import SDKTransport
         assert getattr(SDKTransport, "supports_background_status", False) is True
     except ImportError:
         pass  # SDK not installed in this env — capability check moot
     assert getattr(PipeTransport, "supports_background_status", False) is False
-    assert getattr(ACPTransport, "supports_background_status", False) is False
+    assert getattr(ACPSDKTransport, "supports_background_status", False) is False
     from agent_os.agent.transports.codex_transport import CodexTransport
     # LOCKED (TASK-codex-appserver-transport): Codex is truthfully two-state —
     # no between-turn background work exists (probe A5c). Never set True for

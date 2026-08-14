@@ -1,0 +1,22 @@
+{
+  "name": "acptest",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@deepseek-ai/dsh-acp-demo": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-sandbox": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-deepseek": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-local": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess-local": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-fs": "^0.1.0-rc.6"
+  }
+}

@@ -7,7 +7,7 @@ import { getAgentIcon, MAIN_AGENT_HANDLE } from './agentIcons';
 
 describe('getAgentIcon', () => {
   it('gives every known slug a distinct mark and monogram', () => {
-    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codex', 'cursor', 'gemini', 'grok'];
+    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codex', 'cursor', 'dsh', 'gemini', 'grok'];
     const icons = known.map((slug) => getAgentIcon(slug));
 
     for (const icon of icons) {
@@ -36,6 +36,13 @@ describe('getAgentIcon', () => {
   it('resolves the new cursor and grok slugs', () => {
     expect(getAgentIcon('cursor').src).toBe('/agents/cursor.svg');
     expect(getAgentIcon('grok').src).toBe('/agents/grok.svg');
+  });
+
+  it('resolves dsh → DS / DeepSeek blue', () => {
+    const i = getAgentIcon('dsh');
+    expect(i.monogram).toBe('DS');
+    expect(i.color).toBe('#4D6BFE');
+    expect(i.src).toBe('/agents/dsh.svg');
   });
 
   it('resolves the management agent to the Orbital app icon', () => {

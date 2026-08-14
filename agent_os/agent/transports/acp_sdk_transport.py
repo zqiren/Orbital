@@ -512,7 +512,12 @@ class ACPSDKTransport(AgentTransport):
                     "status": update.status,
                     "update": dumped,
                 },
-                update.title or update.kind or "Tool activity",
+                # The post-hoc capsule parser recovers tool names from this text
+                # and nothing else: transcript entries persist ``content`` with
+                # no metadata, so the format IS the contract
+                # (sub_agent_transcript.py:17-19). Plain titles produced zero
+                # capsule rows for every ACP agent, cursor included.
+                f"[Using tool: {update.title or update.kind or 'tool'}]",
             )
         if isinstance(update, (AgentPlanUpdate, AgentPlanContentUpdate, AgentPlanRemovedUpdate)):
             return TransportEvent("status", {"kind": "plan", "plan": dumped}, "Plan updated")

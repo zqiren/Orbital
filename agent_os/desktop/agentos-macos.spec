@@ -33,6 +33,9 @@ a = Analysis(
     binaries=_httptools_binaries,
     datas=[
         (os.path.join(project_root, 'agent_os', 'agents', 'manifests'), 'agent_os/agents/manifests'),
+        # Composition assets for Orbital-installed sub-agents (dsh): the
+        # on-demand installer copies these out of the bundle at install time.
+        (os.path.join(project_root, 'agent_os', 'agents', 'assets'), 'agent_os/agents/assets'),
         (os.path.join(project_root, 'agent_os', 'config'), 'agent_os/config'),
         (os.path.join(project_root, 'agent_os', 'default_skills'), 'agent_os/default_skills'),
         # Bundled ripgrep — both macOS archs; runtime picks via platform.machine().
@@ -105,8 +108,8 @@ app = BUNDLE(
     icon=os.path.join(project_root, 'assets', 'icon.icns'),
     bundle_identifier='com.orbital.desktop',
     info_plist={
-        'CFBundleShortVersionString': '0.8.7',
-        'CFBundleVersion': '0.8.7',
+        'CFBundleShortVersionString': '0.9.0',
+        'CFBundleVersion': '0.9.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '13.0',
         'CFBundleDisplayName': 'Orbital',

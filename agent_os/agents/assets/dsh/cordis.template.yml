@@ -1,0 +1,81 @@
+# dsh (DeepSeek Harness) composition template — the shipping ACP composition.
+#
+# Plain valid YAML with working single-user defaults, so this file is
+# independently bootable for smoke tests. It is NOT string-templated: the
+# per-spawn renderer loads it with yaml.safe_load, overwrites fields
+# programmatically, and safe_dumps a uniquely-named copy under the workspace's
+# sub-agent dir. Deliberately no double-brace placeholder syntax in any value —
+# dsh itself resolves those names inside persona text, and string-templating a
+# persona into YAML is an injection bug.
+#
+# Every `name:` here must also be a pinned dependency in package.json.
+
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    models:
+      - id: deepseek-v4-flash
+      - id: deepseek-v4-pro
+
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: workspace-write        # renderer overwrites from SCHEMA["dsh"]["permission-mode"]
+
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
+  config:
+    policy: never                # FIXED for v1 — see Product Decision 9; Task 8 verifies semantics
+
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: acp-agent
+  name: '@deepseek-ai/dsh-acp-demo'
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-flash     # renderer overwrites from SCHEMA["dsh"]["model"]
+    persistenceRoot: './.sessions'   # renderer overwrites with absolute per-project path
+    workspaceContext:
+      maxBytes: 65536
+    persona: |                   # renderer overwrites with the real rendered sub-agent prompt
+      You are a coding assistant operating inside an Orbital project workspace.
+
+# ORBITAL TEMPORARY SHIM — remove when upstream dsh-acp forwards tool activity
+# natively (upstream PR: not yet filed — see docs/superpowers/plans/
+# 2026-08-13-deepseek-harness-subagent.md, Task 7). Removal procedure: delete
+# this block, drop the @orbital/dsh-acp-activity-shim dependency from
+# package.json, refresh package-lock.json, re-run the Task 8 smoke. No Orbital
+# code changes. INVARIANT: no Orbital Python may reference this id.
+# The only contract is standard ACP (session/update tool_call notifications).
+#
+# dsh-acp forwards no tool events ("committed answers only"), so a turn that
+# ran five commands reaches Orbital as one bubble. The core records them all;
+# this observes them and emits the standard ACP updates Orbital's transport is
+# already listening for.
+- id: orbital-acp-activity
+  name: '@orbital/dsh-acp-activity-shim'
+
+# There is deliberately NO `orbital-acp-resume` block. Restart-resume was
+# assessed in the same spike and dropped: the ACP `loadSession` capability flag
+# and the SDK's `agent.loadSession` dispatch both live inside dsh-acp's closure,
+# which publishes no Cordis service, so no sibling plugin can supply them. The
+# core is ready (`ctx.agents.resume()` already does persistence-prepare plus
+# session reconstruction and IS reachable from a sibling) — the gap is purely
+# dsh-acp's adapter, which makes it a small upstream PR rather than a fork we
+# carry. v1 ships the verified honest degradation instead: Orbital's transport
+# reports ('fresh', 'resume_unsupported') when the capability is absent.

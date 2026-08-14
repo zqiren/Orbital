@@ -18,6 +18,7 @@ All five files come from **[lobehub/lobe-icons](https://github.com/lobehub/lobe-
 | `cursor.svg` | `cursor.svg` | Cursor |
 | `gemini.svg` | `gemini.svg` | Google Gemini |
 | `grok.svg` | `grok.svg` | xAI / Grok |
+| `dsh.svg` | `deepseek.svg` | DeepSeek (Harness) — fetched 2026-08-14; upstream ships `currentColor`/`1em`, normalized here to the baked brand fill `#4D6BFE` + 24px box to match the older vendored files |
 
 ## Local modifications
 

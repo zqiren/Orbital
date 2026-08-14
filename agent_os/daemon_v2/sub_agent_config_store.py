@@ -29,12 +29,15 @@ logger = logging.getLogger(__name__)
 # parameter names; each parameter has an ``allowed`` list (None = free-text,
 # validated as non-empty string) and a ``flag_template``. The flag_template
 # is a Python format string with ``{value}`` placeholder; if it produces a
-# string with a space, it is split into multiple argv tokens.
+# string with a space, it is split into multiple argv tokens. ``None`` marks a
+# param that is delivered some other way than argv (dsh renders its params into
+# a composition file) — validated and surfaced to the UI like any other, but
+# contributing nothing to the command line.
 @dataclass(frozen=True)
 class _ParamSchema:
     name: str
     allowed: tuple[str, ...] | None  # None = free-text
-    flag_template: str  # e.g. "--model {value}"
+    flag_template: str | None  # e.g. "--model {value}"; None = not argv
     # Effective runtime value when the user has not persisted an override.
     # Most CLI parameters deliberately have no Orbital default and continue
     # to inherit the provider's own default.
@@ -127,7 +130,46 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             flag_template="--approval-mode {value}",
         ),
     },
+    "dsh": {
+        # Both params reach dsh through the per-spawn composition file
+        # (agent_os/agents/composition.py), never argv — dsh takes its whole
+        # runtime configuration from the Cordis plugin list. They live here so
+        # the model and permission mode are ordinary Settings dropdowns like
+        # every other sub-agent's. Changes take effect on the next spawn.
+        "model": _ParamSchema(
+            name="model",
+            allowed=("deepseek-v4-flash", "deepseek-v4-pro"),
+            flag_template=None,
+            default="deepseek-v4-flash",
+        ),
+        # Maps to the composition's dsh-sandbox-policy mode, which is dsh's own
+        # enforcement layer — Orbital's project sandbox does not govern
+        # transport-backed sub-agents.
+        "permission-mode": _ParamSchema(
+            name="permission-mode",
+            allowed=("workspace-write", "danger-full-access"),
+            flag_template=None,
+            default="workspace-write",
+        ),
+    },
 }
+
+
+def resolve_params(slug: str, store: "SubAgentConfigStore | None" = None,
+                   ) -> dict[str, str]:
+    """Effective params for ``slug``: SCHEMA defaults under persisted overrides.
+
+    The argv path (``build_extra_args``) and the composition renderer both read
+    configuration through this, so a param means the same thing either way.
+    """
+    params = {
+        name: schema.default
+        for name, schema in SCHEMA.get(slug, {}).items()
+        if schema.default is not None
+    }
+    if store is not None:
+        params.update(store.get(slug))
+    return params
 
 
 class SubAgentConfigError(ValueError):
@@ -254,21 +296,14 @@ class SubAgentConfigStore:
 
         Reads ``self.get(slug)`` and renders each param via its schema's
         ``flag_template``, splitting on whitespace so each token is a
-        separate argv element.
+        separate argv element. Params with no ``flag_template`` are delivered
+        by another mechanism (a composition file) and emit nothing here.
         """
         slug_schema = SCHEMA.get(slug, {})
-        params = {
-            name: schema.default
-            for name, schema in slug_schema.items()
-            if schema.default is not None
-        }
-        params.update(self.get(slug))
-        if not params:
-            return []
         argv: list[str] = []
-        for key, value in params.items():
+        for key, value in resolve_params(slug, self).items():
             schema = slug_schema.get(key)
-            if schema is None:
+            if schema is None or not schema.flag_template:
                 continue
             argv.extend(schema.flag_template.format(value=value).split())
         return argv

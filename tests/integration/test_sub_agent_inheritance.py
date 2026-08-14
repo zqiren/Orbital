@@ -480,11 +480,9 @@ async def test_pty_transport_does_not_create_memory_md(seeded_workspace):
 
 
 @pytest.mark.asyncio
-async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
-    """ACP-transport sub-agents also drop system_prompt today. Same rule
-    as PTY: skip the orphan stub creation. ACP cannot pair with a
-    claude-prefixed command (raises ValueError at resolve time), so the
-    test uses a manifest with command='gemini'."""
+async def test_acp_sdk_transport_does_not_create_memory_md(seeded_workspace):
+    """ACP-SDK sub-agents also drop system_prompt today. Same rule as PTY:
+    skip the orphan stub creation."""
     from agent_os.agents.manifest import AgentManifest, ManifestRuntime, ManifestSetup, ManifestCapabilities, ManifestPermissions
     from agent_os.agents.registry import AgentRegistry
     from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
@@ -502,7 +500,7 @@ async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
         description="test",
         author="test",
         version="1.0.0",
-        runtime=ManifestRuntime(adapter="cli", mode="interactive", transport="acp", command="gemini"),
+        runtime=ManifestRuntime(adapter="cli", mode="interactive", transport="acp-sdk", command="gemini"),
         setup=ManifestSetup(),
         capabilities=ManifestCapabilities(),
         permissions=ManifestPermissions(),
@@ -534,8 +532,8 @@ async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
         ws_manager=MagicMock(),
     )
 
-    class FakeACPTransport:
-        def __init__(self):
+    class FakeACPSDKTransport:
+        def __init__(self, *, resume_record=None):
             pass
 
         async def start(self, command, args, workspace, env=None):
@@ -551,8 +549,8 @@ async def test_acp_transport_does_not_create_memory_md(seeded_workspace):
             return False
 
     with patch(
-        "agent_os.agent.transports.acp_transport.ACPTransport",
-        FakeACPTransport,
+        "agent_os.agent.transports.acp_sdk_transport.ACPSDKTransport",
+        FakeACPSDKTransport,
     ):
         result = await mgr._start_from_registry("proj_1", "gemini-cli", session_id=SID)
 

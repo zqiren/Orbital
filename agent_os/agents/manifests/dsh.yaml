@@ -1,0 +1,55 @@
+manifest_version: "1"
+name: "DeepSeek Harness"
+slug: "dsh"
+description: "DeepSeek's agent harness, driven over ACP from an Orbital-managed install"
+author: "deepseek-ai"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "dsh-acp-demo"            # never on PATH; resolved via auto_detect below
+  transport: acp-sdk
+  mode: pipe
+  interactive: false
+  args: []                            # --config <per-spawn file> appended by the Task 4 renderer
+  config_template: "cordis.template.yml"
+
+setup:
+  orbital_install:
+    platforms: [macos, linux]         # Windows: untested npm .bin shim story — see Deferred
+  auto_detect:
+    macos:
+      - "${ORBITAL_DATA_DIR}/agents/dsh/node_modules/.bin/dsh-acp-demo"
+    linux:
+      - "${ORBITAL_DATA_DIR}/agents/dsh/node_modules/.bin/dsh-acp-demo"
+  credentials:
+    - key: "DEEPSEEK_API_KEY"
+      label: "DeepSeek API Key"
+      type: secret
+      required: true
+      env_var: "DEEPSEEK_API_KEY"     # REQUIRED — a credential without env_var is silently dropped (setup_engine.py:297)
+    - key: "DEEPSEEK_BASE_URL"
+      label: "DeepSeek API Base URL (optional; region-locked endpoints)"
+      type: secret
+      required: false
+      env_var: "DEEPSEEK_BASE_URL"
+
+capabilities:
+  skills: [code_generation, debugging, testing, refactoring, documentation]
+  input_types: [text, files]
+  output_types: [text, files]
+  routing_hint: "Use for coding tasks on DeepSeek models via the DeepSeek Harness"
+  needs_shell: true
+  needs_network: true
+  emits_tool_activity: false          # drives the Task 5 silent-until-done copy
+
+permissions:
+  # NOTE: network_domains deliberately omitted. It would be documentation-only:
+  # transport-backed sub-agents spawn outside the project sandbox/proxy
+  # (cli_adapter.py:87-91), and api.deepseek.com is already in
+  # DEFAULT_ALLOWLIST_DOMAINS (platform/types.py:79). dsh's own sandbox
+  # plugins are the enforcement layer. Do not re-add it with a claim that
+  # it constrains dsh egress.
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: hands_off

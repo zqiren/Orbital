@@ -166,8 +166,16 @@ class TestManifestLoader:
                     f"CLI manifest '{m.slug}' missing runtime.command"
                 )
 
-                # CLI adapters must have auto_detect paths for all 3 OS
+                # CLI adapters must have auto_detect paths for all 3 OS —
+                # unless the manifest declares an orbital_install platform
+                # gate, in which case the unlisted OSes are deliberately
+                # unsupported and an auto_detect entry for them would be a
+                # support claim we cannot back (dsh on Windows: the npm .bin
+                # shim story is untested there).
+                platforms = m.setup.orbital_install.platforms
                 for os_name in ("windows", "macos", "linux"):
+                    if platforms and os_name not in platforms:
+                        continue
                     assert os_name in m.setup.auto_detect, (
                         f"CLI manifest '{m.slug}' missing auto_detect.{os_name}"
                     )

@@ -2,6 +2,8 @@
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
+> 🔥 **2026 年 8 月 13 日** — DeepSeek 官方 Harness（**dsh**）发布 **3 小时内**，Orbital 已支持将其作为 sub-agent 调度——同样的项目记忆、同样的任务队列、同样的文件。完整集成（一键安装、密钥管理、工具活动胶囊）当晚 **5.5 小时**完成。<!-- TODO: 录制演示视频后替换链接 --> [观看演示 →](https://github.com/zqiren/Orbital/releases/tag/v0.9.0)
+
 <p align="center"><img src="docs/screenshots/hero-competitor-investigation.zh.gif" alt="Orbital 在一个市场项目中执行竞品调研——先自行调研以补全任务背景，再把深度调研派给 Claude Code，最后结合项目自身的决策与经验解读结果" width="100%"></p>
 
 <p align="center"><em>画面里发生的事：在一个市场项目中，Orbital 接到「评估竞品」的任务。它先自行调研，确保任务简报准确；再按项目中既定的指示，把耗 token 的深度调研交给 Claude&nbsp;Code；最后结合项目自身的决策与经验解读返回的结果——并把需要你拍板的选择留给你。</em></p>

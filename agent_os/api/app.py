@@ -30,7 +30,11 @@ from agent_os.daemon_v2.agent_manager import AgentManager
 from agent_os.daemon_v2.browser_manager import BrowserManager
 from agent_os.daemon_v2.process_manager import ProcessManager
 from agent_os.daemon_v2.project_store import ProjectStore
-from agent_os.daemon_v2.credential_store import ApiKeyStore, UserCredentialStore
+from agent_os.daemon_v2.credential_store import (
+    ApiKeyStore,
+    SubAgentCredentialStore,
+    UserCredentialStore,
+)
 from agent_os.daemon_v2.settings_store import SettingsStore
 from agent_os.daemon_v2.sub_agent_manager import SubAgentManager
 from agent_os.daemon_v2.lifecycle_observer import LifecycleObserver
@@ -257,8 +261,14 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     )
     sub_agent_config_store = SubAgentConfigStore(sub_agent_config_path)
 
+    # Sub-agent API credentials (dedicated keychain service). Agents that ship
+    # their own credential store never reach this; it exists for the ones that
+    # don't (dsh) and is what SetupEngine resolves into the spawn env.
     setup_engine = SetupEngine(
-        registry, sub_agent_config_store=sub_agent_config_store,
+        registry,
+        credential_store=SubAgentCredentialStore(),
+        sub_agent_config_store=sub_agent_config_store,
+        data_dir=store_dir,
     )
 
     # 5c. Provider registry (model capabilities, context windows, max output)

@@ -117,6 +117,16 @@ export default function App() {
   // shape the @-mention dropdown actually consumes: installed sub-agents, no
   // 'built-in'. The fetch happens once per project select, off the chat-tab
   // mount path, so tab switches don't block on this network call.
+  // installGeneration bumps when an Orbital-managed install completes, so the
+  // cached list picks up a freshly installed agent (dsh) without a reload —
+  // otherwise the @-mention dropdown stays stale for the whole page lifetime.
+  const [installGeneration, setInstallGeneration] = useState(0);
+  useEffect(() => {
+    const bump = () => setInstallGeneration((g) => g + 1);
+    ws.on('sub_agent_install_done', bump);
+    return () => ws.off('sub_agent_install_done', bump);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     if (!selectedProjectId) return;
     let cancelled = false;
@@ -137,7 +147,7 @@ export default function App() {
         setAgentsAvailable([]);
       });
     return () => { cancelled = true; };
-  }, [selectedProjectId]);
+  }, [selectedProjectId, installGeneration]);
 
   // Mobile panel swap navigation
   const [isMobile, setIsMobile] = useState(false);

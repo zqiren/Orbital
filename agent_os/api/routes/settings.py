@@ -14,6 +14,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agent_os import telemetry
+from agent_os.agents.installer import (
+    InstallInProgress,
+    InstallUnsupported,
+    SubAgentInstaller,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,7 @@ _credential_store = None
 _setup_engine = None
 _sub_agent_config_store = None
 _ws_manager = None
+_installer: SubAgentInstaller | None = None
 # Tracks in-flight login subprocesses keyed by job_id, so callers can poll
 # WS events for ``login.progress`` / ``login.complete`` / ``login.failed``.
 _login_jobs: dict[str, dict] = {}
@@ -32,12 +38,18 @@ _login_jobs: dict[str, dict] = {}
 def configure(settings_store, credential_store=None, setup_engine=None,
               sub_agent_config_store=None, ws_manager=None):
     global _settings_store, _credential_store, _setup_engine
-    global _sub_agent_config_store, _ws_manager
+    global _sub_agent_config_store, _ws_manager, _installer
     _settings_store = settings_store
     _credential_store = credential_store
     _setup_engine = setup_engine
     _sub_agent_config_store = sub_agent_config_store
     _ws_manager = ws_manager
+    # The installer's job registry is per-daemon by design: a restart mid-run
+    # leaves no completion marker, which is the "partial, re-run" signal the
+    # next status read wants. Rebuilding it here keeps that lifetime tied to
+    # the app it serves.
+    _installer = SubAgentInstaller(setup_engine=setup_engine,
+                                   ws_manager=ws_manager)
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -178,9 +190,27 @@ async def get_api_key_status():
 #
 # Single write surface for managing sub-agents at the daemon level: install
 # status, auth status, model/effort/permission-mode overrides, and login
-# trigger. Tokens stay in the CLI's own location (``~/.claude/``,
-# ``~/.codex/``, etc.) — Orbital never stores sub-agent credentials.
+# trigger. For agents that ship a credential store of their own, tokens stay
+# there (``~/.claude/``, ``~/.codex/``, etc.) and never enter Orbital's
+# storage. Agents with no such store (dsh) are the documented exception:
+# their API key is held in a dedicated keychain service via
+# ``SubAgentCredentialStore`` and written through the ``/credential`` routes
+# below. Either way the raw key never appears in a response.
 # ---------------------------------------------------------------------------
+
+
+def _registry_manifest(slug: str):
+    """The manifest for ``slug`` from the setup engine's registry, or None.
+
+    The non-raising counterpart to ``_sub_agent_manifest``, for the status
+    path — one unregistered agent must not fail the whole listing.
+    """
+    if _setup_engine is None:
+        return None
+    registry = getattr(_setup_engine, "_registry", None)
+    if registry is None:
+        return None
+    return registry.get(slug)
 
 
 def _supports_login(slug: str) -> bool:
@@ -191,15 +221,72 @@ def _supports_login(slug: str) -> bool:
     only accept an API key — and therefore have no login subcommand — return
     False so the frontend can hide a Login button that would otherwise 400.
     """
-    if _setup_engine is None:
-        return False
-    registry = getattr(_setup_engine, "_registry", None)
-    if registry is None:
-        return False
-    manifest = registry.get(slug)
+    manifest = _registry_manifest(slug)
     if manifest is None:
         return False
     return any(c.setup_command for c in manifest.setup.credentials)
+
+
+def _install_entry(manifest, *, installed: bool) -> dict:
+    """The ``install`` block of a status entry: what the card can offer.
+
+    ``supported`` is whether Orbital can install this agent on THIS platform —
+    false for every bring-your-own agent, and for a declared one on a platform
+    its manifest left out. ``state`` is derived from the completion marker, the
+    live job registry, and the binary probe, never from WS state, so a client
+    that reloads mid-install still lands on the right screen.
+    """
+    if manifest is None or _installer is None:
+        return {"supported": False, "platforms": [],
+                "state": "installed" if installed else "not_installed"}
+    return _installer.entry_for(manifest, installed=installed)
+
+
+def _credential_configured(cred, missing: list[str]) -> bool:
+    """Whether one declared credential currently resolves to a value.
+
+    Required credentials were already resolved by ``check_all`` — including
+    the ``oauth_cli`` ones, whose probe spawns the agent's CLI — so their
+    answer comes off ``missing_credentials``. Optional ones are never probed
+    there (``check_credentials`` skips them outright), which means reading
+    them off that list would report every unset optional credential as
+    configured. Resolve those the way the spawn env does, minus the
+    subprocess: the sub-agent store, then the environment.
+    """
+    if cred.required:
+        return cred.key not in missing
+    if cred.type == "oauth_cli":
+        # Never spawn a CLI to answer a status read; only the required
+        # oauth credentials are worth that cost, and check_all pays it.
+        return False
+    store = getattr(_setup_engine, "_credential_store", None)
+    if store is not None and store.get(cred.key):
+        return True
+    return bool(os.environ.get(cred.env_var or cred.key))
+
+
+def _declared_credentials(manifest, missing: list[str]) -> list[dict]:
+    """Every credential the manifest declares, with its current state.
+
+    ``missing_credentials`` alone cannot drive a credential form: it holds
+    required-and-missing keys only, so an optional field never appears and a
+    satisfied one vanishes, taking its rotate/remove affordance with it.
+    """
+    if manifest is None:
+        return []
+    return [
+        {
+            "key": c.key,
+            "label": c.label,
+            "type": c.type,
+            "required": c.required,
+            # True for the OAuth agents, whose key arrives through their own
+            # CLI login rather than a form Orbital renders.
+            "has_setup_command": bool(c.setup_command),
+            "configured": _credential_configured(c, missing),
+        }
+        for c in manifest.setup.credentials
+    ]
 
 
 def _build_sub_agent_status_entry(s) -> dict:
@@ -213,6 +300,7 @@ def _build_sub_agent_status_entry(s) -> dict:
         except Exception:
             logger.warning("Failed to read sub-agent config for %s",
                            s.slug, exc_info=True)
+    manifest = _registry_manifest(s.slug)
     return {
         "slug": s.slug,
         "name": s.name,
@@ -224,7 +312,15 @@ def _build_sub_agent_status_entry(s) -> dict:
         "missing_dependencies": s.missing_dependencies,
         "credentials_configured": s.credentials_configured,
         "missing_credentials": s.missing_credentials,
+        "credentials": _declared_credentials(manifest, s.missing_credentials),
         "supports_login": _supports_login(s.slug),
+        "install": _install_entry(manifest, installed=s.installed),
+        # False means the agent's turns are silent until the final answer, so
+        # the UI can say that instead of showing activity it cannot back up.
+        "emits_tool_activity": (
+            manifest.capabilities.emits_tool_activity
+            if manifest is not None else True
+        ),
         "setup_actions": [
             {"action": a.action, "label": a.label, "command": a.command,
              "blocking": a.blocking}
@@ -408,8 +504,9 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
 
     Captures stdout+stderr line by line and emits ``login.progress`` events
     over WebSocket. Final ``login.complete`` or ``login.failed`` carries the
-    return code. Tokens never enter Orbital's storage — the CLI writes them
-    to its own location.
+    return code. Tokens from this flow never enter Orbital's storage — the CLI
+    writes them to its own location. (Agents with no credential store of their
+    own don't come through here at all; they use the ``/credential`` routes.)
     """
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -467,8 +564,10 @@ async def trigger_sub_agent_login(slug: str):
     Returns immediately with a ``job_id``; progress streams over WebSocket
     via ``login.progress`` / ``login.complete`` / ``login.failed`` events.
 
-    Orbital does NOT capture or store the resulting credentials — the CLI
-    writes them to its own location (``~/.claude/``, ``~/.codex/``, etc.).
+    Orbital does NOT capture or store the credentials this flow produces — the
+    CLI writes them to its own location (``~/.claude/``, ``~/.codex/``, etc.).
+    Agents that ship no such store use ``/credential`` instead, which holds the
+    key in a dedicated keychain service.
     """
     command = _resolve_setup_command(slug, "login")
     if not command:
@@ -483,6 +582,32 @@ async def trigger_sub_agent_login(slug: str):
     _login_jobs[job_id] = {"slug": slug, "status": "running", "command": command}
     asyncio.create_task(_run_login_job(slug, job_id, command))
     return {"job_id": job_id, "slug": slug, "status": "running"}
+
+
+@router.post("/settings/sub-agents/{slug}/install", status_code=202)
+async def install_sub_agent(slug: str):
+    """Install an Orbital-managed sub-agent into the daemon's data dir.
+
+    Returns immediately with a ``job_id``; the npm run takes 30–90 s and
+    streams over WebSocket as ``sub_agent_install_progress``, ending in
+    ``sub_agent_install_done`` or ``sub_agent_install_failed``. A client that
+    misses those events reads the same lifecycle off ``install.state`` in
+    ``GET /settings/sub-agents``.
+
+    400 when the agent is not Orbital-installable at all, or not on this
+    platform; 409 when a job for the same slug is already in flight.
+    """
+    manifest = _sub_agent_manifest(slug)
+    if _installer is None:
+        raise HTTPException(status_code=503,
+                            detail="Sub-agent installer not available")
+    try:
+        job_id = _installer.start(slug, manifest)
+    except InstallInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except InstallUnsupported as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"job_id": job_id, "slug": slug, "state": "installing"}
 
 
 @router.post("/settings/sub-agents/{slug}/logout")
@@ -519,6 +644,114 @@ async def trigger_sub_agent_logout(slug: str):
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+
+
+class SubAgentCredentialRequest(BaseModel):
+    # Exactly one of ``value`` / ``use_llm_provider_key`` must be supplied.
+    key: str
+    value: str | None = None
+    use_llm_provider_key: bool = False
+
+
+def _mask_secret(value: str) -> str:
+    """first4...last4 — the only form a stored key may take in a response."""
+    if len(value) <= 8:
+        return "****"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _sub_agent_manifest(slug: str):
+    """Return the manifest for ``slug`` or raise the matching HTTPException."""
+    if _setup_engine is None:
+        raise HTTPException(status_code=503, detail="Setup engine not available")
+    registry = getattr(_setup_engine, "_registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Agent registry not available")
+    manifest = registry.get(slug)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {slug}")
+    return manifest
+
+
+def _validate_credential_key(manifest, key: str) -> None:
+    """Reject keys the agent's manifest doesn't declare."""
+    declared = [c.key for c in manifest.setup.credentials]
+    if key not in declared:
+        raise HTTPException(status_code=400, detail=(
+            f"unknown credential '{key}' for sub-agent '{manifest.slug}'. "
+            f"Declared credentials: {declared}"))
+
+
+def _sub_agent_credential_store():
+    """The dedicated keychain store SetupEngine resolves credentials from."""
+    store = getattr(_setup_engine, "_credential_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503, detail="Sub-agent credential store not available")
+    return store
+
+
+@router.post("/settings/sub-agents/{slug}/credential")
+async def set_sub_agent_credential(slug: str, req: SubAgentCredentialRequest):
+    """Store one manifest-declared credential for a sub-agent.
+
+    For agents that ship no credential store of their own. The value lands in
+    a dedicated OS keychain service and is injected into the spawn env by
+    SetupEngine. The response carries a mask only — never the raw key.
+
+    ``use_llm_provider_key: true`` copies the global LLM key server-side
+    instead of taking one in the body, so the client never has to hold key
+    text it already can't read back.
+    """
+    manifest = _sub_agent_manifest(slug)
+    _validate_credential_key(manifest, req.key)
+    store = _sub_agent_credential_store()
+
+    supplied = (req.value or "").strip()
+    if bool(supplied) == req.use_llm_provider_key:
+        raise HTTPException(status_code=400, detail=(
+            "supply exactly one of 'value' (non-empty) or "
+            "'use_llm_provider_key: true'"))
+
+    if req.use_llm_provider_key:
+        provider = _settings_store.get().llm.provider
+        if provider != "deepseek":
+            raise HTTPException(status_code=409, detail=(
+                f"the global LLM key belongs to provider '{provider}', not "
+                f"deepseek — paste the key for '{slug}' directly instead"))
+        if _credential_store is None:
+            raise HTTPException(status_code=503,
+                                detail="Credential store not available")
+        supplied = (_credential_store.get_api_key() or "").strip()
+        if not supplied:
+            raise HTTPException(status_code=409,
+                                detail="no global LLM API key is configured")
+
+    try:
+        store.set(req.key, supplied)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if hasattr(_setup_engine, "invalidate_cache"):
+        _setup_engine.invalidate_cache()
+
+    return {"slug": slug, "key": req.key, "set": True,
+            "masked": _mask_secret(supplied)}
+
+
+@router.delete("/settings/sub-agents/{slug}/credential/{key}")
+async def delete_sub_agent_credential(slug: str, key: str):
+    """Remove a stored sub-agent credential from the keychain."""
+    manifest = _sub_agent_manifest(slug)
+    _validate_credential_key(manifest, key)
+    _sub_agent_credential_store().delete(key)
+
+    if hasattr(_setup_engine, "invalidate_cache"):
+        _setup_engine.invalidate_cache()
+
+    return {"slug": slug, "key": key, "set": False}
 
 
 class SetSubAgentApiKeyRequest(BaseModel):

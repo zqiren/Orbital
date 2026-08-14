@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 # action that could change the result (install, login, refresh).
 CHECK_ALL_CACHE_TTL_SECONDS = 60
 
+# The one placeholder in the manifest system, expanded in ``setup.auto_detect``
+# entries only. Agents Orbital installs itself land under the daemon's data dir,
+# whose location is a runtime fact (dev daemons, the packaged app, and tests all
+# differ) and so cannot be written into the read-only bundled manifest.
+# ``runtime.command`` and ``runtime.args`` stay strict passthrough.
+ORBITAL_DATA_DIR_TOKEN = "${ORBITAL_DATA_DIR}"
+
 
 class SetupEngine:
     """Probes the system for agent readiness based on manifest metadata."""
@@ -38,10 +45,14 @@ class SetupEngine:
         registry: AgentRegistry,
         credential_store=None,
         sub_agent_config_store=None,
+        data_dir: str = "orbital-data",
     ) -> None:
         self._registry = registry
         self._credential_store = credential_store
         self._sub_agent_config_store = sub_agent_config_store
+        # Absolutised once: auto_detect probes and the composition renderer
+        # both need a path that survives a cwd change mid-daemon.
+        self._data_dir = os.path.abspath(data_dir)
         self._resolved_paths: dict[str, str] = {}  # slug -> resolved binary path
         # In-memory cache of the last check_all() result. Tuple of
         # (results, expires_at_monotonic). None when empty or invalidated.
@@ -50,6 +61,16 @@ class SetupEngine:
     def set_sub_agent_config_store(self, store) -> None:
         """Late-bind the sub-agent config store (called by app factory)."""
         self._sub_agent_config_store = store
+
+    @property
+    def data_dir(self) -> str:
+        """Absolute path of the daemon's data dir (where agents are installed)."""
+        return self._data_dir
+
+    @property
+    def sub_agent_config_store(self):
+        """The bound sub-agent config store, or None."""
+        return self._sub_agent_config_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -138,6 +159,17 @@ class SetupEngine:
         """
         self._check_all_cache = None
 
+    def invalidate_resolved_path(self, slug: str) -> None:
+        """Forget the cached binary path for one agent.
+
+        ``resolve_binary`` caches for the daemon's whole lifetime and nothing
+        else ever drops an entry, so an agent that gains (or loses) a binary
+        mid-run keeps reporting the stale answer — the same shape as the
+        claude-code stale-binary-path issue. Call this after any action that
+        changes what is on disk for ``slug``.
+        """
+        self._resolved_paths.pop(slug, None)
+
     def resolve_binary(self, manifest: AgentManifest) -> str | None:
         """Find the agent binary.
 
@@ -166,7 +198,18 @@ class SetupEngine:
         current_os = detect_os()
         auto_paths = manifest.setup.auto_detect.get(current_os, [])
         for raw_path in auto_paths:
-            expanded = os.path.expandvars(os.path.expanduser(raw_path))
+            # ${ORBITAL_DATA_DIR} is resolved before expandvars: it is not an
+            # environment variable, and dev daemons never export one.
+            substituted = raw_path.replace(
+                ORBITAL_DATA_DIR_TOKEN, self._data_dir)
+            expanded = os.path.expandvars(os.path.expanduser(substituted))
+            if ORBITAL_DATA_DIR_TOKEN in raw_path:
+                # Token entries mix separators on Windows (the manifest half
+                # is written with forward slashes, the data dir is OS-native).
+                # isfile() tolerates that; the spawn command should not.
+                # Scoped to token entries only: plain auto_detect paths are
+                # returned verbatim, as they always were.
+                expanded = os.path.normpath(expanded)
             if os.path.isfile(expanded):
                 self._resolved_paths[manifest.slug] = expanded
                 return expanded
