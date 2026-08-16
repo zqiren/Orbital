@@ -16,10 +16,13 @@
 
 ## Now (in progress)
 
-> **v0.10.0 release batch.** All open design decisions for these six were walked through
-> and locked with the user on 2026-08-16; each row carries its own decision record below.
-> Each builds on its own branch off `main`, merges into `release/v0.10.0`, and ships as one
-> release verified on **CI-built** installers (cardinal rule — never a local build).
+> **Shipped as v0.9.1** (2026-08-16). Planned and built as the "v0.10.0 batch" — the branch
+> is still named `release/v0.10.0` and the rows below still say so — but it was renumbered to
+> a 0.9 patch at release time. v0.10.0 was never tagged, so no client sits ahead of v0.9.1.
+> All open design decisions for these six were walked through and locked with the user on
+> 2026-08-16; each row carries its own decision record below. Each builds on its own branch
+> off `main`, merges into `release/v0.10.0`, and ships as one release verified on
+> **CI-built** installers (cardinal rule — never a local build).
 
 | # | Feature | Notes |
 |---|---------|-------|
