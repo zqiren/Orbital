@@ -30,7 +30,7 @@ from agent_os.agent.providers.types import (
 )
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent import compaction as compaction_mod
@@ -101,7 +101,8 @@ async def test_text_only_turn_retains_reasoning(tmp_path):
         session, _Provider(), _Registry(),
         ContextManager(session, _Builder(), _ctx(str(tmp_path))),
     )
-    await loop.run(initial_message="please answer")
+    persist_user_row(loop._session, "please answer")
+    await loop.run()
 
     assistant = [m for m in session.get_messages() if m["role"] == "assistant"]
     assert len(assistant) == 1, assistant
@@ -133,7 +134,8 @@ async def test_text_only_turn_with_no_answer_retains_reasoning(tmp_path):
         session, _Provider(), _Registry(),
         ContextManager(session, _Builder(), _ctx(str(tmp_path))),
     )
-    await loop.run(initial_message="please answer")
+    persist_user_row(loop._session, "please answer")
+    await loop.run()
 
     assistant = [m for m in session.get_messages() if m["role"] == "assistant"]
     assert len(assistant) == 1, assistant
@@ -223,7 +225,8 @@ async def test_compaction_flush_text_only_retains_reasoning(tmp_path, monkeypatc
     monkeypatch.setattr(compaction_mod, "inject_reorientation", lambda *a, **k: None)
 
     loop = AgentLoop(session, _Provider(), _Registry(), context_mgr)
-    await loop.run(initial_message="work then compact")
+    persist_user_row(loop._session, "work then compact")
+    await loop.run()
 
     # The flush turn's text-only assistant message must carry reasoning.
     flush_msgs = [

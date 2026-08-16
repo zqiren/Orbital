@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import (
@@ -226,7 +226,8 @@ class TestFallbackRotation:
             fallback_providers=[fallback],
             max_iterations=10,
         )
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
 
         # Loop should NOT have failed
         assert not loop._llm_failed
@@ -264,7 +265,8 @@ class TestFallbackRotation:
             fallback_providers=[fallback],
             max_iterations=10,
         )
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
 
         # Loop should have failed
         assert loop._llm_failed
@@ -322,7 +324,8 @@ class TestFallbackRotation:
                 fallback_providers=[fallback],
                 max_iterations=10,
             )
-            await loop.run(initial_message="hello")
+            persist_user_row(loop._session, "hello")
+            await loop.run()
 
         # Primary was called at least twice (first fail, then success after cooldown)
         assert primary._call_count >= 2
@@ -347,7 +350,8 @@ class TestFallbackRotation:
             fallback_providers=[],  # no fallbacks
             max_iterations=10,
         )
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
 
         # Loop should have failed
         assert loop._llm_failed
@@ -390,7 +394,8 @@ class TestFallbackRotation:
             project_dir=str(tmp_path),
             max_iterations=10,
         )
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
 
         # The ledger captured the fallback's response (spend is recorded there
         # now, not in a loop-local dollar accumulator).

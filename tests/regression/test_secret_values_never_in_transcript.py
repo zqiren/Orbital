@@ -40,7 +40,7 @@ from agent_os.agent.context import ContextManager
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.prompt_builder import Autonomy, PromptContext
 from agent_os.agent.providers.types import LLMResponse, StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.browser import BrowserTool
 from agent_os.agent.tools.browser_refs import RefEntry
 from agent_os.agent.tools.registry import ToolRegistry
@@ -181,7 +181,8 @@ async def test_secret_values_never_in_transcript_or_logs(tmp_path, caplog):
 
     with caplog.at_level(logging.DEBUG):
         # request → pause
-        await loop.run(initial_message="log into dify")
+        persist_user_row(loop._session, "log into dify")
+        await loop.run()
         assert session.is_paused()
 
         # user submits the secure modal

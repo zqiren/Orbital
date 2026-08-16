@@ -52,7 +52,7 @@ from agent_os.agent.tools.read import ReadTool
 from agent_os.agent.tools.write import WriteTool
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
 from agent_os.agent.context import ContextManager
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 
 
@@ -154,13 +154,13 @@ async def test_multiple_reads_of_distinct_files_all_stay_live(
     anything. The comparison the model was asked to make needs all three
     present at once — that is precisely what blanket stubbing broke.
     """
-    await agent_loop.run(
-        initial_message=(
-            "Read the files alpha.txt, beta.txt, and gamma.txt. "
-            "Tell me which file has the most characters. "
-            "Reply with just the filename."
-        ),
+    persist_user_row(
+        agent_loop._session,
+        "Read the files alpha.txt, beta.txt, and gamma.txt. "
+        "Tell me which file has the most characters. "
+        "Reply with just the filename."
     )
+    await agent_loop.run()
 
     messages = session.get_messages()
 
@@ -187,12 +187,12 @@ async def test_all_disk_backups_created(
     agent_loop, session, workspace, three_files,
 ):
     """Every large tool result has a disk archive, stubbed or not."""
-    await agent_loop.run(
-        initial_message=(
-            "Read all three files: alpha.txt, beta.txt, gamma.txt. "
-            "For each file, count the words and report the count."
-        ),
+    persist_user_row(
+        agent_loop._session,
+        "Read all three files: alpha.txt, beta.txt, gamma.txt. "
+        "For each file, count the words and report the count."
     )
+    await agent_loop.run()
 
     tool_results_dir = os.path.join(
         workspace, "orbital", "tool-results", "multi-tool-e2e",
@@ -233,12 +233,12 @@ async def test_any_stub_is_a_supersession_stub_and_is_honest(
 ):
     """The only stub reachable is the supersession stub, and it must be honest:
     it leads with the absence and never carries the model's narration."""
-    await agent_loop.run(
-        initial_message=(
-            "Read alpha.txt, beta.txt, and gamma.txt. "
-            "Reply with just: 'All three files read successfully.'"
-        ),
+    persist_user_row(
+        agent_loop._session,
+        "Read alpha.txt, beta.txt, and gamma.txt. "
+        "Reply with just: 'All three files read successfully.'"
     )
+    await agent_loop.run()
 
     messages = session.get_messages()
     stubbed = [m for m in messages if m.get("role") == "tool" and m.get("_stubbed")]
@@ -267,9 +267,8 @@ async def test_session_jsonl_keeps_content_after_multi_read(
     agent_loop, session, workspace, three_files,
 ):
     """Session JSONL on disk keeps the file content for un-superseded reads."""
-    await agent_loop.run(
-        initial_message="Read alpha.txt and beta.txt. Say 'done' when finished.",
-    )
+    persist_user_row(agent_loop._session, "Read alpha.txt and beta.txt. Say 'done' when finished.")
+    await agent_loop.run()
 
     # Reload from disk
     reloaded = Session.load(session._filepath)

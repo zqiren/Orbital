@@ -25,7 +25,7 @@ from agent_os.agent.providers.types import StreamChunk, LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.tools.agent_message import AgentMessageTool
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 
@@ -121,7 +121,8 @@ async def test_dispatch_yields_the_turn(tmp_path):
         meta={"yield_turn": True})})
     loop = _loop(session, provider, registry, str(tmp_path))
 
-    await loop.run(initial_message="delegate this")
+    persist_user_row(loop._session, "delegate this")
+    await loop.run()
 
     # Only one LLM call — the loop yielded instead of looping back to poll.
     assert provider.stream_call_count == 1
@@ -144,7 +145,8 @@ async def test_non_yield_tool_result_continues_the_loop(tmp_path):
     registry = _Registry({"agent_message": ToolResult(content="running")})  # no meta
     loop = _loop(session, provider, registry, str(tmp_path))
 
-    await loop.run(initial_message="check status")
+    persist_user_row(loop._session, "check status")
+    await loop.run()
 
     # Two LLM calls — the loop continued after the non-yield result.
     assert provider.stream_call_count == 2
@@ -160,7 +162,8 @@ async def test_tool_call_id_survives_yield(tmp_path):
         meta={"yield_turn": True})})
     loop = _loop(session, provider, registry, str(tmp_path))
 
-    await loop.run(initial_message="go")
+    persist_user_row(loop._session, "go")
+    await loop.run()
 
     tr = [m for m in session.get_messages()
           if m.get("role") == "tool" and m.get("tool_call_id") == "xyz789"]

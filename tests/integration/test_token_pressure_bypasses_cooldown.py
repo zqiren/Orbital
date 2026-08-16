@@ -33,7 +33,7 @@ from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.workspace_files import WorkspaceFileManager
 
@@ -262,7 +262,8 @@ async def test_token_pressure_fires_before_compaction_within_cooldown():
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.compaction.run", new=mock_compact_run):
                 with patch("agent_os.agent.compaction.inject_reorientation"):
-                    await loop.run("start")
+                    persist_user_row(loop._session, "start")
+                    await loop.run()
 
         # ---- Assertions ----
 
@@ -354,7 +355,8 @@ async def test_token_pressure_updates_checkpoint_metadata():
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.compaction.run", new=AsyncMock()):
                 with patch("agent_os.agent.compaction.inject_reorientation"):
-                    await loop.run("start")
+                    persist_user_row(loop._session, "start")
+                    await loop.run()
 
         # After token-pressure refresh, _last_checkpoint_turn must be updated
         tp_events = _lifecycle_events(ws, trigger="token_pressure", status="done")
@@ -444,7 +446,8 @@ async def test_token_pressure_is_exempt_from_cooldown():
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.compaction.run", new=AsyncMock()):
                 with patch("agent_os.agent.compaction.inject_reorientation"):
-                    await loop.run("start")
+                    persist_user_row(loop._session, "start")
+                    await loop.run()
 
         tp_done = _lifecycle_events(ws, trigger="token_pressure", status="done")
         assert len(tp_done) >= 1, (

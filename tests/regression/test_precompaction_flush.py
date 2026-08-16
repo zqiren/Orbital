@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_os.agent.compaction import MEMORY_FLUSH_PROMPT, is_silent_response
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 
 
 @pytest.fixture
@@ -133,7 +133,8 @@ class TestFlushTurnInLoop:
             call_order.append("compaction")
 
         with patch("agent_os.agent.compaction.run", new=mock_compact_run):
-            await loop.run("Do the task")
+            persist_user_row(loop._session, "Do the task")
+            await loop.run()
 
         # Verify flush was called before compaction
         assert "flush" in call_order, "Flush turn must be called"
@@ -236,7 +237,8 @@ class TestFlushDoesNotIncrementIteration:
 
         loop._stream_response = mock_stream
 
-        await loop.run("test")
+        persist_user_row(loop._session, "test")
+        await loop.run()
 
         # If flush had incremented, max_iterations=1 would have stopped
         # before we got a text response. The fact that we got here means

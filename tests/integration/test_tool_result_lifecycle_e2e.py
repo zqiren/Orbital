@@ -56,7 +56,7 @@ from agent_os.agent.tools.read import ReadTool
 from agent_os.agent.tools.write import WriteTool
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
 from agent_os.agent.context import ContextManager
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 
 
@@ -156,12 +156,12 @@ async def test_tool_result_stays_live_after_read(
     superseded, so nothing about it is rewritten: the agent can still see the
     document it just read on every subsequent iteration.
     """
-    await agent_loop.run(
-        initial_message=(
-            "Read the file large_document.txt and tell me the first sentence. "
-            "Reply with just that sentence, nothing else."
-        ),
+    persist_user_row(
+        agent_loop._session,
+        "Read the file large_document.txt and tell me the first sentence. "
+        "Reply with just that sentence, nothing else."
     )
+    await agent_loop.run()
 
     messages = session.get_messages()
 
@@ -199,9 +199,11 @@ async def test_disk_backup_exists_after_read(
     The archive is unconditional — it does not depend on history being
     rewritten. It is the corpus the lifecycle work is measured against.
     """
-    await agent_loop.run(
-        initial_message="Read the file large_document.txt and summarize it in one word.",
+    persist_user_row(
+        agent_loop._session,
+        "Read the file large_document.txt and summarize it in one word.",
     )
+    await agent_loop.run()
 
     # Check disk archive directory
     tool_results_dir = os.path.join(
@@ -242,9 +244,11 @@ async def test_session_jsonl_keeps_content_after_reload(
     agent_loop, session, workspace, large_file,
 ):
     """After session reload from disk, the read result still holds the content."""
-    await agent_loop.run(
-        initial_message="Read large_document.txt and count the words. Reply with just the number.",
+    persist_user_row(
+        agent_loop._session,
+        "Read large_document.txt and count the words. Reply with just the number.",
     )
+    await agent_loop.run()
 
     # Reload session from disk
     reloaded = Session.load(session._filepath)
@@ -270,12 +274,12 @@ async def test_reread_supersedes_the_earlier_copy(
     Whether the model actually re-reads is up to the model, so this skips
     rather than fails when only one read happened.
     """
-    await agent_loop.run(
-        initial_message=(
-            "Read the file large_document.txt. Then read large_document.txt "
-            "again to double-check. Reply with just: done."
-        ),
+    persist_user_row(
+        agent_loop._session,
+        "Read the file large_document.txt. Then read large_document.txt "
+        "again to double-check. Reply with just: done."
     )
+    await agent_loop.run()
 
     tool_msgs = [
         m for m in session.get_messages()

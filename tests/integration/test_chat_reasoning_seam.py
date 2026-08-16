@@ -38,7 +38,7 @@ from agent_os.daemon_v2.activity_translator import ActivityTranslator
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 
@@ -128,7 +128,8 @@ def _run_turn(workspace, session_uuid, session_id, translator, stream_fn, msg):
         session, _Provider(stream_fn), _Registry(),
         ContextManager(session, _Builder(), _ctx(workspace)),
     )
-    asyncio.run(loop.run(initial_message=msg))
+    persist_user_row(loop._session, msg)
+    asyncio.run(loop.run())
 
 
 @pytest.fixture

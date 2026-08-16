@@ -16,7 +16,7 @@ limit is set (zero-additional-query goal).
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
@@ -123,7 +123,8 @@ async def test_loop_emits_spend_updated_through_sink(tmp_path, monkeypatch):
     # 2.0 / 10 = 20% → under threshold, so the ONLY budget event is spend_updated.
     monkeypatch.setattr("agent_os.budget.ledger.spend", _counting_spend(2.0, []))
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     await loop._spend_broadcaster.aclose()
 
     spend_evs = [e for e in events if e["type"] == SPEND_UPDATED_EVENT]
@@ -152,7 +153,8 @@ async def test_loop_no_limit_still_broadcasts_spend_with_null_limit(tmp_path, mo
     }
     monkeypatch.setattr("agent_os.budget.ledger.spend", _counting_spend(3.5, []))
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     await loop._spend_broadcaster.aclose()
 
     spend_evs = [e for e in events if e["type"] == SPEND_UPDATED_EVENT]
@@ -202,7 +204,8 @@ async def test_loop_zero_extra_spend_query_when_limit_set(tmp_path, monkeypatch)
         return orig_submit(**kwargs)
 
     loop._spend_broadcaster.submit = _spy
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     await loop._spend_broadcaster.aclose()
 
     # Exactly one append → exactly one broadcast submit, and the broadcaster was

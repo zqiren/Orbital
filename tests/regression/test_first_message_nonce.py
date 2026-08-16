@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.daemon_v2.activity_translator import ActivityTranslator
 
@@ -28,13 +28,21 @@ class TestAutoStartNonce:
     """Case 3: inject_message auto-starts agent -- nonce must reach broadcast."""
 
     @pytest.mark.asyncio
-    async def test_auto_start_passes_nonce_to_start_agent(self):
-        """inject_message Case 3 passes nonce to start_agent."""
+    async def test_auto_start_persists_nonce_on_the_user_row(self, tmp_path):
+        """inject_message Case 3 carries the nonce on the PERSISTED row.
+
+        Rewritten for bug #59's one-writer invariant: the nonce no longer
+        travels as ``start_agent(initial_nonce=…)``. The auto-start path
+        write-aheads the row through ``persist_user_row`` before the start
+        window and hands ``start_agent`` the session that already holds it, so
+        the nonce is asserted where it now lives — on disk, and on the session
+        object start_agent receives.
+        """
         from agent_os.daemon_v2.agent_manager import AgentManager
 
         project_store = MagicMock()
         project_store.get_project.return_value = {
-            "workspace": "/tmp/test",
+            "workspace": str(tmp_path),
             "name": "test",
             "model": "gpt-4",
             "api_key": "sk-test",
@@ -55,7 +63,20 @@ class TestAutoStartNonce:
 
         mock_start.assert_called_once()
         _, kwargs = mock_start.call_args
-        assert kwargs.get("initial_nonce") == "nonce-abc"
+        # The message no longer rides the call...
+        assert "initial_nonce" not in kwargs
+        assert "initial_message" not in kwargs
+        # ...it rides the session, already written.
+        rows = kwargs["session"].get_messages()
+        user_rows = [m for m in rows if m.get("role") == "user"]
+        assert len(user_rows) == 1
+        assert user_rows[0]["content"] == "hello"
+        assert user_rows[0]["nonce"] == "nonce-abc"
+
+        # And it is on disk, not just in memory — that is the whole fix.
+        jsonl = (tmp_path / "orbital" / "sessions"
+                 / f"{kwargs['session'].session_uuid}.jsonl")
+        assert '"nonce": "nonce-abc"' in jsonl.read_text(encoding="utf-8")
 
     @pytest.mark.asyncio
     async def test_loop_run_includes_nonce_in_initial_message(self):
@@ -97,7 +118,8 @@ class TestAutoStartNonce:
         )
         with patch.object(loop, "_stream_response_with", new_callable=AsyncMock,
                           return_value=text_response):
-            await loop.run("hello", initial_nonce="nonce-xyz")
+            persist_user_row(loop._session, "hello", "nonce-xyz")
+            await loop.run()
 
         # First appended message should be the initial user message with nonce
         assert len(appended) >= 1
@@ -142,7 +164,8 @@ class TestAutoStartNonce:
         )
         with patch.object(loop, "_stream_response_with", new_callable=AsyncMock,
                           return_value=text_response):
-            await loop.run("hello")
+            persist_user_row(loop._session, "hello")
+            await loop.run()
 
         user_msg = appended[0]
         assert user_msg["role"] == "user"

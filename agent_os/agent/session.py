@@ -1018,3 +1018,43 @@ class Session:
                 os.replace(tmp_path, self._filepath)
                 self._pending_meta = None
         self._messages = new_messages
+
+
+def persist_user_row(session: Session, content: str,
+                     nonce: str | None = None) -> dict:
+    """THE single writer of an injected user message (bug #59).
+
+    Whoever injects a user message persists it — right there, synchronously,
+    before anything that can fail. ``AgentLoop.run()`` deliberately does NOT
+    append an initial message: it resumes from a session that already contains
+    one. Two writers coordinated by a flag is how double-append ships, so
+    there is exactly one, and it is this function.
+
+    Callers today: the auto-start branches of
+    ``AgentManager.inject_message`` / ``start_agent``
+    (``agent_os/daemon_v2/agent_manager.py``) and
+    ``NativeWorkerAdapter.send`` (``agent_os/daemon_v2/native_worker.py``).
+
+    ``session.append`` writes the JSONL line immediately (creating the file
+    and flushing the deferred ``session_start`` meta on the first write), so
+    the message is durable the moment this returns — not once a loop task
+    gets its first execution slice.
+
+    ``nonce`` must ride the row: it is the dedup key the frontend matches its
+    optimistic bubble against, and downstream consumers read it off the
+    persisted message (``agent/providers/openai_compat.py``). Falsy nonces are
+    omitted rather than stored as empty strings, matching the previous
+    ``AgentLoop.run()`` behaviour byte for byte.
+
+    Returns the appended message dict (already enriched by ``append`` with
+    timestamp / session ids / any ``on_append`` observer fields).
+    """
+    message: dict = {
+        "role": "user",
+        "content": content,
+        "source": "user",
+    }
+    if nonce:
+        message["nonce"] = nonce
+    session.append(message)
+    return message

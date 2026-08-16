@@ -19,6 +19,7 @@ import pytest
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
+from agent_os.agent.session import persist_user_row
 
 
 def _unique_tool_response(call_n: int):
@@ -132,7 +133,8 @@ async def test_turn_count_fires_after_cooldown_turns():
     loop._stream_response = mock_stream
 
     with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-        await loop.run("Start task")
+        persist_user_row(loop._session, "Start task")
+        await loop.run()
     await loop.drain_refresh()
 
     # Refresh must have fired at least once (turn-count trigger at turn 15)
@@ -170,7 +172,8 @@ async def test_turns_since_last_update_resets_after_refresh():
         return _unique_tool_response(call_n["n"])
 
     loop._stream_response = mock_stream
-    await loop.run("go")
+    persist_user_row(loop._session, "go")
+    await loop.run()
 
     # After refresh at iteration 15, counter resets to 0, then increments by 1 at iter 16
     assert loop._turns_since_last_update <= COOLDOWN_TURNS, (

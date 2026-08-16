@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 from agent_os.api.app import create_app
 from agent_os.daemon_v2.project_store import ProjectStore
 from agent_os.agent.pricing import get_cost_rates, _pricing_cache
+from agent_os.agent.session import persist_user_row
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +195,8 @@ class TestLoopLedgerEmission:
         )
         loop._stream_response = AsyncMock(return_value=response)
 
-        await loop.run("hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
 
         # Exactly one ledger line was written for the management response.
         path = ledger_path(workspace)

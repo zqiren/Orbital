@@ -42,7 +42,7 @@ from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
 # expected TDD behaviour.
 # ---------------------------------------------------------------------------
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop, normalize_tool_call
 from agent_os.agent.context import ContextManager
 from agent_os.agent import compaction as compaction_mod
@@ -526,7 +526,8 @@ class TestLoopTextOnly:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr)
-        await loop.run(initial_message="hi there")
+        persist_user_row(loop._session, "hi there")
+        await loop.run()
 
         msgs = session.get_messages()
         # Should have: user msg + assistant msg (minimum)
@@ -627,7 +628,8 @@ class TestLoopToolCall:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr)
-        await loop.run(initial_message="read test.py")
+        persist_user_row(loop._session, "read test.py")
+        await loop.run()
 
         # Registry should have been called
         assert len(registry.execute_calls) == 1
@@ -671,7 +673,8 @@ class TestLoopStreaming:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr)
-        await loop.run(initial_message="say hello world")
+        persist_user_row(loop._session, "say hello world")
+        await loop.run()
 
         # Should have notified for each chunk
         assert len(stream_notifications) == 3
@@ -731,7 +734,8 @@ class TestAsyncToolExecution:
         loop = AgentLoop(session, provider, registry, context_mgr)
 
         with patch("agent_os.agent.loop.asyncio.to_thread", wraps=asyncio.to_thread) as mock_to_thread:
-            await loop.run(initial_message="run slow tool")
+            persist_user_row(loop._session, "run slow tool")
+            await loop.run()
             assert mock_to_thread.called
 
 
@@ -761,7 +765,8 @@ class TestLoopInterceptor:
 
         loop = AgentLoop(session, provider, registry, context_mgr,
                          interceptor=interceptor)
-        await loop.run(initial_message="delete everything")
+        persist_user_row(loop._session, "delete everything")
+        await loop.run()
 
         assert session.is_paused()
         assert len(interceptor.intercepted_calls) == 1
@@ -813,7 +818,8 @@ class TestLoopInterceptor:
                          interceptor=interceptor)
 
         # The loop must not raise — this is the core regression assertion.
-        await loop.run(initial_message="run shell")
+        persist_user_row(loop._session, "run shell")
+        await loop.run()
 
         # The intercepted call must have a tool result (not pending, not
         # CANCELLED-as-orphan), and that result must indicate the failure.
@@ -864,7 +870,8 @@ class TestLoopResumeAfterPause:
 
         loop1 = AgentLoop(session, provider1, registry, context_mgr,
                           interceptor=interceptor)
-        await loop1.run(initial_message="list files")
+        persist_user_row(loop1._session, "list files")
+        await loop1.run()
         assert session.is_paused()
 
         # Resume
@@ -940,7 +947,8 @@ class TestLoopQueueMessage:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr)
-        await loop.run(initial_message="read files")
+        persist_user_row(loop._session, "read files")
+        await loop.run()
 
         # The queued message should appear in messages
         msgs = session.get_messages()
@@ -988,7 +996,8 @@ class TestLoopStop:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr)
-        await loop.run(initial_message="read")
+        persist_user_row(loop._session, "read")
+        await loop.run()
 
         assert session.is_stopped()
 
@@ -1019,7 +1028,8 @@ class TestLoopGuardIterationCap:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=3)
-        await loop.run(initial_message="read everything")
+        persist_user_row(loop._session, "read everything")
+        await loop.run()
 
         # Should have a system message about iteration limit
         msgs = session.get_messages()
@@ -1057,7 +1067,8 @@ class TestLoopGuardRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=50)
-        await loop.run(initial_message="read same.py")
+        persist_user_row(loop._session, "read same.py")
+        await loop.run()
 
         # Loop should have exited due to repetition, not max_iterations
         # There should be a system message about repetition
@@ -1090,7 +1101,8 @@ class TestLoopGuardRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=50)
-        await loop.run(initial_message="read x.py repeatedly")
+        persist_user_row(loop._session, "read x.py repeatedly")
+        await loop.run()
 
         msgs = session.get_messages()
 
@@ -1560,7 +1572,8 @@ class TestLoopIsRunning:
 
         context_mgr.prepare = tracking_prepare
 
-        await loop.run(initial_message="test")
+        persist_user_row(loop._session, "test")
+        await loop.run()
         assert not loop.is_running
         # During prepare() inside run(), is_running should have been True
         if running_states:
@@ -1625,7 +1638,8 @@ class TestLoopFinallyCleansUp:
         loop = AgentLoop(session, provider, registry, context_mgr)
         # The loop should handle the error gracefully
         try:
-            await loop.run(initial_message="test")
+            persist_user_row(loop._session, "test")
+            await loop.run()
         except Exception:
             pass
 
@@ -1656,7 +1670,8 @@ class TestPausedForApprovalFlag:
 
         loop1 = AgentLoop(session, provider1, registry, context_mgr,
                           interceptor=interceptor)
-        await loop1.run(initial_message="run echo")
+        persist_user_row(loop1._session, "run echo")
+        await loop1.run()
         assert session.is_paused()
         # The loop should have set _paused_for_approval
         assert session._paused_for_approval is True
@@ -1898,7 +1913,8 @@ class TestMultiToolInterceptBatchCancellation:
         interceptor.on_intercept = MagicMock()
 
         loop = AgentLoop(session, provider, registry, context_mgr, interceptor=interceptor)
-        await loop.run(initial_message="do three things")
+        persist_user_row(loop._session, "do three things")
+        await loop.run()
 
         messages = session.get_messages()
         # Find tool results
@@ -1942,7 +1958,8 @@ class TestMultiToolInterceptBatchCancellation:
         interceptor.on_intercept = MagicMock()
 
         loop = AgentLoop(session, provider, registry, context_mgr, interceptor=interceptor)
-        await loop.run(initial_message="two tools")
+        persist_user_row(loop._session, "two tools")
+        await loop.run()
 
         messages = session.get_messages()
         tool_results = [m for m in messages if m.get("role") == "tool"]

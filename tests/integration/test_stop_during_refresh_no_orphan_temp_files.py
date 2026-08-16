@@ -34,7 +34,7 @@ from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.workspace_files import WorkspaceFileManager
 
@@ -251,7 +251,8 @@ async def test_stop_during_refresh_leaves_no_tmp_files():
 
         loop._stream_response = mock_stream
 
-        loop_task = asyncio.create_task(loop.run("Start task"))
+        persist_user_row(loop._session, "Start task")
+        loop_task = asyncio.create_task(loop.run())
 
         # Wait for the refresh to start (event set when refresh enters sleep)
         await asyncio.wait_for(refresh_started.wait(), timeout=15.0)
@@ -346,7 +347,8 @@ async def test_stop_before_refresh_no_tmp_files():
 
         loop._stream_response = slow_stream
 
-        loop_task = asyncio.create_task(loop.run("Start"))
+        persist_user_row(loop._session, "Start")
+        loop_task = asyncio.create_task(loop.run())
 
         # Wait for stream to begin, then immediately terminate
         await asyncio.wait_for(stream_started.wait(), timeout=5.0)
@@ -435,7 +437,8 @@ async def test_cancel_propagates_to_refresh_task():
 
         loop._stream_response = mock_stream
 
-        loop_task = asyncio.create_task(loop.run("go"))
+        persist_user_row(loop._session, "go")
+        loop_task = asyncio.create_task(loop.run())
 
         # Wait for refresh to start
         await asyncio.wait_for(refresh_started.wait(), timeout=15.0)

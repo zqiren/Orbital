@@ -23,7 +23,7 @@ import os
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import (
@@ -149,7 +149,8 @@ async def test_ledger_attributes_post_rotation_provider(tmp_path):
         project_dir=str(tmp_path),
         max_iterations=10,
     )
-    await loop.run(initial_message="go")
+    persist_user_row(loop._session, "go")
+    await loop.run()
 
     # The loop must have rotated and completed via the fallback.
     assert not loop._llm_failed

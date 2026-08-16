@@ -36,7 +36,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.budget import ledger as ledger_mod
 from agent_os.budget.guard import evaluate_budget
 from agent_os.budget.ledger import (
@@ -173,7 +173,8 @@ class TestSubagentSpendDoesNotEnforce:
         _plant_subagent_10x(ws)
         events = []
         loop = _build_loop(ws, _cfg(limit=1.0), on_budget_event=events.append)
-        await loop.run(initial_message="hi")
+        persist_user_row(loop._session, "hi")
+        await loop.run()
         # The loop completed a normal response — NOT a budget trip.
         assert loop.get_completion_state()[0] != "budget_blocked"
         roles = [m.get("role") for m in loop._session.get_messages()]
@@ -252,7 +253,8 @@ class TestManagementSpendStillEnforces:
             ws, _cfg(limit=1.0), on_budget_event=events.append,
             provider=_RecordingProvider(),
         )
-        await loop.run(initial_message="do expensive work")
+        persist_user_row(loop._session, "do expensive work")
+        await loop.run()
         assert calls["n"] == 0, "no LLM call when management spend is over limit"
         assert loop.get_completion_state()[0] == "budget_blocked"
 
