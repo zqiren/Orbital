@@ -837,7 +837,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         if (sessionIdRef.current !== sid) return;
         setRawMessages(data);
         setTotalMessages(total);
-        setLoadedOffset(Math.min(targetLimit, data.length || targetLimit));
+        const nextOffset = Math.min(targetLimit, data.length || targetLimit);
+        setLoadedOffset(nextOffset);
+        // Bug #58 (hygiene): keep chatHistoryCache in step with the catch-up.
+        // The cache used to be written ONLY by the session-load effect, so
+        // every completed turn left the entry a little further behind — this
+        // is the running→idle catch-up, the moment the freshest canonical
+        // history is in hand. Same key format as the load effect. Not the fix
+        // for the mid-run drop on its own (the in-flight rounds still are not
+        // in the cache while the turn runs), but it stops the entry drifting
+        // stale by construction between turns.
+        chatHistoryCache.set(`${projectId}:${sid}`, {
+          messages: data,
+          total,
+          loadedOffset: nextOffset,
+        });
       })
       .catch(() => {
         // best-effort refresh; the seed remains the prior history
