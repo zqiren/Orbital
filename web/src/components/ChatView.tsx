@@ -1168,10 +1168,36 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // Bug #48 (fix C): on a cache hit, paint the last-known transcript
       // immediately and revalidate in the background — no skeleton flash on
       // switch-back. On a miss, keep the original loading gate.
+      //
+      // Bug #58: two cases must NOT paint from the cache.
+      //
+      // 1. A turn is in flight. The cache is written only here, from a settled
+      //    fetch — `refreshRawMessages` and the live WS appends never write
+      //    back — so mid-turn the entry is stale by construction. Painting it
+      //    fills `items` with the stale snapshot, which arms the seed effect's
+      //    mid-turn skip above: the skip then refuses to let the revalidate
+      //    replace `items` for the REST OF THE TURN, so every round persisted
+      //    after the entry was written vanishes until the next running→idle
+      //    refresh or a full reload (which clears this module-level cache —
+      //    that is why refreshing "brings the messages back"). Show the
+      //    skeleton and wait for the real fetch instead. Nothing the skip
+      //    exists to protect is lost: a remount has already destroyed the live
+      //    overlay, and the fresh fetch lands with `items` empty, so the skip
+      //    fails its own non-empty gate and seeds correctly. The switch-back
+      //    skeleton flash is an accepted cost, scoped strictly to turn-in-flight.
+      // 2. The entry is empty. The backend legitimately returns [] for a
+      //    freshly minted session id that has not materialized yet, so an entry
+      //    cached at that moment is `messages: []`; repainting it hard-blanked
+      //    a pane that has since filled up. Same site, same root — treat an
+      //    empty entry as a miss and let the fetch decide.
       const cached = chatHistoryCache.get(cacheKey);
-      if (cached) {
+      // Committed ref, not effect-closure state: this effect is deliberately
+      // NOT keyed on agentStatus (see the seed effect's dep-array note).
+      const turnInFlight =
+        agentStatusRef.current === 'running' || agentStatusRef.current === 'waiting';
+      const paintCached = cached !== undefined && cached.messages.length > 0 && !turnInFlight;
+      if (paintCached) {
         setRawMessages(cached.messages);
-        if (cached.messages.length === 0) setItems([]);
         setTotalMessages(cached.total);
         setLoadedOffset(cached.loadedOffset);
         setLoading(false);
@@ -1214,9 +1240,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             total,
             loadedOffset: targetLimit,
           });
-        } else if (!cached) {
-          // Fetch failed with nothing cached — show the empty state. On a
-          // cache hit, keep the stale transcript instead of blanking it.
+        } else if (!paintCached) {
+          // Fetch failed with nothing painted — show the empty state. Keyed on
+          // `paintCached`, not `cached`: when the cached entry was withheld
+          // (mid-turn, or empty) there is no stale transcript on screen to
+          // keep, so the pane must fall back to the empty state rather than
+          // sit on a skeleton forever. On a real painted hit, keep the stale
+          // transcript instead of blanking it.
           setRawMessages([]);
           setItems([]);
         }

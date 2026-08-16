@@ -2769,3 +2769,162 @@ describe('Bug #48: session-switch history cache + fetch abort', () => {
     await flushEffects();
   });
 });
+
+// Mid-run transcript loss (investigation 2026-08-15). The module-level
+// chatHistoryCache is only ever written by the session-load effect —
+// refreshRawMessages (the running→idle catch-up) and the live WS appends never
+// write back. So an entry can go stale, and a remount mid-run repaints that
+// stale snapshot. The seed effect's mid-turn skip then refuses to replace
+// `items` for the rest of the turn, pinning the stale paint until a full page
+// reload clears the module cache.
+//
+// The Bug #48 tests above pass only because they run at agentStatus="idle",
+// where the mid-turn skip never arms.
+describe('mid-run remount: stale history cache pins the transcript', () => {
+  const ROUND_1 = {
+    role: 'user',
+    content: 'round-one-message',
+    source: 'user',
+    timestamp: '2026-08-15T06:26:23.698Z',
+  };
+  const ROUND_2 = {
+    role: 'user',
+    content: 'round-two-message',
+    source: 'user',
+    timestamp: '2026-08-15T06:28:03.403Z',
+  };
+
+  function renderChatView(agentStatus: 'idle' | 'running') {
+    return act(async () => {
+      root.render(
+        <ChatView
+          projectId="p1"
+          project={project}
+          agentStatus={agentStatus}
+          mentionAgents={[]}
+          sessionId="s1"
+        />,
+      );
+    });
+  }
+
+  function remountFresh() {
+    // A tab switch (Queue tab and back) unmounts ChatView. Per-instance refs
+    // reset; the module-level chatHistoryCache survives — that asymmetry is
+    // the bug's precondition.
+    return act(async () => {
+      root.unmount();
+      container.remove();
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+    });
+  }
+
+  it('renders a round persisted after the cache entry was written', async () => {
+    // 1. First view of s1 while idle: only round 1 exists. This is what
+    //    populates chatHistoryCache with a one-round snapshot.
+    runStatusHolder = 's1';
+    chatInitialResponse = { data: [ROUND_1], total: 1 };
+    await renderChatView('idle');
+    await flushEffects();
+    expect(container.textContent).toContain('round-one-message');
+
+    await remountFresh();
+
+    // 2. Round 2 has since been sent and persisted, and its turn is still in
+    //    flight with s1 holding the slot.
+    chatInitialResponse = { data: [ROUND_1, ROUND_2], total: 2 };
+
+    // 3. Switch back mid-run, holding the revalidate open so the holder fetch
+    //    settles first. That is the real ordering: the cache is consulted, then
+    //    the holder resolves, then fresh history lands — which is precisely
+    //    when the skip is armed.
+    let releaseChat!: () => void;
+    chatResponseGate = new Promise<void>((r) => {
+      releaseChat = r;
+    });
+    await renderChatView('running');
+    await flushEffects();
+    // Option C: the stale one-round snapshot must NOT be painted while the turn
+    // is in flight — painting it is what arms the seed effect's mid-turn skip
+    // and pins the stale transcript for the rest of the turn. The pane shows
+    // the skeleton and waits for the real fetch. This mid-run switch-back flash
+    // is the accepted cost of the fix, scoped strictly to turn-in-flight.
+    expect(container.textContent).not.toContain('round-one-message');
+    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+
+    releaseChat();
+    chatResponseGate = null;
+    await flushEffects();
+
+    // The revalidate returned BOTH rounds and they are on disk, so BOTH must
+    // render. Before the fix the mid-turn skip dropped round 2 until a full
+    // page reload cleared the module cache.
+    expect(container.textContent).toContain('round-one-message');
+    expect(container.textContent).toContain('round-two-message');
+  });
+
+  // The stale-EMPTY half of the same defect, provable at idle so it is
+  // independent of the mid-turn guard above. A session id is minted before the
+  // first inject, and the backend legitimately returns [] for an id that has
+  // not materialized yet — so a first view caches `messages: []`. The cache-hit
+  // paint then called setItems([]) on that entry, hard-blanking a pane whose
+  // session has since filled up, for the whole duration of the revalidate.
+  // An empty entry is now treated as a miss: skeleton, then real history.
+  it('does not blank the pane from a cache entry written before the session materialized', async () => {
+    runStatusHolder = null;
+    chatInitialResponse = { data: [], total: 0 };
+    await renderChatView('idle');
+    await flushEffects();
+    expect(container.textContent).not.toContain('round-one-message');
+
+    await remountFresh();
+
+    // The session has materialized since; its history is no longer empty.
+    chatInitialResponse = { data: [ROUND_1], total: 1 };
+    let releaseChat!: () => void;
+    chatResponseGate = new Promise<void>((r) => {
+      releaseChat = r;
+    });
+    await renderChatView('idle');
+    await flushEffects();
+
+    // Mid-revalidate: a loading skeleton, not a pane blanked by the empty entry.
+    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+
+    releaseChat();
+    chatResponseGate = null;
+    await flushEffects();
+
+    expect(container.textContent).toContain('round-one-message');
+  });
+
+  // Control: the identical stale-cache flow at idle. This passes today, which
+  // isolates the defect — a stale cache entry alone is survivable because the
+  // revalidate reseeds `items`. It is the mid-turn skip that makes the stale
+  // paint permanent for the duration of the turn.
+  it('recovers from the same stale cache entry when no turn is in flight', async () => {
+    runStatusHolder = 's1';
+    chatInitialResponse = { data: [ROUND_1], total: 1 };
+    await renderChatView('idle');
+    await flushEffects();
+    expect(container.textContent).toContain('round-one-message');
+
+    await remountFresh();
+
+    chatInitialResponse = { data: [ROUND_1, ROUND_2], total: 2 };
+    let releaseChat!: () => void;
+    chatResponseGate = new Promise<void>((r) => {
+      releaseChat = r;
+    });
+    await renderChatView('idle');
+    await flushEffects();
+
+    releaseChat();
+    chatResponseGate = null;
+    await flushEffects();
+
+    expect(container.textContent).toContain('round-two-message');
+  });
+});
