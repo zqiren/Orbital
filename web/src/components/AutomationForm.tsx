@@ -8,6 +8,8 @@ import { useLocale } from '../i18n/LocaleContext';
 import type { Trigger } from '../types';
 import type { TriggerDraft } from '../hooks/useTriggers';
 import ScheduleInput from './ScheduleInput';
+import Select from './Select';
+import { FIELD, FIELD_MULTILINE } from './fieldStyles';
 import {
   cronForDraft,
   draftFromCron,
@@ -15,9 +17,6 @@ import {
   humanForCron,
   type ScheduleDraft,
 } from './scheduleFormat';
-
-const FIELD =
-  'text-sm bg-sidebar border border-border rounded-lg px-2.5 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150';
 
 interface AutomationFormProps {
   /** Edit target. Absent = create. */
@@ -134,16 +133,16 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
               : t('trigger.form.type.fileWatch')}
           </span>
         ) : (
-          <select
+          <Select
             value={type}
             onChange={(e) => setType(e.target.value as 'schedule' | 'file_watch')}
             aria-label={t('trigger.form.type')}
             data-testid="automation-form-type"
-            className={FIELD}
+            className={`${FIELD} w-full`}
           >
             <option value="schedule">{t('trigger.form.type.schedule')}</option>
             <option value="file_watch">{t('trigger.form.type.fileWatch')}</option>
-          </select>
+          </Select>
         )}
       </div>
 
@@ -221,7 +220,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           placeholder={t('trigger.form.promptPlaceholder')}
           aria-label={t('trigger.task')}
           data-testid="automation-form-prompt"
-          className={`${FIELD} resize-y leading-relaxed`}
+          className={`${FIELD_MULTILINE} resize-y leading-relaxed`}
         />
       </label>
 

@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
+import Select from './Select';
 
 export interface SettingsRailSection {
   /** Matches the target element's `data-settings-section` attribute. */
@@ -146,7 +147,7 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
     // Compact jump menu — plain sticky positioning (WKWebView-safe).
     return (
       <div className="sticky top-0 z-10 bg-background border-b border-border px-4 py-2">
-        <select
+        <Select
           data-testid="settings-jump-menu"
           aria-label={t('settingsRail.aria')}
           value={activeId && byId.has(activeId) ? activeId : ''}
@@ -163,7 +164,7 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
               {t(s.labelKey)}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
     );
   }

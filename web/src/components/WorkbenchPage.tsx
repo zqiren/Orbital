@@ -42,6 +42,7 @@ import { useCalendar } from './calendar/useCalendar';
 import { formatTime } from './calendar/range';
 import WorkbenchCard from './WorkbenchCard';
 import type { WorkbenchEntry } from './workbench/types';
+import Select from './Select';
 
 export interface WorkbenchPageProps {
   /**
@@ -237,7 +238,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
         </h1>
         <span className="flex-1" />
         {showProjectChip && entries.length > 0 && (
-          <select
+          <Select
             value={filterProjectId}
             onChange={(e) => setFilterProjectId(e.target.value)}
             aria-label={t('workbench.filter.all')}
@@ -250,7 +251,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                 {o.name}
               </option>
             ))}
-          </select>
+          </Select>
         )}
         <button
           type="button"
@@ -378,7 +379,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
             </button>
           ) : (
             <div className="flex flex-wrap items-center justify-center gap-2">
-              <select
+              <Select
                 value={migrateTarget}
                 onChange={(e) => setMigrateTarget(e.target.value)}
                 aria-label={t('workbench.empty.migratePicker')}
@@ -393,7 +394,7 @@ export default function WorkbenchPage({ projectId, setRoute }: WorkbenchPageProp
                       {p.name}
                     </option>
                   ))}
-              </select>
+              </Select>
               <button
                 type="button"
                 onClick={() => migrateTarget && handleMigrate(migrateTarget)}

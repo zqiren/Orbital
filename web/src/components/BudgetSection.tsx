@@ -16,6 +16,7 @@ import {
   deriveMeter,
   periodToWindow,
 } from '../budget/derive';
+import Select from './Select';
 
 type BudgetPeriod = 'daily' | 'weekly' | 'monthly' | 'total';
 
@@ -190,7 +191,7 @@ export default function BudgetSection({
             aria-label={t('createProject.budget.label')}
             className="w-24 text-sm bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
           />
-          <select
+          <Select
             value={currency}
             onChange={(e) => onCurrencyChange(e.target.value)}
             aria-label={t('settings.budget.aria.currency')}
@@ -201,9 +202,9 @@ export default function BudgetSection({
             {(CURRENCIES.includes(currency) ? CURRENCIES : [currency, ...CURRENCIES]).map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
-          </select>
+          </Select>
           <span>{t('settings.budget.sentence.suffix')}</span>
-          <select
+          <Select
             value={period}
             onChange={(e) => onPeriodChange(e.target.value as BudgetPeriod)}
             aria-label={t('settings.budget.aria.period')}
@@ -212,7 +213,7 @@ export default function BudgetSection({
             {PERIOD_OPTIONS.map((p) => (
               <option key={p.value} value={p.value}>{t(p.labelKey)}</option>
             ))}
-          </select>
+          </Select>
         </div>
 
         {/* Period hint + reset (reset only in total mode) */}

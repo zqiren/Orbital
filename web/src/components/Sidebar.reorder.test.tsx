@@ -31,6 +31,9 @@ vi.mock('../config', () => ({ api: apiMock }));
 // fire a synthetic drop.
 const dnd = vi.hoisted(() => ({
   onDragEnd: null as ((event: DragEndEvent) => void) | null,
+  // Stands in for the pointer listener dnd-kit hands back from useSortable, so
+  // a test can assert WHICH element the Sidebar attached it to.
+  onMouseDown: vi.fn(),
 }));
 
 vi.mock('@dnd-kit/core', () => ({
@@ -61,7 +64,7 @@ vi.mock('@dnd-kit/sortable', async () => {
     verticalListSortingStrategy: 'vertical',
     SortableContext: ({ children }: { children: ReactNode }) => <>{children}</>,
     useSortable: () => ({
-      listeners: {},
+      listeners: { onMouseDown: dnd.onMouseDown },
       setNodeRef: () => {},
       setActivatorNodeRef: () => {},
       transform: null,
@@ -125,7 +128,32 @@ beforeEach(() => {
   apiMock.mockReset();
   apiMock.mockResolvedValue({ entries: [] });
   dnd.onDragEnd = null;
+  dnd.onMouseDown.mockReset();
   onReorderProjects = vi.fn<ReorderFn>().mockResolvedValue([]);
+});
+
+describe('Sidebar reorder — what starts a drag', () => {
+  // The drag used to start only on a 20px handle, which is why every project
+  // name sat 20px right of the Calendar/Workbench labels above it. The handle
+  // is now a hover hint painted over the row's own padding, and the ROW is the
+  // drag target — so the listener has to be on the row, not the glyph.
+  it('starts a drag from the row body, not just the handle glyph', () => {
+    renderSidebar([alpha, beta]);
+    fireEvent.mouseDown(screen.getByText('Alpha'));
+    expect(dnd.onMouseDown).toHaveBeenCalled();
+  });
+
+  it('still starts a drag from the handle glyph, which now merely bubbles', () => {
+    renderSidebar([alpha, beta]);
+    fireEvent.mouseDown(screen.getByTestId('project-drag-handle-p-a'));
+    expect(dnd.onMouseDown).toHaveBeenCalled();
+  });
+
+  it('leaves the pinned scratch row undraggable', () => {
+    renderSidebar([scratch, alpha]);
+    fireEvent.mouseDown(screen.getByText('Quick Tasks'));
+    expect(dnd.onMouseDown).not.toHaveBeenCalled();
+  });
 });
 
 describe('Sidebar reorder — drag end', () => {

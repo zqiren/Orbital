@@ -17,6 +17,7 @@ import SettingsRail, { type SettingsRailSection } from './SettingsRail';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
 import { useT } from '../i18n/useT';
+import Select from './Select';
 
 interface GlobalSettingsProps {
   onBack: () => void;
@@ -116,7 +117,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
           <label className="block text-sm font-medium text-primary mb-1.5">
             {t('global.language')}
           </label>
-          <select
+          <Select
             value={locale}
             onChange={(e) => setLocale(e.target.value as typeof locale)}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
@@ -124,7 +125,7 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
             {LOCALES.map((l) => (
               <option key={l.code} value={l.code}>{l.label}</option>
             ))}
-          </select>
+          </Select>
         </div>
 
         <p className="text-sm text-secondary mb-6">

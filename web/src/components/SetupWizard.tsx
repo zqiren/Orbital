@@ -28,6 +28,7 @@ import BetaBadge from './BetaBadge';
 import { useLocale } from '../i18n/LocaleContext';
 import { LOCALES } from '../i18n/locales';
 import { warmupUrlForLocale } from '../utils/warmupUrl';
+import Select from './Select';
 
 type WizardStep = 'api_key' | 'accounts';
 
@@ -44,7 +45,7 @@ function LocaleToggle() {
   return (
     <div className="inline-flex shrink-0 items-center gap-1.5">
       <Globe className="w-3.5 h-3.5 text-secondary" aria-hidden="true" />
-      <select
+      <Select
         aria-label={t('global.language')}
         data-testid="wizard-locale-select"
         value={locale}
@@ -54,7 +55,7 @@ function LocaleToggle() {
         {LOCALES.map((l) => (
           <option key={l.code} value={l.code}>{l.label}</option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }

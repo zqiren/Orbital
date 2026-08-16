@@ -47,12 +47,7 @@ interface SidebarProps {
   onReorderProjects: (orderedIds: string[]) => Promise<unknown>;
 }
 
-// Width of the drag-handle gutter. The pinned Quick Tasks row is not
-// draggable but reserves the same gutter, so every project name in the list
-// still starts on one vertical line.
-const HANDLE_GUTTER = 'w-5 max-md:w-7 shrink-0';
-
-/** One draggable project row: the shared row button plus its drag handle. */
+/** One draggable project row. The whole row is the drag target. */
 function SortableProjectRow({
   id,
   handleLabel,
@@ -68,28 +63,44 @@ function SortableProjectRow({
   // does not have (spec 056 §6 decision 5 dropped the KeyboardSensor on
   // purpose). Advertising it would put a dead control in the tab order and
   // read the wrong instructions to a screen reader. Only the pointer
-  // listeners and the activator ref are wired.
-  const { listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
-    useSortable({ id });
+  // listeners are wired.
+  //
+  // `setActivatorNodeRef` is gone with the dedicated handle: with the
+  // listeners on the row itself, the draggable node IS the activator, which is
+  // what dnd-kit falls back to when no activator is registered.
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
     <div
       ref={setNodeRef}
+      {...listeners}
       style={{
         // x is zeroed rather than pulled in via @dnd-kit/modifiers'
         // restrictToVerticalAxis — same result for a one-column list, no
         // extra dependency.
         transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
         transition,
+        // NOT `none`, which is what the old 20px handle could afford because it
+        // was a sliver nobody scrolls over. The drag target is now the whole
+        // row, and `none` there would stop the mobile project list from
+        // scrolling under a normal swipe. `manipulation` is the pairing for a
+        // delay-based TouchSensor: the 250ms long-press is what decides
+        // between scroll and drag, and dnd-kit blocks touchmove itself once it
+        // has decided.
+        touchAction: 'manipulation',
       }}
-      className={`group flex items-center ${isDragging ? 'relative z-10 opacity-60' : ''}`}
+      className={`group relative flex items-center ${isDragging ? 'z-10 opacity-60' : ''}`}
     >
+      {/* A hint, not a target. The row is what listens, so this glyph needs no
+          listeners of its own — a press on it bubbles like a press anywhere
+          else on the row. That is what lets it stop reserving layout: it is
+          absolutely positioned inside the row button's own left padding
+          instead of pushing every project name 20px right of the Calendar and
+          Workbench labels above it. */}
       <span
-        ref={setActivatorNodeRef}
-        {...listeners}
         data-testid={`project-drag-handle-${id}`}
         title={handleLabel}
         aria-hidden="true"
-        className={`${HANDLE_GUTTER} self-stretch flex items-center justify-center text-secondary cursor-grab active:cursor-grabbing touch-none opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity motion-reduce:transition-none`}
+        className="absolute inset-y-0 left-0 flex w-3 items-center justify-center text-muted opacity-0 transition-opacity duration-150 cursor-grab active:cursor-grabbing group-hover:opacity-100 motion-reduce:transition-none max-md:opacity-100"
       >
         <GripVertical size={12} />
       </span>
@@ -236,7 +247,15 @@ export default function Sidebar({
           isActive ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'
         }`}
       >
-        <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`} />
+        {/* The dot rides in a 14px box — the width of the Calendar and
+            Workbench icons in the zone above — so every label in this column
+            starts on one vertical line instead of the project names sitting
+            6px right of the nav rows. It was also `mt-1.5` under
+            `items-center`, which pushed it ~3px BELOW centre on the one-line
+            rows that are most of the list. */}
+        <span className="flex w-3.5 shrink-0 items-center justify-center">
+          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+        </span>
         <div className="min-w-0 flex-1">
           <span className="text-xs font-medium text-primary block truncate">
             {truncate(project.name, 20)}
@@ -358,10 +377,10 @@ export default function Sidebar({
           >
             {scratchProjects.map((project) => (
               // Not draggable — scratch-first is an invariant of the list, not
-              // a position the user owns. It still reserves the handle gutter
-              // so its name lines up with every row below the hairline.
+              // a position the user owns. No gutter to reserve any more: the
+              // drag hint on the rows below overlays their padding rather than
+              // occupying a column, so this row lines up with them for free.
               <div key={project.project_id} className="flex items-center">
-                <span className={HANDLE_GUTTER} aria-hidden="true" />
                 {renderProjectRow(project)}
               </div>
             ))}

@@ -34,6 +34,7 @@ import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
+import Select from './Select';
 
 /** "google" → "Google" for the provider-scoped disconnect copy. Provider ids
  *  are backend slugs, not UI chrome — capitalizing is display-only. */
@@ -348,7 +349,7 @@ export default function ConnectorSettings() {
               data-testid="connector-custom-url"
               className="flex-1 text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
             />
-            <select
+            <Select
               value={customAuth}
               onChange={(e) => setCustomAuth(e.target.value as 'none' | 'oauth2')}
               aria-label={t('connectors.custom.auth.label')}
@@ -357,7 +358,7 @@ export default function ConnectorSettings() {
             >
               <option value="none">{t('connectors.custom.auth.none')}</option>
               <option value="oauth2">{t('connectors.custom.auth.oauth2')}</option>
-            </select>
+            </Select>
           </div>
           {customError && (
             <p className="text-xs text-error" role="alert" data-testid="connector-custom-error">

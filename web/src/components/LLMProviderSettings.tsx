@@ -10,6 +10,7 @@ import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { Locale } from '../i18n/locales';
 import watchaLogo from '../assets/watcha-logo.png';
+import Select from './Select';
 
 interface LLMSettingsResponse {
   llm: {
@@ -794,7 +795,7 @@ export default function LLMProviderSettings({
             </button>
           </div>
         ) : (
-          <select
+          <Select
             value={provider}
             onChange={(e) => handleProviderChange(e.target.value)}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
@@ -803,7 +804,7 @@ export default function LLMProviderSettings({
               <option key={key} value={key}>{providers[key].display_name}</option>
             ))}
             <option value={CUSTOM_PROVIDER_KEY}>{t('llm.provider.custom')}</option>
-          </select>
+          </Select>
         )}
         {provider !== CUSTOM_PROVIDER_KEY && providers[provider]?.notes && (
           <HintDetails className="mt-1">
@@ -1041,14 +1042,14 @@ export default function LLMProviderSettings({
             {provider === CUSTOM_PROVIDER_KEY && (
               <div>
                 <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.sdk')}</label>
-                <select
+                <Select
                   value={sdk}
                   onChange={(e) => setSdk(e.target.value as 'openai' | 'anthropic')}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
                 >
                   <option value="openai">{t('llm.sdk.openai')}</option>
                   <option value="anthropic">{t('llm.sdk.anthropic')}</option>
-                </select>
+                </Select>
               </div>
             )}
           </div>

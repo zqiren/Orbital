@@ -276,33 +276,44 @@ export default function ProjectDetail({
             // automation is a standing definition with a create/edit form —
             // sibling views, not sections of one scroll.
             <div className="flex flex-col h-full min-h-0">
-              <div
-                className="flex gap-1 px-6 pt-3 max-md:px-4"
-                role="tablist"
-                aria-label={t('projectDetail.tab.queue')}
-              >
-                {QUEUE_PANES.map((pane) => {
-                  const active = queuePane === pane.key;
-                  return (
-                    <button
-                      key={pane.key}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      data-testid={`queue-pane-${pane.key}`}
-                      onClick={() =>
-                        setRoute({ ...route, tab: 'queue', queuePane: pane.key })
-                      }
-                      className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors duration-150 max-md:min-h-[44px] ${
-                        active
-                          ? 'bg-card text-primary border border-border'
-                          : 'text-secondary hover:text-primary border border-transparent'
-                      }`}
-                    >
-                      {t(pane.labelKey)}
-                    </button>
-                  );
-                })}
+              {/* A segmented control, on a track.
+                  These two panes used to be bare pills: the active one carried
+                  its own border and the inactive one an invisible one, with
+                  nothing enclosing the pair. That reads as one card floating
+                  beside a line of plain text — the inactive pane did not look
+                  clickable, and neither looked related to the other. A track
+                  around both is what says "one control, two positions".
+                  text-[11px] against the parent tab bar's text-xs: two tab
+                  rows at the same size gave no clue which level you were on. */}
+              <div className="px-6 pt-3 max-md:px-4">
+                <div
+                  className="inline-flex gap-0.5 rounded-lg border border-border bg-sidebar p-0.5"
+                  role="tablist"
+                  aria-label={t('projectDetail.tab.queue')}
+                >
+                  {QUEUE_PANES.map((pane) => {
+                    const active = queuePane === pane.key;
+                    return (
+                      <button
+                        key={pane.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        data-testid={`queue-pane-${pane.key}`}
+                        onClick={() =>
+                          setRoute({ ...route, tab: 'queue', queuePane: pane.key })
+                        }
+                        className={`text-[11px] font-medium px-3 py-1 rounded-md transition-colors duration-150 max-md:min-h-[40px] ${
+                          active
+                            ? 'bg-card text-primary shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
+                            : 'text-secondary hover:text-primary'
+                        }`}
+                      >
+                        {t(pane.labelKey)}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
                 {queuePane === 'automations' ? (
