@@ -463,6 +463,37 @@ def _maybe_sync_instructions_to_goals(workspace: str, *, goals_content: str | No
         _write_workspace_file(workspace, "project_goals.md", effective)
 
 
+# ---- Manual project order (spec 056) ----
+
+# Sort position for a project that has never been dragged. +inf parks every
+# such project after all placed ones, where the stable sort preserves creation
+# order — which is exactly the ordering that existed before this feature.
+_UNPLACED_SORT_KEY = float("inf")
+
+
+class ProjectReorderRequest(BaseModel):
+    """The complete ordered id list for the reordered block."""
+
+    ordered_ids: list[str]
+
+
+def _project_sort_key(project: dict) -> float:
+    """Manual position, or ``_UNPLACED_SORT_KEY`` for a never-placed project.
+
+    Deliberately NOT a ``DEFAULT_PROJECT_FIELDS`` entry: defaulting the key to
+    0 on read would hoist every legacy project to the top. "No key" has to stay
+    distinguishable from "position 0".
+    """
+    value = project.get("sort_key")
+    # bool is an int subclass — a stray ``sort_key: true`` is not a position.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _UNPLACED_SORT_KEY
+    value = float(value)
+    if value != value:  # NaN never orders consistently; treat it as unplaced.
+        return _UNPLACED_SORT_KEY
+    return value
+
+
 # ---- Project Endpoints ----
 
 @router.post("/projects", status_code=201)
@@ -568,11 +599,45 @@ async def create_project(req: CreateProjectRequest):
 @router.get("/projects")
 async def list_projects():
     projects = [_redact_project(p) for p in _project_store.list_projects()]
-    projects.sort(key=lambda p: (not p.get("is_scratch", False),))
+    # Spec 056 — manual order. Two components, in this order:
+    #   1. ``not is_scratch`` — Quick Tasks stays pinned above everything. It
+    #      is the FIRST component, so no reorder can float a project above the
+    #      scratch project even if a client puts it there; the invariant is a
+    #      property of the sort, not of endpoint validation.
+    #   2. ``sort_key`` — the manual position written by POST /projects/reorder.
+    #      A project that has never been placed carries no key and sorts to the
+    #      bottom; Python's sort is stable, so keyless projects (legacy records
+    #      and freshly created ones alike) keep today's creation order there.
+    #      A fresh install with no keys at all therefore renders exactly as it
+    #      did before this feature existed.
+    projects.sort(key=lambda p: (not p.get("is_scratch", False), _project_sort_key(p)))
     for p in projects:
         p.setdefault("agent_name", p.get("name", ""))
         p.setdefault("is_scratch", False)
     return projects
+
+
+@router.post("/projects/reorder")
+async def reorder_projects(req: ProjectReorderRequest):
+    """Persist a manual project order (spec 056 §6 decision 3).
+
+    Takes the COMPLETE ordered id list for the block being reordered and
+    writes it in one atomic store pass. Returns the canonical list in its new
+    order so a ``GET /projects`` refetch racing this call converges on the
+    same answer the caller already applied optimistically.
+
+    Unknown ids are rejected rather than silently dropped — a client sending a
+    stale id is sending a stale order, and half-applying it would leave the
+    user looking at a list nobody asked for.
+    """
+    known = {p.get("project_id") for p in _project_store.list_projects()}
+    unknown = [pid for pid in req.ordered_ids if pid not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown project ids: {', '.join(unknown)}",
+        )
+    _project_store.reorder_projects(req.ordered_ids)
+    return await list_projects()
 
 
 @router.get("/projects/{project_id}")

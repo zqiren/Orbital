@@ -46,6 +46,7 @@ const defaultProps = {
   onSelectWorkbench: vi.fn(),
   onNewProject: vi.fn(),
   onSettings: vi.fn(),
+  onReorderProjects: vi.fn().mockResolvedValue([]),
 };
 
 beforeEach(() => {
@@ -149,6 +150,77 @@ describe('Sidebar — Workspace zone (two-zone IA)', () => {
     // Two projects total, one scratch → Projects header count is 1.
     const header = screen.getByText('Projects').parentElement as HTMLElement;
     expect(within(header).getByText('1')).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — manual project order (spec 056)', () => {
+  const scratchProject: Project = {
+    ...mockProject,
+    project_id: 'scratch-1',
+    name: 'Quick Tasks',
+    is_scratch: true,
+  };
+  const alpha: Project = { ...mockProject, project_id: 'p-a', name: 'Alpha' };
+  const beta: Project = { ...mockProject, project_id: 'p-b', name: 'Beta' };
+  const gamma: Project = { ...mockProject, project_id: 'p-c', name: 'Gamma' };
+
+  function navRowNames(container: HTMLElement): string[] {
+    const nav = container.querySelector('nav') as HTMLElement;
+    return within(nav)
+      .getAllByRole('button')
+      .map((b) => b.textContent ?? '');
+  }
+
+  it('renders regular projects in prop order — the API order is the render order', () => {
+    const { container } = render(
+      <Sidebar {...defaultProps} projects={[gamma, alpha, beta]} />,
+    );
+    expect(navRowNames(container)).toEqual(['Gamma', 'Alpha', 'Beta']);
+  });
+
+  it('re-renders in the new order when the reordered list arrives as props', () => {
+    const { container, rerender } = render(
+      <Sidebar {...defaultProps} projects={[alpha, beta, gamma]} />,
+    );
+    expect(navRowNames(container)).toEqual(['Alpha', 'Beta', 'Gamma']);
+
+    rerender(<Sidebar {...defaultProps} projects={[gamma, alpha, beta]} />);
+    expect(navRowNames(container)).toEqual(['Gamma', 'Alpha', 'Beta']);
+  });
+
+  it('gives every regular project a drag handle', () => {
+    render(<Sidebar {...defaultProps} projects={[alpha, beta]} />);
+    expect(screen.getByTestId('project-drag-handle-p-a')).toBeInTheDocument();
+    expect(screen.getByTestId('project-drag-handle-p-b')).toBeInTheDocument();
+  });
+
+  it('does NOT give the pinned Quick Tasks row a handle', () => {
+    // Scratch-first is an invariant of the list, not a position the user owns.
+    render(<Sidebar {...defaultProps} projects={[scratchProject, alpha]} />);
+    expect(screen.queryByTestId('project-drag-handle-scratch-1')).toBeNull();
+    expect(screen.getByTestId('project-drag-handle-p-a')).toBeInTheDocument();
+  });
+
+  it('labels the handle with the translated, project-named string', () => {
+    render(<Sidebar {...defaultProps} projects={[alpha]} />);
+    expect(screen.getByTestId('project-drag-handle-p-a')).toHaveAttribute(
+      'title',
+      'Drag to reorder Alpha',
+    );
+  });
+
+  it('keeps the handle out of the tab order and out of the a11y tree', () => {
+    // §6 decision 5 dropped keyboard reordering on purpose, so the handle must
+    // not advertise itself as a control that keyboard/AT users can operate —
+    // and the list's own tab order must not change.
+    const { container } = render(
+      <Sidebar {...defaultProps} projects={[scratchProject, alpha, beta]} />,
+    );
+    const handle = screen.getByTestId('project-drag-handle-p-a');
+    expect(handle).not.toHaveAttribute('tabindex');
+    expect(handle).toHaveAttribute('aria-hidden', 'true');
+    // One focusable row per project, exactly as before the handles existed.
+    expect(navRowNames(container)).toEqual(['Quick Tasks', 'Alpha', 'Beta']);
   });
 });
 
