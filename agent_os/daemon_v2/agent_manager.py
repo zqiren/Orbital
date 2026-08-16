@@ -22,7 +22,7 @@ from agent_os.agent.context import ContextManager
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext
 from agent_os.agent.providers.openai_compat import LLMProvider
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.workspace_files import WorkspaceFileManager, run_session_end_routine
@@ -633,6 +633,51 @@ class AgentManager:
                 return True
         return False
 
+    def _new_session_object(self, config: AgentConfig, session_id: str, *,
+                            queue_state: str = "chat",
+                            cold_start: bool = False) -> "Session":
+        """Construct (do NOT write) a fresh Session for ``session_id``.
+
+        Seam 3 / D1+D2: the canonical id IS the storage stem. ``session_id`` is
+        already resolved by the caller (explicit, or freshly minted), so the
+        JSONL stem == session_id == handle key — one value, no dual-id split.
+        Origin is derived from the queue context: the QueueDispatcher injects
+        with ``queue_state="running"``, everything else is user chat.
+
+        Extracted so ``start_agent`` and the inject write-ahead path
+        (``_start_with_persisted_message``) mint identical sessions — the two
+        differ only in *when* they mint, and a drift in provider/model/origin
+        metadata between them would be invisible until a post-mortem read the
+        wrong ``session_start`` meta.
+
+        No file is created here: ``Session.new`` defers the ``session_start``
+        meta and the first physical write happens on the first ``append``.
+        """
+        return Session.new(
+            session_id, config.workspace,
+            session_id=session_id,
+            provider=config.provider,
+            model=config.model,
+            sdk=config.sdk,
+            fallback_models=[fb.model for fb in config.llm_fallback_models],
+            origin=(
+                "cold_start" if cold_start
+                else ("queue" if queue_state == "running" else "chat")
+            ),
+        )
+
+    def _wire_session_observers(self, session: "Session", project_id: str,
+                                session_id: str) -> None:
+        """Attach the WS observers to ``session``. Idempotent (plain
+        assignment of freshly-built closures), so the inject write-ahead can
+        wire them early — the user row must fire the canonical
+        ``chat.user_message`` echo the frontend dedups its optimistic bubble
+        against — and ``start_agent`` can re-wire them without consequence.
+        """
+        session.on_append = self._on_message(project_id, session_id)
+        session.on_stream = self._on_stream(project_id, session_id)
+        session.on_queue_drained = self._on_queue_drained(project_id, session_id)
+
     async def start_agent(self, project_id: str, config: AgentConfig,
                           initial_message: str | None = None,
                           trigger_source: str | None = None,
@@ -678,6 +723,34 @@ class AgentManager:
         holder = self.current_holder_session_id(project_id)
         if holder is not None and holder != session_id:
             raise ValueError(f"Slot held by session {holder}")
+
+        # 5. Session + 5b. write-ahead of the caller's initial message (#59).
+        #
+        # Deliberately the FIRST thing past the guards, ahead of ~450 lines of
+        # provider construction, sandbox wiring and prompt assembly. The whole
+        # bug was that the user's text lived only in this argument until
+        # AgentLoop.run() appended it — the last thing this method schedules —
+        # so a provider stall or a 401 in the setup window destroyed it with no
+        # JSONL row, no session, no error. Nothing between here and the loop
+        # touches the session object, so minting it early costs nothing and
+        # buys durability for every caller that passes a message: POST
+        # /agents/start, the trigger manager, and the queue dispatcher.
+        #
+        # The auto-start inject paths persist even earlier — before they call
+        # us at all — and therefore hand us a session that already carries the
+        # row and initial_message=None. Either way the write goes through the
+        # one shared writer, and run() appends nothing, so a message is
+        # persisted exactly once.
+        if session is None:
+            session = self._new_session_object(
+                config, session_id, queue_state=queue_state,
+                cold_start=cold_start,
+            )
+        # 6-7. Observers. Wired before the write so the user row fires the
+        # canonical chat.user_message echo the frontend dedups against.
+        self._wire_session_observers(session, project_id, session_id)
+        if initial_message is not None:
+            persist_user_row(session, initial_message, initial_nonce)
 
         # Guard: check platform capabilities (skip for NullProvider / no isolation)
         if self._platform_provider is not None:
@@ -797,39 +870,9 @@ class AgentManager:
                     project_id, exc_info=True,
                 )
 
-        # 5. Session.
-        # ``session_uuid`` is the Format-2 JSONL filename stem (sanitized
-        # project name + uuid4 hex). ``session_id`` is the Format-1 user-facing
-        # chat id (defaulted to DEFAULT_SESSION_ID above when the caller did
-        # not provide one). Downstream WS broadcasts and callbacks must use
-        # the F1 chat id; only filename derivation and idempotency keys use F2.
-        # Pure-create unless a hydrated session was handed in (continue an
-        # existing on-disk conversation — hydrate-on-inject). When hydrated,
-        # the session already carries its original F1/F2 and full history.
-        if session is None:
-            # Seam 3 / D1+D2: the canonical id IS the storage stem. session_id
-            # was resolved above (explicit, or freshly minted for None), so the
-            # JSONL stem == session_id == handle key — one value, no dual-id
-            # split. Origin derived from the queue context — the QueueDispatcher
-            # injects with queue_state="running", everything else is user chat.
-            session_uuid = session_id
-            session = Session.new(
-                session_uuid, config.workspace,
-                session_id=session_id,
-                provider=config.provider,
-                model=config.model,
-                sdk=config.sdk,
-                fallback_models=[fb.model for fb in config.llm_fallback_models],
-                origin=(
-                    "cold_start" if cold_start
-                    else ("queue" if queue_state == "running" else "chat")
-                ),
-            )
-
-        # 6-7. Observers
-        session.on_append = self._on_message(project_id, session_id)
-        session.on_stream = self._on_stream(project_id, session_id)
-        session.on_queue_drained = self._on_queue_drained(project_id, session_id)
+        # (Steps 5-7 — session construction, observer wiring and the #59
+        # write-ahead — were hoisted above the platform/provider block so the
+        # user's message reaches disk before anything that can stall or fail.)
 
         # 8. Workspace files
         workspace_files = WorkspaceFileManager(config.workspace)
@@ -1085,8 +1128,10 @@ class AgentManager:
         if cold_start and cold_start_skeleton:
             session.append_system(cold_start_skeleton)
 
-        # 11. Start loop task
-        task = asyncio.create_task(loop.run(initial_message, initial_nonce=initial_nonce))
+        # 11. Start loop task. No message rides the coroutine (bug #59): it is
+        # already on disk, so a task that never gets an execution slice — or a
+        # supersede that cancels it first — can no longer destroy user content.
+        task = asyncio.create_task(loop.run())
         task.add_done_callback(self._on_loop_done(project_id, session_id=session_id))
         project_handle.task = task
 
@@ -1752,6 +1797,139 @@ class AgentManager:
         session.append(user_msg)
         return resolved
 
+    def _start_rejection(self, project_id: str,
+                         session_id: str) -> ValueError | None:
+        """Return the ``ValueError`` ``start_agent`` would raise for this
+        session right now, or None if the start would be admitted.
+
+        A READ-ONLY mirror of ``start_agent``'s two entry guards (it must not
+        reap the stale handle that ``start_agent`` deletes). It exists so the
+        write-ahead path can tell a *rejection* from a *failure* before it
+        commits the user's row: "slot held" is answered by the inject route
+        with a 202 + pending-inject enqueue that appends the message itself
+        later, so a write here would double-render it. ``start_agent`` still
+        enforces both guards for every other caller — this only moves the
+        decision earlier for the one path that writes first.
+        """
+        handle = self._handles.get(make_session_key(project_id, session_id))
+        if handle is not None and handle.task is not None and not handle.task.done():
+            return ValueError("Agent already running for this project")
+        holder = self.current_holder_session_id(project_id)
+        if holder is not None and holder != session_id:
+            return ValueError(f"Slot held by session {holder}")
+        return None
+
+    async def _start_with_persisted_message(
+        self, project_id: str, config: AgentConfig, content: str,
+        nonce: str | None, *, session_id: str,
+        queue_state: str = "chat",
+        session: "Session | None" = None,
+    ) -> str:
+        """Write-ahead the user's row, THEN run the start window (bug #59).
+
+        This is the durability boundary for every auto-start inject. Before
+        this existed the message travelled only as ``start_agent``'s
+        ``initial_message`` argument and did not touch disk until
+        ``AgentLoop.run()`` — the LAST thing ``start_agent`` schedules, after
+        ~450 lines of setup. Anything that raised in that window, or a
+        supersede before the task's first execution slice, destroyed the
+        message with no JSONL row, no session, no error row and no traceback.
+        One was lost for real on 2026-08-15.
+
+        Now the row is on disk before the window opens, so the worst case is a
+        user message with no reply — visible, legible, and re-runnable — plus a
+        classified error the UI can render.
+
+        The session is materialized here rather than on the loop's first
+        iteration, which also closes the "minted but unmaterialized" window the
+        chat route papers over by returning ``[]``. Empty-session litter goes up
+        slightly; per the user's standing preference that is acceptable and is
+        NOT to be answered with watch/poll/adopt inference.
+
+        Returns ``"started"`` so the three inject branches keep their contract.
+        Start failures are re-raised after being surfaced — the HTTP route's
+        ``ProviderConfigError``/``ValueError`` → 400/404 mapping is unchanged.
+        """
+        # Pre-flight the rejections BEFORE writing anything. A slot conflict is
+        # not a failure: the inject route turns it into a 202 and enqueues the
+        # message as a pending inject (spec 006), which appends it for real
+        # when the slot frees. Persisting here as well would render it twice.
+        rejection = self._start_rejection(project_id, session_id)
+        if rejection is not None:
+            raise rejection
+
+        if session is None:
+            session = self._new_session_object(
+                config, session_id, queue_state=queue_state,
+            )
+        # Wire observers BEFORE the write: the user row must fire the canonical
+        # chat.user_message echo (nonce + timestamp + session_id) that the
+        # frontend dedups its optimistic bubble against. start_agent re-wires
+        # the identical closures a moment later.
+        self._wire_session_observers(session, project_id, session_id)
+        persist_user_row(session, content, nonce)
+        try:
+            await self.start_agent(
+                project_id, config,
+                session_id=session_id,
+                queue_state=queue_state,
+                session=session,
+            )
+        except BaseException as exc:
+            # Silence is half the defect. Whatever ended the start — a raising
+            # setup step or a cancel/supersede at an await point — the user
+            # gets a session system row plus a classified agent.status error.
+            # BaseException so a CancelledError supersede is surfaced too; the
+            # exception is always re-raised, never swallowed.
+            self._record_start_failure(project_id, session_id, session, exc)
+            raise
+        return "started"
+
+    def _record_start_failure(self, project_id: str, session_id: str,
+                              session: "Session", exc: BaseException) -> None:
+        """Surface a failed/superseded agent start (bug #59).
+
+        Writes a visible system row into the (already materialized) session so
+        the dropped turn is legible in the transcript itself, then delegates to
+        ``_record_loop_error`` for the classified ``agent.status`` broadcast +
+        ``last_terminal_event`` — the same surface a terminal LLM failure gets
+        from ``_on_loop_done``. Both steps are fault-isolated: reporting a
+        failure must never replace it with a different one.
+        """
+        # asyncio.CancelledError stringifies to "", which would broadcast an
+        # empty reason and record an empty last_terminal_event detail. Swap in
+        # a described stand-in; the classifier maps it to the existing
+        # ``provider_error`` code, so no new code enters the FE contract.
+        if isinstance(exc, asyncio.CancelledError):
+            surfaced: BaseException = RuntimeError(
+                "agent start was cancelled or superseded before the turn began"
+            )
+        else:
+            surfaced = exc
+        detail = f"{type(surfaced).__name__}: {surfaced}"
+        try:
+            session.append({
+                "role": "system",
+                "content": (
+                    f"[The agent could not be started for this message — "
+                    f"{detail}. Your message was saved; send it again or "
+                    f"retry once the problem is fixed.]"
+                ),
+                "source": "daemon",
+            })
+        except Exception:
+            logger.exception(
+                "failed to append start-failure system row for %s/%s",
+                project_id, session_id,
+            )
+        try:
+            self._record_loop_error(project_id, session_id, surfaced)
+        except Exception:
+            logger.exception(
+                "failed to broadcast start failure for %s/%s",
+                project_id, session_id,
+            )
+
     async def inject_message(self, project_id: str, content: str, *,
                              nonce: str | None = None,
                              session_id: str | None = None,
@@ -1809,16 +1987,17 @@ class AgentManager:
                     "inject_message(%s): hydrating session uuid %s (meta F1 %s) from disk",
                     project_id, loaded.session_uuid, loaded.session_id,
                 )
-                await self.start_agent(project_id, config, initial_message=content,
-                                      initial_nonce=nonce, session_id=loaded.session_uuid,
-                                      queue_state=queue_state, session=loaded)
-                return "started"
+                return await self._start_with_persisted_message(
+                    project_id, config, content, nonce,
+                    session_id=loaded.session_uuid,
+                    queue_state=queue_state, session=loaded,
+                )
             # Case 3: no session on disk — auto-start a fresh agent.
             logger.info("inject_message(%s): no handle, auto-starting fresh agent", project_id)
-            await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce, session_id=session_id,
-                                  queue_state=queue_state)
-            return "started"
+            return await self._start_with_persisted_message(
+                project_id, config, content, nonce,
+                session_id=session_id, queue_state=queue_state,
+            )
 
         # User interaction — defer idle eviction. (Cold-start paths above
         # create the handle fresh with last_activity=now; this covers the
@@ -1951,10 +2130,10 @@ class AgentManager:
             # this path is reached when the original handle existed but the
             # session was stopped, so we need a fresh AgentConfig.
             config = self._build_agent_config_from_project(project_id)
-            await self.start_agent(project_id, config, initial_message=content,
-                                  initial_nonce=nonce, session_id=session_id,
-                                  queue_state=queue_state)
-            return "started"
+            return await self._start_with_persisted_message(
+                project_id, config, content, nonce,
+                session_id=session_id, queue_state=queue_state,
+            )
 
         # WAIT-STATE QUEUE: if the management agent is in the "waiting" state —
         # it dispatched a sub-agent, yielded its turn, and the idle-poll is

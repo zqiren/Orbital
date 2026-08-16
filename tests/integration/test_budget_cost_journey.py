@@ -65,7 +65,7 @@ from agent_os.api.app import create_app
 from agent_os.daemon_v2.settings_store import SettingsStore
 from agent_os.budget.ledger import ledger_path
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
@@ -201,7 +201,8 @@ def _run_real_loop(workspace: str, provider: _StubProvider, model: str) -> None:
         session, provider, _Registry(), context_mgr,
         project_dir=workspace, max_iterations=5,
     )
-    asyncio.run(loop.run(initial_message="go"))
+    persist_user_row(loop._session, "go")
+    asyncio.run(loop.run())
 
 
 # ===========================================================================

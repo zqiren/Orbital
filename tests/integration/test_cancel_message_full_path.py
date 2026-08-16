@@ -44,7 +44,7 @@ from fastapi.testclient import TestClient
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.api.routes import agents_v2
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
@@ -321,7 +321,8 @@ async def test_cancel_via_http_during_stream():
 
         # Start the real AgentLoop in this event loop.
         loop_obj = handle.loop
-        run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+        persist_user_row(loop_obj._session, "hi")
+        run_task = asyncio.create_task(loop_obj.run())
         handle.task = run_task
 
         # Wait for the stream to begin (provider yields one chunk then hangs).

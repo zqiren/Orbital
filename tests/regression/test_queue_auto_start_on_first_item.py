@@ -11,7 +11,7 @@ The queue dispatcher is the project's session-lifecycle manager. When it has
 queueable work and no agent is running, it starts one itself (gated by
 onboarding) and then dispatches the item. The previous design moved auto-start
 out of the dispatcher into an explicit /queue/start endpoint specifically to
-sidestep a race: the freshly-launched loop.run(None) was still in flight when
+sidestep a race: the freshly-launched loop.run() was still in flight when
 the item was injected, so inject_message took Case 1 (fold into session._queue)
 and the loop's text-only exit was mis-attributed to the queued item as a
 contract violation.

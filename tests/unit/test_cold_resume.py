@@ -24,7 +24,7 @@ from agent_os.agent.providers.types import (
 )
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.workspace_files import WorkspaceFileManager
@@ -301,7 +301,8 @@ class TestSessionEndCallback:
             session, provider, registry, context_mgr,
             on_session_end=session_end,
         )
-        await loop.run(initial_message="test")
+        persist_user_row(loop._session, "test")
+        await loop.run()
 
         # session-end is skipped when LLM failed (provider unreachable)
         session_end.assert_not_awaited()
@@ -325,7 +326,8 @@ class TestSessionEndCallback:
         )
 
         # Should not raise — callback failure is contained in fire-and-forget task
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
         # Let the background task execute and fail silently
         await asyncio.sleep(0)
         assert not loop.is_running
@@ -342,5 +344,6 @@ class TestSessionEndCallback:
 
         loop = AgentLoop(session, provider, registry, context_mgr)
         # Should not raise — no callback set
-        await loop.run(initial_message="hello")
+        persist_user_row(loop._session, "hello")
+        await loop.run()
         assert not loop.is_running

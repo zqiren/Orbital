@@ -14,7 +14,7 @@ Threshold: >= 5 identical hashes within a sliding window (non-browser only).
 import json
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import (
@@ -204,7 +204,8 @@ class TestObservationAwareRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="take screenshots of each page")
+        persist_user_row(loop._session, "take screenshots of each page")
+        await loop.run()
 
         msgs = session.get_messages()
 
@@ -254,7 +255,8 @@ class TestObservationAwareRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="keep taking screenshots")
+        persist_user_row(loop._session, "keep taking screenshots")
+        await loop.run()
 
         msgs = session.get_messages()
 
@@ -303,7 +305,8 @@ class TestObservationAwareRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="read the file")
+        persist_user_row(loop._session, "read the file")
+        await loop.run()
 
         msgs = session.get_messages()
         system_msgs = [
@@ -340,7 +343,8 @@ class TestObservationAwareRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="read the file")
+        persist_user_row(loop._session, "read the file")
+        await loop.run()
 
         msgs = session.get_messages()
         system_msgs = [
@@ -386,7 +390,8 @@ class TestObservationAwareRepetition:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="browse the site")
+        persist_user_row(loop._session, "browse the site")
+        await loop.run()
 
         msgs = session.get_messages()
 

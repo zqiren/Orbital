@@ -30,7 +30,7 @@ from agent_os.agent.loop import AgentLoop
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.prompt_builder import Autonomy, PromptBuilder, PromptContext
 from agent_os.agent.providers.think_splitter import InlineThinkSplitter
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.daemon_v2.models import detect_os
 
 logger = logging.getLogger(__name__)
@@ -386,7 +386,7 @@ class NativeWorkerAdapter:
         legitimate retry. Fail fast rather than run two ``loop.run()``
         invocations on one ``Session`` (``AgentLoop.run()`` itself would raise
         on true re-entry, but only after both calls have already raced to
-        append onto the same session)."""
+        persist their brief onto the same session)."""
         if self._running:
             self._last_response = "Error: worker is already running a task"
             return
@@ -394,8 +394,16 @@ class NativeWorkerAdapter:
         self._running = True
         self._fire_activity()  # turn start
         try:
+            # Bug #59 — whoever injects, persists. AgentLoop.run() no longer
+            # appends the initial message, so the brief is written into the
+            # worker's JSONL here, before the turn can fail. A worker that
+            # dies on its first provider call still leaves the task it was
+            # given on disk instead of an empty session. Kept inside the same
+            # try as run() so a write failure still encodes as "Error: ..."
+            # exactly as it did when the append lived inside run().
             try:
-                await self._loop.run(message)
+                persist_user_row(self._session, message)
+                await self._loop.run()
             except Exception as e:  # noqa: BLE001 — task-level failure, never raise
                 logger.exception(
                     "NativeWorkerAdapter %s: turn raised inside AgentLoop.run",

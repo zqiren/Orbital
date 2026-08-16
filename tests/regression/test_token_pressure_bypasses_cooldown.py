@@ -17,6 +17,7 @@ import pytest
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
+from agent_os.agent.session import persist_user_row
 
 
 _tc_counter = {"n": 0}
@@ -129,7 +130,8 @@ async def test_token_pressure_fires_before_compaction_within_cooldown():
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
         with patch("agent_os.agent.compaction.inject_reorientation"):
-            await loop.run("start")
+            persist_user_row(loop._session, "start")
+            await loop.run()
 
     # Token-pressure refresh must have fired before compaction
     assert "refresh:token_pressure" in call_order, (
@@ -207,7 +209,8 @@ async def test_token_pressure_fires_independently_of_turn_count():
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
         with patch("agent_os.agent.compaction.inject_reorientation"):
-            await loop.run("go")
+            persist_user_row(loop._session, "go")
+            await loop.run()
 
     assert "token_pressure" in fired_triggers, (
         f"Token-pressure trigger should fire regardless of turn count, "

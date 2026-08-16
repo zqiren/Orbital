@@ -20,7 +20,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 
 
 class _FakeContextManager:
@@ -123,7 +123,8 @@ async def test_running_state_makes_approval_a_block(tmp_path):
     )
     loop._queue_state = "running"
 
-    await loop.run("execute the write")
+    persist_user_row(loop._session, "execute the write")
+    await loop.run()
 
     assert loop._exit_reason == "blocked"
     assert "approval required" in (loop._exit_block_reason or "")
@@ -164,7 +165,8 @@ async def test_chat_state_keeps_pause_behavior(tmp_path):
         interceptor=interceptor,
     )
     # Default _queue_state is "chat"; do NOT override it here
-    await loop.run("execute the write")
+    persist_user_row(loop._session, "execute the write")
+    await loop.run()
 
     # Loop should NOT have set exit_reason=blocked; should still be "text" default
     assert loop._exit_reason == "text"

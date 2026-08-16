@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import (
@@ -116,7 +116,8 @@ async def test_one_ledger_line_per_response(tmp_path):
         project_dir=str(tmp_path),
         max_iterations=5,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     events = _read_ledger(str(tmp_path))
     assert len(events) == 1, events
@@ -159,7 +160,8 @@ async def test_ledger_is_the_sole_spend_record(tmp_path):
         project_dir=str(tmp_path),
         max_iterations=5,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     # The ledger is the sole spend record: exactly one line written.
     assert len(_read_ledger(str(tmp_path))) == 1
@@ -180,7 +182,8 @@ async def test_no_project_dir_no_ledger_no_crash(tmp_path):
     registry = SimpleToolRegistry()
 
     loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=5)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     # No ledger file written.
     assert _read_ledger(str(tmp_path)) == []
@@ -215,7 +218,8 @@ async def test_ledger_append_failure_does_not_break_loop(tmp_path, monkeypatch):
         max_iterations=5,
     )
     # Must not raise even though append_event blows up.
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     assert any(m.get("role") == "assistant" for m in session.get_messages())
 
@@ -314,7 +318,8 @@ async def test_flush_completion_emits_ledger_line(tmp_path):
         pass
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
-        await loop.run("do the task")
+        persist_user_row(loop._session, "do the task")
+        await loop.run()
 
     assert utility.complete_calls == 1
     events = _read_ledger(str(tmp_path))
@@ -350,7 +355,8 @@ async def test_flush_without_usage_emits_nothing(tmp_path):
         pass
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
-        await loop.run("do the task")
+        persist_user_row(loop._session, "do the task")
+        await loop.run()
 
     assert utility.complete_calls == 1
     events = _read_ledger(str(tmp_path))

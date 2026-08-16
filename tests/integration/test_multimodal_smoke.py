@@ -39,7 +39,7 @@ from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.tools.read import ReadTool
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
 from agent_os.agent.context import ContextManager
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.config.provider_registry import ModelCapabilities
 
@@ -166,10 +166,12 @@ async def test_read_image_pipeline(workspace, agent_loop, session):
     png_path = os.path.join(workspace, "test_image.png")
     make_test_png(png_path, 100, 100, 255, 0, 0)
 
-    await agent_loop.run(
-        initial_message="Read the file test_image.png and describe what you see. "
-                       "What color is it? What shape?"
+    persist_user_row(
+        agent_loop._session,
+        "Read the file test_image.png and describe what you see. "
+        "What color is it? What shape?"
     )
+    await agent_loop.run()
 
     messages = session.get_messages()
 

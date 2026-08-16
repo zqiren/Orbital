@@ -68,7 +68,7 @@ from fastapi.testclient import TestClient
 from agent_os.api.app import create_app
 
 from agent_os.agent.loop import AgentLoop
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.context import ContextManager
@@ -283,7 +283,8 @@ class _RealLoopManager:
             session_id=session_id or f"sess_{self._session_counter}",
             provider=self._provider,
         )
-        self._task = asyncio.create_task(self._loop.run(content))
+        persist_user_row(self._loop._session, content)
+        self._task = asyncio.create_task(self._loop.run())
         return "delivered"
 
     async def inject_system_message(self, project_id, content, *, session_id=None):
@@ -767,7 +768,8 @@ async def test_threshold_fires_once_with_codes_only_across_two_responses(
         on_budget_event=events.append,
         max_iterations=5,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     types = [e["type"] for e in events]
     # Threshold fired EXACTLY once across the two responses; never tripped.

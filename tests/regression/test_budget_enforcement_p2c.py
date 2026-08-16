@@ -31,7 +31,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.budget import ledger as ledger_mod
 from agent_os.budget.ledger import LedgerEvent, SOURCE_MANAGEMENT, ledger_path
 from agent_os.budget.normalize import NormalizedUsage
@@ -131,7 +131,8 @@ async def test_A1_over_limit_attempts_no_llm_and_writes_no_ledger(tmp_path):
         workspace, lambda: cfg, provider=_RecordingProvider(),
     )
 
-    await loop.run("do expensive work")
+    persist_user_row(loop._session, "do expensive work")
+    await loop.run()
 
     # The guard tripped before any LLM call.
     assert calls["n"] == 0, "no LLM request may be attempted when over budget"
@@ -375,7 +376,8 @@ async def test_B6_no_budget_spent_usd_write_during_run(tmp_path):
     loop, session, _ = _make_loop(workspace, lambda: cfg)
     loop._stream_response = AsyncMock(return_value=response)
 
-    await loop.run("hello")
+    persist_user_row(loop._session, "hello")
+    await loop.run()
 
     # The loop has no handle to a store and never writes a dollar accumulator;
     # the contract we pin is that NO code path on the run wrote budget_spent_usd.

@@ -16,7 +16,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 
 
 class _FakeContextManager:
@@ -111,7 +111,8 @@ async def test_mark_task_complete_alone_sets_exit_reason(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider)
-    await loop.run("please finish")
+    persist_user_row(loop._session, "please finish")
+    await loop.run()
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "all done"
     # No write_file ever ran
@@ -126,7 +127,8 @@ async def test_mark_task_blocked_alone_sets_exit_reason(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider)
-    await loop.run("attempt blocked task")
+    persist_user_row(loop._session, "attempt blocked task")
+    await loop.run()
     assert loop._exit_reason == "blocked"
     assert loop._exit_block_reason == "need API key"
 
@@ -166,7 +168,8 @@ async def test_signal_executes_coemitted_tools_then_exits(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider, registry=registry)
-    await loop.run("do work then complete")
+    persist_user_row(loop._session, "do work then complete")
+    await loop.run()
 
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "done"
@@ -194,7 +197,8 @@ async def test_signal_batch_executes_siblings_no_cancelled(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider, registry=registry)
-    await loop.run("notify, checkpoint, then complete")
+    persist_user_row(loop._session, "notify, checkpoint, then complete")
+    await loop.run()
 
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "batch done"
@@ -228,7 +232,8 @@ async def test_signal_first_then_sibling_still_executes(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider, registry=registry)
-    await loop.run("complete then do work")
+    persist_user_row(loop._session, "complete then do work")
+    await loop.run()
 
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "done early"
@@ -254,7 +259,8 @@ async def test_signal_blocked_executes_coemitted_tools_then_exits(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider, registry=registry)
-    await loop.run("do work then block")
+    persist_user_row(loop._session, "do work then block")
+    await loop.run()
 
     assert loop._exit_reason == "blocked"
     assert loop._exit_block_reason == "need API key"
@@ -279,7 +285,8 @@ async def test_extra_signal_call_left_pending_for_cancel_machinery(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider, registry=registry)
-    await loop.run("two signals in one batch")
+    persist_user_row(loop._session, "two signals in one batch")
+    await loop.run()
 
     assert loop._exit_reason == "complete"
     assert loop._exit_summary == "first wins"
@@ -327,7 +334,8 @@ async def test_signal_deferred_when_sibling_requires_approval(tmp_path):
     ])
     loop = _make_loop(session, provider, registry=registry)
     loop._interceptor = _FakeInterceptor(intercept_names={"write_file"})
-    await loop.run("do work then complete")
+    persist_user_row(loop._session, "do work then complete")
+    await loop.run()
 
     # The run paused for approval — it did not complete.
     assert loop._exit_reason != "complete"
@@ -354,7 +362,8 @@ async def test_text_only_response_yields_default_exit_reason(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(5, 3)),
     ])
     loop = _make_loop(session, provider)
-    await loop.run("hello")
+    persist_user_row(loop._session, "hello")
+    await loop.run()
     assert loop._exit_reason == "text"
     assert loop._exit_summary is None
     assert loop._exit_block_reason is None
@@ -368,7 +377,8 @@ async def test_signal_writes_marker_to_session(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider)
-    await loop.run("the work")
+    persist_user_row(loop._session, "the work")
+    await loop.run()
 
     messages = list(session.get_messages())
     # Find the queue_signal marker
@@ -390,7 +400,8 @@ async def test_exit_reason_resets_between_runs(tmp_path):
         StreamChunk(is_final=True, usage=TokenUsage(10, 5)),
     ])
     loop = _make_loop(session, provider)
-    await loop.run("turn 1")
+    persist_user_row(loop._session, "turn 1")
+    await loop.run()
     assert loop._exit_reason == "complete"
 
     # Second run with a fresh provider that emits text-only
@@ -398,6 +409,7 @@ async def test_exit_reason_resets_between_runs(tmp_path):
         StreamChunk(text="I am thinking"),
         StreamChunk(is_final=True, usage=TokenUsage(5, 3)),
     ])
-    await loop.run("turn 2")
+    persist_user_row(loop._session, "turn 2")
+    await loop.run()
     assert loop._exit_reason == "text"
     assert loop._exit_summary is None

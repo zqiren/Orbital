@@ -32,7 +32,7 @@ from agent_os.agent.context import ContextManager
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.prompt_builder import Autonomy, PromptContext
 from agent_os.agent.providers.types import LLMResponse, StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import Tool, ToolResult
 from agent_os.agent.tools.registry import ToolRegistry
 from agent_os.agent.tools.request_credential import RequestCredentialTool
@@ -178,7 +178,8 @@ async def test_two_sequential_credential_cycles_resume_with_usable_tokens(tmp_pa
     loop = _loop(session, provider, registry, str(tmp_path))
 
     # --- cycle 1: request → pause -----------------------------------------
-    await loop.run(initial_message="log into dify")
+    persist_user_row(loop._session, "log into dify")
+    await loop.run()
     assert provider.stream_call_count == 1
     assert session.is_paused()
 

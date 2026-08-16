@@ -23,7 +23,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 
 
@@ -183,7 +183,8 @@ async def test_recoverable_errors_do_not_disable_tool(tmp_path):
     ))
     provider = _ToolThenDoneProvider("edit", {"path": "x.md", "old_text": "a", "new_text": "b"})
     loop = _make_loop(session, provider, registry)
-    await loop.run("try an edit")
+    persist_user_row(loop._session, "try an edit")
+    await loop.run()
 
     assert not _was_disabled(session, "edit")
 
@@ -195,7 +196,8 @@ async def test_genuine_failures_still_disable_tool(tmp_path):
     registry = _ResultRegistry(raises=OSError("disk on fire"))
     provider = _ToolThenDoneProvider("shell", {"command": "ls"})
     loop = _make_loop(session, provider, registry)
-    await loop.run("run a command")
+    persist_user_row(loop._session, "run a command")
+    await loop.run()
 
     assert _was_disabled(session, "shell")
 
@@ -207,7 +209,8 @@ async def test_unmarked_error_results_still_disable_tool(tmp_path):
     registry = _ResultRegistry(result=ToolResult(content="Error: backend exploded"))
     provider = _ToolThenDoneProvider("shell", {"command": "ls"})
     loop = _make_loop(session, provider, registry)
-    await loop.run("run a command")
+    persist_user_row(loop._session, "run a command")
+    await loop.run()
 
     assert _was_disabled(session, "shell")
 
@@ -222,7 +225,8 @@ async def test_real_edit_not_found_does_not_disable_edit(tmp_path):
         "edit", {"path": "doc.md", "old_text": "not in the file", "new_text": "x"},
     )
     loop = _make_loop(session, provider, registry)
-    await loop.run("edit the doc")
+    persist_user_row(loop._session, "edit the doc")
+    await loop.run()
 
     # The edit really ran twice and really failed both times...
     assert len(registry.executions) >= 2
@@ -244,7 +248,8 @@ async def test_distinct_nonrecoverable_errors_sharing_50char_prefix_not_collapse
     ])
     provider = _ToolThenDoneProvider("shell", {"command": "ls"})
     loop = _make_loop(session, provider, registry)
-    await loop.run("run a command")
+    persist_user_row(loop._session, "run a command")
+    await loop.run()
 
     assert len(registry.executions) >= 2
     assert not _was_disabled(session, "shell")
