@@ -638,6 +638,19 @@ export interface TriggerDeletedEvent {
   trigger_id: string;
 }
 
+/**
+ * An existing trigger changed — enabled/disabled, or any field edited.
+ * Distinct from created/deleted, which mean the record appeared or went away.
+ * Before this event existed the toggle route announced a disable as
+ * `trigger.deleted`, so a disabled automation vanished from every live list
+ * until the next refetch.
+ */
+export interface TriggerUpdatedEvent {
+  type: 'trigger.updated';
+  project_id: string;
+  trigger: Trigger;
+}
+
 export interface TriggerFiredEvent {
   type: 'trigger.fired';
   project_id: string;
@@ -782,6 +795,7 @@ export type WebSocketEvent =
   | DeviceStatusEvent
   | TriggerCreatedEvent
   | TriggerDeletedEvent
+  | TriggerUpdatedEvent
   | TriggerFiredEvent
   | TriggerSkippedEvent
   | StateRefreshLifecycleEvent

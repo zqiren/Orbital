@@ -21,6 +21,13 @@ export type Route =
       projectId: string;
       tab: 'queue' | 'chat' | 'files';
       sessionId?: string;
+      /**
+       * Which pane of the Tasks tab is showing. The tab key stays 'queue'
+       * (renaming it churns the union, deep links and tests for no user
+       * benefit); this only picks between the two panes inside it. Undefined
+       * means 'queue' — the tab's default.
+       */
+      queuePane?: 'queue' | 'automations';
       settings?: boolean;
       /**
        * Optional intent to scroll the settings overlay to a specific section on

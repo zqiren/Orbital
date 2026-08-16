@@ -222,7 +222,9 @@ describe('ProjectDetail routing', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Queue'));
+    // The tab is labelled "Tasks" — it parents two panes, Queue and
+    // Automations. The route key stays 'queue'.
+    fireEvent.click(screen.getByText('Tasks'));
     expect(setRoute).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'project', projectId: 'proj-42', tab: 'queue' }),
     );

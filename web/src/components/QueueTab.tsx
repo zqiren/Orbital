@@ -11,7 +11,6 @@ import type { StringKey } from '../i18n/strings';
 import type { Project, QueueItem } from '../types';
 import { formatMoney } from '../budget/format';
 import { periodToWindow } from '../budget/derive';
-import AutomationsList from './AutomationsList';
 import QueueComposer from './QueueComposer';
 import QueueHeader from './QueueHeader';
 import type { QueueBudgetCost } from './QueueHeader';
@@ -145,12 +144,10 @@ export default function QueueTab({ projectId, project }: QueueTabProps) {
         <Section title={t('queue.section.needsAttention')} testId="needs-attention" items={grouped.blocked} onRemove={removeItem} />
         <Section title={t('queue.section.queued')} testId="queued" items={grouped.queued} onRemove={removeItem} />
         <Section title={t('queue.section.completed')} testId="completed" items={grouped.done} onRemove={removeItem} />
-        <section className="flex flex-col gap-2" data-testid="queue-section-automations">
-          <h2 className="text-xs font-semibold text-secondary uppercase tracking-wide px-1">
-            {t('queue.section.automations')}
-          </h2>
-          <AutomationsList projectId={projectId} />
-        </section>
+        {/* Automations used to sit here as the Nth peer of the queue's own
+            groups, read-only. They now have their own pane behind the
+            Queue│Automations switch (ProjectDetail) — a create/edit form does
+            not belong stacked under a live streaming queue. */}
       </div>
       <QueueComposer
         projectId={projectId}
