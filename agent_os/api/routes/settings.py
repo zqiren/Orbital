@@ -19,6 +19,7 @@ from agent_os.agents.installer import (
     InstallUnsupported,
     SubAgentInstaller,
 )
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +514,7 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            creationflags=win_no_window_flags(),
         )
     except OSError as exc:
         if _ws_manager is not None:
@@ -631,6 +633,7 @@ async def trigger_sub_agent_logout(slug: str):
             capture_output=True,
             text=True,
             timeout=30,
+            creationflags=win_no_window_flags(),
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="logout timed out")
@@ -803,6 +806,7 @@ async def set_sub_agent_api_key(slug: str, req: SetSubAgentApiKeyRequest):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=win_no_window_flags(),
         )
         out, err = await asyncio.wait_for(
             proc.communicate(input=req.api_key.encode("utf-8")),

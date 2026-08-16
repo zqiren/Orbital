@@ -16,6 +16,7 @@ from agent_os.platform.types import (
     PermissionResult,
     WORKSPACE_AGENT_DIR,
 )
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger("agent_os.platform.windows.permissions")
 
@@ -155,6 +156,7 @@ class PermissionManager:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            creationflags=win_no_window_flags(),
         )
 
 

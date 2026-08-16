@@ -30,6 +30,7 @@ import logging
 import time
 
 from agent_os.agent.transports.jsonl_stream import read_jsonl_line
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ async def fetch_codex_models(binary: str = "codex", *,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             limit=1024 * 1024,  # tolerant reader; limit sizes the fast path
+            creationflags=win_no_window_flags(),
         )
         return await read_model_ids(proc.stdout, proc.stdin, timeout=timeout)
     except Exception as exc:

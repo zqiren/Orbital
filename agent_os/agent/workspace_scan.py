@@ -17,6 +17,7 @@ import os
 import subprocess
 
 from agent_os.agent.tools.grep_tool import find_ripgrep
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 _DEFAULT_MAX_FILES = 1000
 _RG_TIMEOUT_SECONDS = 10
@@ -36,6 +37,7 @@ def _list_files(workspace: str) -> list[str]:
                 capture_output=True,
                 text=True,
                 timeout=_RG_TIMEOUT_SECONDS,
+                creationflags=win_no_window_flags(),
             )
             if proc.returncode in (0, 1):  # 1 == no files matched
                 return [ln for ln in proc.stdout.splitlines() if ln.strip()]
