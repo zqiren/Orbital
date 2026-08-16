@@ -243,6 +243,33 @@ body {
   background-color: var(--color-background);
 }
 
+/* ------------------------------------------------- native control suppression
+   `appearance: none` hands us the BOX of an input but not the widgets WebKit
+   paints inside it: `type="time"` keeps its picker indicator and `type="number"`
+   its spin buttons. In the schedule row that left the TIME field wearing a
+   system glyph beside two menus wearing our own chevron — three controls, two
+   idioms.
+
+   Opt-in via a class rather than a bare `input[type=…]` selector: the shared
+   FIELD look is worn by the automation form and the schedule row, and screens
+   that never asked for this (the budget sentence, the pricing table) keep the
+   native steppers their users may be relying on.
+
+   No replacement icon for the time field on purpose. A chevron says "opens a
+   menu" and earns its place; a clock would say only "this is a time", which is
+   what the TIME label above it already says. Suppressing the glyph makes the
+   field read as what it is — a text field you type into. */
+.field-native-none::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
+.field-native-none::-webkit-inner-spin-button,
+.field-native-none::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 @keyframes slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

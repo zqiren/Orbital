@@ -27,9 +27,11 @@ const SURFACE =
  *
  * `appearance-none` matters for the same reason it does on `<select>`: WebKit
  * paints `type="time"` and `type="number"` with its own inner spin buttons and
- * ignores parts of the box we set here.
+ * ignores parts of the box we set here. It only reaches the box, though — the
+ * widgets INSIDE need the `field-native-none` pseudo-element rules in
+ * `index.css`, which is the other half of this class.
  */
-export const FIELD = `h-9 appearance-none text-sm px-2.5 ${SURFACE}`;
+export const FIELD = `h-9 appearance-none field-native-none text-sm px-2.5 ${SURFACE}`;
 
 /**
  * Multi-line controls. Same surface, no fixed height, no `appearance-none`
