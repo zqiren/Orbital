@@ -48,6 +48,10 @@ export interface Project {
   sdk?: string;
   agent_name?: string;
   is_scratch?: boolean;
+  /** Manual sidebar position (spec 056), written by POST /projects/reorder.
+   *  Absent means "never dragged" — the list route parks those after every
+   *  placed project, in creation order. Never default it to 0 client-side. */
+  sort_key?: number;
   /** True when the workspace has no user content (ignoring orbital/ + dotfiles).
    *  Gates the first-session cold-start scan consent card. */
   is_empty_workspace?: boolean;

@@ -774,6 +774,7 @@ export const STRINGS = {
   "sidebar.conn.disconnected": { en: "Disconnected", zh: "断开连接" },
   "sidebar.conn.reconnecting": { en: "Reconnecting…", zh: "重新连接中…" },
   "sidebar.projects": { en: "Projects", zh: "项目空间" },
+  "sidebar.reorder.handleAria": { en: "Drag to reorder {name}", zh: "拖动以调整 {name} 的顺序" },
   "sidebar.settings": { en: "Settings", zh: "设置" },
   "sidebar.wordmark": { en: "Orbital", zh: "Orbital" },
   "slotHeld.body": { en: "Session {id} is currently running. Wait for it to finish, or cancel it to send this message now.", zh: "会话 {id} 正在运行。等待它完成，或取消并立即发送此消息。" },

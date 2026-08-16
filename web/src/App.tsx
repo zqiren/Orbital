@@ -60,6 +60,7 @@ export default function App() {
     createProject,
     refreshProject,
     updateProject,
+    reorderProjects,
     deleteProject,
   } = useProjects();
   const ws = useWebSocket();
@@ -496,6 +497,7 @@ export default function App() {
           onSelectCalendar={handleSelectCalendar}
           onSelectWorkbench={handleSelectWorkbench}
           onNewProject={handleNewProject}
+          onReorderProjects={reorderProjects}
           onSettings={() => {
             setRoute({ name: 'settings' });
             setMobileView('content');

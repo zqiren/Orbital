@@ -208,6 +208,36 @@ class ProjectStore:
         project.pop("network_extra_domains", None)
         self._save()
 
+    def reorder_projects(self, ordered_ids: list[str]) -> list[str]:
+        """Stamp a manual display order onto the listed projects (spec 056).
+
+        Writes ``sort_key = <position>`` for every id in ``ordered_ids`` in a
+        single pass followed by ONE ``_save()``, so the whole order lands
+        atomically — a partial write can never strand two projects sharing a
+        key. Idempotent, and there is nothing to janitor when a project is
+        deleted: the keys of the survivors stay valid (merely non-contiguous)
+        and the next reorder re-densifies them.
+
+        Ids that no longer exist are skipped. Projects NOT named in
+        ``ordered_ids`` are left untouched: they keep whatever key they had,
+        or stay keyless — and a keyless project sorts to the bottom in
+        creation order (see ``_project_sort_key`` in the list route). Callers
+        are expected to send the complete list they are ordering; sending a
+        subset can collide positions with untouched projects, which the list
+        route's stable sort then breaks by creation order.
+
+        Returns the ids that were actually stamped.
+        """
+        applied: list[str] = []
+        for position, project_id in enumerate(ordered_ids):
+            project = self._projects.get(project_id)
+            if project is None:
+                continue
+            project["sort_key"] = position
+            applied.append(project_id)
+        self._save()
+        return applied
+
     def find_scratch_project(self) -> dict | None:
         """Return the scratch project if one exists."""
         for proj in self._projects.values():
