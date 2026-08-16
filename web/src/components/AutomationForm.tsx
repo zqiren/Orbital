@@ -18,6 +18,28 @@ import {
   type ScheduleDraft,
 } from './scheduleFormat';
 
+/** Longest derived name. Past this the row's own truncation takes over, and a
+ *  name that has to be truncated to be read is not doing its job anyway. */
+const DERIVED_NAME_MAX = 48;
+
+/**
+ * A name for an automation whose author did not give it one.
+ *
+ * The prompt is the definition; the name is a label for it. Deriving from the
+ * first line rather than the whole thing keeps a multi-paragraph brief from
+ * turning into a 48-character run-on.
+ *
+ * Pure and un-translated on purpose: every character it returns came from the
+ * user's own prompt, so there is nothing here to localise (the i18n rule for
+ * non-React helpers is about UI chrome, and this produces none).
+ */
+export function deriveName(task: string): string {
+  const firstLine = task.trim().split('\n')[0]!.replace(/\s+/g, ' ').trim();
+  return firstLine.length > DERIVED_NAME_MAX
+    ? `${firstLine.slice(0, DERIVED_NAME_MAX).trimEnd()}…`
+    : firstLine;
+}
+
 interface AutomationFormProps {
   /** Edit target. Absent = create. */
   trigger?: Trigger;
@@ -68,10 +90,18 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
     e.preventDefault();
     if (saving) return;
 
-    if (!name.trim()) return setError(t('trigger.form.nameRequired'));
+    // Name is optional. It was the first, largest and most prominent field on
+    // the form while being the least load-bearing thing on it: the prompt is
+    // what defines the automation, and the name only labels it. Left blank it
+    // is taken from the prompt, which is why the prompt check comes first —
+    // there is no name to derive without one.
     if (!task.trim()) return setError(t('trigger.form.promptRequired'));
 
-    const draft: TriggerDraft = { name: name.trim(), type, task: task.trim() };
+    const draft: TriggerDraft = {
+      name: name.trim() || deriveName(task),
+      type,
+      task: task.trim(),
+    };
     if (type === 'schedule') {
       const cron = cronForDraft(schedule);
       if (!cron) return setError(t('trigger.form.cronRequired'));
@@ -116,6 +146,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          placeholder={t('trigger.form.namePlaceholder')}
           aria-label={t('trigger.form.name')}
           data-testid="automation-form-name"
           className={FIELD}
