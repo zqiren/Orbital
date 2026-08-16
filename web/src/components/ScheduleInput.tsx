@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useT } from '../i18n/useT';
+import Select from './Select';
+import { FIELD } from './fieldStyles';
 import {
   PRESET_LABEL_KEYS,
   SCHEDULE_PRESETS,
@@ -13,9 +15,6 @@ import {
   type ScheduleDraft,
   type SchedulePreset,
 } from './scheduleFormat';
-
-const FIELD =
-  'text-sm bg-sidebar border border-border rounded-lg px-2 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150';
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -50,37 +49,37 @@ export default function ScheduleInput({
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1">
           <Label>{t('trigger.form.repeat')}</Label>
-          <select
+          <Select
             value={value.preset}
             onChange={(e) => set({ preset: e.target.value as SchedulePreset })}
             aria-label={t('trigger.form.repeat')}
             data-testid="schedule-preset"
-            className={FIELD}
+            className={`${FIELD} w-40`}
           >
             {SCHEDULE_PRESETS.map((preset) => (
               <option key={preset} value={preset}>
                 {t(PRESET_LABEL_KEYS[preset])}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         {value.preset === 'weekly' && (
           <label className="flex flex-col gap-1">
             <Label>{t('trigger.form.dayOfWeek')}</Label>
-            <select
+            <Select
               value={value.weekday}
               onChange={(e) => set({ weekday: Number(e.target.value) })}
               aria-label={t('trigger.form.dayOfWeek')}
               data-testid="schedule-weekday"
-              className={FIELD}
+              className={`${FIELD} w-32`}
             >
               {[0, 1, 2, 3, 4, 5, 6].map((d) => (
                 <option key={d} value={d}>
                   {weekdayName(d, t)}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         )}
 
@@ -89,19 +88,19 @@ export default function ScheduleInput({
             <Label>{t('trigger.form.dayOfMonth')}</Label>
             {/* Capped at 28: a "31st" schedule silently skips four months a
                 year, which reads as a broken automation. */}
-            <select
+            <Select
               value={value.dayOfMonth}
               onChange={(e) => set({ dayOfMonth: Number(e.target.value) })}
               aria-label={t('trigger.form.dayOfMonth')}
               data-testid="schedule-dom"
-              className={FIELD}
+              className={`${FIELD} w-20`}
             >
               {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         )}
 
@@ -114,7 +113,7 @@ export default function ScheduleInput({
               onChange={(e) => set({ time: e.target.value })}
               aria-label={t('trigger.form.time')}
               data-testid="schedule-time"
-              className={FIELD}
+              className={`${FIELD} w-28`}
             />
           </label>
         )}
@@ -137,21 +136,21 @@ export default function ScheduleInput({
           </label>
         )}
 
-        <label className="flex flex-col gap-1 min-w-0">
+        <label className="flex min-w-0 flex-col gap-1">
           <Label>{t('trigger.form.timezone')}</Label>
-          <select
+          <Select
             value={value.timezone}
             onChange={(e) => set({ timezone: e.target.value })}
             aria-label={t('trigger.form.timezone')}
             data-testid="schedule-timezone"
-            className={`${FIELD} max-w-full`}
+            className={`${FIELD} w-56 max-w-full`}
           >
             {timezoneOptions(value.timezone).map((zone) => (
               <option key={zone} value={zone}>
                 {zone}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </div>
 
@@ -172,12 +171,24 @@ export default function ScheduleInput({
       )}
 
       {/* Exactly what the row will read afterwards. For a custom cron with no
-          preset phrasing, that is the expression itself. */}
-      <p className="text-[11px] text-secondary" data-testid="schedule-preview">
-        <span className="mr-1.5 uppercase tracking-wide text-muted">
+          preset phrasing, that is the expression itself.
+
+          Sunk into a filled chip, and pulled up out of the container's gap-3 to
+          sit close under whatever it is describing — the controls row, or the
+          cron field when that is showing. As a bare line at a full gap's
+          distance, the one thing on this form that is pure OUTPUT read as one
+          more thing to fill in. `w-fit` keeps it hugging its text rather than
+          ruling a line across the card. */}
+      <p
+        className="-mt-1.5 flex w-fit max-w-full items-baseline gap-1.5 rounded-md bg-sidebar px-2 py-1 text-[11px] text-secondary"
+        data-testid="schedule-preview"
+      >
+        <span className="shrink-0 uppercase tracking-wide text-muted">
           {t('trigger.form.preview')}
         </span>
-        {described ?? <span className="font-mono">{cron || '—'}</span>}
+        <span className="truncate">
+          {described ?? <span className="font-mono">{cron || '—'}</span>}
+        </span>
       </p>
     </div>
   );

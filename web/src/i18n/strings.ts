@@ -1011,6 +1011,10 @@ export const STRINGS = {
   "trigger.editAria": { en: "Edit {name}", zh: "编辑 {name}" },
   "trigger.form.title.edit": { en: "Edit automation", zh: "编辑自动任务" },
   "trigger.form.name": { en: "Name", zh: "名称" },
+  "trigger.form.namePlaceholder": {
+    en: "Optional — taken from the prompt",
+    zh: "可选 — 默认取自提示词",
+  },
   "trigger.form.type": { en: "Trigger", zh: "触发方式" },
   "trigger.form.type.schedule": { en: "On a schedule", zh: "按计划" },
   "trigger.form.type.fileWatch": { en: "When files change", zh: "文件变化时" },
@@ -1035,7 +1039,6 @@ export const STRINGS = {
   "trigger.form.cancel": { en: "Cancel", zh: "取消" },
   "trigger.form.saving": { en: "Saving…", zh: "保存中…" },
   "trigger.form.saveFailed": { en: "Could not save the automation.", zh: "无法保存该自动任务。" },
-  "trigger.form.nameRequired": { en: "Name is required.", zh: "请填写名称。" },
   "trigger.form.promptRequired": { en: "Prompt is required.", zh: "请填写提示词。" },
   "trigger.form.cronRequired": { en: "Cron expression is required.", zh: "请填写 Cron 表达式。" },
   "trigger.form.watchPathRequired": { en: "Folder to watch is required.", zh: "请填写监听的文件夹。" },

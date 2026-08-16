@@ -9,6 +9,7 @@ import MessageAvatar from './MessageAvatar';
 import type { StringKey } from '../i18n/strings';
 import { useT } from '../i18n/useT';
 import type { WebSocketEvent } from '../types';
+import Select from './Select';
 
 // ---------------------------------------------------------------------------
 // Types — wire shape of /api/v2/settings/sub-agents
@@ -670,7 +671,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                   {PARAM_LABEL_KEY[paramKey] ? t(PARAM_LABEL_KEY[paramKey]) : paramKey}
                 </label>
                 {schema.allowed ? (
-                  <select
+                  <Select
                     value={value}
                     onChange={e => handleChange(paramKey, e.target.value)}
                     disabled={!entry.installed}
@@ -696,7 +697,7 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
                         )}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 ) : (
                   <input
                     type="text"

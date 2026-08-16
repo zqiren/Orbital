@@ -8,6 +8,8 @@ import { useLocale } from '../i18n/LocaleContext';
 import type { Trigger } from '../types';
 import type { TriggerDraft } from '../hooks/useTriggers';
 import ScheduleInput from './ScheduleInput';
+import Select from './Select';
+import { FIELD, FIELD_MULTILINE } from './fieldStyles';
 import {
   cronForDraft,
   draftFromCron,
@@ -16,8 +18,27 @@ import {
   type ScheduleDraft,
 } from './scheduleFormat';
 
-const FIELD =
-  'text-sm bg-sidebar border border-border rounded-lg px-2.5 py-1.5 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150';
+/** Longest derived name. Past this the row's own truncation takes over, and a
+ *  name that has to be truncated to be read is not doing its job anyway. */
+const DERIVED_NAME_MAX = 48;
+
+/**
+ * A name for an automation whose author did not give it one.
+ *
+ * The prompt is the definition; the name is a label for it. Deriving from the
+ * first line rather than the whole thing keeps a multi-paragraph brief from
+ * turning into a 48-character run-on.
+ *
+ * Pure and un-translated on purpose: every character it returns came from the
+ * user's own prompt, so there is nothing here to localise (the i18n rule for
+ * non-React helpers is about UI chrome, and this produces none).
+ */
+export function deriveName(task: string): string {
+  const firstLine = task.trim().split('\n')[0]!.replace(/\s+/g, ' ').trim();
+  return firstLine.length > DERIVED_NAME_MAX
+    ? `${firstLine.slice(0, DERIVED_NAME_MAX).trimEnd()}…`
+    : firstLine;
+}
 
 interface AutomationFormProps {
   /** Edit target. Absent = create. */
@@ -69,10 +90,18 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
     e.preventDefault();
     if (saving) return;
 
-    if (!name.trim()) return setError(t('trigger.form.nameRequired'));
+    // Name is optional. It was the first, largest and most prominent field on
+    // the form while being the least load-bearing thing on it: the prompt is
+    // what defines the automation, and the name only labels it. Left blank it
+    // is taken from the prompt, which is why the prompt check comes first —
+    // there is no name to derive without one.
     if (!task.trim()) return setError(t('trigger.form.promptRequired'));
 
-    const draft: TriggerDraft = { name: name.trim(), type, task: task.trim() };
+    const draft: TriggerDraft = {
+      name: name.trim() || deriveName(task),
+      type,
+      task: task.trim(),
+    };
     if (type === 'schedule') {
       const cron = cronForDraft(schedule);
       if (!cron) return setError(t('trigger.form.cronRequired'));
@@ -117,6 +146,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          placeholder={t('trigger.form.namePlaceholder')}
           aria-label={t('trigger.form.name')}
           data-testid="automation-form-name"
           className={FIELD}
@@ -134,16 +164,16 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
               : t('trigger.form.type.fileWatch')}
           </span>
         ) : (
-          <select
+          <Select
             value={type}
             onChange={(e) => setType(e.target.value as 'schedule' | 'file_watch')}
             aria-label={t('trigger.form.type')}
             data-testid="automation-form-type"
-            className={FIELD}
+            className={`${FIELD} w-full`}
           >
             <option value="schedule">{t('trigger.form.type.schedule')}</option>
             <option value="file_watch">{t('trigger.form.type.fileWatch')}</option>
-          </select>
+          </Select>
         )}
       </div>
 
@@ -221,7 +251,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           placeholder={t('trigger.form.promptPlaceholder')}
           aria-label={t('trigger.task')}
           data-testid="automation-form-prompt"
-          className={`${FIELD} resize-y leading-relaxed`}
+          className={`${FIELD_MULTILINE} resize-y leading-relaxed`}
         />
       </label>
 
@@ -234,12 +264,16 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
         </p>
       )}
 
-      <div className="flex items-center gap-2">
+      {/* A footer, not a pair of buttons at the end of a stack. Negative
+          margins pull it out to the card's edges so the rule reads as the
+          bottom of the form; text-xs was the same size as the field HINTS for
+          what is the terminal action of a card this tall. */}
+      <div className="-mx-4 -mb-4 mt-1 flex items-center gap-2 border-t border-border/60 px-4 py-3">
         <button
           type="submit"
           disabled={saving}
           data-testid="automation-form-save"
-          className="text-xs font-medium px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
+          className="text-[13px] font-medium px-4 py-2 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
         >
           {saving
             ? t('trigger.form.saving')
@@ -252,7 +286,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           onClick={onCancel}
           disabled={saving}
           data-testid="automation-form-cancel"
-          className="text-xs text-secondary hover:text-primary transition-colors px-2 py-1.5 max-md:min-h-[44px]"
+          className="text-[13px] text-secondary hover:text-primary transition-colors px-3 py-2 max-md:min-h-[44px]"
         >
           {t('trigger.form.cancel')}
         </button>

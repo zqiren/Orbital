@@ -434,7 +434,9 @@ describe('AutomationsList — create', () => {
     });
   });
 
-  it('blocks submit on a missing name and never calls the API', async () => {
+  // The name used to be required and is now derived from the prompt when
+  // blank, so the prompt is what an empty form is now blocked on.
+  it('blocks submit on a missing prompt and never calls the API', async () => {
     await renderPane();
 
     fireEvent.click(screen.getByTestId('automations-new'));
@@ -443,8 +445,24 @@ describe('AutomationsList — create', () => {
     });
 
     expect(screen.getByTestId('automation-form-error').textContent).toContain(
-      'Name is required',
+      'Prompt is required',
     );
     expect(mockCreateTrigger).not.toHaveBeenCalled();
+  });
+
+  it('creates with a name derived from the prompt when the name is left blank', async () => {
+    await renderPane();
+
+    fireEvent.click(screen.getByTestId('automations-new'));
+    fireEvent.change(screen.getByTestId('automation-form-prompt'), {
+      target: { value: 'Post the standup summary' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('automation-form-save'));
+    });
+
+    expect(mockCreateTrigger).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Post the standup summary' }),
+    );
   });
 });

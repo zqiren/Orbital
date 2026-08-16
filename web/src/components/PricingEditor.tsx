@@ -23,6 +23,7 @@ import {
   type RateField,
   type StagedEdits,
 } from '../budget/pricing';
+import Select from './Select';
 
 interface PricingEditorProps {
   /**
@@ -258,7 +259,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                 <h3 className="text-sm font-semibold text-primary font-mono">{provider}</h3>
                 <label className="flex items-center gap-2 text-xs text-secondary">
                   {t('pricing.currency.label')}
-                  <select
+                  <Select
                     value={curr.value}
                     onChange={(e) => stageCurrency(provider, e.target.value)}
                     aria-label={t('pricing.currency.aria', { provider })}
@@ -272,7 +273,7 @@ export default function PricingEditor({ onSaved }: PricingEditorProps) {
                     ).map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
-                  </select>
+                  </Select>
                   {curr.origin === 'override' && (
                     <span className="text-2xs text-accent uppercase tracking-wide">
                       {t('pricing.badge.override')}
