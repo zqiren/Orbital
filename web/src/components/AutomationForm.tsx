@@ -264,12 +264,16 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
         </p>
       )}
 
-      <div className="flex items-center gap-2">
+      {/* A footer, not a pair of buttons at the end of a stack. Negative
+          margins pull it out to the card's edges so the rule reads as the
+          bottom of the form; text-xs was the same size as the field HINTS for
+          what is the terminal action of a card this tall. */}
+      <div className="-mx-4 -mb-4 mt-1 flex items-center gap-2 border-t border-border/60 px-4 py-3">
         <button
           type="submit"
           disabled={saving}
           data-testid="automation-form-save"
-          className="text-xs font-medium px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
+          className="text-[13px] font-medium px-4 py-2 rounded-lg bg-accent text-white disabled:opacity-60 transition-colors max-md:min-h-[44px]"
         >
           {saving
             ? t('trigger.form.saving')
@@ -282,7 +286,7 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
           onClick={onCancel}
           disabled={saving}
           data-testid="automation-form-cancel"
-          className="text-xs text-secondary hover:text-primary transition-colors px-2 py-1.5 max-md:min-h-[44px]"
+          className="text-[13px] text-secondary hover:text-primary transition-colors px-3 py-2 max-md:min-h-[44px]"
         >
           {t('trigger.form.cancel')}
         </button>
