@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,7 @@ class PipeTransport(AgentTransport):
                 subprocess.run, cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 cwd=self._workspace, env=env, timeout=300,
+                creationflags=win_no_window_flags(),
             )
         except subprocess.TimeoutExpired:
             return "Error: sub-agent timed out after 5 minutes"

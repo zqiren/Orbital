@@ -10,6 +10,8 @@ import re
 import subprocess
 from uuid import uuid4
 
+from agent_os.utils.subprocess_flags import win_no_window_flags
+
 from .base import Tool, ToolResult
 
 _TIMEOUT = 120
@@ -217,6 +219,7 @@ class ShellTool(Tool):
                 capture_output=True,
                 text=True,
                 timeout=_TIMEOUT,
+                creationflags=win_no_window_flags(),
             )
         except subprocess.TimeoutExpired:
             return ToolResult(

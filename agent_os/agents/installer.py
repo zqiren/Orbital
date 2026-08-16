@@ -39,6 +39,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from agent_os.daemon_v2.models import detect_os
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,7 @@ class SubAgentInstaller:
                 cwd=target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                creationflags=win_no_window_flags(),
             )
         except OSError as exc:
             raise InstallError(f"could not run '{' '.join(argv)}': {exc}")
@@ -435,6 +437,7 @@ async def _run_capture(*argv: str) -> str:
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            creationflags=win_no_window_flags(),
         )
         out, _ = await proc.communicate()
     except OSError as exc:

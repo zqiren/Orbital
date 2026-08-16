@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from agent_os.utils.subprocess_flags import win_no_window_flags
+
 from ._path_utils import _excluded_in_secondary, resolve_safe_read
 from .base import Tool, ToolResult
 
@@ -299,6 +301,7 @@ class GrepTool(Tool):
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS,
                 encoding="utf-8", errors="replace",
+                creationflags=win_no_window_flags(),
             )
         except subprocess.TimeoutExpired:
             return None, "", f"Error: grep timed out after {_TIMEOUT_SECONDS}s"
