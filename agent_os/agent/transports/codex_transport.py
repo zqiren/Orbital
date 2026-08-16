@@ -44,6 +44,7 @@ from agent_os.agent.transports.jsonl_stream import (
     read_jsonl_line,
 )
 from agent_os.agent.transports.tool_risk import should_auto_approve
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -596,6 +597,7 @@ class CodexTransport(AgentTransport):
             # default (64 KiB) is routinely exceeded. read_jsonl_line() is
             # tolerant of ANY limit — this just sizes the fast path.
             limit=1024 * 1024,
+            creationflags=win_no_window_flags(),
         )
         try:
             self._proc = psutil.Process(self._popen.pid)

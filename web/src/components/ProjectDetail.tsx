@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { AgentRunStatus, FileContent, Project, Trigger } from '../types';
 import type { Route } from '../route';
+import AutomationsList from './AutomationsList';
 import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
@@ -24,6 +25,11 @@ interface ProjectDetailProps {
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
   triggers?: Trigger[];
+  /**
+   * Still accepted (App owns a trigger hook for the strip) but no longer used
+   * here: management moved into the Automations pane, which drives its own
+   * hook. Kept so App's existing props stay valid.
+   */
   onTriggerToggle?: (triggerId: string, enabled: boolean) => void;
   onTriggerDelete?: (triggerId: string) => void;
   /**
@@ -46,6 +52,15 @@ const BASE_TABS: { key: TabKey; labelKey: StringKey }[] = [
   { key: 'files', labelKey: 'projectDetail.tab.files' },
 ];
 
+// The two panes inside the Tasks tab. A parent tab should not carry the name
+// of one of its children — hence "Tasks" above, "Queue" here.
+type QueuePaneKey = 'queue' | 'automations';
+
+const QUEUE_PANES: { key: QueuePaneKey; labelKey: StringKey }[] = [
+  { key: 'queue', labelKey: 'queue.pane.queue' },
+  { key: 'automations', labelKey: 'queue.section.automations' },
+];
+
 export default function ProjectDetail({
   project,
   agentStatus,
@@ -53,8 +68,6 @@ export default function ProjectDetail({
   route,
   setRoute,
   triggers = [],
-  onTriggerToggle,
-  onTriggerDelete,
   globalDefaultModel,
   children,
 }: ProjectDetailProps) {
@@ -62,6 +75,7 @@ export default function ProjectDetail({
 
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
+  const queuePane: QueuePaneKey = route.queuePane ?? 'queue';
 
   const tabs = BASE_TABS;
 
@@ -163,6 +177,17 @@ export default function ProjectDetail({
     setRoute({ ...route, settings: true, settingsAnchor: 'budget', previewPath: undefined });
   }
 
+  // Trigger strip → the Automations pane of the Tasks tab (one management home).
+  function handleOpenAutomations() {
+    setRoute({
+      ...route,
+      tab: 'queue',
+      queuePane: 'automations',
+      settings: false,
+      previewPath: undefined,
+    });
+  }
+
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-card">
       {/* Header */}
@@ -203,9 +228,11 @@ export default function ProjectDetail({
         </div>
       )}
 
-      {/* Trigger strip — between header and tab bar */}
-      {triggers.length > 0 && onTriggerToggle && (
-        <TriggerStrip triggers={triggers} onToggle={onTriggerToggle} onDelete={onTriggerDelete} />
+      {/* Trigger strip — between header and tab bar. A status line only: the
+          glanceable off-count stays visible from every tab, and clicking it
+          goes to the one place automations are managed. */}
+      {triggers.length > 0 && (
+        <TriggerStrip triggers={triggers} onOpen={handleOpenAutomations} />
       )}
 
       {/* Tab bar */}
@@ -244,7 +271,63 @@ export default function ProjectDetail({
         }`}
       >
         <OpenPathContext.Provider value={handleOpenPath}>
-          {children}
+          {activeTab === 'queue' ? (
+            // Two panes behind one tab. The queue is a live stream and an
+            // automation is a standing definition with a create/edit form —
+            // sibling views, not sections of one scroll.
+            <div className="flex flex-col h-full min-h-0">
+              {/* A segmented control, on a track.
+                  These two panes used to be bare pills: the active one carried
+                  its own border and the inactive one an invisible one, with
+                  nothing enclosing the pair. That reads as one card floating
+                  beside a line of plain text — the inactive pane did not look
+                  clickable, and neither looked related to the other. A track
+                  around both is what says "one control, two positions".
+                  text-[11px] against the parent tab bar's text-xs: two tab
+                  rows at the same size gave no clue which level you were on. */}
+              <div className="px-6 pt-3 max-md:px-4">
+                <div
+                  className="inline-flex gap-0.5 rounded-lg border border-border bg-nav p-0.5"
+                  role="tablist"
+                  aria-label={t('projectDetail.tab.queue')}
+                >
+                  {QUEUE_PANES.map((pane) => {
+                    const active = queuePane === pane.key;
+                    return (
+                      <button
+                        key={pane.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        data-testid={`queue-pane-${pane.key}`}
+                        onClick={() =>
+                          setRoute({ ...route, tab: 'queue', queuePane: pane.key })
+                        }
+                        className={`text-[11px] font-medium px-3 py-1 rounded-md transition-colors duration-150 max-md:min-h-[40px] ${
+                          active
+                            ? 'bg-card text-primary shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
+                            : 'text-secondary hover:text-primary'
+                        }`}
+                      >
+                        {t(pane.labelKey)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {queuePane === 'automations' ? (
+                  <div className="h-full overflow-y-auto px-6 py-4 max-md:px-4">
+                    <AutomationsList projectId={project.project_id} />
+                  </div>
+                ) : (
+                  children
+                )}
+              </div>
+            </div>
+          ) : (
+            children
+          )}
         </OpenPathContext.Provider>
         <FilePreviewDrawer
           open={previewPath !== null}

@@ -311,6 +311,45 @@ class TriggerToggleRequest(BaseModel):
     enabled: bool
 
 
+class TriggerScheduleBody(BaseModel):
+    """The `schedule` sub-object of a schedule trigger.
+
+    `human` is the display caption the UI shows instead of the raw cron. The
+    web form derives it from the chosen preset (localized), so it is optional
+    here — the agent tool supplies its own free-text version.
+    """
+    cron: str
+    human: str | None = None
+    timezone: str = "UTC"
+
+
+class TriggerCreateRequest(BaseModel):
+    name: str
+    type: Literal["schedule", "file_watch"]
+    task: str
+    enabled: bool = True
+    schedule: TriggerScheduleBody | None = None
+    watch_path: str | None = None
+    patterns: list[str] | None = None
+    recursive: bool = False
+    debounce_seconds: int = 5
+
+
+class TriggerUpdateRequest(BaseModel):
+    """Partial update. Every field is optional; only the ones actually sent
+    are applied (`exclude_unset`), so the long-standing `{"enabled": false}`
+    body keeps working untouched.
+    """
+    name: str | None = None
+    task: str | None = None
+    enabled: bool | None = None
+    schedule: TriggerScheduleBody | None = None
+    watch_path: str | None = None
+    patterns: list[str] | None = None
+    recursive: bool | None = None
+    debounce_seconds: int | None = None
+
+
 class BulkDeleteRequest(BaseModel):
     prefix: str | None = None
     project_ids: list[str] | None = None
@@ -463,6 +502,37 @@ def _maybe_sync_instructions_to_goals(workspace: str, *, goals_content: str | No
         _write_workspace_file(workspace, "project_goals.md", effective)
 
 
+# ---- Manual project order (spec 056) ----
+
+# Sort position for a project that has never been dragged. +inf parks every
+# such project after all placed ones, where the stable sort preserves creation
+# order — which is exactly the ordering that existed before this feature.
+_UNPLACED_SORT_KEY = float("inf")
+
+
+class ProjectReorderRequest(BaseModel):
+    """The complete ordered id list for the reordered block."""
+
+    ordered_ids: list[str]
+
+
+def _project_sort_key(project: dict) -> float:
+    """Manual position, or ``_UNPLACED_SORT_KEY`` for a never-placed project.
+
+    Deliberately NOT a ``DEFAULT_PROJECT_FIELDS`` entry: defaulting the key to
+    0 on read would hoist every legacy project to the top. "No key" has to stay
+    distinguishable from "position 0".
+    """
+    value = project.get("sort_key")
+    # bool is an int subclass — a stray ``sort_key: true`` is not a position.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _UNPLACED_SORT_KEY
+    value = float(value)
+    if value != value:  # NaN never orders consistently; treat it as unplaced.
+        return _UNPLACED_SORT_KEY
+    return value
+
+
 # ---- Project Endpoints ----
 
 @router.post("/projects", status_code=201)
@@ -568,11 +638,45 @@ async def create_project(req: CreateProjectRequest):
 @router.get("/projects")
 async def list_projects():
     projects = [_redact_project(p) for p in _project_store.list_projects()]
-    projects.sort(key=lambda p: (not p.get("is_scratch", False),))
+    # Spec 056 — manual order. Two components, in this order:
+    #   1. ``not is_scratch`` — Quick Tasks stays pinned above everything. It
+    #      is the FIRST component, so no reorder can float a project above the
+    #      scratch project even if a client puts it there; the invariant is a
+    #      property of the sort, not of endpoint validation.
+    #   2. ``sort_key`` — the manual position written by POST /projects/reorder.
+    #      A project that has never been placed carries no key and sorts to the
+    #      bottom; Python's sort is stable, so keyless projects (legacy records
+    #      and freshly created ones alike) keep today's creation order there.
+    #      A fresh install with no keys at all therefore renders exactly as it
+    #      did before this feature existed.
+    projects.sort(key=lambda p: (not p.get("is_scratch", False), _project_sort_key(p)))
     for p in projects:
         p.setdefault("agent_name", p.get("name", ""))
         p.setdefault("is_scratch", False)
     return projects
+
+
+@router.post("/projects/reorder")
+async def reorder_projects(req: ProjectReorderRequest):
+    """Persist a manual project order (spec 056 §6 decision 3).
+
+    Takes the COMPLETE ordered id list for the block being reordered and
+    writes it in one atomic store pass. Returns the canonical list in its new
+    order so a ``GET /projects`` refetch racing this call converges on the
+    same answer the caller already applied optimistically.
+
+    Unknown ids are rejected rather than silently dropped — a client sending a
+    stale id is sending a stale order, and half-applying it would leave the
+    user looking at a list nobody asked for.
+    """
+    known = {p.get("project_id") for p in _project_store.list_projects()}
+    unknown = [pid for pid in req.ordered_ids if pid not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown project ids: {', '.join(unknown)}",
+        )
+    _project_store.reorder_projects(req.ordered_ids)
+    return await list_projects()
 
 
 @router.get("/projects/{project_id}")
@@ -2700,9 +2804,90 @@ async def list_triggers(project_id: str):
     return project.get("triggers", [])
 
 
+def _validate_trigger_timezone(tz_name: str) -> None:
+    """400 on an unknown IANA zone.
+
+    The tick loop falls back to UTC with a log warning for an unknown zone
+    (trigger_manager._is_due), which is the right runtime behaviour but a
+    silent one — a form that accepts 'Asia/Shangai' would fire at the wrong
+    hour forever. Reject it at the door instead.
+    """
+    import pytz
+
+    try:
+        pytz.timezone(tz_name)
+    except pytz.UnknownTimeZoneError:
+        raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz_name}")
+
+
+@router.post("/projects/{project_id}/triggers", status_code=201)
+async def create_trigger(project_id: str, body: TriggerCreateRequest):
+    """Create a trigger from the UI.
+
+    Mirrors CreateTriggerTool's record shape exactly — the agent tool and this
+    route must produce interchangeable records, since both feed the same store,
+    scheduler and list surfaces.
+    """
+    from agent_os.daemon_v2.trigger_manager import generate_trigger_id, validate_trigger
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    trigger = {
+        "id": generate_trigger_id(),
+        "name": body.name,
+        "enabled": body.enabled,
+        "type": body.type,
+        "task": body.task,
+        "last_triggered": None,
+        "trigger_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.type == "schedule":
+        if body.schedule is None:
+            raise HTTPException(
+                status_code=400, detail="Schedule trigger requires schedule.cron"
+            )
+        _validate_trigger_timezone(body.schedule.timezone)
+        trigger["schedule"] = {
+            "cron": body.schedule.cron,
+            # Fall back to the cron itself rather than an empty caption: the
+            # strip and the list render `human` as the row label.
+            "human": body.schedule.human or body.schedule.cron,
+            "timezone": body.schedule.timezone,
+        }
+    else:
+        trigger["watch_path"] = body.watch_path or ""
+        trigger["patterns"] = body.patterns or []
+        trigger["recursive"] = body.recursive
+        trigger["debounce_seconds"] = body.debounce_seconds
+
+    workspace = project.get("workspace", "")
+    error = validate_trigger(trigger, workspace=workspace)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    triggers = project.get("triggers", [])
+    triggers.append(trigger)
+    _project_store.update_project(project_id, {"triggers": triggers})
+
+    if _trigger_manager is not None:
+        _trigger_manager.register_trigger(project_id, trigger)
+
+    return trigger
+
+
 @router.patch("/projects/{project_id}/triggers/{trigger_id}")
-async def toggle_trigger(project_id: str, trigger_id: str, body: TriggerToggleRequest):
-    """Toggle a trigger on/off. This is the only REST mutation for triggers."""
+async def update_trigger(project_id: str, trigger_id: str, body: TriggerUpdateRequest):
+    """Partially update a trigger — enable/disable and every editable field.
+
+    Emits `trigger.updated`, never created/deleted: the record did not appear
+    or go away, and treating a disable as a delete made the row vanish from
+    every live list until the next refetch.
+    """
+    from agent_os.daemon_v2.trigger_manager import validate_trigger
+
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -2712,15 +2897,47 @@ async def toggle_trigger(project_id: str, trigger_id: str, body: TriggerToggleRe
     if trigger is None:
         raise HTTPException(status_code=404, detail="Trigger not found")
 
-    trigger["enabled"] = body.enabled
+    updates = body.model_dump(exclude_unset=True)
+
+    # Type is immutable, so fields belonging to the other kind are noise — drop
+    # them rather than writing a schedule onto a file-watch record.
+    if trigger.get("type") == "schedule":
+        for key in ("watch_path", "patterns", "recursive", "debounce_seconds"):
+            updates.pop(key, None)
+    else:
+        updates.pop("schedule", None)
+
+    if "schedule" in updates:
+        schedule = updates.pop("schedule")
+        if schedule is not None:
+            # Merge onto the existing schedule so a body that omits `human`
+            # (or `timezone`) doesn't blank the stored caption.
+            merged_schedule = dict(trigger.get("schedule") or {})
+            merged_schedule.update({k: v for k, v in schedule.items() if v is not None})
+            merged_schedule.setdefault("timezone", "UTC")
+            merged_schedule["human"] = (
+                merged_schedule.get("human") or merged_schedule.get("cron", "")
+            )
+            _validate_trigger_timezone(merged_schedule["timezone"])
+            updates["schedule"] = merged_schedule
+
+    # A partial update must not be able to null out a required field.
+    candidate = dict(trigger)
+    candidate.update({k: v for k, v in updates.items() if v is not None})
+
+    workspace = project.get("workspace", "")
+    error = validate_trigger(candidate, workspace=workspace)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    # Mutate in place: `triggers` is the list we persist, and the row keeps
+    # its position (an edit must not reorder the list).
+    trigger.clear()
+    trigger.update(candidate)
     _project_store.update_project(project_id, {"triggers": triggers})
 
-    # Notify TriggerManager
     if _trigger_manager is not None:
-        if body.enabled:
-            _trigger_manager.register_trigger(project_id, trigger)
-        else:
-            _trigger_manager.unregister_trigger(trigger_id)
+        _trigger_manager.apply_trigger_update(project_id, trigger)
 
     return trigger
 

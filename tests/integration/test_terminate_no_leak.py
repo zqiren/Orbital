@@ -34,7 +34,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
@@ -199,7 +199,8 @@ async def test_new_session_terminates_in_under_3s_without_leak():
         mgr, ws, handle = _make_manager_with_loop(workspace, project_id, provider)
 
         loop_obj = handle.loop
-        run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+        persist_user_row(loop_obj._session, "hi")
+        run_task = asyncio.create_task(loop_obj.run())
         handle.task = run_task
         run_task.add_done_callback(
             mgr._on_loop_done(project_id, session_id=SID)
@@ -333,7 +334,8 @@ async def test_dispatcher_survives_stop_agent_and_is_drained_by_shutdown():
         # Start the loop and let it begin streaming so stop_agent has a
         # real cancellation path to exercise.
         loop_obj = handle.loop
-        run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+        persist_user_row(loop_obj._session, "hi")
+        run_task = asyncio.create_task(loop_obj.run())
         handle.task = run_task
         run_task.add_done_callback(
             mgr._on_loop_done(project_id, session_id=SID)

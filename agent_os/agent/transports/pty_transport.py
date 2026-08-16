@@ -17,6 +17,7 @@ except ImportError:
 from agent_os.agent.adapters.cli_adapter import strip_ansi
 from agent_os.agent.adapters.output_parser import OutputParser
 from agent_os.agent.transports.base import AgentTransport, TransportEvent
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 
 # Map OutputChunk.chunk_type to TransportEvent.event_type
@@ -53,6 +54,7 @@ class PTYTransport(AgentTransport):
             self._process = subprocess.Popen(
                 cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
                 cwd=workspace, env=merged_env, shell=True,
+                creationflags=win_no_window_flags(),
             )
             os.close(slave_fd)
             self._master_fd = master_fd
@@ -63,7 +65,10 @@ class PTYTransport(AgentTransport):
             self._process = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 cwd=workspace, env=merged_env, shell=True,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+                creationflags=(
+                    (subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
+                    | win_no_window_flags()
+                ),
             )
             self._master_fd = None
 

@@ -9,6 +9,7 @@ import sys
 from typing import Literal
 
 from agent_os.platform.base import PlatformProvider
+from agent_os.utils.subprocess_flags import win_no_window_flags
 from agent_os.platform.types import (
     CommandResult,
     FolderInfo,
@@ -80,6 +81,7 @@ class NullProvider(PlatformProvider):
                     stderr=slave_fd,
                     cwd=working_dir,
                     env=env,
+                    creationflags=win_no_window_flags(),
                 )
             finally:
                 os.close(slave_fd)
@@ -103,6 +105,7 @@ class NullProvider(PlatformProvider):
                 stderr=subprocess.PIPE,
                 cwd=working_dir,
                 env=env,
+                creationflags=win_no_window_flags(),
             )
 
             handle = ProcessHandle(
@@ -138,6 +141,7 @@ class NullProvider(PlatformProvider):
                 cwd=working_dir,
                 env=env,
                 timeout=timeout_sec,
+                creationflags=win_no_window_flags(),
             )
             return CommandResult(
                 exit_code=result.returncode,

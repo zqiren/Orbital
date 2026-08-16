@@ -34,7 +34,7 @@ from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.workspace_files import WorkspaceFileManager
 
@@ -300,7 +300,8 @@ async def test_30_turn_session_fires_refresh_at_turn_15_and_30():
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-                await loop.run("Start a 30-turn session")
+                persist_user_row(loop._session, "Start a 30-turn session")
+                await loop.run()
             await loop.drain_refresh()
 
         # ---- Assertions ----
@@ -452,7 +453,8 @@ async def test_project_state_mtime_changes_between_refreshes():
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-                await loop.run("Start")
+                persist_user_row(loop._session, "Start")
+                await loop.run()
             await loop.drain_refresh()
 
         # Both refreshes should have recorded an mtime
@@ -529,7 +531,8 @@ async def test_ws_event_log_contains_exactly_two_turn_count_events():
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-                await loop.run("go")
+                persist_user_row(loop._session, "go")
+                await loop.run()
             await loop.drain_refresh()
 
         events = _lifecycle_events(ws)

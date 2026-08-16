@@ -23,7 +23,7 @@ Contract pinned here:
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
@@ -124,7 +124,8 @@ async def test_reasoning_only_response_is_nudged_then_recovers(tmp_path):
         ("recovered answer", "", "stop"),
     ])
     loop, session = _make_loop(tmp_path, provider, "guard_recover")
-    await loop.run(initial_message="do the thing")
+    persist_user_row(loop._session, "do the thing")
+    await loop.run()
 
     assert provider.calls == 2
     # The healthy answer ended the turn normally.
@@ -145,7 +146,8 @@ async def test_partial_reasoning_is_preserved_for_resumption(tmp_path):
         ("recovered answer", "", "stop"),
     ])
     loop, session = _make_loop(tmp_path, provider, "guard_reasoning")
-    await loop.run(initial_message="do the thing")
+    persist_user_row(loop._session, "do the thing")
+    await loop.run()
 
     partials = [
         m for m in session.get_messages()
@@ -164,7 +166,8 @@ async def test_persistent_empty_responses_exit_declared_not_silent(tmp_path):
         ("", "", None),  # empty forever — no reasoning, no finish_reason:
     ])                   # the guard keys on the contract, not the metadata
     loop, session = _make_loop(tmp_path, provider, "guard_exhaust")
-    await loop.run(initial_message="do the thing")
+    persist_user_row(loop._session, "do the thing")
+    await loop.run()
 
     assert provider.calls == 3
     assert loop._loop_exit_path == "empty_response"
@@ -178,7 +181,8 @@ async def test_normal_text_turn_is_unaffected(tmp_path):
     call with no nudge rows."""
     provider = ScriptedProvider([("hello there", "", "stop")])
     loop, session = _make_loop(tmp_path, provider, "guard_normal")
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     assert provider.calls == 1
     assert loop._loop_exit_path == "text_complete"
@@ -195,7 +199,8 @@ async def test_response_shape_diag_includes_finish_reason(tmp_path, caplog):
     provider = ScriptedProvider([("hello there", "", "stop")])
     loop, _session = _make_loop(tmp_path, provider, "guard_diag")
     with caplog.at_level(logging.INFO, logger="agent.diag"):
-        await loop.run(initial_message="hi")
+        persist_user_row(loop._session, "hi")
+        await loop.run()
 
     shapes = []
     for record in caplog.records:

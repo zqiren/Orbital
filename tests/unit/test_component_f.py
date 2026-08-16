@@ -1599,7 +1599,17 @@ class TestAgentManager:
              patch("agent_os.daemon_v2.agent_manager.AgentLoop") as MockLoop, \
              patch("agent_os.daemon_v2.agent_manager.AutonomyInterceptor"):
 
-            MockSession.new.return_value = MagicMock()
+            # Honour Session.new's real contract: session_uuid IS the stem it
+            # was minted with (seam 3 / D1+D2 — id == uuid == handle key). The
+            # #59 write-ahead builds the Session at inject time and hands it to
+            # start_agent, which re-reads session_uuid off it, so a mock that
+            # returns a bare MagicMock there would key the handle on the mock.
+            def _new_session(session_uuid, workspace, **kwargs):
+                s = MagicMock()
+                s.session_uuid = session_uuid
+                s.session_id = kwargs.get("session_id", session_uuid)
+                return s
+            MockSession.new.side_effect = _new_session
             mock_reg = MagicMock()
             mock_reg.tool_names.return_value = ["read"]
             MockReg.return_value = mock_reg

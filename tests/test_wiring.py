@@ -42,7 +42,7 @@ from agent_os.agent.tools.write import WriteTool
 from agent_os.agent.tools.shell import ShellTool
 from agent_os.agent.prompt_builder import PromptBuilder, PromptContext, Autonomy
 from agent_os.agent.context import ContextManager
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk
 
@@ -131,7 +131,8 @@ def agent_loop(session, provider, registry, context_manager):
 @pytest.mark.timeout(60)
 async def test_basic_round_trip(agent_loop, session):
     """Send a trivial math question, verify the LLM answers correctly."""
-    await agent_loop.run(initial_message="What is 2+2? Reply with just the number.")
+    persist_user_row(agent_loop._session, "What is 2+2? Reply with just the number.")
+    await agent_loop.run()
 
     messages = session.get_messages()
     # Should have at least: user message + assistant response
@@ -185,9 +186,11 @@ async def test_tool_usage_round_trip(workspace, provider, prompt_builder):
     cm = ContextManager(sess, prompt_builder, ctx, model_context_limit=128_000)
     loop = AgentLoop(sess, provider, reg, cm, max_iterations=5, token_budget=500_000)
 
-    await loop.run(
-        initial_message="Read the file test.txt and tell me what it says. Use the read tool."
+    persist_user_row(
+        loop._session,
+        "Read the file test.txt and tell me what it says. Use the read tool.",
     )
+    await loop.run()
 
     messages = sess.get_messages()
 
@@ -237,7 +240,8 @@ async def test_tool_usage_round_trip(workspace, provider, prompt_builder):
 @pytest.mark.timeout(60)
 async def test_session_persistence(agent_loop, session, workspace):
     """After a loop run, the JSONL file should contain all messages."""
-    await agent_loop.run(initial_message="Say 'hello'. Reply with just that one word.")
+    persist_user_row(agent_loop._session, "Say 'hello'. Reply with just that one word.")
+    await agent_loop.run()
 
     messages = session.get_messages()
     assert len(messages) >= 2
@@ -279,7 +283,8 @@ async def test_streaming_callback(agent_loop, session):
 
     session.on_stream = on_stream
 
-    await agent_loop.run(initial_message="What is 1+1? Reply with just the number.")
+    persist_user_row(agent_loop._session, "What is 1+1? Reply with just the number.")
+    await agent_loop.run()
 
     # We should have received streaming chunks
     assert len(chunks_received) > 0, "No stream chunks received"

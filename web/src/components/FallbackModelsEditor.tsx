@@ -6,6 +6,7 @@ import { useId, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
 import { useT } from '../i18n/useT';
+import Select from './Select';
 
 interface FallbackModelsEditorProps {
   models: FallbackModelEntry[];
@@ -124,7 +125,7 @@ export default function FallbackModelsEditor({
                 <label className="block text-xs font-medium text-primary mb-1">
                   {t('llm.field.provider')}
                 </label>
-                <select
+                <Select
                   value={draft.provider}
                   onChange={(e) => handleProviderChange(e.target.value)}
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
@@ -134,7 +135,7 @@ export default function FallbackModelsEditor({
                       {info.display_name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {/* Model */}

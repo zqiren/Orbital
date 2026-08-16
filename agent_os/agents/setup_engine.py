@@ -18,6 +18,7 @@ from agent_os.agents.manifest import AgentManifest
 from agent_os.agents.registry import AgentRegistry
 from agent_os.agents.setup_types import AgentSetupStatus, SetupAction
 from agent_os.daemon_v2.models import detect_os
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,7 @@ class SetupEngine:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=win_no_window_flags(),
             )
             if result.returncode != 0:
                 return False
@@ -380,6 +382,7 @@ class SetupEngine:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=win_no_window_flags(),
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
@@ -401,6 +404,7 @@ class SetupEngine:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=win_no_window_flags(),
             )
             if result.returncode != 0:
                 return False

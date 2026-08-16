@@ -21,6 +21,7 @@ import pytest
 
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.daemon_v2.agent_manager import AgentManager
+from agent_os.daemon_v2.models import AgentConfig
 
 
 def _make_manager(tmp_path, workspace):
@@ -105,22 +106,50 @@ async def test_inject_hydrates_existing_session(tmp_path):
     # (the id the frontend addresses by), NOT the meta F1. This is what makes
     # viewed == holder. See test_hydrate_adopts_uuid_not_f1.py.
     assert kwargs.get("session_id") == "proj_cccc3333", "routes under the uuid, not the meta F1"
-    assert kwargs.get("initial_message") == "What number?"
+    # Bug #59: the message no longer travels as an argument — it is already
+    # appended to the hydrated session (and to its JSONL) before start_agent
+    # is entered. Assert it where it now lives, after the prior turn.
+    assert "initial_message" not in kwargs
+    contents = [m.get("content") for m in kwargs["session"].get_messages()
+                if m.get("role") == "user"]
+    assert contents == ["Remember the number 7.", "What number?"]
+    on_disk = (ws / "orbital" / "sessions" / "proj_cccc3333.jsonl").read_text(
+        encoding="utf-8")
+    assert "What number?" in on_disk
 
 
 @pytest.mark.asyncio
 async def test_inject_forks_fresh_when_no_file(tmp_path):
+    """No disk file → a fresh session is minted.
+
+    Bug #59 moved the mint from inside ``start_agent`` to the inject
+    write-ahead (the row must exist before the start window), so the fresh
+    session now arrives AS the ``session=`` argument rather than being built
+    downstream. ``_build_agent_config_from_project`` therefore has to return a
+    real AgentConfig — a MagicMock's provider/model land in the session_start
+    meta and are not JSON-serializable.
+    """
     ws = tmp_path / "ws"
     (ws / "orbital" / "sessions").mkdir(parents=True)
     mgr = _make_manager(tmp_path, ws)
     mgr.start_agent = AsyncMock()
-    mgr._build_agent_config_from_project = MagicMock(return_value=MagicMock())
+    mgr._build_agent_config_from_project = MagicMock(return_value=AgentConfig(
+        workspace=str(ws), model="deepseek-chat", api_key="k",
+        provider="deepseek", sdk="openai",
+    ))
 
     await mgr.inject_message("p1", "hello", session_id="sess_brand_new")
 
     assert mgr.start_agent.await_count == 1
     kwargs = mgr.start_agent.await_args.kwargs
-    assert kwargs.get("session") is None, "no disk file -> fresh session (Session.new path)"
+    fresh = kwargs.get("session")
+    assert fresh is not None, "the write-ahead mints and passes the fresh session"
+    assert fresh.session_uuid == "sess_brand_new"
+    assert [m.get("content") for m in fresh.get_messages()] == ["hello"]
+    # Freshly created on disk — no prior history was forked in.
+    on_disk = (ws / "orbital" / "sessions" / "sess_brand_new.jsonl").read_text(
+        encoding="utf-8")
+    assert "hello" in on_disk
 
 
 # ── Step 3: chat read-path resolves F1 and F2 to the same file ────────────

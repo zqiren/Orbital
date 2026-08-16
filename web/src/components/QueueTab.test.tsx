@@ -21,7 +21,7 @@ const mockSnapshot: QueueSnapshot = {
 };
 
 vi.mock('../hooks/useQueue', () => ({
-  useQueue: (_projectId: string) => ({
+  useQueue: () => ({
     snapshot: mockSnapshot,
     loading: false,
     error: null,
@@ -33,20 +33,7 @@ vi.mock('../hooks/useQueue', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock useTriggers — return empty so AutomationsList renders its empty state
-// ---------------------------------------------------------------------------
-vi.mock('../hooks/useTriggers', () => ({
-  useTriggers: (_projectId: string) => ({
-    triggers: [],
-    loading: false,
-    fetchTriggers: vi.fn(async () => []),
-    toggleTrigger: vi.fn(),
-    deleteTrigger: vi.fn(),
-  }),
-}));
-
-// ---------------------------------------------------------------------------
-// Mock useWebSocket (used transitively by useTriggers / useQueue)
+// Mock useWebSocket (used transitively by useQueue)
 // ---------------------------------------------------------------------------
 vi.mock('../hooks/useWebSocket', () => ({
   useWebSocket: () => ({
@@ -59,17 +46,17 @@ vi.mock('../hooks/useWebSocket', () => ({
 
 import QueueTab from './QueueTab';
 
-describe('QueueTab — Automations section', () => {
-  it('renders the Automations section alongside the queue sections', async () => {
+describe('QueueTab — Automations moved out of the queue scroll', () => {
+  it('no longer renders automations inside the queue', async () => {
+    // Item #57: automations are a sibling pane behind the Queue│Automations
+    // switch (ProjectDetail), not the Nth section of the queue's own scroll —
+    // a create/edit form does not belong under a live streaming queue.
     await act(async () => {
       render(<QueueTab projectId="proj-1" />);
     });
 
-    // The Automations section must be present
-    expect(screen.getByTestId('queue-section-automations')).toBeInTheDocument();
-
-    // AutomationsList empty state is visible (no triggers mocked)
-    expect(screen.getByTestId('automations-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-section-automations')).toBeNull();
+    expect(screen.queryByTestId('automations-pane')).toBeNull();
   });
 
   it('does NOT remove existing queue section structure', async () => {

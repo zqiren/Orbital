@@ -641,9 +641,16 @@ class AgentLoop:
                 return candidate
         return None
 
-    async def run(self, initial_message: str | None = None,
-                  initial_nonce: str | None = None) -> None:
-        """Main loop entry point."""
+    async def run(self) -> None:
+        """Main loop entry point.
+
+        Takes no initial message. Bug #59: the user's row is persisted by
+        whoever injects it, through ``agent_os.agent.session.persist_user_row``,
+        *before* the caller enters the start window — so ``run()`` always
+        resumes from a session that already contains the message rather than
+        carrying it in an argument that dies with an un-executed coroutine.
+        There is exactly one writer, and it is not here.
+        """
         if self._running:
             # Re-entrancy guard: a second concurrent run() on the same loop would
             # write two interleaved turns into one session. Reject rather than
@@ -669,9 +676,6 @@ class AgentLoop:
         # Every run() invocation begins a fresh turn boundary: clear the
         # sticky cancel-marker flag so a Stop click on this run writes a
         # new marker rather than no-opping on the previous run's flag.
-        # Hot-resume paths (_on_loop_done → _start_loop) call run() with
-        # no initial_message, so this reset must fire unconditionally —
-        # not just when initial_message is provided.
         self._cancellation_marker_appended_this_turn = False
         # Diagnostics: track exit path + appended-row delta for this run.
         self._loop_exit_path = None
@@ -683,16 +687,11 @@ class AgentLoop:
             else:
                 self._session.resolve_pending_tool_calls()
 
-            # Append initial user message
-            if initial_message is not None:
-                msg: dict = {
-                    "role": "user",
-                    "content": initial_message,
-                    "source": "user",
-                }
-                if initial_nonce:
-                    msg["nonce"] = initial_nonce
-                self._session.append(msg)
+            # NOTE (bug #59): no initial-message append here. The injector
+            # already persisted the user row via persist_user_row() before it
+            # entered the start window. Re-adding an append here re-introduces
+            # the double-write this fix removed — see
+            # tests/unit/test_message_write_ahead.py.
 
             # Reset per-run state on all tools (e.g. send counters)
             self._tool_registry.reset_run_state()
@@ -720,9 +719,10 @@ class AgentLoop:
             error_tracker: dict[str, dict] = {}  # tool_name -> {"error": str, "count": int}
             blocked_tools: set[str] = set()
 
-            # Diagnostics: row count at run start (after the initial user
-            # message is appended above) — the run_terminal disposition compares
-            # against this to detect a turn that appended nothing.
+            # Diagnostics: row count at run start (the injector's user row is
+            # already in the session — see the #59 note above) — the
+            # run_terminal disposition compares against this to detect a turn
+            # that appended nothing.
             rows_at_run_start = len(self._session._messages)
 
             while True:
@@ -1912,8 +1912,8 @@ class AgentLoop:
         # Idempotency: if we have already initiated a cancel for the
         # current turn (marker pending or appended), do nothing. The flag
         # is reset unconditionally at run() entry so the hot-resume path
-        # (run() with no initial_message after a cancelled turn) does
-        # not inherit the prior turn's True flag.
+        # (a fresh run() after a cancelled turn) does not inherit the
+        # prior turn's True flag.
         if self._cancellation_marker_appended_this_turn:
             return
 

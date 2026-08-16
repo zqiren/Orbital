@@ -27,6 +27,7 @@ except ImportError:
 
 from agent_os.agent.adapters.base import AdapterConfig, AdapterError, AgentAdapter, OutputChunk
 from agent_os.agent.adapters.output_parser import OutputParser
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 
 # ANSI escape sequence stripping (module-level function, tests import it directly)
@@ -129,6 +130,7 @@ class CLIAdapter(AgentAdapter):
                 cwd=config.workspace,
                 env=merged_env,
                 shell=True,
+                creationflags=win_no_window_flags(),
             )
             os.close(slave_fd)
             self._master_fd = master_fd
@@ -146,7 +148,10 @@ class CLIAdapter(AgentAdapter):
                 cwd=config.workspace,
                 env=merged_env,
                 shell=True,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+                creationflags=(
+                    (subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
+                    | win_no_window_flags()
+                ),
             )
             self._master_fd = None
 

@@ -18,6 +18,7 @@ import pytest
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
+from agent_os.agent.session import persist_user_row
 
 
 def _unique_tool_response(call_n: int):
@@ -120,7 +121,8 @@ async def test_cooldown_resets_after_each_refresh():
 
     loop._stream_response = mock_stream
     with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-        await loop.run("go")
+        persist_user_row(loop._session, "go")
+        await loop.run()
     await loop.drain_refresh()
 
     # Two full COOLDOWN_TURNS windows should have produced exactly 2 refreshes
@@ -160,7 +162,8 @@ async def test_turns_since_last_update_not_cooled_down_when_below_threshold():
         return _unique_tool_response(call_n["n"])
 
     loop._stream_response = mock_stream
-    await loop.run("go")
+    persist_user_row(loop._session, "go")
+    await loop.run()
 
     assert refresh_count["n"] == 0, (
         f"Expected no refresh before COOLDOWN_TURNS ({COOLDOWN_TURNS}), "

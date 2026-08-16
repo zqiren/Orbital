@@ -202,8 +202,13 @@ body {
    so the traffic lights float over the app's own top-left corner and there is
    no separate grey system bar.
 
-   That band still belongs to the native titlebar view, which sits ABOVE the
-   webview and swallows mouse events — so no interactive control may sit in it.
+   No interactive control may sit in that band. Not because the native titlebar
+   claims it — a transparent titlebar is hit-transparent, which is exactly what
+   left the window undraggable in v0.8.0–v0.9.0 (bug #60) — but because the fix
+   for that covers the band with a native drag strip
+   (install_titlebar_drag_strip in agent_os/desktop/main.py), and that strip
+   sits above the page and swallows the clicks. Reserving the gutter is what
+   keeps anything clickable out from under it.
    Panes pad themselves by this amount rather than one shared wrapper doing it,
    so each pane's own surface colour fills its own slice of the band (the nav
    column is a heavier material than the content pane; one wrapper would paint
@@ -236,6 +241,33 @@ body {
 
 :root[data-chrome="mac-inline"] .titlebar-band-canvas {
   background-color: var(--color-background);
+}
+
+/* ------------------------------------------------- native control suppression
+   `appearance: none` hands us the BOX of an input but not the widgets WebKit
+   paints inside it: `type="time"` keeps its picker indicator and `type="number"`
+   its spin buttons. In the schedule row that left the TIME field wearing a
+   system glyph beside two menus wearing our own chevron — three controls, two
+   idioms.
+
+   Opt-in via a class rather than a bare `input[type=…]` selector: the shared
+   FIELD look is worn by the automation form and the schedule row, and screens
+   that never asked for this (the budget sentence, the pricing table) keep the
+   native steppers their users may be relying on.
+
+   No replacement icon for the time field on purpose. A chevron says "opens a
+   menu" and earns its place; a clock would say only "this is a time", which is
+   what the TIME label above it already says. Suppressing the glyph makes the
+   field read as what it is — a text field you type into. */
+.field-native-none::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
+.field-native-none::-webkit-inner-spin-button,
+.field-native-none::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
 }
 
 @keyframes slide-up {

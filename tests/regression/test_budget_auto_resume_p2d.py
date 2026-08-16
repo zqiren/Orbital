@@ -39,6 +39,7 @@ from agent_os.budget.normalize import NormalizedUsage
 from agent_os.queue.dispatcher import QueueDispatcher
 from agent_os.queue.models import AttemptOutcome, ItemState, QueueRunState
 from agent_os.queue.store import QueueStore
+from agent_os.agent.session import persist_user_row
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +550,8 @@ async def test_D7_manual_resume_over_limit_trips_guard_pre_spend(tmp_path):
 
         async def inject_message(self, project_id, content, *, nonce=None,
                                  session_id=None, queue_state="chat"):
-            self._task = asyncio.create_task(loop.run(content))
+            persist_user_row(loop._session, content)
+            self._task = asyncio.create_task(loop.run())
             return "delivered"
 
         async def inject_system_message(self, project_id, content, *, session_id=None):

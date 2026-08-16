@@ -38,7 +38,7 @@ import pytest
 
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.daemon_v2.agent_manager import AgentManager, ProjectHandle
 
@@ -216,8 +216,9 @@ async def test_stop_button_full_path_cancels_loop_and_reopens_for_inject():
         # Hot-start the loop manually (matches what start_agent would do, but
         # without the heavy provider/registry building we don't need here).
         loop_obj = handle.loop
+        persist_user_row(loop_obj._session, "please run")
         run_task = asyncio.create_task(
-            loop_obj.run(initial_message="please run")
+            loop_obj.run()
         )
         handle.task = run_task
         run_task.add_done_callback(

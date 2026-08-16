@@ -30,7 +30,7 @@ from agent_os.agent import workspace_files as wsf_module
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.tools.checkpoint_state import CheckpointStateTool
 from agent_os.agent.tools.registry import ToolRegistry
@@ -290,7 +290,8 @@ async def test_checkpoint_at_turn_8_engages_cooldown_no_turn_count_at_23():
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-                await loop.run("Start task")
+                persist_user_row(loop._session, "Start task")
+                await loop.run()
             await loop.drain_refresh()
 
         events = _lifecycle_events(ws)
@@ -394,7 +395,8 @@ async def test_agent_decided_fires_once_regardless_of_turn_count():
         with patch.object(wsf_module, "run_session_end_routine",
                           new=AsyncMock(side_effect=fake_session_end_routine)):
             with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 0):
-                await loop.run("Start")
+                persist_user_row(loop._session, "Start")
+                await loop.run()
             await loop.drain_refresh()
 
         events = _lifecycle_events(ws)
@@ -484,7 +486,8 @@ async def test_debounce_suppresses_turn_count_after_agent_decided():
         with patch("agent_os.agent.loop.REFRESH_DEBOUNCE_S", 10_000):
             with patch.object(wsf_module, "run_session_end_routine",
                               new=AsyncMock(side_effect=fake_session_end_routine)):
-                await loop.run("Start task")
+                persist_user_row(loop._session, "Start task")
+                await loop.run()
             await loop.drain_refresh()
 
         events = _lifecycle_events(ws)

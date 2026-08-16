@@ -9,6 +9,8 @@ import sys
 import time
 import logging
 
+from agent_os.utils.subprocess_flags import win_no_window_flags
+
 logger = logging.getLogger(__name__)
 
 CURRENT_DATA_VERSION = 1
@@ -239,6 +241,7 @@ def provision_browsers_background():
                 env=env,
                 timeout=_DOWNLOAD_TIMEOUT_S,
                 check=True,
+                creationflags=win_no_window_flags(),
             )
             logger.info("Chromium installed successfully")
             _write_download_status(browsers_dir, state="ready", ts=time.time())

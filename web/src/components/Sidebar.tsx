@@ -2,8 +2,25 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useState } from 'react';
-import { Calendar, Inbox } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Calendar, GripVertical, Inbox } from 'lucide-react';
+import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type Announcements,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { api } from '../config';
@@ -24,6 +41,72 @@ interface SidebarProps {
   onSelectWorkbench: () => void;
   onNewProject: () => void;
   onSettings: () => void;
+  /** Persist a new manual order for the regular-projects block (spec 056).
+   *  Receives the COMPLETE ordered id list. The caller applies it
+   *  optimistically and reverts if the write fails. */
+  onReorderProjects: (orderedIds: string[]) => Promise<unknown>;
+}
+
+/** One draggable project row. The whole row is the drag target. */
+function SortableProjectRow({
+  id,
+  handleLabel,
+  children,
+}: {
+  id: string;
+  handleLabel: string;
+  children: ReactNode;
+}) {
+  // `attributes` is deliberately NOT spread. It carries tabIndex=0,
+  // role="button" and an aria-describedby pointing at dnd-kit's keyboard
+  // instructions — all of which describe a keyboard lift/drop mode this app
+  // does not have (spec 056 §6 decision 5 dropped the KeyboardSensor on
+  // purpose). Advertising it would put a dead control in the tab order and
+  // read the wrong instructions to a screen reader. Only the pointer
+  // listeners are wired.
+  //
+  // `setActivatorNodeRef` is gone with the dedicated handle: with the
+  // listeners on the row itself, the draggable node IS the activator, which is
+  // what dnd-kit falls back to when no activator is registered.
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      style={{
+        // x is zeroed rather than pulled in via @dnd-kit/modifiers'
+        // restrictToVerticalAxis — same result for a one-column list, no
+        // extra dependency.
+        transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
+        transition,
+        // NOT `none`, which is what the old 20px handle could afford because it
+        // was a sliver nobody scrolls over. The drag target is now the whole
+        // row, and `none` there would stop the mobile project list from
+        // scrolling under a normal swipe. `manipulation` is the pairing for a
+        // delay-based TouchSensor: the 250ms long-press is what decides
+        // between scroll and drag, and dnd-kit blocks touchmove itself once it
+        // has decided.
+        touchAction: 'manipulation',
+      }}
+      className={`group relative flex items-center ${isDragging ? 'z-10 opacity-60' : ''}`}
+    >
+      {/* A hint, not a target. The row is what listens, so this glyph needs no
+          listeners of its own — a press on it bubbles like a press anywhere
+          else on the row. That is what lets it stop reserving layout: it is
+          absolutely positioned inside the row button's own left padding
+          instead of pushing every project name 20px right of the Calendar and
+          Workbench labels above it. */}
+      <span
+        data-testid={`project-drag-handle-${id}`}
+        title={handleLabel}
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0 flex w-3 items-center justify-center text-muted opacity-0 transition-opacity duration-150 cursor-grab active:cursor-grabbing group-hover:opacity-100 motion-reduce:transition-none max-md:opacity-100"
+      >
+        <GripVertical size={12} />
+      </span>
+      {children}
+    </div>
+  );
 }
 
 /** Nav-row count badge: total flagged entries across the (privacy-filtered)
@@ -90,6 +173,7 @@ export default function Sidebar({
   onSelectWorkbench,
   onNewProject,
   onSettings,
+  onReorderProjects,
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
@@ -102,6 +186,51 @@ export default function Sidebar({
   // without setting anything up.
   const scratchProjects = projects.filter((p) => p.is_scratch);
   const regularProjects = projects.filter((p) => !p.is_scratch);
+  const regularIds = regularProjects.map((p) => p.project_id);
+
+  // Two sensors, no KeyboardSensor (spec 056 §6 decision 5).
+  //   Mouse: a 5px distance threshold, so a plain click on a project never
+  //          becomes a drag.
+  //   Touch: a 250ms long-press with an 8px slop, so the full-screen mobile
+  //          project list still scrolls under a normal swipe.
+  // MouseSensor rather than PointerSensor: PointerSensor also claims touch
+  // input, which would beat TouchSensor to the gesture and take the
+  // long-press delay with it.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+  );
+
+  // Silence dnd-kit's built-in live-region announcements. They exist to narrate
+  // the keyboard lift/move/drop cycle; with no KeyboardSensor there is no such
+  // cycle, and a screen reader has no way to reach this interaction anyway
+  // (accepted in §6 decision 5). Announcing a drag nobody can perform is noise.
+  const accessibility = useMemo(
+    () => ({
+      announcements: {
+        onDragStart: () => undefined,
+        onDragOver: () => undefined,
+        onDragEnd: () => undefined,
+        onDragCancel: () => undefined,
+      } satisfies Announcements,
+      screenReaderInstructions: { draggable: '' },
+    }),
+    [],
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const from = regularIds.indexOf(String(active.id));
+    const to = regularIds.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    Promise.resolve(onReorderProjects(arrayMove(regularIds, from, to))).catch((e) => {
+      // The caller restores the pre-drag order, so the snap-back is the
+      // user-visible feedback. Caught here only so a failed write is never an
+      // unhandled rejection.
+      console.error('Failed to reorder projects', e);
+    });
+  }
 
   // Shared project-row renderer — identical status dot / summary / active-state
   // behavior for the pinned Quick Tasks row and every project below it. Being
@@ -114,11 +243,19 @@ export default function Sidebar({
       <button
         key={project.project_id}
         onClick={() => onSelectProject(project.project_id)}
-        className={`w-full text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
+        className={`flex-1 min-w-0 text-left px-3 py-2 rounded-sm flex items-center gap-2.5 transition-all duration-150 max-md:min-h-[44px] ${
           isActive ? 'bg-nav-hover' : 'hover:bg-nav-hover/50'
         }`}
       >
-        <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0 mt-1.5`} />
+        {/* The dot rides in a 14px box — the width of the Calendar and
+            Workbench icons in the zone above — so every label in this column
+            starts on one vertical line instead of the project names sitting
+            6px right of the nav rows. It was also `mt-1.5` under
+            `items-center`, which pushed it ~3px BELOW centre on the one-line
+            rows that are most of the list. */}
+        <span className="flex w-3.5 shrink-0 items-center justify-center">
+          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+        </span>
         <div className="min-w-0 flex-1">
           <span className="text-xs font-medium text-primary block truncate">
             {truncate(project.name, 20)}
@@ -238,10 +375,35 @@ export default function Sidebar({
                 : undefined
             }
           >
-            {scratchProjects.map(renderProjectRow)}
+            {scratchProjects.map((project) => (
+              // Not draggable — scratch-first is an invariant of the list, not
+              // a position the user owns. No gutter to reserve any more: the
+              // drag hint on the rows below overlays their padding rather than
+              // occupying a column, so this row lines up with them for free.
+              <div key={project.project_id} className="flex items-center">
+                {renderProjectRow(project)}
+              </div>
+            ))}
           </div>
         )}
-        {regularProjects.map(renderProjectRow)}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          accessibility={accessibility}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={regularIds} strategy={verticalListSortingStrategy}>
+            {regularProjects.map((project) => (
+              <SortableProjectRow
+                key={project.project_id}
+                id={project.project_id}
+                handleLabel={t('sidebar.reorder.handleAria', { name: project.name })}
+              >
+                {renderProjectRow(project)}
+              </SortableProjectRow>
+            ))}
+          </SortableContext>
+        </DndContext>
       </nav>
 
       {/* Bottom section */}

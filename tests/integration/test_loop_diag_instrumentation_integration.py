@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_os.agent.loop import AgentLoop
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.context import ContextManager
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
@@ -101,7 +101,8 @@ async def test_uncaught_exception_visible_at_both_layers(tmp_path, caplog):
     mgr = _make_manager()
 
     # Wire the REAL done-callback, exactly as agent_manager._start_loop does.
-    task = asyncio.ensure_future(loop.run(initial_message="trigger blowup"))
+    persist_user_row(loop._session, "trigger blowup")
+    task = asyncio.ensure_future(loop.run())
     task.add_done_callback(mgr._on_loop_done("proj", session_id="proj_diagsess01"))
 
     results = await asyncio.gather(task, return_exceptions=True)

@@ -17,6 +17,7 @@ import { useT } from '../../i18n/useT';
 import type { CalendarEvent } from './types';
 import { agendaDayLabel, formatTimeRange } from './range';
 import { eventColor } from './color';
+import Select from '../Select';
 
 export interface EventDetailProps {
   event: CalendarEvent;
@@ -158,7 +159,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
             >
               {t('calendar.detail.link')}
             </label>
-            <select
+            <Select
               id="calendar-link-select"
               data-testid="calendar-event-link-select"
               value={event.project_id ?? ''}
@@ -172,7 +173,7 @@ export default function EventDetail({ event, projects, onClose, onLink }: EventD
                   {p.name}
                 </option>
               ))}
-            </select>
+            </Select>
             {linkedProject && (
               <p className="mt-1 text-[11px] text-secondary" data-testid="calendar-event-linked">
                 {t('calendar.detail.linkedTo', { name: linkedProject.name })}

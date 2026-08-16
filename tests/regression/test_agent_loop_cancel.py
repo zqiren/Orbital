@@ -34,7 +34,7 @@ from agent_os.agent.providers.types import (
     StreamChunk,
     TokenUsage,
 )
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,8 @@ async def test_cancel_during_stream_persists_partial(tmp_path):
     )
 
     # Start the loop. It enters the streaming wait state.
-    run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+    persist_user_row(loop_obj._session, "hi")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         await provider.wait_for_partial_chunks(n=3, timeout=2.0)
         original_inflight = loop_obj._inflight_stream
@@ -395,7 +396,8 @@ async def test_cancel_during_tool_loop_skips_remaining(tmp_path):
     loop_obj = _make_loop(session, provider, registry=registry)
     holder["loop"] = loop_obj
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="please"))
+    persist_user_row(loop_obj._session, "please")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         # Wait for the loop to complete (after cancel, it issues a 2nd stream
         # call which returns plain text and breaks).
@@ -442,7 +444,8 @@ async def test_cancel_then_fresh_run_completes_normally(tmp_path):
     )
     loop_obj = _make_loop(session, provider)
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="first"))
+    persist_user_row(loop_obj._session, "first")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         await provider.wait_for_partial_chunks(n=1, timeout=2.0)
         await loop_obj.cancel_turn()
@@ -540,7 +543,8 @@ async def test_cancel_breaks_loop_two_turn_hot_resume(tmp_path):
     loop_obj = _make_loop(session, provider)
 
     # ---- Turn 1: run + cancel ----
-    run_task1 = asyncio.create_task(loop_obj.run(initial_message="msg1"))
+    persist_user_row(loop_obj._session, "msg1")
+    run_task1 = asyncio.create_task(loop_obj.run())
     try:
         await asyncio.wait_for(provider.first_done.wait(), timeout=2.0)
         await loop_obj.cancel_turn()
@@ -567,7 +571,8 @@ async def test_cancel_breaks_loop_two_turn_hot_resume(tmp_path):
         raise
 
     # ---- Turn 3: another run + cancel; this MUST write a second marker ----
-    run_task3 = asyncio.create_task(loop_obj.run(initial_message="msg3"))
+    persist_user_row(loop_obj._session, "msg3")
+    run_task3 = asyncio.create_task(loop_obj.run())
     try:
         await asyncio.wait_for(provider.third_done.wait(), timeout=2.0)
         await loop_obj.cancel_turn()
@@ -614,7 +619,8 @@ async def test_double_cancel_idempotent(tmp_path):
         context_manager=_FakeContextManager(session),
     )
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+    persist_user_row(loop_obj._session, "hi")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         await provider.wait_for_partial_chunks(n=1, timeout=2.0)
         # Two cancels in quick succession
@@ -655,7 +661,8 @@ async def test_terminate_during_stream_exits_loop(tmp_path):
     )
     loop_obj = _make_loop(session, provider)
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+    persist_user_row(loop_obj._session, "hi")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         await provider.wait_for_partial_chunks(n=1, timeout=2.0)
         await loop_obj.terminate()
@@ -713,7 +720,8 @@ async def test_terminate_idle_exits_loop(tmp_path):
     )
     loop_obj = _make_loop(session, provider)
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+    persist_user_row(loop_obj._session, "hi")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         # Give the loop time to enter the stream wait
         await asyncio.sleep(0.05)
@@ -759,7 +767,8 @@ async def test_terminate_then_new_loop_on_same_session(tmp_path):
     )
     loop_obj = _make_loop(session, provider)
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="hi"))
+    persist_user_row(loop_obj._session, "hi")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         await provider.wait_for_partial_chunks(n=1, timeout=2.0)
         await loop_obj.terminate()
@@ -793,7 +802,8 @@ async def test_terminate_then_new_loop_on_same_session(tmp_path):
     new_provider._call_count = 1  # forces fallback branch to fire on the next call
     new_loop = _make_loop(reloaded, new_provider)
     # Use no initial_message so we don't append a fresh user msg
-    await asyncio.wait_for(new_loop.run(initial_message="follow up"), timeout=5.0)
+    persist_user_row(new_loop._session, "follow up")
+    await asyncio.wait_for(new_loop.run(), timeout=5.0)
 
     final_msgs = _read_session_messages(reloaded)
     final_replies = [m for m in final_msgs
@@ -844,8 +854,8 @@ async def test_no_fire_and_forget_session_end(tmp_path):
     # Snapshot existing tasks
     tasks_before = set(asyncio.all_tasks())
 
-    await asyncio.wait_for(loop_obj.run(initial_message="hi"), timeout=5.0)
-
+    persist_user_row(loop_obj._session, "hi")
+    await asyncio.wait_for(loop_obj.run(), timeout=5.0)
     # Give any leftover task a moment to be scheduled (negative test)
     await asyncio.sleep(0.05)
 
@@ -988,7 +998,8 @@ async def test_cancel_then_iteration_continues_preserves_marker_ordering(tmp_pat
 
     loop_obj._persist_cancellation_marker_inner = race_inducing_marker_inner
 
-    run_task = asyncio.create_task(loop_obj.run(initial_message="please"))
+    persist_user_row(loop_obj._session, "please")
+    run_task = asyncio.create_task(loop_obj.run())
     try:
         # Wait until the first stream has yielded all 3 chunks (accumulator
         # populated, then hanging).

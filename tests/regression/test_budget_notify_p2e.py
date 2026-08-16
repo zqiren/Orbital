@@ -16,7 +16,7 @@ relay-client Tier-1 push routing for both event types.
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import StreamChunk, TokenUsage
@@ -129,7 +129,8 @@ async def test_loop_emits_threshold_after_crossing(tmp_path, monkeypatch):
     # 8.5 / 10 = 85% → crosses 80% but under 100% → threshold ONLY.
     monkeypatch.setattr("agent_os.budget.ledger.spend", _stub_spend(8.5))
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     types = [e["type"] for e in events]
     assert EVENT_THRESHOLD in types
@@ -167,7 +168,8 @@ async def test_loop_no_limit_emits_no_threshold_or_trip(tmp_path):
         "fx_rates": {},
     }
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     await loop._spend_broadcaster.aclose()
     # No threshold/trip events (the emitter is gated on a configured limit).
     assert EVENT_THRESHOLD not in [e["type"] for e in events]
@@ -195,7 +197,8 @@ async def test_loop_no_sink_is_silent_noop(tmp_path, monkeypatch):
     monkeypatch.setattr("agent_os.budget.ledger.spend", _stub_spend(8.5))
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=None)
     # Must not raise.
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     # Ledger still written (the append path is independent of the emitter).
     from agent_os.budget.ledger import ledger_path
     import os
@@ -257,7 +260,8 @@ async def test_loop_threshold_fires_once_across_two_responses(tmp_path, monkeypa
         on_budget_event=events.append,
         max_iterations=5,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     # Two ledger appends happened (two responses with usage), but the threshold
     # fired only ONCE across the window, and never tripped (85% < 100%).
@@ -343,7 +347,8 @@ async def test_loop_trip_emitted_via_ledger_append(tmp_path, monkeypatch):
         on_budget_event=events.append,
         max_iterations=10,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     types = [e["type"] for e in events]
     assert types.count(EVENT_THRESHOLD) == 1, types
@@ -423,7 +428,8 @@ async def test_guard_trip_no_append_emits_trip_once(tmp_path, monkeypatch):
     monkeypatch.setattr("agent_os.budget.ledger.spend", _stub_spend(12.0))
 
     loop = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     # Guard tripped pre-flight: budget_blocked exit, no LLM call, no append.
     assert loop.get_completion_state()[0] == "budget_blocked"
@@ -439,7 +445,8 @@ async def test_guard_trip_no_append_emits_trip_once(tmp_path, monkeypatch):
     # Second run, FRESH loop objects, same project (same marker on disk):
     # the guard trips again but the trip must NOT re-fire this window.
     loop2 = _build_loop(tmp_path, budget_config=cfg, on_budget_event=events.append)
-    await loop2.run(initial_message="hi again")
+    persist_user_row(loop2._session, "hi again")
+    await loop2.run()
     assert loop2.get_completion_state()[0] == "budget_blocked"
     assert [e["type"] for e in events] == [EVENT_TRIP]  # still exactly one
 
@@ -519,7 +526,8 @@ async def test_append_trip_then_guard_trip_no_refire(tmp_path, monkeypatch):
         on_budget_event=events.append,
         max_iterations=10,
     )
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     # The guard-trip site WAS reached (loop exited budget_blocked) ...
     assert loop.get_completion_state()[0] == "budget_blocked"

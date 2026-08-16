@@ -88,6 +88,7 @@ describe('Sidebar routing', () => {
         onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
+        onReorderProjects={vi.fn().mockResolvedValue([])}
       />,
     );
 
@@ -114,6 +115,7 @@ describe('Sidebar routing', () => {
         onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
+        onReorderProjects={vi.fn().mockResolvedValue([])}
       />,
     );
 
@@ -138,6 +140,7 @@ describe('Sidebar routing', () => {
         onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
+        onReorderProjects={vi.fn().mockResolvedValue([])}
       />,
     );
 
@@ -185,6 +188,7 @@ describe('Sidebar mobile select-project regression', () => {
         onSelectWorkbench={vi.fn()}
         onNewProject={vi.fn()}
         onSettings={vi.fn()}
+        onReorderProjects={vi.fn().mockResolvedValue([])}
       />
     );
   }
@@ -222,7 +226,9 @@ describe('ProjectDetail routing', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Queue'));
+    // The tab is labelled "Tasks" — it parents two panes, Queue and
+    // Automations. The route key stays 'queue'.
+    fireEvent.click(screen.getByText('Tasks'));
     expect(setRoute).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'project', projectId: 'proj-42', tab: 'queue' }),
     );
@@ -380,6 +386,7 @@ describe('Global settings nav (settings in Route union)', () => {
           onSelectWorkbench={vi.fn()}
           onNewProject={handleNewProject}
           onSettings={() => setRoute({ name: 'settings' })}
+          onReorderProjects={vi.fn().mockResolvedValue([])}
         />
         {/* Content panel driven SOLELY by route — same gating App now uses. */}
         {route.name === 'settings' && <div data-testid="settings-view">Settings</div>}

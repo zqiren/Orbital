@@ -17,6 +17,7 @@ import pytest
 from agent_os.agent.loop import AgentLoop, COOLDOWN_TURNS
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
 from agent_os.agent.tools.base import ToolResult
+from agent_os.agent.session import persist_user_row
 
 
 def _tool_response(call_n: int = 0):
@@ -113,7 +114,8 @@ async def test_refresh_task_is_registered_and_cancellable():
 
     loop._stream_response = mock_stream
 
-    loop_task = asyncio.create_task(loop.run("go"))
+    persist_user_row(loop._session, "go")
+    loop_task = asyncio.create_task(loop.run())
 
     # Wait for the refresh to start, then call terminate()
     await asyncio.wait_for(refresh_started.wait(), timeout=10.0)
@@ -168,7 +170,8 @@ async def test_terminate_before_refresh_starts_is_safe():
 
     loop._stream_response = mock_stream
 
-    loop_task = asyncio.create_task(loop.run("go"))
+    persist_user_row(loop._session, "go")
+    loop_task = asyncio.create_task(loop.run())
 
     # Wait for first stream call, then terminate immediately (no refresh yet)
     await asyncio.wait_for(streaming_event.wait(), timeout=5.0)

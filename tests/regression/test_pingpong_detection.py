@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.providers.types import (
@@ -176,7 +176,8 @@ class TestPingPongDetection:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="alternate between read and write")
+        persist_user_row(loop._session, "alternate between read and write")
+        await loop.run()
 
         msgs = session.get_messages()
         system_msgs = [
@@ -212,7 +213,8 @@ class TestPingPongDetection:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="work on the file")
+        persist_user_row(loop._session, "work on the file")
+        await loop.run()
 
         msgs = session.get_messages()
         system_msgs = [
@@ -245,7 +247,8 @@ class TestPingPongDetection:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="read the file")
+        persist_user_row(loop._session, "read the file")
+        await loop.run()
 
         msgs = session.get_messages()
         # Either ping-pong or repetition detection should fire
@@ -284,7 +287,8 @@ class TestPingPongDetection:
         context_mgr = ContextManager(session, builder, ctx)
 
         loop = AgentLoop(session, provider, registry, context_mgr, max_iterations=20)
-        await loop.run(initial_message="cycle through tools")
+        persist_user_row(loop._session, "cycle through tools")
+        await loop.run()
 
         msgs = session.get_messages()
         system_msgs = [

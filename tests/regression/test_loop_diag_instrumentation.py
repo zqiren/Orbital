@@ -37,7 +37,7 @@ from agent_os.agent.providers.types import (
 )
 from agent_os.agent.tools.base import ToolResult
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 
@@ -161,7 +161,8 @@ def _exits(caplog):
 async def test_response_shape_logged_per_iteration(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger=DIAG_LOGGER)
     loop, _ = _make_loop(tmp_path, [_text_resp("Hello there!")])
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     shapes = _events(caplog, "response_shape")
     assert len(shapes) >= 1, "expected at least one response_shape record"
@@ -181,7 +182,8 @@ async def test_response_shape_logged_per_iteration(tmp_path, caplog):
 async def test_exit_text_complete(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger=DIAG_LOGGER)
     loop, _ = _make_loop(tmp_path, [_text_resp("done")])
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     assert "text_complete" in _exits(caplog)
 
 
@@ -195,7 +197,8 @@ async def test_exit_tool_continue_then_text_complete(tmp_path, caplog):
         [_tool_resp(tc, text="[STATUS: reading]"), _text_resp("done")],
         results={"read": ToolResult(content="file body")},
     )
-    await loop.run(initial_message="read x")
+    persist_user_row(loop._session, "read x")
+    await loop.run()
     exits = _exits(caplog)
     assert "tool_continue" in exits, f"expected tool_continue, got {exits}"
     assert "text_complete" in exits, f"expected text_complete, got {exits}"
@@ -208,7 +211,8 @@ async def test_exit_task_complete(tmp_path, caplog):
            "function": {"name": "mark_task_complete",
                         "arguments": '{"summary": "all done"}'}}]
     loop, _ = _make_loop(tmp_path, [_tool_resp(tc, text="[STATUS: wrapping up]")])
-    await loop.run(initial_message="finish")
+    persist_user_row(loop._session, "finish")
+    await loop.run()
     assert "task_complete" in _exits(caplog)
 
 
@@ -217,7 +221,8 @@ async def test_exit_llm_error(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger=DIAG_LOGGER)
     # status_code 400 -> ErrorCategory.ABORT -> append_system + break
     loop, _ = _make_loop(tmp_path, [LLMError("bad request", status_code=400)])
-    await loop.run(initial_message="trigger error")
+    persist_user_row(loop._session, "trigger error")
+    await loop.run()
     assert "llm_error" in _exits(caplog)
 
 
@@ -231,7 +236,8 @@ async def test_cancel_yields_none_appended_run_terminal(tmp_path, caplog):
     # Stream aborts mid-flight (CancelledError, not a stop) -> break before any
     # row is appended -> the exact silent fingerprint of the original failure.
     loop, _ = _make_loop(tmp_path, [asyncio.CancelledError()])
-    await loop.run(initial_message="this turn appends nothing")
+    persist_user_row(loop._session, "this turn appends nothing")
+    await loop.run()
 
     terminals = _events(caplog, "run_terminal")
     assert len(terminals) == 1, "expected exactly one run_terminal record"
@@ -245,7 +251,8 @@ async def test_cancel_yields_none_appended_run_terminal(tmp_path, caplog):
 async def test_run_terminal_normal_when_rows_appended(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger=DIAG_LOGGER)
     loop, _ = _make_loop(tmp_path, [_text_resp("answer")])
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
     terminals = _events(caplog, "run_terminal")
     assert len(terminals) == 1
     assert terminals[0]["disposition"] == "normal"

@@ -18,6 +18,7 @@ import openai
 import pytest
 
 from agent_os.daemon_v2.models import AgentConfig
+from agent_os.agent.session import persist_user_row
 from agent_os.daemon_v2.provider_errors import (
     ProviderConfigError,
     classify_llm_error,
@@ -204,7 +205,8 @@ async def test_loop_exposes_terminal_llm_error(tmp_path):
     )
     loop = AgentLoop(session, AbortProvider(), EmptyRegistry(),
                      ContextManager(session, Builder(), ctx))
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     err = loop.last_llm_error
     assert err is not None

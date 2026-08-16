@@ -17,7 +17,7 @@ import logging
 import pytest
 
 from agent_os.agent.providers.types import LLMResponse, TokenUsage
-from agent_os.agent.session import Session
+from agent_os.agent.session import Session, persist_user_row
 from agent_os.agent.loop import AgentLoop
 from agent_os.agent.context import ContextManager
 from agent_os.agent.prompt_builder import PromptContext, Autonomy
@@ -74,7 +74,8 @@ async def test_loop_accumulates_session_cache_tokens(tmp_path):
         cm,
     )
 
-    await loop.run(initial_message="hi")
+    persist_user_row(loop._session, "hi")
+    await loop.run()
 
     assert loop._prompt_input_tokens_total == 1000
     assert loop._cache_read_tokens_total == 800
@@ -92,7 +93,8 @@ async def test_loop_logs_session_cache_summary_at_run_end(tmp_path, caplog):
     )
 
     with caplog.at_level(logging.INFO, logger="orbital.cache_audit"):
-        await loop.run(initial_message="hi")
+        persist_user_row(loop._session, "hi")
+        await loop.run()
 
     summary_lines = [r.getMessage() for r in caplog.records
                      if "CACHE_SESSION" in r.getMessage()]
