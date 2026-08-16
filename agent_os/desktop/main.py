@@ -382,6 +382,252 @@ def _is_foreign_url(url: str | None, port: int) -> bool:
     return app_port != port
 
 
+# ------------------------------------------------------------------ drag strip
+# macOS-only. See install_titlebar_drag_strip() for the full story; the short
+# version is that the frameless window has NO drag region at all without this.
+
+# PyObjC raises if the same ObjC class name is registered twice in one process,
+# so the subclass is built once and cached here.
+_DRAG_STRIP_CLASS = None
+
+# The band height, once it has been read off a live NSTitlebarContainerView.
+# Cached because that view is ABSENT in fullscreen — the measurement is only
+# available while the window is in its normal state, so we keep the first
+# successful reading rather than re-measuring later and getting the fallback.
+_MEASURED_BAND_HEIGHT = None
+
+# Matches --titlebar-h in web/src/index.css. Only used if the live measurement
+# is unavailable (fullscreen at install time, or an AppKit shape we don't know).
+_TITLEBAR_BAND_FALLBACK = 28.0
+
+
+def _run_on_main_thread(func):
+    """Run `func` on the AppKit main thread, hopping only if we aren't on it.
+
+    Every entry point that touches the drag strip — pywebview's `loaded`,
+    `maximized`, and `restored` events — is dispatched on a throw-away thread
+    (webview/event.py spawns one per non-locking event), and AppKit geometry
+    calls off the main thread raise `NSInternalInconsistencyException: NSWindow
+    geometry should only be modified on the main thread!`.
+
+    The hop is fire-and-forget: callers must not depend on `func` having run by
+    the time this returns. Blocking on the main queue instead would risk a
+    deadlock against pywebview's own main-thread work.
+    """
+    queue = None
+    try:
+        import AppKit
+
+        if not AppKit.NSThread.isMainThread():
+            queue = AppKit.NSOperationQueue.mainQueue()
+    except Exception:
+        # No AppKit (non-macOS, or a stripped build) — run inline rather than
+        # dropping the work. Off macOS there is no main-thread rule anyway.
+        queue = None
+    # Deciding where to run and running are kept apart on purpose: folding them
+    # into one try would re-invoke `func` on the fallback path if it raised.
+    try:
+        if queue is None:
+            func()
+        else:
+            queue.addOperationWithBlock_(func)
+    except Exception:
+        pass
+
+
+def _double_click_titlebar_action() -> str:
+    """What a double-click on the titlebar should do, per system preference.
+
+    macOS stores this in NSGlobalDomain as `AppleActionOnDoubleClick`
+    ("Maximize" / "Minimize" / "None"). The key is UNSET on a default install,
+    and unset means the system default, which is zoom — so that is also what
+    every unrecognized value maps to.
+    """
+    try:
+        import AppKit
+
+        raw = AppKit.NSUserDefaults.standardUserDefaults().stringForKey_(
+            "AppleActionOnDoubleClick"
+        )
+    except Exception:
+        return "zoom"
+    if raw is None:
+        return "zoom"
+    normalized = str(raw).strip().lower()
+    if normalized == "minimize":
+        return "minimize"
+    if normalized == "none":
+        return "none"
+    return "zoom"
+
+
+def _drag_strip_mouse_down(view, event) -> None:
+    """Route a click on the drag strip: double-click gestures, else drag.
+
+    Split out of the ObjC method below so it can be exercised with plain
+    doubles — an NSEvent cannot be synthesized meaningfully in a unit test.
+
+    `performWindowDragWithEvent_` is the supported AppKit API for custom drag
+    regions: it hands off to the real window-drag loop, so window snapping,
+    Spaces, and multi-display all behave natively rather than being
+    re-implemented on top of mouse deltas.
+    """
+    window = view.window()
+    if window is None:
+        return
+    if event.clickCount() == 2:
+        action = _double_click_titlebar_action()
+        if action == "zoom":
+            window.zoom_(view)
+        elif action == "minimize":
+            window.miniaturize_(view)
+        # "none": the user asked for no double-click gesture at all.
+        return
+    window.performWindowDragWithEvent_(event)
+
+
+def _drag_strip_class():
+    """The transparent NSView that turns the titlebar band into a drag region."""
+    global _DRAG_STRIP_CLASS
+    if _DRAG_STRIP_CLASS is not None:
+        return _DRAG_STRIP_CLASS
+
+    import AppKit
+
+    class _OrbitalTitlebarDragStrip(AppKit.NSView):
+        def acceptsFirstMouse_(self, event):
+            # Drag an inactive window without a separate click to focus it
+            # first, which is how a real titlebar behaves.
+            return True
+
+        def mouseDownCanMoveWindow(self):
+            # NO, so that mouseDown_ below actually runs. YES would route the
+            # click into the window-background drag path instead and skip the
+            # double-click handling entirely.
+            return False
+
+        def mouseDown_(self, event):
+            _drag_strip_mouse_down(self, event)
+
+    _DRAG_STRIP_CLASS = _OrbitalTitlebarDragStrip
+    return _DRAG_STRIP_CLASS
+
+
+def titlebar_band_height(native_window) -> float:
+    """Height of the native titlebar band, measured off the live window.
+
+    Read from NSTitlebarContainerView rather than hardcoded so it cannot drift
+    from the system metric (28.0 today). The container is a sibling of the
+    content view under NSThemeFrame, and is absent in fullscreen — hence the
+    module-level cache and the fallback.
+    """
+    global _MEASURED_BAND_HEIGHT
+    if _MEASURED_BAND_HEIGHT is not None:
+        return _MEASURED_BAND_HEIGHT
+    try:
+        theme_frame = native_window.contentView().superview()
+        for view in theme_frame.subviews():
+            if view.className() != "NSTitlebarContainerView":
+                continue
+            height = float(view.frame().size.height)
+            if height > 0:
+                _MEASURED_BAND_HEIGHT = height
+                return height
+    except Exception:
+        pass
+    return _TITLEBAR_BAND_FALLBACK
+
+
+def install_titlebar_drag_strip(native_window):
+    """Give the frameless macOS window a drag region. Returns the strip or None.
+
+    Why this is needed at all: pywebview's `frameless` on macOS sets
+    `titlebarAppearsTransparent` + NSFullSizeContentView on a still-titled
+    window. A *transparent* NSTitlebarContainerView is hit-transparent
+    everywhere except its own traffic-light widgets, so every mouse-down in the
+    band falls through to the WKWebView and AppKit's titlebar-drag machinery
+    never arms. With `easy_drag` correctly off, that leaves the window with no
+    drag region whatsoever (bug #60). `-webkit-app-region: drag` is not an
+    option — that is a Chromium feature and this shell is WKWebView.
+
+    Three of the four obvious ways to write this silently produce a strip that
+    exists and does nothing. All four were measured on a live NSWindow:
+
+    1. The strip must be a subview of the **contentView** (the WKWebView), not
+       of NSThemeFrame. AppKit rejects the latter — "adding an unknown
+       subview" — and forces it to index [0], behind the webview.
+    2. Install on `loaded`, not `before_show`: pywebview only swaps the
+       WKWebView in as the contentView inside `webView_didFinishNavigation_`,
+       so anything earlier attaches to the throw-away default content view.
+    3. `loaded` runs off the main thread (see _run_on_main_thread), and it can
+       re-fire — the origin guard reloads the SPA — so this must be idempotent.
+    4. **Auto Layout, not autoresizing masks.** WebKitHost reports
+       `isFlipped=True` but AppKit lays its subviews out with unflipped math
+       (pywebview compensates for exactly this in its own `addSubview_`
+       override). With NSViewWidthSizable|NSViewMinYMargin the width tracked a
+       resize but the vertical pin did not, leaving a dead band floating in the
+       middle of the content. Constraints pin correctly through resize and both
+       fullscreen transitions.
+
+    Must be called on the main thread. Failure is always non-fatal: window
+    chrome cosmetics never block the app from opening, and a missing strip
+    leaves the window dragging no worse than it does today.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        import AppKit
+
+        content = native_window.contentView()
+        if content is None:
+            return None
+
+        strip_class = _drag_strip_class()
+        for existing in content.subviews():
+            if isinstance(existing, strip_class):
+                return existing  # trap 3: `loaded` re-fired, already installed
+
+        band = titlebar_band_height(native_window)
+        strip = strip_class.alloc().initWithFrame_(
+            AppKit.NSMakeRect(0, 0, content.frame().size.width, band)
+        )
+        strip.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        # Positioned above every existing subview so it wins hit-testing inside
+        # the webview. The traffic lights still win over it: they live in the
+        # titlebar container, which is a sibling of the content view and in
+        # front of it, so a full-width strip needs no left inset.
+        content.addSubview_positioned_relativeTo_(strip, AppKit.NSWindowAbove, None)
+        AppKit.NSLayoutConstraint.activateConstraints_([
+            strip.leadingAnchor().constraintEqualToAnchor_(content.leadingAnchor()),
+            strip.trailingAnchor().constraintEqualToAnchor_(content.trailingAnchor()),
+            strip.topAnchor().constraintEqualToAnchor_(content.topAnchor()),
+            strip.heightAnchor().constraintEqualToConstant_(band),
+        ])
+        return strip
+    except Exception:
+        return None
+
+
+def set_drag_strip_hidden(strip, hidden: bool) -> None:
+    """Show/hide the drag strip. No-op when there is no strip.
+
+    Hiding is mandatory in fullscreen: the SPA collapses --titlebar-h to 0
+    there, so real UI moves into the top band and the strip would swallow its
+    clicks. Hidden views drop out of hit-testing entirely, restoring
+    click-through to the webview.
+    """
+    if strip is None:
+        return
+
+    def _apply():
+        try:
+            strip.setHidden_(bool(hidden))
+        except Exception:
+            pass
+
+    _run_on_main_thread(_apply)
+
+
 _window = None
 
 # pywebview chrome strings (macOS menu bar, quit dialog, file pickers).
@@ -522,6 +768,12 @@ def open_window(port: int):
             pass
         return
 
+    # macOS window-chrome state shared between the `loaded` installer and the
+    # fullscreen handlers. A dict rather than two locals because the installer
+    # writes from the AppKit main queue while the handlers read from pywebview
+    # event threads.
+    chrome_state = {"strip": None, "fullscreen": False}
+
     class Api:
         def pick_folder(self):
             result = window.create_file_dialog(
@@ -585,10 +837,16 @@ def open_window(port: int):
         and makes the titlebar transparent — then hides all three standard
         buttons (webview/platforms/cocoa.py). We want every part of that except
         the last step. Content runs edge-to-edge under an empty titlebar, but
-        the traffic lights stay where users expect them, and because the style
-        mask still says "titled window", macOS keeps handling titlebar drag and
-        fullscreen auto-hide (lights hide in fullscreen, slide back on hover at
-        the top edge) with no code from us.
+        the traffic lights stay where users expect them, and the still-titled
+        style mask keeps the fullscreen titlebar auto-hide (lights hide in
+        fullscreen, slide back on hover at the top edge) for free.
+
+        What it does NOT keep for free is drag. A transparent titlebar is
+        hit-transparent everywhere except these three buttons, so mouse-downs
+        in the band land on the WKWebView and AppKit never starts a window
+        drag — bug #60, shipped v0.8.0 → v0.9.0 on the strength of a comment
+        here that claimed the opposite. install_titlebar_drag_strip() supplies
+        the drag region; see its docstring for the measurements.
 
         Runs on `before_show` rather than `shown` so the buttons are already
         visible on the first frame — `window.native` doesn't exist until
@@ -622,6 +880,11 @@ def open_window(port: int):
         `--titlebar-h` falls back to 0px for any value that isn't 'mac-inline',
         so the fullscreen case needs no CSS branch of its own.
 
+        The native drag strip has to move in lockstep: with the gutter
+        collapsed, real UI sits in the top band, and a strip left visible there
+        would swallow its clicks. `set_drag_strip_hidden` does its own
+        main-thread hop, because these handlers run off it (below).
+
         Calling evaluate_js here is safe specifically because `maximized` and
         `restored` are non-locking events, which pywebview runs on their own
         thread (webview/event.py). evaluate_js queues its script onto the main
@@ -630,10 +893,43 @@ def open_window(port: int):
         """
         if not inline_titlebar:
             return
+        fullscreen = mode == "fullscreen"
+        # Recorded as well as applied: `loaded` installs the strip
+        # asynchronously, so it may not exist yet when this first runs.
+        chrome_state["fullscreen"] = fullscreen
+        set_drag_strip_hidden(chrome_state["strip"], fullscreen)
         try:
             window.evaluate_js(f"document.documentElement.dataset.chrome = '{mode}'")
         except Exception:
             pass
+
+    def _install_drag_strip():
+        """Attach the native drag strip once the WKWebView is the contentView.
+
+        Bound to `loaded` because that is the earliest point the real content
+        view exists — pywebview swaps it in inside webView_didFinishNavigation_
+        — and hopped to the main queue because `loaded` is dispatched on a
+        worker thread, where AppKit geometry calls raise. `loaded` re-fires when
+        the origin guard reloads the SPA, which is why the installer is
+        idempotent.
+        """
+        if not inline_titlebar:
+            return
+
+        def _install():
+            # Runs as a block on the AppKit main queue, where an escaping
+            # Python exception would surface inside pywebview's run loop.
+            try:
+                strip = install_titlebar_drag_strip(window.native)
+            except Exception:
+                return
+            if strip is None:
+                return
+            chrome_state["strip"] = strip
+            # Catch up with a fullscreen transition that beat the install.
+            set_drag_strip_hidden(strip, chrome_state["fullscreen"])
+
+        _run_on_main_thread(_install)
 
     def _on_loaded():
         """Origin guard: catch a same-frame navigation that escaped the SPA.
@@ -698,6 +994,10 @@ def open_window(port: int):
     window = _window
     window.events.closing += _on_closing
     window.events.loaded += _on_loaded
+    # Also on `loaded` — that is the first moment the WKWebView is the
+    # contentView. Ordered after the origin guard so the guard gets first look;
+    # the reload it may trigger re-fires this, which the installer absorbs.
+    window.events.loaded += _install_drag_strip
     window.events.before_show += _reveal_traffic_lights
     # macOS fires `maximized` on entering fullscreen and `restored` on leaving
     # it (webview/platforms/cocoa.py). `restored` also fires on un-minimize,
