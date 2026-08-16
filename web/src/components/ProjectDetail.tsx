@@ -287,7 +287,7 @@ export default function ProjectDetail({
                   rows at the same size gave no clue which level you were on. */}
               <div className="px-6 pt-3 max-md:px-4">
                 <div
-                  className="inline-flex gap-0.5 rounded-lg border border-border bg-sidebar p-0.5"
+                  className="inline-flex gap-0.5 rounded-lg border border-border bg-nav p-0.5"
                   role="tablist"
                   aria-label={t('projectDetail.tab.queue')}
                 >
