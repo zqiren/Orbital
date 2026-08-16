@@ -725,7 +725,15 @@ class TestTriggerEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["enabled"] is False
-        mock_tm.unregister_trigger.assert_called_with("trg_aaa")
+        # A disable is an UPDATE, not an unregister-and-forget: the record is
+        # still there. apply_trigger_update disarms the scheduler AND announces
+        # trigger.updated (see TestTriggerBroadcastSemantics).
+        assert mock_tm.apply_trigger_update.call_count == 1
+        called_pid, called_trigger = mock_tm.apply_trigger_update.call_args[0]
+        assert called_pid == pid
+        assert called_trigger["id"] == "trg_aaa"
+        assert called_trigger["enabled"] is False
+        mock_tm.unregister_trigger.assert_not_called()
 
     def test_toggle_trigger_enable(self, client):
         test_client, pid, mock_tm = client
@@ -742,7 +750,7 @@ class TestTriggerEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["enabled"] is True
-        mock_tm.register_trigger.assert_called()
+        assert mock_tm.apply_trigger_update.call_args[0][1]["enabled"] is True
 
     def test_toggle_trigger_not_found(self, client):
         test_client, pid, _ = client
@@ -769,6 +777,390 @@ class TestTriggerEndpoints:
         resp = client.get(f"/api/v2/projects/{pid}/triggers")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+# ===========================================================================
+# REST create (POST) — the UI's create path. Must produce a record that is
+# byte-compatible with CreateTriggerTool's, since both feed the same store,
+# scheduler and list surfaces.
+# ===========================================================================
+
+def _make_trigger_client(triggers=None, trigger_manager=None):
+    """TestClient over the trigger routes. Returns (client, pid, store, tm)."""
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from agent_os.api.routes import agents_v2
+
+    store, pid = _make_project_store(triggers=triggers if triggers is not None else [])
+    mock_agent_mgr = MagicMock()
+    mock_agent_mgr.is_running = MagicMock(return_value=False)
+    mock_ws = MagicMock()
+    tm = trigger_manager if trigger_manager is not None else MagicMock()
+
+    agents_v2.configure(store, mock_agent_mgr, mock_ws, trigger_manager=tm)
+    app = FastAPI()
+    app.include_router(agents_v2.router)
+    return TestClient(app), pid, store, tm
+
+
+class TestTriggerCreateRoute:
+
+    def test_create_schedule_trigger(self):
+        client, pid, store, tm = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={
+                "name": "Morning brief",
+                "type": "schedule",
+                "task": "Summarize the inbox",
+                "schedule": {"cron": "0 7 * * *", "human": "Every day at 07:00",
+                             "timezone": "Asia/Shanghai"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["id"].startswith("trg_")
+        assert data["enabled"] is True
+        assert data["trigger_count"] == 0
+        assert data["last_triggered"] is None
+        assert data["created_at"]
+        assert data["schedule"] == {
+            "cron": "0 7 * * *",
+            "human": "Every day at 07:00",
+            "timezone": "Asia/Shanghai",
+        }
+        # Persisted into the project record
+        assert [t["id"] for t in store.get_project(pid)["triggers"]] == [data["id"]]
+        # Armed with the scheduler
+        tm.register_trigger.assert_called_once()
+
+    def test_create_file_watch_trigger(self):
+        client, pid, store, tm = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={
+                "name": "Incoming photos",
+                "type": "file_watch",
+                "task": "Sort the new photos",
+                "watch_path": "incoming",
+                "patterns": ["*.jpg", "*.png"],
+                "recursive": True,
+                "debounce_seconds": 12,
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["watch_path"] == "incoming"
+        assert data["patterns"] == ["*.jpg", "*.png"]
+        assert data["recursive"] is True
+        assert data["debounce_seconds"] == 12
+        assert "schedule" not in data
+
+    def test_create_defaults_human_to_the_cron_expression(self):
+        # A caption is what the strip/list render as the row label — never
+        # leave it empty just because the client didn't send one.
+        client, pid, _, _ = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "Hourly", "type": "schedule", "task": "Poll",
+                  "schedule": {"cron": "0 * * * *"}},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["schedule"]["human"] == "0 * * * *"
+        assert resp.json()["schedule"]["timezone"] == "UTC"
+
+    def test_create_rejects_invalid_cron(self):
+        client, pid, store, tm = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "Bad", "type": "schedule", "task": "x",
+                  "schedule": {"cron": "not a cron"}},
+        )
+        assert resp.status_code == 400
+        assert "cron" in resp.json()["detail"].lower()
+        assert store.get_project(pid)["triggers"] == []
+        tm.register_trigger.assert_not_called()
+
+    def test_create_rejects_unknown_timezone(self):
+        client, pid, _, _ = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "Bad tz", "type": "schedule", "task": "x",
+                  "schedule": {"cron": "0 7 * * *", "timezone": "Asia/Shangai"}},
+        )
+        assert resp.status_code == 400
+        assert "timezone" in resp.json()["detail"].lower()
+
+    def test_create_rejects_schedule_without_schedule_block(self):
+        client, pid, _, _ = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "No cron", "type": "schedule", "task": "x"},
+        )
+        assert resp.status_code == 400
+
+    def test_create_rejects_watch_path_outside_workspace(self):
+        # Never trust a client-supplied path — realpath containment, same
+        # guard the agent tool goes through.
+        client, pid, store, _ = _make_trigger_client()
+        resp = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "Escape", "type": "file_watch", "task": "x",
+                  "watch_path": "../../etc"},
+        )
+        assert resp.status_code == 400
+        assert "outside workspace" in resp.json()["detail"]
+        assert store.get_project(pid)["triggers"] == []
+
+    def test_create_project_not_found(self):
+        client, _, _, _ = _make_trigger_client()
+        resp = client.post(
+            "/api/v2/projects/proj_nope/triggers",
+            json={"name": "x", "type": "schedule", "task": "x",
+                  "schedule": {"cron": "0 7 * * *"}},
+        )
+        assert resp.status_code == 404
+
+
+# ===========================================================================
+# REST update (PATCH) — widened from {enabled} to every editable field,
+# including the file_watch ones the agent tool still can't reach (item #61).
+# ===========================================================================
+
+SEED_SCHEDULE = {
+    "id": "trg_sched", "name": "Morning", "type": "schedule", "enabled": True,
+    "schedule": {"cron": "0 7 * * *", "human": "Every day at 07:00", "timezone": "UTC"},
+    "task": "Do morning task", "trigger_count": 3,
+    "last_triggered": "2026-02-27T07:00:00Z", "created_at": "2026-01-01T00:00:00Z",
+}
+SEED_WATCH = {
+    "id": "trg_watch", "name": "Photos", "type": "file_watch", "enabled": True,
+    "watch_path": "incoming", "patterns": ["*.jpg"], "recursive": False,
+    "debounce_seconds": 5, "task": "Sort photos", "trigger_count": 0,
+    "last_triggered": None, "created_at": "2026-01-01T00:00:00Z",
+}
+
+
+class TestTriggerUpdateRoute:
+
+    def test_patch_name_and_task(self):
+        client, pid, store, _ = _make_trigger_client([dict(SEED_SCHEDULE)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched",
+            json={"name": "Renamed", "task": "New prompt"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Renamed"
+        assert data["task"] == "New prompt"
+        # Untouched fields survive a partial update
+        assert data["enabled"] is True
+        assert data["trigger_count"] == 3
+        assert data["schedule"]["cron"] == "0 7 * * *"
+        assert store.get_project(pid)["triggers"][0]["name"] == "Renamed"
+
+    def test_patch_schedule_merges_and_keeps_caption(self):
+        client, pid, _, _ = _make_trigger_client([dict(SEED_SCHEDULE)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched",
+            json={"schedule": {"cron": "30 18 * * 1-5", "human": "Weekdays at 18:30"}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["schedule"] == {
+            "cron": "30 18 * * 1-5",
+            "human": "Weekdays at 18:30",
+            "timezone": "UTC",  # merged from the stored schedule, not blanked
+        }
+
+    def test_patch_file_watch_fields(self):
+        # The gap that made edit unshippable: PATCH accepted only {enabled}.
+        client, pid, store, _ = _make_trigger_client([dict(SEED_WATCH)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_watch",
+            json={
+                "watch_path": "uploads",
+                "patterns": ["*.png", "*.gif"],
+                "recursive": True,
+                "debounce_seconds": 30,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["watch_path"] == "uploads"
+        assert data["patterns"] == ["*.png", "*.gif"]
+        assert data["recursive"] is True
+        assert data["debounce_seconds"] == 30
+        assert store.get_project(pid)["triggers"][0]["watch_path"] == "uploads"
+
+    def test_patch_can_clear_patterns_to_all_files(self):
+        client, pid, _, _ = _make_trigger_client([dict(SEED_WATCH)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_watch",
+            json={"patterns": [], "recursive": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["patterns"] == []
+
+    def test_patch_rejects_invalid_cron(self):
+        client, pid, store, _ = _make_trigger_client([dict(SEED_SCHEDULE)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched",
+            json={"schedule": {"cron": "99 99 * * *"}},
+        )
+        assert resp.status_code == 400
+        # Nothing persisted on a rejected edit
+        assert store.get_project(pid)["triggers"][0]["schedule"]["cron"] == "0 7 * * *"
+
+    def test_patch_rejects_watch_path_outside_workspace(self):
+        client, pid, store, _ = _make_trigger_client([dict(SEED_WATCH)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_watch",
+            json={"watch_path": "../../etc"},
+        )
+        assert resp.status_code == 400
+        assert store.get_project(pid)["triggers"][0]["watch_path"] == "incoming"
+
+    def test_patch_rejects_empty_name(self):
+        client, pid, _, _ = _make_trigger_client([dict(SEED_SCHEDULE)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched", json={"name": ""},
+        )
+        assert resp.status_code == 400
+
+    def test_patch_ignores_fields_of_the_other_trigger_kind(self):
+        # Type is immutable; a stray watch_path must not land on a schedule
+        # record (nor a schedule on a file-watch one).
+        client, pid, store, _ = _make_trigger_client([dict(SEED_SCHEDULE)])
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched",
+            json={"name": "Still a schedule", "watch_path": "incoming", "recursive": True},
+        )
+        assert resp.status_code == 200
+        stored = store.get_project(pid)["triggers"][0]
+        assert stored["name"] == "Still a schedule"
+        assert "watch_path" not in stored
+        assert "recursive" not in stored
+
+    def test_patch_keeps_row_position(self):
+        # An edit must not reorder the list (the old enable path re-appended).
+        client, pid, store, _ = _make_trigger_client(
+            [dict(SEED_SCHEDULE), dict(SEED_WATCH)]
+        )
+        client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched", json={"enabled": False},
+        )
+        assert [t["id"] for t in store.get_project(pid)["triggers"]] == [
+            "trg_sched", "trg_watch",
+        ]
+
+
+# ===========================================================================
+# Broadcast semantics — the vanish-on-disable regression.
+#
+# Toggling a trigger off used to travel over the wire as trigger.deleted
+# (the route called unregister_trigger, which broadcast a delete), so every
+# live list dropped the row until the next refetch. created/deleted now mean
+# a record appeared or went away; everything else is trigger.updated.
+# ===========================================================================
+
+def _client_with_real_manager(triggers):
+    """TestClient wired to a REAL TriggerManager + a mock ws_manager, so the
+    assertions are about the events that actually reach the wire."""
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from agent_os.api.routes import agents_v2
+
+    store, pid = _make_project_store(triggers=triggers)
+    mock_ws = MagicMock()
+    tm = TriggerManager(store, MagicMock(), mock_ws)
+    agents_v2.configure(store, MagicMock(), mock_ws, trigger_manager=tm)
+    app = FastAPI()
+    app.include_router(agents_v2.router)
+    return TestClient(app), pid, mock_ws, tm
+
+
+class TestTriggerBroadcastSemantics:
+
+    def _events(self, mock_ws):
+        return [call.args[1]["type"] for call in mock_ws.broadcast.call_args_list]
+
+    def test_disable_broadcasts_updated_not_deleted(self):
+        client, pid, mock_ws, tm = _client_with_real_manager([dict(SEED_SCHEDULE)])
+        # Arm it first — a live daemon has every enabled trigger registered
+        # (TriggerManager.start), which is exactly the state in which the old
+        # disable path emitted a delete.
+        tm.register_trigger(pid, dict(SEED_SCHEDULE))
+        mock_ws.reset_mock()
+
+        resp = client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched", json={"enabled": False},
+        )
+        assert resp.status_code == 200
+
+        events = self._events(mock_ws)
+        assert "trigger.deleted" not in events, (
+            "disabling a trigger must not announce a delete — the row would "
+            "vanish from every live list"
+        )
+        assert events == ["trigger.updated"]
+        payload = mock_ws.broadcast.call_args_list[0].args[1]
+        assert payload["project_id"] == pid
+        assert payload["trigger"]["id"] == "trg_sched"
+        assert payload["trigger"]["enabled"] is False
+        # …and it really is disarmed, not just relabelled.
+        assert "trg_sched" not in tm._schedule_ids
+
+    def test_enable_broadcasts_updated_not_created(self):
+        seed = dict(SEED_SCHEDULE)
+        seed["enabled"] = False
+        client, pid, mock_ws, tm = _client_with_real_manager([seed])
+
+        client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched", json={"enabled": True},
+        )
+        assert self._events(mock_ws) == ["trigger.updated"]
+        assert "trg_sched" in tm._schedule_ids
+
+    def test_edit_broadcasts_updated_with_the_full_record(self):
+        client, pid, mock_ws, _ = _client_with_real_manager([dict(SEED_SCHEDULE)])
+
+        client.patch(
+            f"/api/v2/projects/{pid}/triggers/trg_sched",
+            json={"name": "Evening", "schedule": {"cron": "0 19 * * *"}},
+        )
+        assert self._events(mock_ws) == ["trigger.updated"]
+        trigger = mock_ws.broadcast.call_args_list[0].args[1]["trigger"]
+        assert trigger["name"] == "Evening"
+        assert trigger["schedule"]["cron"] == "0 19 * * *"
+        assert trigger["task"] == "Do morning task"  # full record, not a diff
+
+    def test_create_and_delete_still_broadcast_created_and_deleted(self):
+        client, pid, mock_ws, _ = _client_with_real_manager([])
+
+        created = client.post(
+            f"/api/v2/projects/{pid}/triggers",
+            json={"name": "New", "type": "schedule", "task": "x",
+                  "schedule": {"cron": "0 7 * * *"}},
+        ).json()
+        assert self._events(mock_ws) == ["trigger.created"]
+
+        mock_ws.reset_mock()
+        assert client.delete(
+            f"/api/v2/projects/{pid}/triggers/{created['id']}"
+        ).status_code == 204
+        assert self._events(mock_ws) == ["trigger.deleted"]
+
+    def test_re_register_does_not_announce_a_delete(self):
+        # register_trigger unregisters first for idempotency; that internal
+        # disarm is not a deletion and must stay off the wire.
+        store, pid = _make_project_store(triggers=[])
+        mock_ws = MagicMock()
+        tm = TriggerManager(store, MagicMock(), mock_ws)
+        trigger = dict(SEED_SCHEDULE)
+        tm.register_trigger(pid, trigger)
+        mock_ws.reset_mock()
+        tm.register_trigger(pid, trigger)
+        assert self._events(mock_ws) == ["trigger.created"]
 
 
 # ===========================================================================

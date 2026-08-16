@@ -311,6 +311,45 @@ class TriggerToggleRequest(BaseModel):
     enabled: bool
 
 
+class TriggerScheduleBody(BaseModel):
+    """The `schedule` sub-object of a schedule trigger.
+
+    `human` is the display caption the UI shows instead of the raw cron. The
+    web form derives it from the chosen preset (localized), so it is optional
+    here — the agent tool supplies its own free-text version.
+    """
+    cron: str
+    human: str | None = None
+    timezone: str = "UTC"
+
+
+class TriggerCreateRequest(BaseModel):
+    name: str
+    type: Literal["schedule", "file_watch"]
+    task: str
+    enabled: bool = True
+    schedule: TriggerScheduleBody | None = None
+    watch_path: str | None = None
+    patterns: list[str] | None = None
+    recursive: bool = False
+    debounce_seconds: int = 5
+
+
+class TriggerUpdateRequest(BaseModel):
+    """Partial update. Every field is optional; only the ones actually sent
+    are applied (`exclude_unset`), so the long-standing `{"enabled": false}`
+    body keeps working untouched.
+    """
+    name: str | None = None
+    task: str | None = None
+    enabled: bool | None = None
+    schedule: TriggerScheduleBody | None = None
+    watch_path: str | None = None
+    patterns: list[str] | None = None
+    recursive: bool | None = None
+    debounce_seconds: int | None = None
+
+
 class BulkDeleteRequest(BaseModel):
     prefix: str | None = None
     project_ids: list[str] | None = None
@@ -2765,9 +2804,90 @@ async def list_triggers(project_id: str):
     return project.get("triggers", [])
 
 
+def _validate_trigger_timezone(tz_name: str) -> None:
+    """400 on an unknown IANA zone.
+
+    The tick loop falls back to UTC with a log warning for an unknown zone
+    (trigger_manager._is_due), which is the right runtime behaviour but a
+    silent one — a form that accepts 'Asia/Shangai' would fire at the wrong
+    hour forever. Reject it at the door instead.
+    """
+    import pytz
+
+    try:
+        pytz.timezone(tz_name)
+    except pytz.UnknownTimeZoneError:
+        raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz_name}")
+
+
+@router.post("/projects/{project_id}/triggers", status_code=201)
+async def create_trigger(project_id: str, body: TriggerCreateRequest):
+    """Create a trigger from the UI.
+
+    Mirrors CreateTriggerTool's record shape exactly — the agent tool and this
+    route must produce interchangeable records, since both feed the same store,
+    scheduler and list surfaces.
+    """
+    from agent_os.daemon_v2.trigger_manager import generate_trigger_id, validate_trigger
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    trigger = {
+        "id": generate_trigger_id(),
+        "name": body.name,
+        "enabled": body.enabled,
+        "type": body.type,
+        "task": body.task,
+        "last_triggered": None,
+        "trigger_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.type == "schedule":
+        if body.schedule is None:
+            raise HTTPException(
+                status_code=400, detail="Schedule trigger requires schedule.cron"
+            )
+        _validate_trigger_timezone(body.schedule.timezone)
+        trigger["schedule"] = {
+            "cron": body.schedule.cron,
+            # Fall back to the cron itself rather than an empty caption: the
+            # strip and the list render `human` as the row label.
+            "human": body.schedule.human or body.schedule.cron,
+            "timezone": body.schedule.timezone,
+        }
+    else:
+        trigger["watch_path"] = body.watch_path or ""
+        trigger["patterns"] = body.patterns or []
+        trigger["recursive"] = body.recursive
+        trigger["debounce_seconds"] = body.debounce_seconds
+
+    workspace = project.get("workspace", "")
+    error = validate_trigger(trigger, workspace=workspace)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    triggers = project.get("triggers", [])
+    triggers.append(trigger)
+    _project_store.update_project(project_id, {"triggers": triggers})
+
+    if _trigger_manager is not None:
+        _trigger_manager.register_trigger(project_id, trigger)
+
+    return trigger
+
+
 @router.patch("/projects/{project_id}/triggers/{trigger_id}")
-async def toggle_trigger(project_id: str, trigger_id: str, body: TriggerToggleRequest):
-    """Toggle a trigger on/off. This is the only REST mutation for triggers."""
+async def update_trigger(project_id: str, trigger_id: str, body: TriggerUpdateRequest):
+    """Partially update a trigger — enable/disable and every editable field.
+
+    Emits `trigger.updated`, never created/deleted: the record did not appear
+    or go away, and treating a disable as a delete made the row vanish from
+    every live list until the next refetch.
+    """
+    from agent_os.daemon_v2.trigger_manager import validate_trigger
+
     project = _project_store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -2777,15 +2897,47 @@ async def toggle_trigger(project_id: str, trigger_id: str, body: TriggerToggleRe
     if trigger is None:
         raise HTTPException(status_code=404, detail="Trigger not found")
 
-    trigger["enabled"] = body.enabled
+    updates = body.model_dump(exclude_unset=True)
+
+    # Type is immutable, so fields belonging to the other kind are noise — drop
+    # them rather than writing a schedule onto a file-watch record.
+    if trigger.get("type") == "schedule":
+        for key in ("watch_path", "patterns", "recursive", "debounce_seconds"):
+            updates.pop(key, None)
+    else:
+        updates.pop("schedule", None)
+
+    if "schedule" in updates:
+        schedule = updates.pop("schedule")
+        if schedule is not None:
+            # Merge onto the existing schedule so a body that omits `human`
+            # (or `timezone`) doesn't blank the stored caption.
+            merged_schedule = dict(trigger.get("schedule") or {})
+            merged_schedule.update({k: v for k, v in schedule.items() if v is not None})
+            merged_schedule.setdefault("timezone", "UTC")
+            merged_schedule["human"] = (
+                merged_schedule.get("human") or merged_schedule.get("cron", "")
+            )
+            _validate_trigger_timezone(merged_schedule["timezone"])
+            updates["schedule"] = merged_schedule
+
+    # A partial update must not be able to null out a required field.
+    candidate = dict(trigger)
+    candidate.update({k: v for k, v in updates.items() if v is not None})
+
+    workspace = project.get("workspace", "")
+    error = validate_trigger(candidate, workspace=workspace)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    # Mutate in place: `triggers` is the list we persist, and the row keeps
+    # its position (an edit must not reorder the list).
+    trigger.clear()
+    trigger.update(candidate)
     _project_store.update_project(project_id, {"triggers": triggers})
 
-    # Notify TriggerManager
     if _trigger_manager is not None:
-        if body.enabled:
-            _trigger_manager.register_trigger(project_id, trigger)
-        else:
-            _trigger_manager.unregister_trigger(trigger_id)
+        _trigger_manager.apply_trigger_update(project_id, trigger)
 
     return trigger
 

@@ -26,6 +26,19 @@ vi.mock('../hooks/useQueue', () => ({
     resumeQueue: vi.fn(),
   }),
 }));
+// The Automations pane mounts useTriggers (→ useWebSocket). These tests only
+// care about which pane renders, so stub it empty.
+vi.mock('../hooks/useTriggers', () => ({
+  useTriggers: () => ({
+    triggers: [],
+    loading: false,
+    fetchTriggers: vi.fn(async () => []),
+    createTrigger: vi.fn(),
+    updateTrigger: vi.fn(),
+    toggleTrigger: vi.fn(),
+    deleteTrigger: vi.fn(),
+  }),
+}));
 // BudgetCorner (in the header) calls useCost → useWebSocket. Mock it to a
 // no-spend response so the corner renders nothing and the header label tests
 // stay focused on the model label.
@@ -89,7 +102,9 @@ describe('ProjectDetail — gear icon in header', () => {
 
   it('still renders queue/chat/files tab buttons (not a Settings tab)', () => {
     renderProjectDetail();
-    expect(screen.getByRole('button', { name: /^Queue$/i })).toBeInTheDocument();
+    // The queue tab is labelled "Tasks" (it parents the Queue and Automations
+    // panes); its route key is still 'queue'.
+    expect(screen.getByRole('button', { name: /^Tasks$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Chat$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Files$/i })).toBeInTheDocument();
     // Must NOT have a standalone "Settings" tab button
@@ -99,9 +114,99 @@ describe('ProjectDetail — gear icon in header', () => {
   it('tab click calls setRoute with settings:false to clear settings overlay', () => {
     const setRoute = vi.fn();
     renderProjectDetail({ tab: 'chat', settings: false }, setRoute);
-    fireEvent.click(screen.getByRole('button', { name: /^Queue$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Tasks$/i }));
     expect(setRoute).toHaveBeenCalledWith(
       expect.objectContaining({ tab: 'queue', settings: false }),
+    );
+  });
+});
+
+describe('ProjectDetail — Tasks tab panes', () => {
+  it('shows the Queue│Automations switch only on the Tasks tab', () => {
+    const { unmount } = renderProjectDetail({ tab: 'chat' });
+    expect(screen.queryByTestId('queue-pane-automations')).toBeNull();
+    unmount();
+
+    renderProjectDetail({ tab: 'queue' });
+    expect(screen.getByTestId('queue-pane-queue')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-pane-automations')).toBeInTheDocument();
+  });
+
+  it('defaults to the queue pane and renders the tab children there', () => {
+    const route = { ...baseRoute, tab: 'queue' as const };
+    render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus="idle"
+        route={route}
+        setRoute={vi.fn()}
+      >
+        <div data-testid="queue-children" />
+      </ProjectDetail>,
+    );
+    expect(screen.getByTestId('queue-children')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-pane-queue')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('automations-pane')).toBeNull();
+  });
+
+  it('renders the automations pane (not the queue children) when queuePane=automations', () => {
+    const route = { ...baseRoute, tab: 'queue' as const, queuePane: 'automations' as const };
+    render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus="idle"
+        route={route}
+        setRoute={vi.fn()}
+      >
+        <div data-testid="queue-children" />
+      </ProjectDetail>,
+    );
+    expect(screen.getByTestId('automations-pane')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-children')).toBeNull();
+  });
+
+  it('clicking the Automations pane sets route.queuePane', () => {
+    const setRoute = vi.fn();
+    renderProjectDetail({ tab: 'queue' }, setRoute);
+    fireEvent.click(screen.getByTestId('queue-pane-automations'));
+    expect(setRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: 'queue', queuePane: 'automations' }),
+    );
+  });
+
+  it('the trigger strip is a status line that deep-links into the automations pane', () => {
+    const setRoute = vi.fn();
+    render(
+      <ProjectDetail
+        project={mockProject}
+        agentStatus="idle"
+        route={baseRoute}
+        setRoute={setRoute}
+        triggers={[
+          {
+            id: 'trg-1',
+            name: 'Daily build',
+            enabled: false,
+            type: 'schedule',
+            schedule: { cron: '0 9 * * *', human: 'Every day at 09:00', timezone: 'UTC' },
+            task: 'Build',
+            autonomy: null,
+            last_triggered: null,
+            trigger_count: 0,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    );
+    const summary = screen.getByTestId('trigger-summary');
+    // The off-count stays glanceable from every tab.
+    expect(summary.textContent).toContain('1 off');
+    // No management controls left on the strip — one home for that.
+    expect(screen.queryByRole('switch')).toBeNull();
+
+    fireEvent.click(summary);
+    expect(setRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: 'queue', queuePane: 'automations' }),
     );
   });
 });

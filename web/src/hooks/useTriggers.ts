@@ -7,6 +7,26 @@ import { api } from '../config';
 import type { Trigger, WebSocketEvent } from '../types';
 import { useWebSocket } from './useWebSocket';
 
+/** Body of POST /triggers — what the create form sends. */
+export interface TriggerDraft {
+  name: string;
+  type: 'schedule' | 'file_watch';
+  task: string;
+  enabled?: boolean;
+  schedule?: { cron: string; human?: string; timezone?: string };
+  watch_path?: string;
+  patterns?: string[];
+  recursive?: boolean;
+  debounce_seconds?: number;
+}
+
+/**
+ * Body of PATCH /triggers/{id} — a partial update. `type` is absent on
+ * purpose: a schedule automation cannot become a file-watch one (different
+ * required fields, different scheduler arming); create a new one instead.
+ */
+export type TriggerPatch = Partial<Omit<TriggerDraft, 'type'>>;
+
 export function useTriggers(projectId: string) {
   const [triggers, setTriggers] = useState<Trigger[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,19 +48,42 @@ export function useTriggers(projectId: string) {
     }
   }, [projectId]);
 
-  const toggleTrigger = useCallback(
-    async (triggerId: string, enabled: boolean) => {
+  const updateTrigger = useCallback(
+    async (triggerId: string, patch: TriggerPatch) => {
       const updated = await api<Trigger>(
         `/api/v2/projects/${encodeURIComponent(projectId)}/triggers/${encodeURIComponent(triggerId)}`,
         {
           method: 'PATCH',
-          body: JSON.stringify({ enabled }),
+          body: JSON.stringify(patch),
         },
       );
+      // Replace in place — an edit must never reorder or drop the row.
       setTriggers((prev) =>
         prev.map((t) => (t.id === triggerId ? updated : t)),
       );
       return updated;
+    },
+    [projectId],
+  );
+
+  const toggleTrigger = useCallback(
+    (triggerId: string, enabled: boolean) => updateTrigger(triggerId, { enabled }),
+    [updateTrigger],
+  );
+
+  const createTrigger = useCallback(
+    async (draft: TriggerDraft) => {
+      const created = await api<Trigger>(
+        `/api/v2/projects/${encodeURIComponent(projectId)}/triggers`,
+        {
+          method: 'POST',
+          body: JSON.stringify(draft),
+        },
+      );
+      setTriggers((prev) =>
+        prev.some((t) => t.id === created.id) ? prev : [...prev, created],
+      );
+      return created;
     },
     [projectId],
   );
@@ -71,6 +114,15 @@ export function useTriggers(projectId: string) {
         setTriggers((prev) => prev.filter((t) => t.id !== event.trigger_id));
       }
     };
+    // An edit/toggle updates the row IN PLACE. Never append and never drop:
+    // created/deleted are for records appearing and going away.
+    const handleUpdated = (event: WebSocketEvent) => {
+      if (event.type === 'trigger.updated' && event.project_id === projectId) {
+        setTriggers((prev) =>
+          prev.map((t) => (t.id === event.trigger.id ? event.trigger : t)),
+        );
+      }
+    };
     const handleFired = (event: WebSocketEvent) => {
       if (event.type === 'trigger.fired' && event.project_id === projectId) {
         setTriggers((prev) =>
@@ -84,13 +136,23 @@ export function useTriggers(projectId: string) {
     };
     on('trigger.created', handleCreated);
     on('trigger.deleted', handleDeleted);
+    on('trigger.updated', handleUpdated);
     on('trigger.fired', handleFired);
     return () => {
       off('trigger.created', handleCreated);
       off('trigger.deleted', handleDeleted);
+      off('trigger.updated', handleUpdated);
       off('trigger.fired', handleFired);
     };
   }, [projectId, on, off]);
 
-  return { triggers, loading, fetchTriggers, toggleTrigger, deleteTrigger };
+  return {
+    triggers,
+    loading,
+    fetchTriggers,
+    createTrigger,
+    updateTrigger,
+    toggleTrigger,
+    deleteTrigger,
+  };
 }

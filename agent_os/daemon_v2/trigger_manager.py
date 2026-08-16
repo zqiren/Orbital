@@ -154,11 +154,20 @@ class TriggerManager:
         self._trigger_project.clear()
         logger.info("TriggerManager stopped")
 
-    def register_trigger(self, project_id: str, trigger: dict) -> None:
-        """Register a single trigger (called after create/update)."""
+    def register_trigger(
+        self, project_id: str, trigger: dict, *, broadcast: bool = True
+    ) -> None:
+        """Register a single trigger (called after create/update).
+
+        ``broadcast=False`` arms the scheduler/observer silently — for callers
+        that announce the change themselves (an edit is a ``trigger.updated``,
+        not a ``trigger.created``; see ``apply_trigger_update``).
+        """
         trigger_id = trigger["id"]
-        # Drop any existing registration/observer first (idempotent re-register)
-        self.unregister_trigger(trigger_id)
+        # Drop any existing registration/observer first (idempotent re-register).
+        # Silent: a re-register is not a deletion, and announcing one made every
+        # UI list drop the row.
+        self.unregister_trigger(trigger_id, broadcast=False)
         self._trigger_project[trigger_id] = project_id
         if trigger.get("enabled", True):
             ttype = trigger.get("type")
@@ -167,29 +176,53 @@ class TriggerManager:
             elif ttype == "file_watch":
                 self._start_file_watch(project_id, trigger)
         # Broadcast creation event for real-time UI updates
-        self._broadcast(project_id, {
-            "type": "trigger.created",
-            "project_id": project_id,
-            "trigger": trigger,
-        })
+        if broadcast:
+            self._broadcast(project_id, {
+                "type": "trigger.created",
+                "project_id": project_id,
+                "trigger": trigger,
+            })
 
-    def unregister_trigger(self, trigger_id: str) -> None:
+    def unregister_trigger(self, trigger_id: str, *, broadcast: bool = True) -> None:
         """Unregister a trigger (called after delete or disable).
 
         Removes it from the tick loop's evaluated set and clears any
         held-streak tracking. Also stops file-watch observers.
+
+        ``broadcast=False`` disarms without announcing a delete — used when the
+        record still exists (disable / re-register).
         """
         self._schedule_ids.discard(trigger_id)
         self._held.discard(trigger_id)
         self._stop_file_watch(trigger_id)
         # Broadcast deletion event
         project_id = self._trigger_project.pop(trigger_id, None)
-        if project_id:
+        if project_id and broadcast:
             self._broadcast(project_id, {
                 "type": "trigger.deleted",
                 "project_id": project_id,
                 "trigger_id": trigger_id,
             })
+
+    def apply_trigger_update(self, project_id: str, trigger: dict) -> None:
+        """Re-arm an EDITED trigger and announce it as ``trigger.updated``.
+
+        ``trigger.created``/``trigger.deleted`` mean exactly what they say —
+        a record appeared or went away. Enable/disable and field edits are
+        neither: they used to travel as created/deleted (because the toggle
+        route called register/unregister), which made a disabled automation
+        vanish from every live list until the next refetch. Callers that
+        mutate an existing record use this instead.
+
+        ``register_trigger`` is idempotent and only arms when ``enabled`` — so
+        it correctly disarms a trigger that was just switched off.
+        """
+        self.register_trigger(project_id, trigger, broadcast=False)
+        self._broadcast(project_id, {
+            "type": "trigger.updated",
+            "project_id": project_id,
+            "trigger": trigger,
+        })
 
     # ---- File-watch observer lifecycle ----
 
