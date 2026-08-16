@@ -171,12 +171,24 @@ export default function ScheduleInput({
       )}
 
       {/* Exactly what the row will read afterwards. For a custom cron with no
-          preset phrasing, that is the expression itself. */}
-      <p className="text-[11px] text-secondary" data-testid="schedule-preview">
-        <span className="mr-1.5 uppercase tracking-wide text-muted">
+          preset phrasing, that is the expression itself.
+
+          Sunk into a filled chip, and pulled up out of the container's gap-3 to
+          sit close under whatever it is describing — the controls row, or the
+          cron field when that is showing. As a bare line at a full gap's
+          distance, the one thing on this form that is pure OUTPUT read as one
+          more thing to fill in. `w-fit` keeps it hugging its text rather than
+          ruling a line across the card. */}
+      <p
+        className="-mt-1.5 flex w-fit max-w-full items-baseline gap-1.5 rounded-md bg-sidebar px-2 py-1 text-[11px] text-secondary"
+        data-testid="schedule-preview"
+      >
+        <span className="shrink-0 uppercase tracking-wide text-muted">
           {t('trigger.form.preview')}
         </span>
-        {described ?? <span className="font-mono">{cron || '—'}</span>}
+        <span className="truncate">
+          {described ?? <span className="font-mono">{cron || '—'}</span>}
+        </span>
       </p>
     </div>
   );
