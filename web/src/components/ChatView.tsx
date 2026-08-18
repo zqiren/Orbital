@@ -3471,7 +3471,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 >
                   {isCancelling
                     ? <Loader2 size={18} className="animate-spin" />
-                    : <Square size={18} />}
+                    : <Square size={18} fill="currentColor" />}
                 </button>
                 <button
                   type="button"
