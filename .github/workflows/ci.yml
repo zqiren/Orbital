@@ -22,6 +22,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow-scoped, so EVERY job inherits it (spec 063 §2): CI was the largest
+# single source of phantom installs in production telemetry. Two job families
+# boot a daemon and would otherwise ping the real ingest endpoint — the
+# backend-tests matrix (61 test files reach create_app()) and the packaged-app
+# "--smoke-test" steps in build-macos / build-windows, whose data dir is a
+# normal app-support path the temp-dir backstop cannot catch.
+env:
+  AGENT_OS_TELEMETRY_DISABLED: '1'
+
 jobs:
   frontend:
     name: Frontend (tsc + vitest + i18n)
@@ -57,6 +66,8 @@ jobs:
       # The null backend neutralizes any stray keyring use elsewhere.
       AGENT_OS_API_KEY: ci-dummy-key
       PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+      # AGENT_OS_TELEMETRY_DISABLED is set workflow-wide (see the top of this
+      # file) so the installer smoke tests are covered too.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

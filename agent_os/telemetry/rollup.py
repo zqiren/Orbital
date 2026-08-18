@@ -34,7 +34,16 @@ def build_ping(
         "sessions": 0,
         "turns": 0,
         "errors": {},
+        # Same failures as ``errors``, keyed by provider instead of by code
+        # (spec 063 §7 P1). Both are published: ``errors`` is the only error
+        # series with history, so it stays for continuity.
+        "errors_by_provider": {},
         "tokens_by_provider": {},
+        # Sub-agent setup funnel (spec 063 §12 decision 5): the CLI login jobs
+        # emitted nothing, so the product's differentiating setup step was
+        # invisible between "key set" and "first turn".
+        "login_attempted": 0,
+        "login_failed": 0,
     }
     for row in spool.read_day(day):
         event = row.get("event")
@@ -60,6 +69,15 @@ def build_ping(
         elif event == "llm_error":
             code = str(row.get("error_code") or "unknown")
             counters["errors"][code] = counters["errors"].get(code, 0) + 1
+            # Same "unknown" fallback as tokens above: the provider is
+            # unresolved when the failure happens before config resolution.
+            provider = str(row.get("provider") or "unknown")
+            by_provider = counters["errors_by_provider"]
+            by_provider[provider] = by_provider.get(provider, 0) + 1
+        elif event == "login_attempted":
+            counters["login_attempted"] += 1
+        elif event == "login_failed":
+            counters["login_failed"] += 1
 
     milestones = identity.milestones
     return {

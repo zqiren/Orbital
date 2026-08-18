@@ -16,6 +16,9 @@ import { useWebSocket } from './useWebSocket';
  * Per-project derived-cost view. The SINGLE source of recorded spend for the
  * Budget surface: it reads GET /api/v2/projects/{pid}/cost EXCLUSIVELY and
  * re-fetches when a `budget.spend_updated` WS event arrives for this project.
+ * The socket is already subscribed per project, so the event reaching us is
+ * itself the routing proof — the payload's own `project_id` is optional and is
+ * only used to reject when the daemon DOES stamp it (see the handler below).
  *
  * The window is the budget period the Budget section currently shows; passing
  * it explicitly (rather than letting the server default) means changing the
@@ -95,7 +98,15 @@ export function useCost(projectId: string | null, window: CostWindow): UseCostRe
     if (!projectId) return;
     const handler = (event: WebSocketEvent) => {
       if (event.type !== 'budget.spend_updated') return;
-      if (event.project_id !== projectId) return;
+      // PRESENCE-guarded, exactly as useQueue does. The daemon's spend payload
+      // is built by SpendBroadcaster.submit and carries only
+      // type/window/spend/limit/currency — `project_id` is the WS routing key,
+      // not a payload field, and may be absent. A bare `event.project_id !==
+      // projectId` compared `undefined` to the id, was therefore always true,
+      // and silently muted every spend event: the corner only ever refreshed on
+      // mount, project/window/pricing change, or reconnect. Never re-introduce
+      // an unguarded read of a field the sender does not promise.
+      if ('project_id' in event && event.project_id !== projectId) return;
       void refresh();
     };
     ws.on('budget.spend_updated', handler);

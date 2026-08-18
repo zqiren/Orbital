@@ -404,7 +404,8 @@ class AgentManager:
 
     def _broadcast(self, project_id: str, payload: dict,
                    session_id: str | None = None) -> None:
-        """Wrap ``self._ws.broadcast`` to stamp an additive ``session_id`` field.
+        """Wrap ``self._ws.broadcast`` to stamp additive ``session_id`` and
+        ``project_id`` fields.
 
         The existing project-keyed subscription model is unchanged — every
         client subscribed to ``project_id`` still receives the payload.
@@ -418,6 +419,10 @@ class AgentManager:
         # Don't overwrite a session_id already set by the caller (rare,
         # but cleaner than special-casing): the call site's choice wins.
         payload.setdefault("session_id", sid)
+        # Same treatment for project_id: routing is by subscription, so the
+        # field was absent from most payloads — and the frontend filters WS
+        # events on it, silently dropping every event that lacked it.
+        payload.setdefault("project_id", project_id)
         self._ws.broadcast(project_id, payload)
 
     def _prevent_sleep_if_needed(self) -> None:
@@ -1881,12 +1886,16 @@ class AgentManager:
             # gets a session system row plus a classified agent.status error.
             # BaseException so a CancelledError supersede is surfaced too; the
             # exception is always re-raised, never swallowed.
-            self._record_start_failure(project_id, session_id, session, exc)
+            self._record_start_failure(
+                project_id, session_id, session, exc,
+                provider=getattr(config, "provider", None),
+            )
             raise
         return "started"
 
     def _record_start_failure(self, project_id: str, session_id: str,
-                              session: "Session", exc: BaseException) -> None:
+                              session: "Session", exc: BaseException,
+                              provider: str | None = None) -> None:
         """Surface a failed/superseded agent start (bug #59).
 
         Writes a visible system row into the (already materialized) session so
@@ -1923,7 +1932,11 @@ class AgentManager:
                 project_id, session_id,
             )
         try:
-            self._record_loop_error(project_id, session_id, surfaced)
+            # The handle does not exist yet on a start failure, so the caller's
+            # config is the only provider source telemetry can use here.
+            self._record_loop_error(
+                project_id, session_id, surfaced, provider=provider,
+            )
         except Exception:
             logger.exception(
                 "failed to broadcast start failure for %s/%s",
@@ -2585,8 +2598,29 @@ class AgentManager:
             event["error_code"] = error_code
         self._last_terminal_events[make_session_key(project_id, session_id)] = event
 
+    def _provider_for_error(self, project_id: str, session_id: str,
+                            explicit: str | None = None) -> str:
+        """Best-effort provider key for ``llm_error`` attribution (spec 063 §4).
+
+        Order: what the caller knows (start failures still hold the config) →
+        the running handle's config snapshot → ``"unknown"``, the same
+        fallback ``rollup.py`` uses for tokens when the provider is
+        unresolved at failure time.
+        """
+        if explicit:
+            return str(explicit)
+        try:
+            handle = self._handles.get(make_session_key(project_id, session_id))
+            provider = (getattr(handle, "config_snapshot", None) or {}).get("provider")
+            if provider:
+                return str(provider)
+        except Exception:
+            pass
+        return "unknown"
+
     def _record_loop_error(self, project_id: str, session_id: str,
-                           exc: BaseException) -> None:
+                           exc: BaseException,
+                           provider: str | None = None) -> None:
         """Surface a loop/start failure: log with traceback, record a
         classified terminal event, and broadcast agent.status error with the
         stable ``error_code`` so the frontend can show an actionable message
@@ -2600,10 +2634,19 @@ class AgentManager:
         )
         # Persist the structured code (spec 046 §4): local-only debugging value,
         # so it spools even when the telemetry toggle is off (Q2). Code enum
-        # only — never the message, which can carry paths/model names.
+        # only — never the message, which can carry paths/model names. The
+        # provider enum rides along (spec 063 §4) so an error can be attributed
+        # to a vendor; provider names already travel in tokens_by_provider.
         from agent_os import telemetry
 
-        telemetry.emit("llm_error", {"error_code": code}, always_spool=True)
+        telemetry.emit(
+            "llm_error",
+            {
+                "error_code": code,
+                "provider": self._provider_for_error(project_id, session_id, provider),
+            },
+            always_spool=True,
+        )
         self._set_last_terminal_event(
             project_id, session_id, "error", details=message, error_code=code,
         )
@@ -3122,6 +3165,16 @@ class AgentManager:
             "new_session(%s): minted uuid %s (uuid-only; F1 retired)",
             project_id, new_session_uuid,
         )
+        # Telemetry sessions counter (spec 063 §3): this mint point is the
+        # chokepoint all four callers cross — the "+ new session" button, the
+        # cold-start scan, the workbench seeded spawn and the queue dispatcher
+        # (one fresh session per item). It used to live in the route, so three
+        # of the four were uncounted and `counters.sessions` measured a button.
+        # Same discipline `turn_completed` gets from riding ledger.append_event.
+        from agent_os import telemetry
+
+        telemetry.emit("session_created")
+        telemetry.latch("first_session")
         return {
             "status": "ok",
             "session_id": new_session_uuid,

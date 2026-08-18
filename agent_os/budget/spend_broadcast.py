@@ -28,6 +28,14 @@ Payload carries CODES/NUMBERS ONLY (the binding i18n rule): the client renders
 the display from ``window`` / ``spend`` / ``limit`` / ``currency``. ``limit`` is
 ``None`` when no limit is configured (the corner still shows spend).
 
+Idle settle: the trailing edge alone is not enough. A run's LAST append almost
+always lands INSIDE the one-second window, so the number that then sits on
+screen for the whole idle period is exactly the one the debouncer is still
+holding. ``flush`` emits that pending payload immediately and is called at both
+idle boundaries — the end of a run and loop teardown (``aclose``) — so the
+corner settles on the true final figure the moment work stops instead of
+keeping (or, as it used to on ``aclose``, DROPPING) it.
+
 Resilience: a throwing emit sink is swallowed (the ledger append must never be
 affected by a broadcast failure). ``emit=None`` (relay absent) is a silent
 no-op.
@@ -159,15 +167,33 @@ class SpendBroadcaster:
         import time
         return time.monotonic()
 
-    async def aclose(self) -> None:
-        """Cancel any pending trailing task. Idempotent; drops the final state.
+    def flush(self) -> None:
+        """Emit the pending trailing payload NOW and disarm the timer.
 
-        Called when the loop tears down. The trailing broadcast is best-effort
-        UI freshness, not durable state, so cancelling a pending flush on close
-        is acceptable — the next run's first append re-broadcasts the current
-        total as a fresh leading edge.
+        The idle-settle primitive. Synchronous, idempotent and never raises:
+        with nothing pending it is a pure no-op (no duplicate frame), so it is
+        safe to call at every idle boundary. After it returns, the broadcaster
+        holds no pending state and no armed timer — nothing can fire later on
+        its own. A subsequent ``submit`` re-arms normally, so flushing does NOT
+        mute a loop that is hot-resumed on the same broadcaster.
         """
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+        pending = self._pending
         self._pending = None
+        if pending is None:
+            return
+        self._do_emit(pending, self._now())
+
+    async def aclose(self) -> None:
+        """FLUSH any pending trailing payload, then disarm. Idempotent.
+
+        Called when the loop tears down. This used to CANCEL the pending
+        trailing broadcast on the theory that it is best-effort UI freshness —
+        but the dropped payload was systematically the run's final append (it
+        lands inside the 1s window), so the corner was left showing a stale
+        mid-burst number for the entire idle period that followed. Flushing
+        emits it once, synchronously, while the sink is still live.
+        """
+        self.flush()

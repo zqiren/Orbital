@@ -35,6 +35,22 @@ import { useCost } from './useCost';
 import { bumpPricingVersion } from '../budget/pricingVersion';
 import type { CostResponse } from '../budget/types';
 
+/**
+ * The payload the daemon ACTUALLY sends. `SpendBroadcaster.submit`
+ * (agent_os/budget/spend_broadcast.py) builds exactly these five fields;
+ * `WSManager.broadcast(project_id, payload)` uses the project id for ROUTING
+ * and forwards the payload verbatim, so there is NO `project_id` on the wire.
+ *
+ * Every fixture here used to hand-build the event WITH `project_id`, which is
+ * why the suite stayed green while the corner never refreshed in production:
+ * the tests proved the handler works on a message that does not exist. Keep
+ * this the default; only the two tests that specifically exercise the
+ * presence-guarded filter add the field.
+ */
+function daemonSpendEvent(spend = 3) {
+  return { type: 'budget.spend_updated', window: 'daily', spend, limit: 10, currency: 'USD' };
+}
+
 function makeCost(amount: number): CostResponse {
   return {
     window: 'daily',
@@ -111,7 +127,7 @@ describe('useCost', () => {
     apiFn.mockReturnValueOnce(new Promise(() => {}));
     const handler = onMock.mock.calls.find((c) => c[0] === 'budget.spend_updated')![1] as (e: unknown) => void;
     await act(async () => {
-      handler({ type: 'budget.spend_updated', project_id: 'p1', window: 'daily', spend: 3, limit: 10, currency: 'USD' });
+      handler(daemonSpendEvent());
     });
     // Refetch in flight: previous number still shown, not blanked.
     expect(result.current.cost?.converted_total.amount).toBe(1);
@@ -128,14 +144,32 @@ describe('useCost', () => {
     expect(offMock.mock.calls.map((c) => c[0])).toContain('budget.spend_updated');
   });
 
-  it('re-fetches when a budget.spend_updated event arrives for this project', async () => {
+  it('re-fetches on the daemon\'s REAL spend payload (no project_id field)', async () => {
+    // The regression this pins: the handler used to compare `event.project_id`
+    // (undefined on the wire) to the project id, so the refetch never ran and
+    // the corner sat frozen until an unrelated remount/reconnect.
     apiFn.mockResolvedValueOnce(makeCost(1)).mockResolvedValueOnce(makeCost(3));
     const { result } = renderHook(() => useCost('p1', 'daily'));
     await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
 
     const handler = onMock.mock.calls.find((c) => c[0] === 'budget.spend_updated')![1] as (e: unknown) => void;
     await act(async () => {
-      handler({ type: 'budget.spend_updated', project_id: 'p1', window: 'daily', spend: 3, limit: 10, currency: 'USD' });
+      handler(daemonSpendEvent());
+    });
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(3));
+    expect(apiFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-fetches when the payload DOES carry a matching project_id', async () => {
+    // The daemon may start stamping project_id on the broadcast; the guarded
+    // filter must accept that shape too, not just the bare one.
+    apiFn.mockResolvedValueOnce(makeCost(1)).mockResolvedValueOnce(makeCost(3));
+    const { result } = renderHook(() => useCost('p1', 'daily'));
+    await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
+
+    const handler = onMock.mock.calls.find((c) => c[0] === 'budget.spend_updated')![1] as (e: unknown) => void;
+    await act(async () => {
+      handler({ ...daemonSpendEvent(), project_id: 'p1' });
     });
     await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(3));
     expect(apiFn).toHaveBeenCalledTimes(2);
@@ -147,8 +181,9 @@ describe('useCost', () => {
     await waitFor(() => expect(result.current.cost?.converted_total.amount).toBe(1));
 
     const handler = onMock.mock.calls.find((c) => c[0] === 'budget.spend_updated')![1] as (e: unknown) => void;
+    // The field IS present here, so the guarded filter must still reject it.
     await act(async () => {
-      handler({ type: 'budget.spend_updated', project_id: 'OTHER', window: 'daily', spend: 99, limit: null, currency: 'USD' });
+      handler({ ...daemonSpendEvent(99), project_id: 'OTHER', limit: null });
     });
     // No second fetch — still the initial value.
     expect(apiFn).toHaveBeenCalledTimes(1);

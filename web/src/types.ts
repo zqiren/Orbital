@@ -630,6 +630,43 @@ export interface SubAgentInstallFailedEvent {
   error: string;
 }
 
+// Daemon-global CLI login job events (agent_os/api/routes/settings.py), broadcast
+// while a POST /settings/sub-agents/{slug}/login job runs. `line` is the CLI's own
+// output with terminal escapes already stripped daemon-side (the claude login URL
+// arrives wrapped in an OSC-8 hyperlink) — dynamic text, displayed verbatim and
+// never translated.
+export interface LoginProgressEvent {
+  type: 'login.progress';
+  slug: string;
+  job_id: string;
+  line: string;
+}
+
+// The CLI exited 0. `verified` is the post-run re-check of the manifest's
+// credential check_command: false means the CLI claimed success but the auth
+// probe still reports unconfigured ("signed in, but couldn't confirm") — NOT a
+// failure, since a slow keychain write looks identical. Optional because older
+// daemons emit this event without the field.
+export interface LoginCompleteEvent {
+  type: 'login.complete';
+  slug: string;
+  job_id: string;
+  return_code: number;
+  verified?: boolean;
+}
+
+// The CLI exited non-zero, could not be spawned, or went idle past the timeout.
+// Only one of `return_code` / `error` is present depending on which; `timed_out`
+// is sent only on the idle-timeout path.
+export interface LoginFailedEvent {
+  type: 'login.failed';
+  slug: string;
+  job_id: string;
+  return_code?: number;
+  error?: string;
+  timed_out?: boolean;
+}
+
 export interface TriggerCreatedEvent {
   type: 'trigger.created';
   project_id: string;
@@ -774,7 +811,13 @@ export interface BlockedCountChangedEvent {
  */
 export interface BudgetSpendUpdatedEvent {
   type: 'budget.spend_updated';
-  project_id: string;
+  /** OPTIONAL — the daemon does not always stamp it. `SpendBroadcaster.submit`
+   *  builds the payload as type/window/spend/limit/currency; the project id is
+   *  the WS *routing* key (`WSManager.broadcast(project_id, payload)`), not a
+   *  payload field. Declaring it required was a contract the backend never
+   *  honored, and a consumer that trusted it (`useCost`) silently dropped every
+   *  event. Consumers must presence-guard it. */
+  project_id?: string;
   window: 'daily' | 'weekly' | 'monthly' | 'total';
   spend: number;
   limit: number | null;
@@ -817,6 +860,9 @@ export type WebSocketEvent =
   | SubAgentInstallProgressEvent
   | SubAgentInstallDoneEvent
   | SubAgentInstallFailedEvent
+  | LoginProgressEvent
+  | LoginCompleteEvent
+  | LoginFailedEvent
   | UpdateAvailableEvent;
 
 // Queue resource types (mirror agent_os/queue/models.py)

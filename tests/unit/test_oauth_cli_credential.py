@@ -71,7 +71,12 @@ class TestManifestOAuthCLIFields:
         assert cred.check_command == "claude auth status --json"
         assert cred.check_field == "loggedIn"
         assert cred.check_value == "true"
-        assert cred.setup_command == "claude login"
+        # `claude auth login`, NOT `claude login`. Claude Code retired the
+        # top-level `login` subcommand, so `claude login` parsed as a positional
+        # PROMPT: the CLI answered conversationally and exited 0, which the login
+        # job read as success. This assertion used to pin that dead string, and
+        # so certified the bug it should have caught. Do not "restore" it.
+        assert cred.setup_command == "claude auth login"
         assert cred.setup_label == "Log in to Claude"
 
 

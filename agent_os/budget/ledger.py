@@ -36,7 +36,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:  # pragma: no cover — type-only; avoids an import cycle.
     from agent_os.budget.normalize import NormalizedUsage
@@ -120,6 +120,65 @@ class LedgerEvent:
         return record
 
 
+# ---------------------------------------------------------------------------
+# Post-append hook — the single spend-notification chokepoint.
+#
+# THREE call sites append to the ledger: the management loop
+# (``AgentLoop._emit_ledger_event``) and BOTH sub-agent transports
+# (``SdkTransport._capture_usage``, ``CodexTransport._capture_usage``). Only the
+# management one used to notify the UI, so sub-agent spend changed the ledger
+# without ever refreshing the settings breakdown. Registering the notification
+# HERE — the one function every appender crosses — fixes all three at once and
+# gives the next transport the behaviour for free, mirroring the telemetry
+# counter already emitted below.
+#
+# Keyed by project workspace so a multi-project daemon routes each append to the
+# right loop; single-slot per project (the newest registration wins), and
+# ``unregister_append_hook`` is identity-checked so a torn-down loop cannot
+# unregister its successor.
+# ---------------------------------------------------------------------------
+
+_append_hooks: dict[str, Callable[[str, "LedgerEvent"], None]] = {}
+
+
+def register_append_hook(
+    project_dir: str, hook: Callable[[str, "LedgerEvent"], None],
+) -> None:
+    """Install THE post-append hook for one project workspace.
+
+    Replaces any previously registered hook for the same ``project_dir``.
+    """
+    _append_hooks[project_dir] = hook
+
+
+def unregister_append_hook(
+    project_dir: str, hook: Callable[[str, "LedgerEvent"], None],
+) -> None:
+    """Remove ``hook`` iff it is STILL the one registered for ``project_dir``.
+
+    The identity check matters on the hand-off between two loops for the same
+    project: the outgoing loop's ``terminate()`` must not silence the incoming
+    loop that already replaced it.
+    """
+    if _append_hooks.get(project_dir) is hook:
+        _append_hooks.pop(project_dir, None)
+
+
+def _fire_append_hook(project_dir: str, event: LedgerEvent) -> None:
+    """Run the registered hook. NEVER raises, never blocks an append."""
+    hook = _append_hooks.get(project_dir)
+    if hook is None:
+        return
+    try:
+        hook(project_dir, event)
+    except Exception:  # noqa: BLE001 — a notification failure must never
+        # affect the append that triggered it, nor the caller's turn.
+        logger.warning(
+            "Token-ledger append hook failed for project_dir=%s; continuing.",
+            project_dir, exc_info=True,
+        )
+
+
 def append_event(project_dir: str, event: LedgerEvent) -> None:
     """Append one event line to the project's usage ledger.
 
@@ -167,6 +226,11 @@ def append_event(project_dir: str, event: LedgerEvent) -> None:
         telemetry.latch("first_turn")
     except Exception:  # noqa: BLE001
         pass
+    # Spend-notification chokepoint (see the hook block above): the UI refresh
+    # for EVERY appender — management loop and both sub-agent transports. Runs
+    # only after a SUCCESSFUL write (the early return above skips it), so the
+    # broadcast never claims spend that was not recorded. Self-guarded.
+    _fire_append_hook(project_dir, event)
 
 
 # ===========================================================================

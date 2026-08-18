@@ -1702,11 +1702,11 @@ async def new_session(project_id: str, req: SessionScopedRequest | None = None):
     ``session_id`` + ``session_uuid`` and returns them; writes no file and
     touches no running session. The UI navigates to the new ``session_id`` and
     the session materializes on the first message. The body ``session_id`` is
-    accepted for compatibility but ignored — a new session is always fresh."""
-    from agent_os import telemetry
+    accepted for compatibility but ignored — a new session is always fresh.
 
-    telemetry.emit("session_created")
-    telemetry.latch("first_session")
+    The ``session_created`` telemetry emit lives in ``new_session()`` itself
+    (spec 063 §3), not here — a route handler only ever measures one of the
+    four callers."""
     result = await _agent_manager.new_session(
         project_id, session_id=(req.session_id if req else None),
     )

@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from uuid import uuid4
 
@@ -34,6 +35,38 @@ _installer: SubAgentInstaller | None = None
 # Tracks in-flight login subprocesses keyed by job_id, so callers can poll
 # WS events for ``login.progress`` / ``login.complete`` / ``login.failed``.
 _login_jobs: dict[str, dict] = {}
+
+# Seconds of silence (no output line) before an in-flight login is killed.
+# It is an IDLE timeout, not a wall-clock cap: the user is off in a browser
+# doing an OAuth dance and the CLI stays quiet the whole time, so the budget
+# has to be generous. What it actually stops is an abandoned flow leaking a
+# subprocess for the daemon's lifetime.
+LOGIN_IDLE_TIMEOUT_SECONDS = 300.0
+
+# OSC (Operating System Command) sequences, terminated by BEL or ST. The
+# claude CLI prints its login URL as an OSC-8 terminal hyperlink
+# (``ESC]8;;<url>ST<label>ESC]8;;ST``), so the raw line carries the URL twice
+# wrapped in control bytes — unreadable if broadcast verbatim.
+_OSC_SEQUENCE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# CSI sequences: colours, cursor moves, erase-line — the usual spinner kit.
+_CSI_SEQUENCE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# Anything left over: stray ESC, BEL, backspace, DEL.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _strip_terminal_escapes(line: str) -> str:
+    """Reduce a raw CLI output line to what a terminal would actually show.
+
+    Drops OSC-8 hyperlink wrappers (leaving the visible label, which for the
+    claude login URL *is* the URL, once instead of twice), CSI colour/cursor
+    codes, and leftover control bytes. Carriage returns are in-place redraws,
+    so only the last frame survives.
+    """
+    line = _OSC_SEQUENCE_RE.sub("", line)
+    line = _CSI_SEQUENCE_RE.sub("", line)
+    if "\r" in line:
+        line = line.split("\r")[-1]
+    return _CONTROL_CHARS_RE.sub("", line).strip()
 
 
 def configure(settings_store, credential_store=None, setup_engine=None,
@@ -120,6 +153,15 @@ async def update_settings(req: UpdateSettingsRequest):
             f.write(req.user_preferences_content)
 
     _settings_store.update(current)
+
+    # Most keys arrive here, not through PUT /settings/api-key — this is the
+    # write the provider dropdown uses — and this path emitted nothing, so
+    # `key_set` under-counted. Emitted after the update so a request that sets
+    # provider and key together reports the provider the key belongs to.
+    if req.llm_api_key is not None:
+        telemetry.emit("key_set", {"provider": current.llm.provider})
+        telemetry.latch("key_set")
+
     return _settings_store.get_masked()
 
 
@@ -500,15 +542,51 @@ def _resolve_setup_command(slug: str, action: str) -> str | None:
     return None
 
 
+async def _credentials_now_configured(slug: str) -> bool:
+    """Re-run the manifest's credential ``check_command`` for ``slug``.
+
+    A login process exiting 0 is necessary but not sufficient: the invalid
+    ``claude login`` form parsed as a prompt and exited 0 having authenticated
+    nothing (bug #64). Only the CLI's own auth-status command can settle it,
+    and it is the same probe the sub-agent list renders from, so agreeing with
+    it is what stops the row flipping back to signed-out a second later.
+
+    Returns False when the answer can't be established — the caller treats
+    that as *unconfirmed*, never as a failure.
+    """
+    if _setup_engine is None:
+        return False
+    registry = getattr(_setup_engine, "_registry", None)
+    manifest = registry.get(slug) if registry is not None else None
+    if manifest is None:
+        return False
+    try:
+        binary = _setup_engine.resolve_binary(manifest)
+        configured, _missing = await asyncio.to_thread(
+            _setup_engine.check_credentials, manifest, binary
+        )
+    except Exception:
+        logger.exception("post-login credential re-check failed for %s", slug)
+        return False
+    return bool(configured)
+
+
 async def _run_login_job(slug: str, job_id: str, command: str) -> None:
     """Background task: run the CLI login command, broadcast progress.
 
-    Captures stdout+stderr line by line and emits ``login.progress`` events
-    over WebSocket. Final ``login.complete`` or ``login.failed`` carries the
-    return code. Tokens from this flow never enter Orbital's storage — the CLI
-    writes them to its own location. (Agents with no credential store of their
-    own don't come through here at all; they use the ``/credential`` routes.)
+    Captures stdout+stderr line by line and emits sanitised ``login.progress``
+    events over WebSocket. Final ``login.complete`` or ``login.failed`` carries
+    the return code; ``login.complete`` also carries ``verified``, the result
+    of re-running the manifest's credential check afterwards. An unverified
+    completion is deliberately NOT a failure — a slow keychain write must not
+    turn a real login into a reported error — but it is reported honestly so
+    the UI can say "signed in, but couldn't confirm".
+
+    Tokens from this flow never enter Orbital's storage — the CLI writes them
+    to its own location. (Agents with no credential store of their own don't
+    come through here at all; they use the ``/credential`` routes.)
     """
+    telemetry.emit("login_attempted", {"agent": slug})
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -517,6 +595,7 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
             creationflags=win_no_window_flags(),
         )
     except OSError as exc:
+        telemetry.emit("login_failed", {"agent": slug})
         if _ws_manager is not None:
             _ws_manager.broadcast_global({
                 "type": "login.failed",
@@ -529,11 +608,19 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
 
     _login_jobs[job_id]["pid"] = proc.pid
     assert proc.stdout is not None
+    timed_out = False
     while True:
-        raw = await proc.stdout.readline()
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(),
+                                         timeout=LOGIN_IDLE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            # Idle too long: the user walked away mid-OAuth. Kill it rather
+            # than hold the subprocess for the daemon's lifetime.
+            timed_out = True
+            break
         if not raw:
             break
-        line = raw.decode("utf-8", errors="replace").rstrip()
+        line = _strip_terminal_escapes(raw.decode("utf-8", errors="replace"))
         if _ws_manager is not None and line:
             _ws_manager.broadcast_global({
                 "type": "login.progress",
@@ -542,20 +629,62 @@ async def _run_login_job(slug: str, job_id: str, command: str) -> None:
                 "line": line,
             })
 
+    if timed_out:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        _login_jobs[job_id]["status"] = "failed"
+        _login_jobs[job_id]["timed_out"] = True
+        telemetry.emit("login_failed", {"agent": slug})
+        if _ws_manager is not None:
+            _ws_manager.broadcast_global({
+                "type": "login.failed",
+                "job_id": job_id,
+                "slug": slug,
+                "timed_out": True,
+                "error": (
+                    f"login timed out after "
+                    f"{int(LOGIN_IDLE_TIMEOUT_SECONDS)}s with no activity"
+                ),
+            })
+        return
+
     rc = await proc.wait()
-    _login_jobs[job_id]["status"] = "complete" if rc == 0 else "failed"
     _login_jobs[job_id]["return_code"] = rc
 
-    # Re-check status now that the auth state may have changed.
+    # Re-check status now that the auth state may have changed. This has to
+    # come before the re-check below so the list the UI refetches and the
+    # verdict we broadcast are reading the same (fresh) state.
     if _setup_engine is not None and hasattr(_setup_engine, "invalidate_cache"):
         _setup_engine.invalidate_cache()
 
+    if rc != 0:
+        _login_jobs[job_id]["status"] = "failed"
+        telemetry.emit("login_failed", {"agent": slug})
+        if _ws_manager is not None:
+            _ws_manager.broadcast_global({
+                "type": "login.failed",
+                "job_id": job_id,
+                "slug": slug,
+                "return_code": rc,
+            })
+        return
+
+    verified = await _credentials_now_configured(slug)
+    _login_jobs[job_id]["status"] = "complete" if verified else "unverified"
+    _login_jobs[job_id]["verified"] = verified
+    if not verified:
+        telemetry.emit("login_failed", {"agent": slug})
+
     if _ws_manager is not None:
         _ws_manager.broadcast_global({
-            "type": "login.complete" if rc == 0 else "login.failed",
+            "type": "login.complete",
             "job_id": job_id,
             "slug": slug,
             "return_code": rc,
+            "verified": verified,
         })
 
 
@@ -819,6 +948,15 @@ async def set_sub_agent_api_key(slug: str, req: SetSubAgentApiKeyRequest):
 
     if _setup_engine is not None and hasattr(_setup_engine, "invalidate_cache"):
         _setup_engine.invalidate_cache()
+
+    # The third way a key gets set, and the only one that emitted nothing.
+    # Gated on the CLI accepting it: a rejected key never landed anywhere, so
+    # counting it would inflate `key_set` with failures. ``provider`` is the
+    # agent slug here — this key belongs to the sub-agent CLI, not to the
+    # global LLM provider.
+    if proc.returncode == 0:
+        telemetry.emit("key_set", {"provider": slug})
+        telemetry.latch("key_set")
 
     return {
         "slug": slug,

@@ -207,6 +207,87 @@ describe('SubAgentSettings', () => {
     expect(screen.getByRole('button', { name: /^login$/i })).toBeInTheDocument();
   });
 
+  // The CLI finishes the OAuth handshake itself (the result travels
+  // server-side), so the UI's whole job is: offer the URL if the browser did
+  // not open, and be honest about an unconfirmed outcome.
+  async function renderClaudeCodeLoginCard() {
+    api.mockResolvedValueOnce([
+      makeEntry({
+        slug: 'claude-code',
+        name: 'Claude Code',
+        installed: true,
+        credentials_configured: false,
+        supports_login: true,
+      }),
+    ]);
+    render(<SubAgentSettings />);
+    await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+  }
+
+  it('renders the streamed sign-in URL as a link', async () => {
+    await renderClaudeCodeLoginCard();
+
+    emit('login.progress', {
+      slug: 'claude-code',
+      job_id: 'job-1',
+      line: "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true",
+    });
+
+    expect(screen.getByTestId('sub-agent-login-url-claude-code')).toHaveAttribute(
+      'href',
+      'https://claude.com/cai/oauth/authorize?code=true',
+    );
+  });
+
+  it('ignores login events for a different agent', async () => {
+    await renderClaudeCodeLoginCard();
+
+    emit('login.progress', { slug: 'other', job_id: 'job-9', line: 'visit: https://evil.test/x' });
+    expect(screen.queryByTestId('sub-agent-login-url-claude-code')).not.toBeInTheDocument();
+  });
+
+  // Exit code 0 is NOT proof of a login — that is the whole bug this guards.
+  // An unconfirmed result must read as "couldn't confirm", never as a failure.
+  it('reports an unverified completion distinctly from a failure', async () => {
+    await renderClaudeCodeLoginCard();
+
+    emit('login.complete', {
+      slug: 'claude-code',
+      job_id: 'job-1',
+      return_code: 0,
+      verified: false,
+    });
+
+    const notice = screen.getByTestId('sub-agent-login-notice-claude-code');
+    expect(notice).toHaveTextContent(/couldn't confirm/i);
+    expect(notice).not.toHaveTextContent(/did not complete/i);
+  });
+
+  it('shows no notice when a completion is verified', async () => {
+    await renderClaudeCodeLoginCard();
+
+    emit('login.complete', {
+      slug: 'claude-code',
+      job_id: 'job-1',
+      return_code: 0,
+      verified: true,
+    });
+
+    expect(
+      screen.queryByTestId('sub-agent-login-notice-claude-code'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reports a failed login', async () => {
+    await renderClaudeCodeLoginCard();
+
+    emit('login.failed', { slug: 'claude-code', job_id: 'job-1', return_code: 1 });
+
+    expect(screen.getByTestId('sub-agent-login-notice-claude-code')).toHaveTextContent(
+      /did not complete/i,
+    );
+  });
+
   it('makes Cursor auto permission policy legible without a persisted override', async () => {
     api.mockResolvedValueOnce([
       makeEntry({

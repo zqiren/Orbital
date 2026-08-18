@@ -165,6 +165,14 @@ class AgentLoop:
         # makes ``submit`` a silent no-op (lightweight test loops / no relay).
         from agent_os.budget.spend_broadcast import SpendBroadcaster
         self._spend_broadcaster = SpendBroadcaster(emit=on_budget_event)
+        # Install the post-append hook at the LEDGER chokepoint rather than at
+        # this loop's own append site. Sub-agent transports append to the same
+        # ledger without going through the loop, so a loop-side notification
+        # left their spend invisible to the UI until something else refreshed
+        # it. Registered per workspace and removed in terminate().
+        if project_dir is not None:
+            from agent_os.budget import ledger as _ledger_mod
+            _ledger_mod.register_append_hook(project_dir, self._on_ledger_append)
         self._running = False
         self._llm_failed = False
         self._on_session_end = on_session_end
@@ -471,14 +479,38 @@ class AgentLoop:
                 exc_info=True,
             )
             return
-        # Ledger-append is the CAUSAL moment a spend crosses 80%/100% of the
-        # window limit (Budget Piece 2 — Task E). Check the threshold/trip
-        # crossings here — separately guarded so a notify failure can never
-        # affect the ledger append above nor the loop. No-op when no budget
-        # config resolver or no emitter sink was plumbed.
-        self._check_budget_notify()
+        # NOTE: the threshold/trip notify + spend broadcast are NOT invoked
+        # here. Ledger-append is still the CAUSAL moment a spend crosses
+        # 80%/100% (Budget Piece 2 — Task E), but the trigger now lives at the
+        # ledger chokepoint (``budget.ledger.append_event`` → the hook this loop
+        # registered in __init__ → ``_on_ledger_append``), so the sub-agent
+        # transports' appends fire it too. The append above lands in that same
+        # chokepoint, so this path is unchanged in effect.
 
-    def _check_budget_notify(self) -> None:
+    def _on_ledger_append(self, project_dir: str, event) -> None:
+        """Post-append hook registered in ``budget.ledger`` for this workspace.
+
+        Fires for EVERY appender — this loop's management responses AND both
+        sub-agent transports — which is what makes sub-agent spend refresh the
+        settings breakdown instead of silently going stale until the next
+        management append.
+
+        Threshold/trip notification stays MANAGEMENT-ONLY: the limit governs
+        management spend exclusively (guard isolation, the P3-A pinned
+        regression passes ``sources=["management"]``), so a sub-agent append can
+        never move a crossing — running the detector on it would only buy an
+        extra spend() query. The spend BROADCAST runs for every source.
+
+        Never raises (``_check_budget_notify`` is fully guarded) and never
+        blocks (``submit`` is a synchronous debounce).
+        """
+        if project_dir != self._project_dir:
+            return
+        self._check_budget_notify(
+            notify=getattr(event, "source", None) == SOURCE_MANAGEMENT,
+        )
+
+    def _check_budget_notify(self, *, notify: bool = True) -> None:
         """Run the budget threshold/trip emitter after a ledger append, then
         feed the debounced ``budget.spend_updated`` broadcast (Budget Piece 3).
 
@@ -493,6 +525,11 @@ class AgentLoop:
         management-only query here for the broadcast. A spend/window-math failure
         skips the broadcast silently (already logged in the notify module).
 
+        ``notify=False`` (a SUB-AGENT append) skips the threshold/trip detector
+        entirely — sub-agent spend cannot cross a management-only limit — and
+        goes straight to the single management-only spend query the broadcast
+        needs, so the settings breakdown still refreshes.
+
         Never raises. No-op when ``on_budget_event``/``get_budget_config``/
         ``project_dir`` were not plumbed (e.g. lightweight test loops).
         """
@@ -503,13 +540,15 @@ class AgentLoop:
         try:
             cfg = self._get_budget_config()
             fx_rates = (cfg or {}).get("fx_rates") if isinstance(cfg, dict) else None
-            from agent_os.budget.notify import maybe_emit_budget_event
-            snapshot = maybe_emit_budget_event(
-                self._project_dir,
-                cfg,
-                emit=self._on_budget_event,
-                fx_rates=fx_rates,
-            )
+            snapshot = None
+            if notify:
+                from agent_os.budget.notify import maybe_emit_budget_event
+                snapshot = maybe_emit_budget_event(
+                    self._project_dir,
+                    cfg,
+                    emit=self._on_budget_event,
+                    fx_rates=fx_rates,
+                )
         except Exception:  # noqa: BLE001 — never break the loop on notify errors
             logger.warning(
                 "budget threshold/trip notify failed (session=%s); continuing.",
@@ -522,8 +561,9 @@ class AgentLoop:
         # ledger append nor the loop.
         try:
             if snapshot is None:
-                # No limit configured (or a notify-side failure) → run one
-                # management-only spend query so the corner still shows spend.
+                # No limit configured, a sub-agent append (detector skipped) or
+                # a notify-side failure → run one management-only spend query so
+                # the corner/breakdown still refresh.
                 snapshot = self._compute_spend_snapshot(cfg, fx_rates)
             if snapshot is not None:
                 self._spend_broadcaster.submit(
@@ -541,20 +581,30 @@ class AgentLoop:
 
     def _compute_spend_snapshot(self, cfg, fx_rates) -> "dict | None":
         """Compute the post-append management-spend snapshot for the
-        ``budget.spend_updated`` broadcast in the NO-LIMIT case only.
+        ``budget.spend_updated`` broadcast when the notify check ran no query.
 
-        The corner shows spend even without a limit, so when the notify check
-        ran no spend query (``maybe_emit_budget_event`` returned None because no
-        limit is set) we run exactly ONE management-only query here, converted
-        into ``budget_currency`` (consistent with the meter). Returns
-        ``{"window", "spend", "limit", "currency"}`` (``limit`` always None on
-        this path) or None when spend cannot be computed (guard-style failure →
-        skip the broadcast silently with a warning).
+        That is the case when no limit is configured (``maybe_emit_budget_event``
+        returns None early) and when the append came from a SUB-AGENT (the
+        detector is skipped — see ``_check_budget_notify``). The corner shows
+        spend either way, so we run exactly ONE management-only query here,
+        converted into ``budget_currency`` (consistent with the meter). Returns
+        ``{"window", "spend", "limit", "currency"}`` or None when spend cannot be
+        computed (guard-style failure → skip the broadcast silently with a
+        warning).
         """
         cfg = cfg or {}
         window = cfg.get("budget_period") or "daily"
         currency = cfg.get("budget_currency") or "USD"
         anchor_ts = cfg.get("budget_anchor_ts")
+        # The limit is reported in ``budget_currency`` (same convention as the
+        # notify snapshot). None/0/negative → no limit, exactly as before.
+        limit = cfg.get("budget_limit_usd")
+        try:
+            limit_val = float(limit) if limit is not None else None
+        except (TypeError, ValueError):
+            limit_val = None
+        if limit_val is not None and limit_val <= 0:
+            limit_val = None
         try:
             from agent_os.budget.ledger import spend as _spend
             result = _spend(
@@ -580,9 +630,27 @@ class AgentLoop:
         return {
             "window": window,
             "spend": spend_amount,
-            "limit": None,
+            "limit": limit_val,
             "currency": currency,
         }
+
+    def _flush_spend_broadcast(self) -> None:
+        """Emit the debouncer's pending spend payload at an idle boundary.
+
+        Called at the end of every run (turn over → the agent is idle) and from
+        ``terminate()``. Synchronous and self-guarded: it runs inside run()'s
+        ``finally``, which may execute while a CancelledError is propagating, so
+        it must never raise and never await.
+        """
+        try:
+            self._spend_broadcaster.flush()
+        except Exception:  # noqa: BLE001 — an idle-settle failure must not
+            # disturb loop teardown; the next append re-broadcasts anyway.
+            logger.warning(
+                "budget spend_updated idle flush failed (session=%s); continuing.",
+                getattr(self._session, "session_id", "?"),
+                exc_info=True,
+            )
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
         """Stream LLM response from the primary provider.
@@ -661,6 +729,15 @@ class AgentLoop:
                 f"(session {getattr(self._session, 'session_id', '?')})"
             )
         self._running = True
+        # Re-arm the ledger chokepoint hook: a prior terminate() released it, and
+        # this same loop object is what a hot resume (_start_loop) runs again.
+        # Registering at every run start also makes the RUNNING loop the one that
+        # broadcasts when several loops share a workspace. Idempotent.
+        if self._project_dir is not None:
+            from agent_os.budget import ledger as _ledger_mod
+            _ledger_mod.register_append_hook(
+                self._project_dir, self._on_ledger_append,
+            )
         # Reset queue exit-reason at the start of every run so the dispatcher
         # always reads a fresh value scoped to this run.
         self._exit_reason = "text"
@@ -1662,6 +1739,14 @@ class AgentLoop:
             )
 
             self._running = False
+            # The turn is over: settle the spend corner on the FINAL figure now
+            # rather than leaving the debouncer's pending payload to fire (or
+            # not) up to a second later. The run's last append almost always
+            # lands inside the 1s window, so this pending payload is precisely
+            # the number that would otherwise sit stale for the whole idle
+            # period. A no-op when nothing is pending (the last append already
+            # went out on a leading edge) — no duplicate frame.
+            self._flush_spend_broadcast()
 
     # ------------------------------------------------------------------
     # State refresh helpers
@@ -1967,13 +2052,26 @@ class AgentLoop:
         # Cancel any in-flight refresh task before cancelling the turn.
         if self._refresh_task is not None and not self._refresh_task.done():
             self._refresh_task.cancel()
-        # Cancel any pending debounced spend_updated trailing broadcast so it
-        # does not fire after teardown (best-effort UI freshness, not durable
-        # state — dropping a pending trailing on terminate is acceptable).
-        await self._spend_broadcaster.aclose()
         await self.cancel_turn()
         # Cooperative flag: loop's between-iterations check picks this up.
         self._session.stop()
+        # Settle the spend corner, THEN disarm. This runs AFTER cancel_turn() +
+        # session.stop() deliberately: those two are the last moments a ledger
+        # append can land, so flushing here catches the final numbers instead of
+        # racing them. aclose() now FLUSHES rather than cancels — the pending
+        # payload it used to drop was systematically the run's last append, i.e.
+        # exactly the figure the user then stared at for the whole idle period.
+        # It leaves nothing pending and no armed timer, so nothing can fire
+        # later against a torn-down loop.
+        await self._spend_broadcaster.aclose()
+        # Release the ledger chokepoint hook. Identity-checked inside, so if a
+        # newer loop for this workspace already replaced ours, this is a no-op
+        # and the successor keeps broadcasting.
+        if self._project_dir is not None:
+            from agent_os.budget import ledger as _ledger_mod
+            _ledger_mod.unregister_append_hook(
+                self._project_dir, self._on_ledger_append,
+            )
         # Re-cancel: the await in cancel_turn() above can let the loop's own
         # task wake into the turn-boundary block (schedule_checkpoint /
         # _maybe_consume_dirty) BEFORE session.stop() lands above, spawning a

@@ -74,6 +74,56 @@ class TestRollup:
         )
         assert ping["counters"]["turns"] == 0
         assert ping["counters"]["tokens_by_provider"] == {}
+        assert ping["counters"]["errors_by_provider"] == {}
+        assert ping["counters"]["login_attempted"] == 0
+        assert ping["counters"]["login_failed"] == 0
+
+    def test_errors_split_by_provider_alongside_by_code(self, tmp_path):
+        """Spec 063 §4 + decision 2: the new map is ADDITIVE — `errors` is the
+        only error series with history and keeps its exact shape."""
+        spool = seed_spool(tmp_path, [
+            ev("llm_error", error_code="invalid_api_key", provider="deepseek"),
+            ev("llm_error", error_code="provider_unreachable", provider="deepseek"),
+            ev("llm_error", error_code="invalid_api_key", provider="minimax"),
+        ])
+        c = build_ping(
+            InstallIdentity(tmp_path), spool, DAY, version="0.9.1", os_name="windows",
+        )["counters"]
+        assert c["errors"] == {"invalid_api_key": 2, "provider_unreachable": 1}
+        assert c["errors_by_provider"] == {"deepseek": 2, "minimax": 1}
+
+    def test_unresolved_provider_falls_back_to_unknown(self, tmp_path):
+        """Construction failures fail before the provider is resolved; the
+        same `unknown` bucket tokens_by_provider already uses (§8)."""
+        spool = seed_spool(tmp_path, [
+            ev("llm_error", error_code="missing_api_key"),          # field absent
+            ev("llm_error", error_code="missing_api_key", provider=None),
+            ev("llm_error", error_code="invalid_api_key", provider="deepseek"),
+        ])
+        c = build_ping(
+            InstallIdentity(tmp_path), spool, DAY, version="0.9.1", os_name="darwin",
+        )["counters"]
+        assert c["errors_by_provider"] == {"unknown": 2, "deepseek": 1}
+        assert sum(c["errors_by_provider"].values()) == sum(c["errors"].values())
+
+    def test_login_funnel_counters_aggregate(self, tmp_path):
+        """Spec 063 §12 decision 5: sub-agent setup — the product's
+        differentiator — was invisible between key_set and first_turn. The
+        agent slug stays in the local spool; only totals are transmitted."""
+        spool = seed_spool(tmp_path, [
+            ev("login_attempted", agent="claude-code"),
+            ev("login_attempted", agent="codex"),
+            ev("login_attempted", agent="codex"),
+            ev("login_failed", agent="codex"),
+            # Different day must be excluded:
+            {"event": "login_attempted", "ts": "2026-08-07T10:00:00+00:00"},
+        ])
+        c = build_ping(
+            InstallIdentity(tmp_path), spool, DAY, version="0.9.1", os_name="windows",
+        )["counters"]
+        assert c["login_attempted"] == 3
+        assert c["login_failed"] == 1
+        assert isinstance(c["login_attempted"], int)
 
 
 class FakePost:
