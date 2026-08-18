@@ -64,6 +64,12 @@ def _strip_terminal_escapes(line: str) -> str:
     """
     line = _OSC_SEQUENCE_RE.sub("", line)
     line = _CSI_SEQUENCE_RE.sub("", line)
+    # Drop the LINE TERMINATOR before interpreting carriage returns as redraws.
+    # On Windows the CLI's newline is CRLF, so `"waiting\r\n"` would otherwise
+    # split to `"\n"` and reduce to "" — falsy, so the caller broadcast nothing
+    # and EVERY login progress line vanished on Windows, taking the sign-in URL
+    # fallback link with it. A terminator is not a redraw.
+    line = line.rstrip("\r\n")
     if "\r" in line:
         line = line.split("\r")[-1]
     return _CONTROL_CHARS_RE.sub("", line).strip()

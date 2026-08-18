@@ -293,6 +293,27 @@ class TestProgressSanitising:
         assert settings_routes._strip_terminal_escapes(
             "- waiting\r\\ waiting\r| done") == "| done"
 
+    # A CRLF line terminator is NOT a spinner redraw. Getting this wrong made
+    # every progress line reduce to "" on Windows (`"waiting\r\n"` → split on
+    # \r → "\n" → ""), which the broadcaster skips as falsy — so the whole
+    # login progress stream, sign-in URL included, vanished on the platform
+    # carrying most users. Asserted on the pure function so the guard holds on
+    # every platform; the original tests drove a real child process and so only
+    # ever saw the host's own line ending.
+    def test_crlf_terminator_is_not_treated_as_a_redraw(self):
+        assert settings_routes._strip_terminal_escapes(
+            "still waiting 0\r\n") == "still waiting 0"
+
+    def test_crlf_terminated_osc8_url_survives(self):
+        assert settings_routes._strip_terminal_escapes(_OSC8_LINE + "\r\n") == _URL
+
+    def test_redraws_still_collapse_when_crlf_terminated(self):
+        assert settings_routes._strip_terminal_escapes(
+            "- waiting\r| done\r\n") == "| done"
+
+    def test_bare_cr_terminator_is_not_treated_as_a_redraw(self):
+        assert settings_routes._strip_terminal_escapes("waiting\r") == "waiting"
+
     def test_broadcast_progress_line_is_clean(self, login_env, tmp_path):
         ws, _engine = login_env
         body = (
