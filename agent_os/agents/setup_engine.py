@@ -280,6 +280,10 @@ class SetupEngine:
                 shell=True,
                 capture_output=True,
                 text=True,
+                # CLIs emit UTF-8; the Windows ANSI default crashes the
+                # decode on non-ASCII output (see test_subprocess_encoding).
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 creationflags=win_no_window_flags(),
             )
@@ -381,6 +385,8 @@ class SetupEngine:
                 shell=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 creationflags=win_no_window_flags(),
             )
@@ -403,6 +409,8 @@ class SetupEngine:
                 shell=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 creationflags=win_no_window_flags(),
             )

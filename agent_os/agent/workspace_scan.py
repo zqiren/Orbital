@@ -36,12 +36,21 @@ def _list_files(workspace: str) -> list[str]:
                 cwd=workspace,
                 capture_output=True,
                 text=True,
+                # ripgrep emits UTF-8; without encoding=, Windows decodes with
+                # the ANSI code page and non-ASCII filenames crash the scan.
+                encoding="utf-8",
+                errors="replace",
                 timeout=_RG_TIMEOUT_SECONDS,
                 creationflags=win_no_window_flags(),
             )
-            if proc.returncode in (0, 1):  # 1 == no files matched
+            # stdout can be None on Windows when the pipe reader thread dies
+            # (e.g. a decode error) — treat it as a failed listing, not a crash.
+            if proc.returncode in (0, 1) and proc.stdout is not None:
+                # 1 == no files matched
                 return [ln for ln in proc.stdout.splitlines() if ln.strip()]
-        except (OSError, subprocess.SubprocessError):
+        except Exception:
+            # Any rg failure — including decode errors, which are ValueError,
+            # not SubprocessError — degrades to the walk fallback below.
             pass
     # Fallback: os.walk skipping .git (no gitignore semantics).
     out: list[str] = []
