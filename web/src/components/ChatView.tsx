@@ -2759,7 +2759,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           !coldStartDismissed ? (
             <div className="mt-8">
               <ColdStartCard
-                folderName={(project.workspace || '').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
+                folderName={(project.workspace || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || t('coldStart.folderFallback')}
                 busy={coldStartBusy}
                 error={coldStartError}
                 onScan={async () => {
