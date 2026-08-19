@@ -140,16 +140,48 @@ def test_sdk_transport_with_hands_off_auto_approves_write_and_shell():
 # Test 3 — management agent still respects the project's autonomy
 # ---------------------------------------------------------------------------
 
-def test_management_agent_resolution_path_reads_project_autonomy():
-    """agents_v2.py's start path still derives Autonomy from project.autonomy.
+def _config_for(project: dict):
+    """Build an AgentConfig through the canonical builder — the single site
+    every start path (chat, queue, trigger, /agents/start) now derives from."""
+    from agent_os.daemon_v2.agent_manager import AgentManager
 
-    Static check: the resolution at agents_v2.py:651-655 must still read
-    project.get("autonomy", ...) — only the sub-agent path was elevated.
-    """
-    src = inspect.getsource(agents_v2_module)
-    assert 'autonomy_str = project.get("autonomy", "hands_off")' in src, (
-        "management-agent autonomy resolution must still read project.autonomy"
+    project_store = MagicMock()
+    project_store.get_project = MagicMock(return_value=project)
+    settings_store = MagicMock()
+    settings_store.get = MagicMock(return_value=None)
+    credential_store = MagicMock()
+    credential_store.get_api_key = MagicMock(return_value=None)
+    mgr = AgentManager(
+        project_store=project_store, ws_manager=MagicMock(),
+        sub_agent_manager=MagicMock(), activity_translator=MagicMock(),
+        process_manager=MagicMock(), settings_store=settings_store,
+        credential_store=credential_store,
     )
+    return mgr._build_agent_config_from_project(project["project_id"])
+
+
+def test_management_agent_resolution_path_reads_project_autonomy():
+    """The management agent still derives Autonomy from project.autonomy —
+    only the sub-agent path was elevated to hardcoded HANDS_OFF.
+
+    Behavioral, not a source grep: this used to assert that the literal
+    ``autonomy_str = project.get("autonomy", "hands_off")`` appeared in
+    agents_v2.py, which broke the moment that route stopped re-deriving
+    config and started calling the canonical builder like every other start
+    path. The invariant was never about where the line lives.
+    """
+    cfg = _config_for({"project_id": "p", "workspace": "/tmp/p",
+                       "autonomy": "check_in"})
+    assert cfg.autonomy is Autonomy.CHECK_IN
+
+
+def test_management_agent_autonomy_defaults_and_survives_garbage():
+    cfg = _config_for({"project_id": "p", "workspace": "/tmp/p"})
+    assert cfg.autonomy is Autonomy.HANDS_OFF
+
+    cfg = _config_for({"project_id": "p", "workspace": "/tmp/p",
+                       "autonomy": "not-a-real-preset"})
+    assert cfg.autonomy is Autonomy.HANDS_OFF
 
 
 def test_check_in_management_still_prompts_for_write_tools():

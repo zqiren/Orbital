@@ -534,9 +534,18 @@ class TestTriggerManager:
         assert call_kwargs.kwargs["trigger_source"] == "schedule"
         assert call_kwargs.kwargs["trigger_name"] == "Test"
         assert "Do the thing" in call_kwargs.kwargs["initial_message"]
-        config = call_kwargs.args[1]
-        assert config.sub_agent_deployment_instructions == (
-            "Use Codex for trigger work."
+
+        # The config is the canonical builder's, passed through untouched.
+        # This used to assert that _fire_trigger copied
+        # sub_agent_deployment_instructions off the project itself — one field
+        # of a private re-derivation that also resolved model/provider/
+        # base_url/api_key independently and paired a project's stale endpoint
+        # with the current global key, 401ing every scheduled run. Deriving
+        # config is no longer this path's job; carrying it faithfully is.
+        # Field-level coverage lives in tests/unit/test_agent_config_parity.py.
+        mock_agent_mgr._build_agent_config_from_project.assert_called_once_with(pid)
+        assert call_kwargs.args[1] is (
+            mock_agent_mgr._build_agent_config_from_project.return_value
         )
 
     @pytest.mark.asyncio

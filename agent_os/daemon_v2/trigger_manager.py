@@ -599,77 +599,17 @@ class TriggerManager:
             trigger["trigger_count"] = old_trigger_count
             raise
 
-        # Start the agent
+        # Start the agent.
+        #
+        # Config comes from AgentManager's canonical builder, never a local
+        # re-derivation. The copy that used to live here resolved model,
+        # provider, base_url and api_key as four independent fallbacks, so a
+        # project that pinned a provider + endpoint but left model/key empty
+        # got the stale endpoint paired with the current global key — every
+        # scheduled run 401'd while chat on the same project worked. See
+        # tests/unit/test_agent_config_parity.py.
         try:
-            from agent_os.daemon_v2.models import AgentConfig
-            from agent_os.agent.prompt_builder import Autonomy
-
-            # Always use project-level autonomy (triggers inherit from project)
-            autonomy_str = project.get("autonomy", "hands_off")
-            try:
-                autonomy = Autonomy(autonomy_str)
-            except ValueError:
-                autonomy = Autonomy.HANDS_OFF
-
-            # Resolve API key / model / base_url through the same fallback
-            # chain as inject_message: project → credential store → global settings
-            settings_store = getattr(self._agent_manager, '_settings_store', None)
-            credential_store = getattr(self._agent_manager, '_credential_store', None)
-            global_settings = settings_store.get() if settings_store else None
-            cred_key = credential_store.get_api_key() if credential_store else None
-            api_key = (
-                project.get("api_key")
-                or cred_key
-                or (global_settings.llm.api_key if global_settings else None)
-                or ""
-            )
-            base_url = project.get("base_url") or (
-                global_settings.llm.base_url if global_settings else None
-            )
-            model = (
-                project.get("model")
-                or (global_settings.llm.model if global_settings else None)
-                or ""
-            )
-
-            # Compute available sub-agents from setup_engine, minus the
-            # project's disabled_sub_agents denylist. Legacy ``enabled_sub_agents``
-            # is informational-only in v1.
-            disabled = set(project.get("disabled_sub_agents", []) or [])
-            setup_engine = getattr(self._agent_manager, '_setup_engine', None)
-            if setup_engine is not None:
-                available = setup_engine.check_all()
-                trigger_enabled_sub_agents = [
-                    a.slug for a in available
-                    if a.installed and a.slug != "built-in"
-                    and a.slug not in disabled
-                ]
-            else:
-                trigger_enabled_sub_agents = [
-                    s for s in (project.get("enabled_sub_agents") or [])
-                    if s not in disabled
-                ]
-
-            config = AgentConfig(
-                workspace=project["workspace"],
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                autonomy=autonomy,
-                sdk=project.get("sdk", "openai"),
-                provider=project.get("provider", "custom"),
-                project_name=project.get("name", ""),
-                project_instructions=project.get("instructions", ""),
-                sub_agent_deployment_instructions=(project.get(
-                    "sub_agent_deployment_instructions", ""
-                ) or ""),
-                is_scratch=project.get("is_scratch", False),
-                agent_name=project.get("agent_name", project.get("name", "")),
-                enabled_sub_agents=trigger_enabled_sub_agents,
-                disabled_sub_agents=list(disabled),
-                budget_limit_usd=project.get("budget_limit_usd"),
-                budget_action=project.get("budget_action", "pause"),
-            )
+            config = self._agent_manager._build_agent_config_from_project(project_id)
             await self._agent_manager.start_agent(
                 project_id, config,
                 initial_message=initial_message,

@@ -94,6 +94,7 @@ def _manager_with_global(projects: dict) -> AgentManager:
     gs.llm.base_url = "https://tokendance.space/gateway/v1"
     gs.llm.model = "deepseek-v4-flash"
     gs.llm.api_key = None
+    gs.llm.fallback_models = []
     mgr._settings_store.get = MagicMock(return_value=gs)
     mgr._credential_store.get_api_key = MagicMock(return_value="sk-td-global")
     return mgr
@@ -134,3 +135,167 @@ def test_cross_provider_pinned_project_unchanged():
     assert cfg.base_url == "https://api.deepseek.com"
     assert cfg.provider == "deepseek"
     assert cfg.model == "deepseek-chat"
+
+
+# ---- Three-way start-path parity (2026-08-19) --------------------------------
+#
+# Live-daemon bug: every scheduled trigger on the Orbital-marketing project
+# fired into a 401 while typing in chat worked, minutes apart, same session.
+# Cause: three AgentConfig construction sites had drifted apart, and the
+# trigger one (``TriggerManager._fire_trigger``) had none of the
+# provider/endpoint invariants the canonical builder grew. It resolved each
+# field independently — project provider ``minimax`` + project base_url
+# ``api.minimaxi.com`` + global model ``deepseek-v4-flash`` + the global
+# OpenCode Go key — a combination no single provider can serve.
+#
+# The invariant these tests pin is not any one rule but the *absence of a
+# second implementation*: every path that starts an agent for a project
+# (chat/inject, queue, trigger, /agents/start) must derive its config from
+# ``_build_agent_config_from_project`` so a rule written once holds
+# everywhere. Fallback models included — they were previously resolved only
+# in the /agents/start route, so a trigger or queue auto-start silently ran
+# with no fallback chain at all.
+
+import asyncio
+from unittest.mock import AsyncMock
+
+from agent_os.daemon_v2.trigger_manager import TriggerManager
+
+
+# The exact live shape that broke: project pins a provider + endpoint it no
+# longer has a key for, leaves model/key empty to inherit the global provider.
+STALE_PINNED = {
+    "project_id": "p_m", "name": "Orbital-marketing", "workspace": "/tmp/m",
+    "provider": "minimax", "model": "", "api_key": "",
+    "base_url": "https://api.minimaxi.com/v1",
+    "triggers": [{
+        "id": "trg_test", "name": "Daily scan", "enabled": True,
+        "type": "schedule", "task": "Scan the repo.",
+        "schedule": {"cron": "0 9 * * *", "human": "Every day at 9:00 AM"},
+    }],
+}
+
+
+def _manager_with_opencode_global(projects: dict) -> AgentManager:
+    """Global settings on OpenCode Go with the key in the credential store —
+    the state of the install where the trigger 401s were observed."""
+    mgr = _manager_with(projects)
+    gs = MagicMock()
+    gs.llm.provider = "opencode-go"
+    gs.llm.base_url = "https://opencode.ai/zen/go/v1"
+    gs.llm.model = "deepseek-v4-flash"
+    gs.llm.api_key = None
+    gs.llm.fallback_models = []
+    mgr._settings_store.get = MagicMock(return_value=gs)
+    mgr._credential_store.get_api_key = MagicMock(return_value="sk-opencode-global")
+    return mgr
+
+
+def _llm_fields(cfg) -> dict:
+    """The subset that decides which endpoint the request actually reaches."""
+    return {
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": cfg.base_url,
+        "api_key": cfg.api_key,
+        "sdk": cfg.sdk,
+        "fallbacks": [(fb.provider, fb.model, fb.base_url, fb.api_key)
+                      for fb in cfg.llm_fallback_models],
+    }
+
+
+def _config_passed_to_start_agent(mgr) -> "AgentConfig":
+    """Pull the AgentConfig out of the mocked start_agent call."""
+    assert mgr.start_agent.await_count == 1, "start_agent was not called exactly once"
+    args, kwargs = mgr.start_agent.await_args
+    return kwargs.get("config") or args[1]
+
+
+def test_trigger_start_uses_canonical_config():
+    """A fired trigger must start the agent with exactly the config the
+    canonical builder derives — not its own re-derivation."""
+    mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
+    expected = _llm_fields(mgr._build_agent_config_from_project("p_m"))
+
+    mgr.start_agent = AsyncMock()
+    mgr.is_running = MagicMock(return_value=False)
+    tm = TriggerManager(mgr._project_store, mgr)
+    asyncio.run(tm._fire_trigger("p_m", "trg_test"))
+
+    assert _llm_fields(_config_passed_to_start_agent(mgr)) == expected
+
+
+def test_trigger_start_does_not_pair_global_key_with_stale_endpoint():
+    """The concrete failure: an OpenCode Go key sent to api.minimaxi.com."""
+    mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
+    mgr.start_agent = AsyncMock()
+    mgr.is_running = MagicMock(return_value=False)
+    tm = TriggerManager(mgr._project_store, mgr)
+    asyncio.run(tm._fire_trigger("p_m", "trg_test"))
+
+    cfg = _config_passed_to_start_agent(mgr)
+    assert cfg.base_url == "https://opencode.ai/zen/go/v1"
+    assert cfg.provider == "opencode-go"
+    assert cfg.model == "deepseek-v4-flash"
+    assert cfg.api_key == "sk-opencode-global"
+
+
+def test_start_route_uses_canonical_config():
+    """``POST /agents/start`` must derive config the same way."""
+    from agent_os.api.routes import agents_v2
+
+    mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
+    expected = _llm_fields(mgr._build_agent_config_from_project("p_m"))
+
+    mgr.start_agent = AsyncMock()
+    agents_v2.configure(
+        project_store=mgr._project_store, agent_manager=mgr,
+        ws_manager=MagicMock(), settings_store=mgr._settings_store,
+        credential_store=mgr._credential_store,
+        provider_registry=mgr._provider_registry,
+    )
+    asyncio.run(agents_v2.start_agent(
+        agents_v2.StartAgentRequest(project_id="p_m")))
+
+    assert _llm_fields(_config_passed_to_start_agent(mgr)) == expected
+
+
+def test_canonical_config_carries_project_fallback_models():
+    """Fallback chains were resolved only in the /agents/start route, so a
+    trigger or queue auto-start ran with no fallback at all."""
+    with_fb = {**STALE_PINNED, "llm_fallback_models": [
+        {"provider": "deepseek", "model": "deepseek-chat",
+         "base_url": "https://api.deepseek.com", "api_key": "", "sdk": "openai"},
+    ]}
+    mgr = _manager_with_opencode_global({"p_m": with_fb})
+    cfg = mgr._build_agent_config_from_project("p_m")
+
+    assert [fb.model for fb in cfg.llm_fallback_models] == ["deepseek-chat"]
+    # An entry with no key of its own inherits the resolved primary key.
+    assert cfg.llm_fallback_models[0].api_key == "sk-opencode-global"
+
+
+def test_canonical_config_falls_back_to_global_fallback_models():
+    """No project-level chain = inherit the global one."""
+    mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
+    gs = mgr._settings_store.get()
+    fb = MagicMock()
+    fb.model_dump = MagicMock(return_value={
+        "provider": "deepseek", "model": "deepseek-reasoner",
+        "base_url": "https://api.deepseek.com", "api_key": "sk-fb", "sdk": "openai",
+    })
+    gs.llm.fallback_models = [fb]
+
+    cfg = mgr._build_agent_config_from_project("p_m")
+    assert [f.model for f in cfg.llm_fallback_models] == ["deepseek-reasoner"]
+    assert cfg.llm_fallback_models[0].api_key == "sk-fb"
+
+
+def test_canonical_config_carries_agent_slug_and_credentials():
+    """Fields the /agents/start route used to add on its own."""
+    pinned = {**NORMAL, "agent_slug": "claude-code",
+              "agent_credentials": {"claude-code": {"token": "t"}}}
+    mgr = _manager_with_opencode_global({"p_n": pinned})
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.agent_slug == "claude-code"
+    assert cfg.agent_credentials == {"claude-code": {"token": "t"}}

@@ -1501,10 +1501,20 @@ class AgentManager:
     def _build_agent_config_from_project(self, project_id: str) -> AgentConfig:
         """Construct an AgentConfig for ``project_id`` from the project store.
 
-        Used by auto-start paths (inject_message Case 3 and the queue items
-        route) so the same derivation logic — autonomy resolution, sub-agent
-        availability, API key/model/base_url fallback through credential and
-        settings stores — runs in one place.
+        The single derivation site for EVERY path that starts an agent for a
+        project — chat/inject auto-start, the queue items route, scheduled and
+        file-watch triggers, the ``/agents/start`` route, cold-start scan, and
+        hot-resume live-resolve. Autonomy resolution, sub-agent availability,
+        API key/model/base_url/provider resolution through the credential and
+        settings stores, and the fallback chain all run here and only here.
+
+        That is a hard invariant, not a convenience: when the trigger path
+        carried its own copy it resolved each LLM field independently and
+        paired a project's stale ``base_url`` snapshot with the current global
+        key, so every scheduled run 401'd while chat on the same project and
+        session worked. ``tests/unit/test_agent_config_parity.py`` pins the
+        parity. Callers needing extra fields set them on the returned
+        dataclass — they must not re-derive anything resolved here.
 
         Raises:
             KeyError: if no project exists for ``project_id``.
@@ -1593,6 +1603,30 @@ class AgentManager:
             else:
                 base_url = (global_settings.llm.base_url if global_settings else None) or project.get("base_url")
 
+        # Fallback chain: project-level > global-level > empty. Resolved here
+        # rather than per-caller because every start path deserves the same
+        # chain — it used to live only in the /agents/start route, so a
+        # trigger fire, a queue auto-start, an inject auto-start and a
+        # cold-start scan all ran with no fallback at all and died on the
+        # first transient the primary threw.
+        from agent_os.daemon_v2.models import FallbackModelEntry
+
+        raw_fallbacks = project.get("llm_fallback_models")
+        if not raw_fallbacks and global_settings:
+            raw_fallbacks = [
+                fb.model_dump() for fb in (global_settings.llm.fallback_models or [])
+            ]
+        fallback_models = [
+            FallbackModelEntry(
+                provider=fb.get("provider", "custom"),
+                model=fb.get("model", ""),
+                base_url=fb.get("base_url"),
+                api_key=fb.get("api_key") or api_key,  # inherit primary key if empty
+                sdk=fb.get("sdk", "openai"),
+            )
+            for fb in (raw_fallbacks or [])
+        ]
+
         return AgentConfig(
             workspace=project["workspace"],
             model=model,
@@ -1610,6 +1644,9 @@ class AgentManager:
             disabled_sub_agents=list(disabled),
             is_scratch=project.get("is_scratch", False),
             agent_name=project.get("agent_name", project.get("name", "")),
+            agent_slug=project.get("agent_slug", "built-in"),
+            agent_credentials=project.get("agent_credentials", {}),
+            llm_fallback_models=fallback_models,
             budget_limit_usd=project.get("budget_limit_usd"),
             budget_action=project.get("budget_action", "pause"),
         )

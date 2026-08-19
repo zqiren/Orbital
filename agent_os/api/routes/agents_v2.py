@@ -1112,92 +1112,18 @@ async def delete_project(project_id: str):
 
 @router.post("/agents/start")
 async def start_agent(req: StartAgentRequest):
-    from agent_os.daemon_v2.models import AgentConfig
-
     project = _project_store.get_project(req.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    autonomy_str = project.get("autonomy", "hands_off")
-    try:
-        autonomy = Autonomy(autonomy_str)
-    except ValueError:
-        autonomy = Autonomy.HANDS_OFF
+    # Config comes from the canonical builder, same as every other start path
+    # (inject auto-start, queue, triggers, cold-start scan). This route used to
+    # carry a partial copy of the provider/endpoint rules — it had the
+    # crosses-provider guard but not the provider-tracks-model rule — so a
+    # project inheriting the global model while pinning its own stale provider
+    # reached the wrong endpoint. See tests/unit/test_agent_config_parity.py.
+    config = _agent_manager._build_agent_config_from_project(req.project_id)
 
-    # Use global settings as fallback for missing project-level LLM config
-    global_settings = _settings_store.get() if _settings_store else None
-    cred_key = _credential_store.get_api_key() if _credential_store else None
-    model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-    # base_url and api_key must stay within the project's OWN provider. The
-    # global values belong to the GLOBAL provider, so inheriting them into a
-    # project pinned elsewhere pairs one provider's key with another's
-    # endpoint — the classic wrong-provider 401. (Observed: a project on
-    # opencode-zen with the endpoint field left empty reached tokendance.space
-    # and came back `401 API 密钥不存在`.) Same rule as
-    # AgentManager._build_agent_config_from_project, which this route cannot
-    # simply call: the canonical builder omits llm_fallback_models,
-    # agent_slug, agent_credentials and global_preferences_path.
-    global_provider = global_settings.llm.provider if global_settings else None
-    project_provider = project.get("provider")
-    crosses_provider = (
-        bool(project.get("model")) and project_provider
-        and project_provider != global_provider
-    )
-    if crosses_provider:
-        base_url = project.get("base_url") or (
-            _provider_registry.get_provider_data(project_provider).get("base_url")
-            if _provider_registry else None
-        )
-        api_key = project.get("api_key") or ""
-    else:
-        api_key = (project.get("api_key")
-                   or cred_key
-                   or (global_settings.llm.api_key if global_settings else None)
-                   or "")
-        base_url = project.get("base_url") or (
-            global_settings.llm.base_url if global_settings else None)
-
-    # Resolve fallback models: project-level > global-level > empty
-    from agent_os.daemon_v2.models import FallbackModelEntry
-    raw_fallbacks = project.get("llm_fallback_models")
-    if not raw_fallbacks and global_settings:
-        raw_fallbacks = [fb.model_dump() for fb in global_settings.llm.fallback_models]
-    fallback_models = []
-    for fb in (raw_fallbacks or []):
-        fb_key = fb.get("api_key") or api_key  # inherit primary key if empty
-        fallback_models.append(FallbackModelEntry(
-            provider=fb.get("provider", "custom"),
-            model=fb.get("model", ""),
-            base_url=fb.get("base_url"),
-            api_key=fb_key,
-            sdk=fb.get("sdk", "openai"),
-        ))
-
-    config = AgentConfig(
-        workspace=project["workspace"],
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        autonomy=autonomy,
-        sdk=project.get("sdk", "openai"),
-        provider=project.get("provider", "custom"),
-        project_name=project.get("name", ""),
-        project_instructions=project.get("instructions", ""),
-        sub_agent_deployment_instructions=(project.get(
-            "sub_agent_deployment_instructions", ""
-        ) or ""),
-        agent_slug=project.get("agent_slug", "built-in"),
-        enabled_sub_agents=project.get("enabled_sub_agents", []),
-        disabled_sub_agents=project.get("disabled_sub_agents", []),
-        agent_credentials=project.get("agent_credentials", {}),
-        is_scratch=project.get("is_scratch", False),
-        agent_name=project.get("agent_name", project.get("name", "")),
-        global_preferences_path="",
-        llm_fallback_models=fallback_models,
-        budget_limit_usd=project.get("budget_limit_usd"),
-        budget_action=project.get("budget_action", "pause"),
-    )
     try:
         await _agent_manager.start_agent(
             req.project_id, config,
