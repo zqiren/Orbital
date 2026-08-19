@@ -1127,12 +1127,36 @@ async def start_agent(req: StartAgentRequest):
     # Use global settings as fallback for missing project-level LLM config
     global_settings = _settings_store.get() if _settings_store else None
     cred_key = _credential_store.get_api_key() if _credential_store else None
-    api_key = (project.get("api_key")
-               or cred_key
-               or (global_settings.llm.api_key if global_settings else None)
-               or "")
-    base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
     model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
+
+    # base_url and api_key must stay within the project's OWN provider. The
+    # global values belong to the GLOBAL provider, so inheriting them into a
+    # project pinned elsewhere pairs one provider's key with another's
+    # endpoint — the classic wrong-provider 401. (Observed: a project on
+    # opencode-zen with the endpoint field left empty reached tokendance.space
+    # and came back `401 API 密钥不存在`.) Same rule as
+    # AgentManager._build_agent_config_from_project, which this route cannot
+    # simply call: the canonical builder omits llm_fallback_models,
+    # agent_slug, agent_credentials and global_preferences_path.
+    global_provider = global_settings.llm.provider if global_settings else None
+    project_provider = project.get("provider")
+    crosses_provider = (
+        bool(project.get("model")) and project_provider
+        and project_provider != global_provider
+    )
+    if crosses_provider:
+        base_url = project.get("base_url") or (
+            _provider_registry.get_provider_data(project_provider).get("base_url")
+            if _provider_registry else None
+        )
+        api_key = project.get("api_key") or ""
+    else:
+        api_key = (project.get("api_key")
+                   or cred_key
+                   or (global_settings.llm.api_key if global_settings else None)
+                   or "")
+        base_url = project.get("base_url") or (
+            global_settings.llm.base_url if global_settings else None)
 
     # Resolve fallback models: project-level > global-level > empty
     from agent_os.daemon_v2.models import FallbackModelEntry
@@ -2775,6 +2799,16 @@ async def test_connection(req: TestConnectionRequest):
     base_url = req.base_url or (provider_info["base_url"] if provider_info else None)
     sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
 
+    # Per-model endpoint override wins over both: the frontend can only send
+    # the PROVIDER-level sdk, so on a mixed-protocol aggregator (OpenCode
+    # Zen/Go) Test Connection would otherwise fail on a model that works in a
+    # real turn. Models without an override leave the user's choice intact —
+    # that is every Custom / self-hosted endpoint.
+    if _provider_registry is not None:
+        _mi = _provider_registry.get_model_info(req.provider, req.model)
+        sdk = _mi.sdk or sdk
+        base_url = _mi.base_url or base_url
+
     from agent_os.agent.providers.openai_compat import LLMProvider
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
 
@@ -2802,7 +2836,16 @@ async def test_connection(req: TestConnectionRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except LLMError as e:
         status = e.status_code or 500
-        if status == 401 or status == 403:
+        # Billing failures are not auth failures, even when the gateway
+        # returns 401 for both. OpenCode answers a paid model on a workspace
+        # with no payment method with 401 + a CreditsError body; "Invalid API
+        # key" would send the user to re-issue a key that works fine. Pass the
+        # provider's own wording through — it names the fix and links to it.
+        _billing = ("payment method", "credits", "insufficient balance",
+                    "quota", "billing")
+        if status in (401, 403) and any(w in (e.message or "").lower() for w in _billing):
+            detail = e.message
+        elif status == 401 or status == 403:
             detail = "Invalid API key"
         elif status == 404:
             detail = f"Model '{req.model}' not found on this provider"

@@ -576,8 +576,17 @@ class AgentManager:
         def _headers_for(provider_key: str) -> dict | None:
             return self._provider_registry.get_provider_data(provider_key).get("extra_headers")
 
+        # Per-model endpoint override (registry ``sdk``/``base_url``). An
+        # aggregator serves different models over different wire protocols
+        # under one key — OpenCode Go puts minimax-m3 on Anthropic /messages
+        # and deepseek-v4-pro on OpenAI /chat/completions — so the protocol
+        # can only be resolved once the model is known. None (every model of
+        # every single-protocol provider) inherits the config, leaving the
+        # Custom/self-hosted escape hatch and user-typed endpoints untouched.
         provider = LLMProvider(
-            config.model, api_key, config.base_url, sdk=config.sdk,
+            config.model, api_key,
+            model_info.base_url or config.base_url,
+            sdk=model_info.sdk or config.sdk,
             max_output=model_info.max_output,
             capabilities=model_info.capabilities,
             reasoning=model_info.reasoning,
@@ -592,7 +601,9 @@ class AgentManager:
                 getattr(fb, 'provider', 'custom'), fb.model,
             )
             fallback_providers.append(
-                LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
+                LLMProvider(fb.model, fb_key,
+                            fb_info.base_url or fb.base_url,
+                            sdk=fb_info.sdk or fb.sdk,
                             max_output=fb_info.max_output,
                             capabilities=fb_info.capabilities,
                             reasoning=fb_info.reasoning,
@@ -603,7 +614,9 @@ class AgentManager:
         if config.utility_model:
             utility_info = self._provider_registry.get_model_info(config.provider, config.utility_model)
             utility_provider = LLMProvider(
-                config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
+                config.utility_model, config.api_key,
+                utility_info.base_url or config.base_url,
+                sdk=utility_info.sdk or config.sdk,
                 reasoning=utility_info.reasoning,
                 provider=config.provider,
                 extra_headers=_headers_for(config.provider),

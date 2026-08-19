@@ -349,3 +349,106 @@ class TestJuly2026Models:
         info = registry.get_model_info("custom", "my-local-llama")
         assert info.context_window == 128000
         assert info.max_output == 8192
+
+
+# ---------------------------------------------------------------------------
+# Per-model endpoint overrides (OpenCode Zen / Go)
+# ---------------------------------------------------------------------------
+#
+# `sdk` and `base_url` used to live only at provider level, which assumes one
+# provider speaks one protocol at one address. Aggregators break that: on
+# OpenCode Go, `minimax-m3` is served over the Anthropic /messages protocol
+# while `deepseek-v4-pro` on the SAME account is OpenAI /chat/completions —
+# and on the Zen tier that same `minimax-m3` is /chat/completions. The wire
+# protocol is a property of (provider, model), not of either alone.
+
+
+class TestPerModelEndpointOverride:
+    @pytest.fixture
+    def mixed_registry(self, tmp_path):
+        data = {
+            "providers": {
+                "mixed": {
+                    "display_name": "Mixed-protocol router",
+                    "base_url": "https://router.example/v1",
+                    "sdk": "openai",
+                    "suggested_models": ["plain-model"],
+                    "models": {
+                        "plain-model": {"context_window": 100},
+                        "anthropic-model": {
+                            "context_window": 200,
+                            # The Anthropic SDK appends /v1/messages itself, so
+                            # its base_url stops one segment short.
+                            "sdk": "anthropic",
+                            "base_url": "https://router.example",
+                        },
+                        "_default": {"context_window": 50},
+                    },
+                }
+            },
+            "defaults": {"unknown_model": {"context_window": 10}},
+        }
+        path = tmp_path / "providers.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return ProviderRegistry(str(path))
+
+    def test_model_without_override_inherits_provider(self, mixed_registry):
+        info = mixed_registry.get_model_info("mixed", "plain-model")
+        assert info.sdk is None
+        assert info.base_url is None
+
+    def test_model_with_override_reports_its_own_endpoint(self, mixed_registry):
+        info = mixed_registry.get_model_info("mixed", "anthropic-model")
+        assert info.sdk == "anthropic"
+        assert info.base_url == "https://router.example"
+
+    def test_override_survives_the_fallback_chain(self, mixed_registry):
+        """An unknown model inherits suggested_models[0] — which has no
+        override — so it must NOT pick up a sibling's protocol."""
+        info = mixed_registry.get_model_info("mixed", "brand-new-model")
+        assert info.sdk is None
+        assert info.base_url is None
+
+    def test_real_registry_models_default_to_no_override(self, registry):
+        """Every provider that speaks one protocol keeps reporting None, so
+        the resolution sites fall back to the provider-level config."""
+        info = registry.get_model_info("deepseek", "deepseek-v4-pro")
+        assert info.sdk is None
+        assert info.base_url is None
+
+    def test_default_entry_override_does_not_leak_to_unknown_models(self, tmp_path):
+        """An override says "THIS model lives elsewhere". A model reached by
+        the fallback chain is by definition one the registry does not know, so
+        inheriting a sibling's endpoint is a guess that can only be wrong —
+        a newly released model on a mixed-protocol aggregator would be sent to
+        whichever protocol the flagship happens to use. Specs are inherited;
+        the endpoint is not."""
+        data = {
+            "providers": {
+                "mixed": {
+                    "base_url": "https://router.example/v1",
+                    "sdk": "openai",
+                    # The flagship itself carries an override.
+                    "suggested_models": ["ant-flagship"],
+                    "models": {
+                        "ant-flagship": {
+                            "context_window": 400,
+                            "sdk": "anthropic",
+                            "base_url": "https://router.example",
+                        },
+                    },
+                }
+            },
+            "defaults": {"unknown_model": {"context_window": 10}},
+        }
+        path = tmp_path / "providers.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        reg = ProviderRegistry(str(path))
+
+        known = reg.get_model_info("mixed", "ant-flagship")
+        assert known.sdk == "anthropic"
+
+        unknown = reg.get_model_info("mixed", "brand-new-model")
+        assert unknown.context_window == 400, "specs still inherit"
+        assert unknown.sdk is None, "but never the endpoint"
+        assert unknown.base_url is None

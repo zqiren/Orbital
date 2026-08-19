@@ -70,6 +70,9 @@ const DEFAULT_PROVIDER = 'deepseek';
 const PROVIDER_ORDER = [
   'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax',
   'openai', 'anthropic', 'google', 'xai', 'mistral', 'groq', 'together', 'openrouter',
+  // Aggregators last, next to OpenRouter. Zen (pay-as-you-go credits) before
+  // Go (the $10/mo subscription) — one account and one key serve both.
+  'opencode-zen', 'opencode-go',
 ];
 
 export function providerOrderForLocale(locale: Locale): string[] {
