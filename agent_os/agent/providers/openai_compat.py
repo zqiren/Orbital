@@ -527,7 +527,12 @@ class LLMProvider:
             response_iter = await self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools or None,
+                # OMIT `tools` when empty. `tools=None` serializes to
+                # "tools": null, which strict gateways reject outright:
+                # GLM-5.2 via OpenCode Go answers 400 "Input should be a
+                # valid list, field: 'tools', value: None". The Anthropic
+                # path already only sets the key when it has one.
+                **({"tools": tools} if tools else {}),
                 stream=True,
                 stream_options={"include_usage": True},
             )
@@ -555,7 +560,7 @@ class LLMProvider:
                     response_iter = await self._openai_client.chat.completions.create(
                         model=self.model,
                         messages=flat_messages,
-                        tools=tools or None,
+                        **({"tools": tools} if tools else {}),
                         stream=True,
                         stream_options={"include_usage": True},
                     )
@@ -703,7 +708,7 @@ class LLMProvider:
             response = await self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools or None,
+                **({"tools": tools} if tools else {}),
                 stream=False,
                 **extra_kwargs,
             )
