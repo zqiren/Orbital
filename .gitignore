@@ -95,11 +95,11 @@ BACKLOG-*.md
 ONBOARDING.md
 LOG-*.md
 docs/known-issues/
-# Orbital dogfooding: the curated roadmap file BACKLOG.md IS tracked; its
-# spec/diagram working dir BACKLOG/ stays local. (!BACKLOG.md is defensive —
-# nothing above matches it today, but it guards against a future BACKLOG* rule.)
+# Orbital dogfooding: the roadmap is local-only. BACKLOG.md was tracked until
+# 2026-08-19; it and its spec/diagram working dir BACKLOG/ now both stay out of
+# the public repo, like the other internal working artifacts above.
 BACKLOG/
-!BACKLOG.md
+BACKLOG.md
 
 # Scratch artifacts & tool caches
 artifacts-*/
