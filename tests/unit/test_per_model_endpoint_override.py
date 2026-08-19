@@ -387,3 +387,89 @@ def test_every_opencode_model_is_priced(real):
         priced = set(_load_pricing().get(key, {}))
         listed = set(real.get_provider_data(key)["models"])
         assert not (listed - priced), f"{key}: unpriced {sorted(listed - priced)}"
+
+
+# --- 401/403 taxonomy: only auth failures may read as auth failures ----------
+#
+# A gateway rejects a request for many reasons that are not "your key is
+# wrong": no payment method, a region gate, a quota, an unenrolled model. They
+# arrive as 401 or 403 just like a bad key. Flattening all of them to "Invalid
+# API key" sends the user to re-issue a working key — reported from the field
+# on OpenCode Go, where deepseek-v4-flash answers 403 RegionError until the
+# workspace opts into China hosting.
+#
+# So the allowlist runs the other way: say "Invalid API key" only when the
+# provider's own message is about authentication, and otherwise show what the
+# provider said. Auth phrasing is a small stable set; the reasons a request can
+# be refused are open-ended.
+
+
+def _provider_error(monkeypatch, message, status):
+    import agent_os.agent.providers.openai_compat as oc
+    from agent_os.agent.providers.types import LLMError
+    from unittest.mock import AsyncMock
+
+    def ctor(model, api_key, base_url, **kw):
+        inst = MagicMock()
+        inst.complete = AsyncMock(side_effect=LLMError(message, status_code=status))
+        return inst
+
+    monkeypatch.setattr(oc, "LLMProvider", ctor)
+
+
+REGION_403 = (
+    "Error code: 403 - {'type': 'error', 'error': {'type': 'RegionError', "
+    "'message': 'The latest version of this model is only available hosted in "
+    "China and requires explicit opt in: https://opencode.ai/workspace/wrk_x/go'}}"
+)
+
+
+def test_region_gate_is_not_reported_as_an_invalid_key(route_client, monkeypatch):
+    _provider_error(monkeypatch, REGION_403, 403)
+    resp = route_client.post(
+        "/api/v2/providers/test",
+        json={"provider": "router", "model": "oai-model", "api_key": "sk-valid"},
+    )
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert "Invalid API key" not in detail, detail
+    assert "China" in detail and "opt in" in detail, detail
+
+
+def test_the_provider_message_is_unwrapped_for_display(route_client, monkeypatch):
+    """`Error code: 403 - {'type': 'error', ...}` is a Python repr pasted into
+    a red UI line. Show the provider's sentence, not the envelope."""
+    _provider_error(monkeypatch, REGION_403, 403)
+    resp = route_client.post(
+        "/api/v2/providers/test",
+        json={"provider": "router", "model": "oai-model", "api_key": "sk-valid"},
+    )
+    detail = resp.json()["detail"]
+    assert detail.startswith("The latest version of this model"), detail
+    assert "Error code:" not in detail, detail
+    assert "{" not in detail, detail
+
+
+def test_deepseek_style_auth_failure_still_reads_as_an_invalid_key(
+    route_client, monkeypatch
+):
+    _provider_error(
+        monkeypatch,
+        "Error code: 401 - {'error': {'message': 'Authentication Fails, Your "
+        "api key: ****dKLb is invalid', 'type': 'authentication_error'}}",
+        401,
+    )
+    resp = route_client.post(
+        "/api/v2/providers/test",
+        json={"provider": "router", "model": "oai-model", "api_key": "sk-bad"},
+    )
+    assert resp.json()["detail"] == "Invalid API key"
+
+
+def test_go_does_not_default_to_a_region_gated_model(real):
+    """suggested_models[0] is what a new user lands on. deepseek-v4-* answer
+    403 RegionError on Go until the workspace opts into China hosting, so
+    leading with one turns a working subscription into "Invalid API key" on
+    first contact — which is exactly how this was reported."""
+    first = real.suggested_models("opencode-go")[0]
+    assert not first.startswith("deepseek-"), first

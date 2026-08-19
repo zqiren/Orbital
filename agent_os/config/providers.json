@@ -3398,7 +3398,7 @@
         "deepseek-v4-flash-free",
         "big-pickle"
       ],
-      "notes": "Pay-as-you-go credits (auto-reload configurable), sold at cost. Orbital reaches the /chat/completions family (open models + the free tier) and the /messages family (all Claude models and Qwen) — 33 of Zen's 63 models. The GPT-5.x/Grok models are served over OpenAI's Responses API and Gemini over Google's; Orbital speaks neither, so use the OpenAI/Google providers directly for those. The free models (ids ending -free, plus big-pickle) work with NO payment method on file — verified on the wire. Note that a paid model with no balance returns HTTP 401 carrying a CreditsError body: the key is valid, the workspace just needs a payment method. Same API key as OpenCode Go. https://opencode.ai/docs/zen/",
+      "notes": "Pay-as-you-go credits (auto-reload configurable), sold at cost. Orbital reaches the /chat/completions family (open models + the free tier) and the /messages family (all Claude models and Qwen) — 33 of Zen's 63 models. The GPT-5.x/Grok models are served over OpenAI's Responses API and Gemini over Google's; Orbital speaks neither, so use the OpenAI/Google providers directly for those. The free models (ids ending -free, plus big-pickle) work with NO payment method on file — verified on the wire. Note that a paid model with no balance returns HTTP 401 carrying a CreditsError body: the key is valid, the workspace just needs a payment method. Same API key as OpenCode Go. https://opencode.ai/docs/zen/ A Go subscription does NOT fund Zen: with Go active but no Zen credits, Zen's paid models still answer CreditsError while the free models keep working (verified 2026-08-19). The balance flows the other way — Go can fall back to Zen credits past a cap.",
       "pricing": {
         "big-pickle": {
           "input_per_1m": 0.0,
@@ -4208,15 +4208,16 @@
       "supports_model_list": true,
       "sdk": "openai",
       "suggested_models": [
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
+        "glm-5.2",
         "kimi-k3",
         "glm-5.3",
         "minimax-m3",
-        "qwen3.8-max",
-        "kimi-k2.7-code"
+        "kimi-k2.7-code",
+        "mimo-v2.5",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
       ],
-      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. grok-4.5 and gpt-5.6-luna use the Responses API, which Orbital does not speak. https://opencode.ai/docs/go/",
+      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. grok-4.5 and gpt-5.6-luna use the Responses API, which Orbital does not speak. https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
       "pricing": {
         "deepseek-v4-flash": {
           "input_per_1m": 0.22,

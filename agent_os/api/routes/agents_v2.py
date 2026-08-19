@@ -2778,6 +2778,57 @@ async def fetch_models(req: FetchModelsRequest):
             raise HTTPException(status_code=502, detail=str(e) or type(e).__name__)
 
 
+# Phrases that mean the CREDENTIAL was rejected. Everything else a gateway
+# refuses a request for — no payment method, a region gate, a quota, an
+# unenrolled model — also arrives as 401/403, and calling those "Invalid API
+# key" sends the user to re-issue a key that works fine. Reported from the
+# field on OpenCode Go: deepseek-v4-flash answers 403 RegionError until the
+# workspace opts into China hosting. Auth phrasing is a small stable set; the
+# reasons a request can be refused are open-ended, so the allowlist covers
+# auth and everything else passes through in the provider's own words.
+_AUTH_FAILURE_PHRASES = (
+    "api key", "apikey", "api-key",
+    "authentication", "unauthorized", "invalid token", "invalid credentials",
+)
+
+
+def _unwrap_provider_message(raw: str) -> str:
+    """Pull the provider's sentence out of an SDK envelope.
+
+    SDK errors arrive as ``Error code: 403 - {'type': 'error', 'error':
+    {'message': '...'}}`` — a Python repr, which is unreadable in a red UI
+    line. Return the innermost ``message`` when the envelope parses, else the
+    raw string unchanged.
+    """
+    import ast
+
+    body = raw.split(" - ", 1)[1] if " - " in raw else raw
+    try:
+        parsed = ast.literal_eval(body.strip())
+    except (ValueError, SyntaxError):
+        return raw
+    for _ in range(4):  # {'error': {'error': {...}}} nests at most a little
+        if not isinstance(parsed, dict):
+            break
+        msg = parsed.get("message")
+        if isinstance(msg, str) and msg:
+            return msg
+        nxt = parsed.get("error")
+        if nxt is None:
+            break
+        parsed = nxt
+    return raw
+
+
+def _describe_auth_failure(raw: str | None) -> str:
+    """Map a 401/403 to display text: the stable "Invalid API key" only when
+    the provider says the credential was the problem."""
+    message = raw or ""
+    if any(p in message.lower() for p in _AUTH_FAILURE_PHRASES):
+        return "Invalid API key"
+    return _unwrap_provider_message(message)
+
+
 class TestConnectionRequest(BaseModel):
     # Local OpenAI-compatible servers (LM Studio / llama.cpp / Ollama) are
     # reached via the "Custom" provider with no API key. The frontend omits
@@ -2836,17 +2887,8 @@ async def test_connection(req: TestConnectionRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except LLMError as e:
         status = e.status_code or 500
-        # Billing failures are not auth failures, even when the gateway
-        # returns 401 for both. OpenCode answers a paid model on a workspace
-        # with no payment method with 401 + a CreditsError body; "Invalid API
-        # key" would send the user to re-issue a key that works fine. Pass the
-        # provider's own wording through — it names the fix and links to it.
-        _billing = ("payment method", "credits", "insufficient balance",
-                    "quota", "billing")
-        if status in (401, 403) and any(w in (e.message or "").lower() for w in _billing):
-            detail = e.message
-        elif status == 401 or status == 403:
-            detail = "Invalid API key"
+        if status in (401, 403):
+            detail = _describe_auth_failure(e.message)
         elif status == 404:
             detail = f"Model '{req.model}' not found on this provider"
         elif status == 429:
