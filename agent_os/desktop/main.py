@@ -8,13 +8,33 @@ import time
 import threading
 import socket
 
+
+def _get_log_path() -> str:
+    """Return the platform-appropriate log directory path for error messages.
+
+    Defined before the stderr redirect below so the redirect and the
+    "Failed to start daemon" dialog point at the same directory.
+    """
+    if sys.platform == "win32":
+        return os.path.join(os.environ.get("APPDATA", ""), "Orbital", "logs")
+    elif sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Logs", "Orbital")
+    else:
+        return os.path.join(os.path.expanduser("~"), ".orbital", "logs")
+
+
 # PyInstaller windowed mode (console=False) sets sys.stdout/stderr to None.
 # Uvicorn's log formatter calls sys.stderr.isatty() on init and crashes.
 # Redirect to a log file so errors are visible for debugging.
 if getattr(sys, "frozen", False) and sys.stderr is None:
-    _log_dir = os.path.join(os.path.expanduser("~"), "Library", "Logs", "Orbital")
+    _log_dir = _get_log_path()
     os.makedirs(_log_dir, exist_ok=True)
-    _log_file = open(os.path.join(_log_dir, "orbital-stderr.log"), "w")
+    # utf-8: tracebacks can carry non-ANSI text (e.g. Chinese filenames);
+    # the platform-default codec would raise while writing the evidence.
+    _log_file = open(
+        os.path.join(_log_dir, "orbital-stderr.log"), "w",
+        encoding="utf-8", errors="replace",
+    )
     sys.stdout = _log_file
     sys.stderr = _log_file
 
@@ -1113,16 +1133,6 @@ def run_sandbox_teardown():
 
     # Always exit 0 — never block uninstall
     sys.exit(0)
-
-
-def _get_log_path() -> str:
-    """Return the platform-appropriate log directory path for error messages."""
-    if sys.platform == "win32":
-        return os.path.join(os.environ.get("APPDATA", ""), "Orbital", "logs")
-    elif sys.platform == "darwin":
-        return os.path.join(os.path.expanduser("~"), "Library", "Logs", "Orbital")
-    else:
-        return os.path.join(os.path.expanduser("~"), ".orbital", "logs")
 
 
 # Every desktop shell puts its own icon in the Windows notification area, so
