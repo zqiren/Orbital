@@ -52,12 +52,8 @@ export function NetworkAccessSection({
     });
 
   return (
+    // Heading + intro come from the enclosing SettingsSection.
     <div data-testid="network-access-section">
-      <label className="block text-sm font-medium text-primary mb-1.5">
-        {t('settings.network.label')}
-      </label>
-      <p className="text-xs text-secondary mb-2">{t('settings.network.hint')}</p>
-
       {pendingRequests.length > 0 && (
         <div className="mb-3">
           <h4 className="text-xs font-semibold text-primary mb-1.5">

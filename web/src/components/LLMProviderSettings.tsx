@@ -766,12 +766,15 @@ export default function LLMProviderSettings({
     <button
       type="button"
       onClick={() => setExpanded(!expanded)}
-      className="flex items-center gap-2 text-sm font-medium text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
+      // Reads as a SettingsSection heading (15px semibold) with a disclosure
+      // chevron, so a collapsed section is still a landmark on the page rather
+      // than a stray link between two headed sections.
+      className="flex items-center gap-2 text-[15px] font-semibold leading-6 text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
     >
-      {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+      {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
       <span>{t('llm.provider.heading')}</span>
       {!expanded && (
-        <span className="text-secondary font-normal ml-1">
+        <span className="text-[13px] text-secondary font-normal ml-1">
           {t('llm.project.usingDefault', {
             provider: projectValues?.provider && providers[projectValues.provider]
               ? providers[projectValues.provider].display_name

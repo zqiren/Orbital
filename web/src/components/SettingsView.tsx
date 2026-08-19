@@ -19,12 +19,14 @@ import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
 import BudgetSection from './BudgetSection';
 import ProjectConnectorToggles from './ProjectConnectorToggles';
+import BetaBadge from './BetaBadge';
 import { NetworkAccessSection } from './NetworkAccessSection';
 import type { PendingDomainRequest } from '../types';
 import SettingsRail, {
   scrollToSettingsSection,
   type SettingsRailSection,
 } from './SettingsRail';
+import SettingsSection, { SettingsGroup, LabelWithHint } from './SettingsSection';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
 
@@ -54,21 +56,27 @@ interface SettingsViewProps {
  * Conditional groups (scratch/relay-gated) and the reserved 'connectors' id
  * (section lands in a later wave) only get a rail entry once a matching
  * data-settings-section element actually exists in the DOM.
+ *
+ * `groupKey` mirrors the `SettingsGroup` chapters in the document below, so
+ * the rail reads as the same five chapters rather than fourteen flat peers.
+ * The array order must stay in step with DOM order — the rail renders in DOM
+ * order, and a group whose entries were interleaved would print twice.
  */
 export const PROJECT_SETTINGS_SECTIONS: SettingsRailSection[] = [
-  { id: 'agent-name', labelKey: 'createProject.agentName.label' },
-  { id: 'project-goals', labelKey: 'settings.projectGoals.label' },
-  { id: 'project-instructions', labelKey: 'settings.projectInstructions.label' },
-  { id: 'sub-agents', labelKey: 'settings.subAgents.label' },
-  { id: 'skills', labelKey: 'settings.skills.label' },
-  { id: 'notifications', labelKey: 'settings.notifications.label' },
-  { id: 'llm', labelKey: 'llm.provider.heading' },
-  { id: 'fallback-models', labelKey: 'fallback.heading' },
-  { id: 'autonomy', labelKey: 'autonomy.level.label' },
-  { id: 'budget', labelKey: 'settings.budget.label' },
-  { id: 'network', labelKey: 'settingsRail.network' },
-  { id: 'connectors', labelKey: 'settingsRail.connectors' },
-  { id: 'workbench', labelKey: 'settings.workbench.label' },
+  { id: 'agent-name', labelKey: 'createProject.agentName.label', groupKey: 'settings.group.project' },
+  { id: 'project-goals', labelKey: 'settings.projectGoals.label', groupKey: 'settings.group.project' },
+  { id: 'project-instructions', labelKey: 'settings.projectInstructions.label', groupKey: 'settings.group.project' },
+  { id: 'sub-agents', labelKey: 'settings.subAgents.label', groupKey: 'settings.group.capabilities' },
+  { id: 'skills', labelKey: 'settings.skills.label', groupKey: 'settings.group.capabilities' },
+  { id: 'connectors', labelKey: 'settingsRail.connectors', groupKey: 'settings.group.capabilities' },
+  { id: 'llm', labelKey: 'llm.provider.heading', groupKey: 'settings.group.model' },
+  { id: 'fallback-models', labelKey: 'fallback.heading', groupKey: 'settings.group.model' },
+  { id: 'autonomy', labelKey: 'autonomy.level.label', groupKey: 'settings.group.limits' },
+  { id: 'budget', labelKey: 'settings.budget.label', groupKey: 'settings.group.limits' },
+  { id: 'network', labelKey: 'settings.network.label', groupKey: 'settings.group.limits' },
+  { id: 'notifications', labelKey: 'settings.notifications.label', groupKey: 'settings.group.preferences' },
+  { id: 'workbench', labelKey: 'settings.workbench.label', groupKey: 'settings.group.preferences' },
+  // No groupKey: a one-entry chapter whose heading repeats the entry is noise.
   { id: 'danger', labelKey: 'settings.danger.title' },
 ];
 
@@ -429,12 +437,10 @@ export default function SettingsView({
       containerRef={scrollContainerRef}
     />
     <div className="max-w-[720px] w-full min-w-0 py-8 px-6 max-md:px-4">
-      <form onSubmit={handleSave} className="space-y-6">
+      <form onSubmit={handleSave}>
+        <SettingsGroup title={t('settings.group.project')}>
         {/* Agent Name */}
-        <div data-settings-section="agent-name" className="scroll-mt-4">
-          <label className="block text-sm font-medium text-primary mb-1.5">
-            {t('createProject.agentName.label')}
-          </label>
+        <SettingsSection id="agent-name" title={t('createProject.agentName.label')}>
           <input
             type="text"
             value={agentName}
@@ -442,14 +448,11 @@ export default function SettingsView({
             placeholder={t('settings.agentName.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
           />
-        </div>
+        </SettingsSection>
 
         {/* Project Goals */}
         {!project.is_scratch && (
-          <div data-settings-section="project-goals" className="scroll-mt-4">
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              {t('settings.projectGoals.label')}
-            </label>
+          <SettingsSection id="project-goals" title={t('settings.projectGoals.label')}>
             <textarea
               rows={6}
               value={projectGoals}
@@ -458,17 +461,15 @@ export default function SettingsView({
               placeholder={loadingDetail ? t('settings.loading') : t('settings.projectGoals.placeholder')}
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
             />
-          </div>
+          </SettingsSection>
         )}
 
         {/* Project Instructions */}
-        <div data-settings-section="project-instructions" className="scroll-mt-4">
-          <label className="block text-sm font-medium text-primary mb-1.5">
-            {t('settings.projectInstructions.label')}
-          </label>
-          <p className="text-xs text-secondary mb-2">
-            {t('settings.projectInstructions.hint')}
-          </p>
+        <SettingsSection
+          id="project-instructions"
+          title={t('settings.projectInstructions.label')}
+          description={t('settings.projectInstructions.hint')}
+        >
           <textarea
             rows={4}
             value={standingRules}
@@ -477,31 +478,28 @@ export default function SettingsView({
             placeholder={loadingDetail ? t('settings.loading') : t('settings.projectInstructions.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
           />
-        </div>
+        </SettingsSection>
+        </SettingsGroup>
 
+        <SettingsGroup title={t('settings.group.capabilities')}>
         {/* Sub-Agents — merged per-agent card: enable toggle + auth badge +
             memory summary in the header, MEMORY.md editor as the expandable
             body. One card per installed sub-agent (a disabled one is dimmed
             but still expandable). */}
         {!project.is_scratch && (
-          <div data-settings-section="sub-agents" className="scroll-mt-4">
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              {t('settings.subAgents.label')}
-              <span className="text-secondary font-normal"> {t('settings.subAgents.labelSuffix')}</span>
-            </label>
-            <p className="text-xs text-secondary mb-2">
-              {t('settings.subAgents.hint')}
-            </p>
-
-            <label
-              htmlFor="sub-agent-deployment-instructions"
-              className="block text-sm font-medium text-primary mb-1.5"
-            >
-              {t('settings.subAgents.deploymentInstructions.label')}
-            </label>
-            <p className="text-xs text-secondary mb-2">
-              {t('settings.subAgents.deploymentInstructions.hint')}
-            </p>
+          <SettingsSection
+            id="sub-agents"
+            title={t('settings.subAgents.label')}
+            description={t('settings.subAgents.hint')}
+          >
+            <div className="mt-4">
+              <LabelWithHint
+                htmlFor="sub-agent-deployment-instructions"
+                hint={t('settings.subAgents.deploymentInstructions.hint')}
+              >
+                {t('settings.subAgents.deploymentInstructions.label')}
+              </LabelWithHint>
+            </div>
             <textarea
               id="sub-agent-deployment-instructions"
               rows={4}
@@ -552,19 +550,16 @@ export default function SettingsView({
                 </p>
               </>
             )}
-          </div>
+          </SettingsSection>
         )}
 
         {/* Skills */}
         {!project.is_scratch && (
-          <div data-settings-section="skills" className="scroll-mt-4">
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              {t('settings.skills.label')}
-            </label>
-            <p className="text-xs text-secondary mb-2">
-              {t('settings.skills.hint')}
-            </p>
-
+          <SettingsSection
+            id="skills"
+            title={t('settings.skills.label')}
+            description={t('settings.skills.hint')}
+          >
             {skillError && (
               <p className="text-xs text-error mb-2">{skillError}</p>
             )}
@@ -623,18 +618,129 @@ export default function SettingsView({
                 }}
               />
             </label>
-          </div>
+          </SettingsSection>
         )}
 
-        {/* Notification Preferences (remote mode only) */}
+        {/* Connectors — per-project enablement (spec 011 §0.2/§0.6, Task E1).
+            One switch per globally-connected connector, writing
+            enabled_connectors through this form's save. Mounting this fills
+            the reserved 'connectors' rail entry. */}
+        <SettingsSection
+          id="connectors"
+          title={t('connectors.heading')}
+          suffix={<BetaBadge />}
+          description={t('connectors.project.hint')}
+        >
+          <ProjectConnectorToggles
+            enabledConnectors={enabledConnectors}
+            onChange={setEnabledConnectors}
+          />
+        </SettingsSection>
+        </SettingsGroup>
+
+        <SettingsGroup title={t('settings.group.model')}>
+        {/* LLM Provider (collapsible, from shared component — the disclosure
+            button is its own section heading, so no `title` here). */}
+        <SettingsSection id="llm">
+          <LLMProviderSettings
+            mode="project"
+            projectValues={{
+              provider: project.provider,
+              model: project.model,
+              api_key: project.api_key,
+              base_url: project.base_url,
+              sdk: project.sdk,
+            }}
+            onChange={handleLLMChange}
+          />
+        </SettingsSection>
+
+        {/* Fallback Models (collapsible — heading lives in the component) */}
+        <SettingsSection id="fallback-models">
+          <FallbackModelsEditor
+            models={fallbackModels}
+            onChange={handleFallbackChange}
+            providers={providers}
+          />
+        </SettingsSection>
+        </SettingsGroup>
+
+        <SettingsGroup title={t('settings.group.limits')}>
+        {/* Autonomy Level */}
+        <SettingsSection id="autonomy" title={t('autonomy.level.label')}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {AUTONOMY_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setAutonomy(opt.value)}
+                className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
+                  autonomy === opt.value
+                    ? 'border-accent bg-accent/5'
+                    : 'border-border hover:border-secondary/40'
+                }`}
+              >
+                <span className="text-sm font-medium text-primary block">
+                  {t(opt.titleKey)}
+                </span>
+                <span className="text-xs text-secondary mt-1 block">
+                  {t(opt.descriptionKey)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </SettingsSection>
+
+        {/* Budget — limit-as-sentence, behavior cards, spend meter, breakdown.
+            Spend is read EXCLUSIVELY from GET /cost (useCost), refreshed on the
+            budget.spend_updated WS event. The data-settings-section tag anchors
+            the header corner's deep-link (scrollToSection === 'budget') and
+            the index rail. */}
+        <SettingsSection id="budget" title={t('settings.budget.label')}>
+          <BudgetSection
+            project={project}
+            limit={budgetLimit}
+            onLimitChange={setBudgetLimit}
+            currency={budgetCurrency}
+            onCurrencyChange={setBudgetCurrency}
+            period={budgetPeriod}
+            onPeriodChange={setBudgetPeriod}
+            action={budgetAction}
+            onActionChange={setBudgetAction}
+            onEditPricing={onEditPricing}
+          />
+        </SettingsSection>
+
+        {/* Network access — TOFU allowlist (Plan 2 Task 7). Approved domains +
+            pending requests, writing approved_domains / pending_domain_requests
+            through this form's save (Task 2's PUT route live-rebuilds the
+            proxy rules server-side). */}
+        <SettingsSection
+          id="network"
+          title={t('settings.network.label')}
+          description={t('settings.network.hint')}
+        >
+          <NetworkAccessSection
+            approvedDomains={approvedDomains}
+            pendingRequests={pendingDomainRequests}
+            onChange={({ approvedDomains: next, pendingRequests }) => {
+              setApprovedDomains(next);
+              setPendingDomainRequests(pendingRequests);
+            }}
+          />
+        </SettingsSection>
+        </SettingsGroup>
+
+        <SettingsGroup title={t('settings.group.preferences')}>
+        {/* Notification Preferences (remote mode only). Unlike every other
+            section these save on change, not on Save — hence the standalone
+            note under the list. */}
         {!project.is_scratch && isRelayMode && (
-          <div data-settings-section="notifications" className="scroll-mt-4">
-            <label className="block text-sm font-medium text-primary mb-1.5">
-              {t('settings.notifications.label')}
-            </label>
-            <p className="text-xs text-secondary mb-2">
-              {t('settings.notifications.hint')}
-            </p>
+          <SettingsSection
+            id="notifications"
+            title={t('settings.notifications.label')}
+            description={t('settings.notifications.hint')}
+          >
             <div className="space-y-2">
               {([
                 { key: 'task_completed', labelKey: 'settings.notifications.taskCompleted' },
@@ -661,117 +767,18 @@ export default function SettingsView({
             <p className="text-xs text-secondary/60 mt-2 italic">
               {t('settings.notifications.approvalNote')}
             </p>
-          </div>
+          </SettingsSection>
         )}
-
-        {/* LLM Provider (collapsible, from shared component) */}
-        <div data-settings-section="llm" className="scroll-mt-4">
-          <LLMProviderSettings
-            mode="project"
-            projectValues={{
-              provider: project.provider,
-              model: project.model,
-              api_key: project.api_key,
-              base_url: project.base_url,
-              sdk: project.sdk,
-            }}
-            onChange={handleLLMChange}
-          />
-        </div>
-
-        {/* Fallback Models */}
-        <div data-settings-section="fallback-models" className="scroll-mt-4">
-          <FallbackModelsEditor
-            models={fallbackModels}
-            onChange={handleFallbackChange}
-            providers={providers}
-          />
-        </div>
-
-        {/* Autonomy Level */}
-        <div data-settings-section="autonomy" className="scroll-mt-4">
-          <label className="block text-sm font-medium text-primary mb-2">
-            {t('autonomy.level.label')}
-          </label>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {AUTONOMY_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setAutonomy(opt.value)}
-                className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
-                  autonomy === opt.value
-                    ? 'border-accent bg-accent/5'
-                    : 'border-border hover:border-secondary/40'
-                }`}
-              >
-                <span className="text-sm font-medium text-primary block">
-                  {t(opt.titleKey)}
-                </span>
-                <span className="text-xs text-secondary mt-1 block">
-                  {t(opt.descriptionKey)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Budget — limit-as-sentence, behavior cards, spend meter, breakdown.
-            Spend is read EXCLUSIVELY from GET /cost (useCost), refreshed on the
-            budget.spend_updated WS event. The data-settings-section tag anchors
-            the header corner's deep-link (scrollToSection === 'budget') and
-            the index rail. */}
-        <div data-settings-section="budget" className="scroll-mt-4">
-          <BudgetSection
-            project={project}
-            limit={budgetLimit}
-            onLimitChange={setBudgetLimit}
-            currency={budgetCurrency}
-            onCurrencyChange={setBudgetCurrency}
-            period={budgetPeriod}
-            onPeriodChange={setBudgetPeriod}
-            action={budgetAction}
-            onActionChange={setBudgetAction}
-            onEditPricing={onEditPricing}
-          />
-        </div>
-
-        {/* Network access — TOFU allowlist (Plan 2 Task 7). Approved domains +
-            pending requests, writing approved_domains / pending_domain_requests
-            through this form's save (Task 2's PUT route live-rebuilds the
-            proxy rules server-side). DOM order: budget → network → connectors
-            → danger, matching PROJECT_SETTINGS_SECTIONS. */}
-        <div data-settings-section="network" className="scroll-mt-4">
-          <NetworkAccessSection
-            approvedDomains={approvedDomains}
-            pendingRequests={pendingDomainRequests}
-            onChange={({ approvedDomains: next, pendingRequests }) => {
-              setApprovedDomains(next);
-              setPendingDomainRequests(pendingRequests);
-            }}
-          />
-        </div>
-
-        {/* Connectors — per-project enablement (spec 011 §0.2/§0.6, Task E1).
-            One switch per globally-connected connector, writing
-            enabled_connectors through this form's save. Mounting this fills
-            the reserved 'connectors' rail entry (DOM order: budget → network →
-            connectors → danger, matching PROJECT_SETTINGS_SECTIONS). */}
-        <div data-settings-section="connectors" className="scroll-mt-4">
-          <ProjectConnectorToggles
-            enabledConnectors={enabledConnectors}
-            onChange={setEnabledConnectors}
-          />
-        </div>
 
         {/* Workbench privacy toggle (spec 2026-07-23 §6). Per-project — the
             per-project Workbench lens is unaffected; this only controls
             whether the project's flagged entries are aggregated into the
             GLOBAL Workbench view. */}
-        <div data-settings-section="workbench" className="scroll-mt-4">
-          <label className="block text-sm font-medium text-primary mb-1.5">
-            {t('settings.workbench.label')}
-          </label>
+        <SettingsSection
+          id="workbench"
+          title={t('settings.workbench.label')}
+          description={t('settings.workbench.excludeGlobal.hint')}
+        >
           <label className="flex items-center gap-2 cursor-pointer max-md:min-h-[44px]">
             <input
               type="checkbox"
@@ -783,13 +790,12 @@ export default function SettingsView({
               {t('settings.workbench.excludeGlobal.label')}
             </span>
           </label>
-          <p className="text-xs text-secondary mt-1.5">
-            {t('settings.workbench.excludeGlobal.hint')}
-          </p>
-        </div>
+        </SettingsSection>
+        </SettingsGroup>
 
         {/* Save */}
-        <div className="flex items-center gap-3 pt-2">
+        {/* No rule above Save: a rule means "a chapter starts here" now. */}
+        <div className="flex items-center gap-3 mt-12">
           <button
             type="submit"
             className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
@@ -805,7 +811,7 @@ export default function SettingsView({
       {/* Danger zone */}
       {!project.is_scratch && (
         <div data-settings-section="danger" className="mt-12 border border-error/30 rounded-lg p-6 scroll-mt-4">
-          <h3 className="text-sm font-semibold text-error mb-2">{t('settings.danger.title')}</h3>
+          <h3 className="text-[15px] font-semibold leading-6 text-error mb-2">{t('settings.danger.title')}</h3>
           <p className="text-sm text-secondary mb-4">
             {t('settings.danger.body')}
           </p>
