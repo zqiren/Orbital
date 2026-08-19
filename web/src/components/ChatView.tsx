@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Send, Square, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown } from 'lucide-react';
+import { Send, Loader2, Plus, ChevronRight, ChevronDown, ArrowDown } from 'lucide-react';
 import { api, apiWithTotal } from '../config';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAgent } from '../hooks/useAgent';
@@ -24,6 +24,7 @@ import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import { StopGlyph } from './StopGlyph';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
@@ -3467,11 +3468,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   }}
                   disabled={isCancelling}
                   aria-label={isCancelling ? t('chat.cancelling') : t('chat.stop')}
-                  className="shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+                  className="group shrink-0 p-1.5 rounded-full transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
-                  {isCancelling
-                    ? <Loader2 size={18} className="animate-spin" />
-                    : <Square size={18} fill="currentColor" />}
+                  <StopGlyph cancelling={isCancelling} />
                 </button>
                 <button
                   type="button"
