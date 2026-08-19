@@ -44,11 +44,11 @@ Orbital's memory lives under `orbital/`. Each file has a distinct job:
 - **`orbital/sub_agents/*/MEMORY.md`** — private, per-agent memory (e.g.
   `orbital/sub_agents/claude-code/MEMORY.md`). If you *are* that agent,
   this is yours to read and append to across dispatches.
-- **`BACKLOG.md` + `BACKLOG/specs/`** — the roadmap. `BACKLOG.md` is
-  tracked in git and is the reviewable source of truth; `BACKLOG/specs/`
-  (rough implementation specs, one per non-trivial backlog item — often
-  carrying the resolved decisions for that feature) is **gitignored**, so a
-  fresh clone won't have it even though `BACKLOG.md` links to it.
+- **`BACKLOG.md` + `BACKLOG/specs/`** — the roadmap. Both are **gitignored**
+  and local-only, so a fresh clone has neither. `BACKLOG.md` is the curated
+  Kanban + spec index; `BACKLOG/specs/` holds the rough implementation specs
+  (one per non-trivial backlog item — often carrying the resolved decisions
+  for that feature) that `BACKLOG.md` links to.
 
 ## Write posture
 

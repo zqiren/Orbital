@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os"
-version = "0.9.1"
+version = "0.10.0"
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.0",
@@ -23,7 +23,14 @@ dependencies = [
     "pyyaml>=6.0",
     "claude-agent-sdk>=0.1.48",
     "agent-client-protocol==0.11.0",
-    "mcp>=1.2",
+    # Capped below 2.0: mcp 2.0.0 (released 2026-08-19) drops
+    # `streamablehttp_client` from mcp.client.streamable_http, which
+    # agent_os/connectors/mcp_client.py imports at module scope — so a
+    # fresh install cannot import agent_os.connectors at all. That is
+    # production code, not just tests: it broke CI and would have
+    # shipped inside the packaged app. Lift the cap only together with
+    # a 2.x migration of the client.
+    "mcp>=1.2,<2",
 ]
 
 [project.optional-dependencies]

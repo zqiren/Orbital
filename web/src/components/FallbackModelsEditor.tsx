@@ -66,16 +66,18 @@ export default function FallbackModelsEditor({
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm font-medium text-primary hover:text-accent transition-all duration-150 w-full text-left mb-2"
+        // Section-heading weight — see the note on LLMProviderSettings'
+        // disclosure button; a collapsed section still has to read as one.
+        className="flex items-center gap-2 text-[15px] font-semibold leading-6 text-primary hover:text-accent transition-all duration-150 w-full text-left mb-2"
       >
         {expanded ? (
-          <ChevronDown className="w-4 h-4" />
+          <ChevronDown className="w-4 h-4 shrink-0" />
         ) : (
-          <ChevronRight className="w-4 h-4" />
+          <ChevronRight className="w-4 h-4 shrink-0" />
         )}
         <span>{t('fallback.heading')}</span>
         {!expanded && models.length > 0 && (
-          <span className="text-secondary font-normal ml-1">
+          <span className="text-[13px] text-secondary font-normal ml-1">
             {t('fallback.configuredCount', { n: models.length })}
           </span>
         )}

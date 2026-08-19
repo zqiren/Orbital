@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 _PROVIDERS_JSON = os.path.join(os.path.dirname(__file__), "providers.json")
 
@@ -56,13 +56,29 @@ class ReasoningInfo:
 
 @dataclass(frozen=True)
 class ModelInfo:
-    """Metadata for a specific model."""
+    """Metadata for a specific model.
+
+    ``sdk`` and ``base_url`` are per-model ENDPOINT OVERRIDES, normally None.
+    They exist because an aggregator can serve different models over different
+    wire protocols under one account: on OpenCode Go, ``minimax-m3`` is
+    Anthropic ``/messages`` while ``deepseek-v4-pro`` is OpenAI
+    ``/chat/completions`` — and on the Zen tier that same ``minimax-m3`` is
+    ``/chat/completions``. So the protocol belongs to (provider, model), not
+    to either one alone. None means "inherit the provider-level config",
+    which is every model of every single-protocol provider.
+
+    The paired ``base_url`` is needed because the two SDKs disagree on where
+    ``/v1`` lives: the OpenAI client appends ``/chat/completions`` to what it
+    is given, while the Anthropic client appends ``/v1/messages``.
+    """
     context_window: int = _FALLBACK_CONTEXT_WINDOW
     max_output: int = _FALLBACK_MAX_OUTPUT
     capabilities: ModelCapabilities = ModelCapabilities()
     tier: str = ""
     display_name: str = ""
     reasoning: ReasoningInfo = ReasoningInfo()
+    sdk: str | None = None
+    base_url: str | None = None
 
 
 def _parse_reasoning_entry(entry: dict | None) -> ReasoningInfo:
@@ -94,6 +110,8 @@ def _parse_model_entry(entry: dict) -> ModelInfo:
         tier=entry.get("tier", ""),
         display_name=entry.get("display_name", ""),
         reasoning=_parse_reasoning_entry(entry.get("reasoning")),
+        sdk=entry.get("sdk"),
+        base_url=entry.get("base_url"),
     )
 
 
@@ -136,10 +154,19 @@ class ProviderRegistry:
         models = provider_data.get("models", {})
 
         entry = None
+        # Endpoint overrides (``sdk`` / ``base_url``) are honored ONLY on a
+        # real match — exact or prefix. Everything below that is the registry
+        # admitting it does not know this model, and guessing that an unknown
+        # model lives on a sibling's protocol is strictly worse than the
+        # provider default: a model released after our catalog would be sent
+        # to whichever endpoint the flagship happens to use. Specs inherit;
+        # the endpoint does not.
+        matched_exactly = False
 
         # 1. Exact match
         if model in models:
             entry = models[model]
+            matched_exactly = True
         else:
             # 2. Prefix match (longest key that is a prefix of model)
             best = ""
@@ -150,6 +177,7 @@ class ProviderRegistry:
                     best = key
             if best:
                 entry = models[best]
+                matched_exactly = True
 
         # 2.5. Inherit from the provider's newest flagship. An unknown model
         # on a known provider is almost always NEWER than the bundled catalog
@@ -176,7 +204,10 @@ class ProviderRegistry:
         if entry is None:
             return _UNKNOWN_MODEL
 
-        return _parse_model_entry(entry)
+        info = _parse_model_entry(entry)
+        if not matched_exactly and (info.sdk or info.base_url):
+            info = replace(info, sdk=None, base_url=None)
+        return info
 
     def get_capabilities(self, provider: str, model: str) -> ModelCapabilities:
         """Return capabilities for a model."""

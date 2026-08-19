@@ -242,8 +242,11 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
       <p className="text-xs text-secondary mb-1">
         {t('subAgentSettings.installHint')}
       </p>
-      <p className="text-xs text-secondary mb-4 italic">
+      <p className="text-xs text-secondary mb-1 italic">
         {t('subAgentSettings.credNote')}
+      </p>
+      <p className="text-xs text-secondary mb-4 italic">
+        {t('subAgentSettings.loginNote')}
       </p>
 
       {error && (
@@ -315,6 +318,14 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   const [installBusy, setInstallBusy] = useState(false);
   const [installLine, setInstallLine] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  // Login: the CLI opens a browser and completes the OAuth handshake on its
+  // own (the result travels server-side), so the ONLY thing the user may need
+  // is the URL — printed once, in case the browser did not open. `loginNotice`
+  // carries the terminal outcome: 'unverified' means the CLI exited 0 but the
+  // credential re-check still reported unconfigured, which is NOT a failure (a
+  // slow keychain write looks identical), so it reads as "couldn't confirm".
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [loginNotice, setLoginNotice] = useState<'unverified' | 'failed' | null>(null);
 
   const paramKeys = Object.keys(entry.param_schema);
   const isApiKeyFlow = API_KEY_LOGIN_SLUGS.has(entry.slug);
@@ -379,6 +390,44 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
     };
   }, [ws, entry.slug, onChanged]);
 
+  // Login job events. Daemon-global and slug-carrying, same shape as the
+  // install trio above. The progress lines are already ANSI/OSC-stripped by the
+  // daemon (the CLI prints its URL wrapped in an OSC-8 hyperlink), so the first
+  // bare URL we see is directly linkable.
+  useEffect(() => {
+    const onLoginProgress = (event: WebSocketEvent) => {
+      if (event.type !== 'login.progress') return;
+      if (event.slug !== entry.slug) return;
+      const url = event.line.match(/https?:\/\/\S+/)?.[0];
+      if (url) setLoginUrl(prev => prev ?? url);
+    };
+    const onLoginComplete = (event: WebSocketEvent) => {
+      if (event.type !== 'login.complete') return;
+      if (event.slug !== entry.slug) return;
+      setLoginBusy(false);
+      setLoginUrl(null);
+      // `verified === undefined` means an older daemon that does not re-check;
+      // treat only an explicit false as unconfirmed.
+      setLoginNotice(event.verified === false ? 'unverified' : null);
+      void onChanged();
+    };
+    const onLoginFailed = (event: WebSocketEvent) => {
+      if (event.type !== 'login.failed') return;
+      if (event.slug !== entry.slug) return;
+      setLoginBusy(false);
+      setLoginUrl(null);
+      setLoginNotice('failed');
+    };
+    ws.on('login.progress', onLoginProgress);
+    ws.on('login.complete', onLoginComplete);
+    ws.on('login.failed', onLoginFailed);
+    return () => {
+      ws.off('login.progress', onLoginProgress);
+      ws.off('login.complete', onLoginComplete);
+      ws.off('login.failed', onLoginFailed);
+    };
+  }, [ws, entry.slug, onChanged]);
+
   const handleInstall = async () => {
     setInstallBusy(true);
     setInstallError(null);
@@ -428,6 +477,10 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
   const handleLogin = async () => {
     setLoginBusy(true);
     setActionError(null);
+    // Clear the previous attempt's URL/outcome so a retry never shows a stale
+    // link or a stale "couldn't confirm" from the run before it.
+    setLoginUrl(null);
+    setLoginNotice(null);
     try {
       await api(`/api/v2/settings/sub-agents/${encodeURIComponent(entry.slug)}/login`, {
         method: 'POST',
@@ -620,6 +673,35 @@ function SubAgentCard({ entry, onChanged }: CardProps) {
           </button>
         )}
       </div>
+
+      {/* The CLI opens the browser itself and finishes the handshake without
+          any input from us; this link is the fallback for when it cannot. */}
+      {loginUrl && (
+        <p className="text-[11px] text-secondary mb-3">
+          {t('subAgentCard.loginBrowserHint')}{' '}
+          <a
+            href={loginUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            data-testid={`sub-agent-login-url-${entry.slug}`}
+            className="text-accent underline break-all"
+          >
+            {t('subAgentCard.loginOpenLink')}
+          </a>
+        </p>
+      )}
+      {loginNotice && (
+        <p
+          data-testid={`sub-agent-login-notice-${entry.slug}`}
+          className={`text-[11px] mb-3 ${
+            loginNotice === 'unverified' ? 'text-warning' : 'text-error'
+          }`}
+        >
+          {loginNotice === 'unverified'
+            ? t('subAgentCard.loginUnverified')
+            : t('subAgentCard.loginFailed')}
+        </p>
+      )}
 
       {showApiKeyForm && isApiKeyFlow && (
         <div className="bg-sidebar/40 border border-border rounded p-3 mb-3 flex flex-col gap-2">

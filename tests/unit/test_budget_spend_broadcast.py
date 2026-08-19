@@ -170,20 +170,77 @@ class TestPayload:
 
 
 # ---------------------------------------------------------------------------
-# aclose cancels any pending trailing task (no orphan)
+# Idle settle: flush/aclose deliver the pending payload instead of dropping it
 # ---------------------------------------------------------------------------
 
 class TestLifecycle:
     @pytest.mark.asyncio
-    async def test_aclose_cancels_pending_trailing(self):
-        """Closing before the trailing fires cancels it cleanly (no orphan task,
-        no late broadcast)."""
+    async def test_aclose_flushes_pending_trailing_once(self):
+        """Closing before the trailing fires DELIVERS it immediately (it used to
+        be cancelled), and the disarmed timer never fires a duplicate later."""
         emitted, sink = _drain()
         b = SpendBroadcaster(emit=sink, interval=0.2)
         b.submit(window="daily", spend=1.0, limit=10.0, currency="USD")
         b.submit(window="daily", spend=2.0, limit=10.0, currency="USD")
         assert len(emitted) == 1  # leading only so far
         await b.aclose()
-        # Wait past when the trailing would have fired — it must NOT.
+        # The pending final numbers went out on close, not into the bin.
+        assert len(emitted) == 2, emitted
+        assert emitted[1]["spend"] == 2.0
+        # Wait past when the trailing would have fired — no duplicate.
         await asyncio.sleep(0.3)
+        assert len(emitted) == 2
+
+    @pytest.mark.asyncio
+    async def test_flush_emits_pending_immediately(self):
+        """flush() is the idle-settle primitive: the corner lands on the final
+        figure the moment work stops, not up to `interval` later."""
+        emitted, sink = _drain()
+        b = SpendBroadcaster(emit=sink, interval=10.0)  # trailing far in the future
+        b.submit(window="daily", spend=1.0, limit=10.0, currency="USD")
+        b.submit(window="daily", spend=7.5, limit=10.0, currency="USD")
         assert len(emitted) == 1
+        b.flush()
+        assert len(emitted) == 2, emitted
+        assert emitted[1]["spend"] == 7.5
+        await b.aclose()
+
+    @pytest.mark.asyncio
+    async def test_flush_with_nothing_pending_is_a_noop(self):
+        """No pending payload → no duplicate frame. Safe to call at every idle
+        boundary (run-end AND terminate) without spamming the socket."""
+        emitted, sink = _drain()
+        b = SpendBroadcaster(emit=sink, interval=1.0)
+        b.submit(window="daily", spend=1.0, limit=10.0, currency="USD")
+        assert len(emitted) == 1  # leading edge already carried the final number
+        b.flush()
+        b.flush()
+        await b.aclose()
+        assert len(emitted) == 1
+
+    @pytest.mark.asyncio
+    async def test_submit_after_aclose_still_works(self):
+        """aclose() must not permanently mute the broadcaster: the SAME loop
+        object is what a hot resume runs again, and its spend must keep
+        reaching the UI."""
+        emitted, sink = _drain()
+        b = SpendBroadcaster(emit=sink, interval=0.05)
+        b.submit(window="daily", spend=1.0, limit=10.0, currency="USD")
+        await b.aclose()
+        await asyncio.sleep(0.08)
+        b.submit(window="daily", spend=2.0, limit=10.0, currency="USD")
+        assert [e["spend"] for e in emitted] == [1.0, 2.0]
+        await b.aclose()
+
+    @pytest.mark.asyncio
+    async def test_flush_swallows_a_throwing_sink(self):
+        """The idle flush runs inside loop teardown — a broken sink must not
+        propagate into it."""
+        def _boom(_payload):
+            raise RuntimeError("ws send failed")
+
+        b = SpendBroadcaster(emit=_boom, interval=10.0)
+        b.submit(window="daily", spend=1.0, limit=None, currency="USD")  # leading
+        b.submit(window="daily", spend=2.0, limit=None, currency="USD")  # pending
+        b.flush()          # must not raise
+        await b.aclose()   # must not raise

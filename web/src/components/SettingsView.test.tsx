@@ -100,6 +100,14 @@ describe('SettingsView sub-agent deployment instructions', () => {
       'placeholder',
       '示例：使用 Gemini 进行调研，Claude Code 负责规划和审查，Codex 负责实现。除非任务无关，否则继续使用现有会话。',
     );
+    // The hint is behind the label's ⓘ now, not printed under it.
+    expect(screen.queryByText(/留空则由管理Agent自行决定/)).not.toBeInTheDocument();
+    // The ⓘ that belongs to THIS label — a positional index would silently
+    // follow whichever other section happens to gain or lose a description.
+    const hintToggle = screen
+      .getByText('子Agent派发指示')
+      .parentElement!.querySelector('button');
+    fireEvent.click(hintToggle!);
     expect(screen.getByText(/留空则由管理Agent自行决定/)).toBeInTheDocument();
   });
 });

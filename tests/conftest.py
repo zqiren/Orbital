@@ -10,6 +10,10 @@ unaffected by patching the re-export in ``agent_os.api.app``.
 Also enforces the resource markers declared in pyproject.toml: marked tests
 are skipped by default unless the resource is present or explicitly opted
 into via env var. See docs/TESTING-markers.md for the run commands.
+
+Session-scoped autouse: sets ``AGENT_OS_TELEMETRY_DISABLED`` so no test
+process posts a ping to the production telemetry endpoint (spec 063 §2 — test
+runs produced ~98% of the stored install fleet).
 """
 
 import os
@@ -53,6 +57,24 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_live_sandbox)
         if "live_daemon" in item.keywords and not _opted_in("ORBITAL_LIVE_DAEMON_TESTS"):
             item.add_marker(skip_live_daemon)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _disable_telemetry_sends():
+    """Keep the whole suite off the production telemetry endpoint (spec 063 §7).
+
+    Written into ``os.environ`` rather than via ``monkeypatch`` so daemons the
+    tests spawn as subprocesses inherit it. Only ``TelemetrySender.start()``
+    reads it — local spooling and ``run_cycle()`` are unaffected, so spool and
+    rollup assertions are untouched.
+    """
+    previous = os.environ.get("AGENT_OS_TELEMETRY_DISABLED")
+    os.environ["AGENT_OS_TELEMETRY_DISABLED"] = "1"
+    yield
+    if previous is None:
+        os.environ.pop("AGENT_OS_TELEMETRY_DISABLED", None)
+    else:
+        os.environ["AGENT_OS_TELEMETRY_DISABLED"] = previous
 
 
 @pytest.fixture(autouse=True)

@@ -70,6 +70,9 @@ const DEFAULT_PROVIDER = 'deepseek';
 const PROVIDER_ORDER = [
   'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax',
   'openai', 'anthropic', 'google', 'xai', 'mistral', 'groq', 'together', 'openrouter',
+  // Aggregators last, next to OpenRouter. Zen (pay-as-you-go credits) before
+  // Go (the $10/mo subscription) — one account and one key serve both.
+  'opencode-zen', 'opencode-go',
 ];
 
 export function providerOrderForLocale(locale: Locale): string[] {
@@ -154,6 +157,11 @@ export default function LLMProviderSettings({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelInputValue, setModelInputValue] = useState('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  // Set only by the "enter a custom model" escape hatch. The fetch effect used
+  // to gate on `modelSource === 'freetext'`, which conflated a deliberate
+  // choice with "this provider has no catalog" — and the latter is exactly the
+  // case (Custom / self-hosted) that most needs a live list.
+  const [freetextPinned, setFreetextPinned] = useState(false);
 
   // Test connection state
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
@@ -365,6 +373,7 @@ export default function LLMProviderSettings({
     setProvider(key);
     setModel('');
     setModelInputValue('');
+    setFreetextPinned(false);
     setTestStatus('idle');
     setTestMessage('');
     // Seed the dropdown from the catalog immediately (no key required).
@@ -398,40 +407,69 @@ export default function LLMProviderSettings({
     setTestMessage('');
   }
 
-  // Fetch models when provider + key available
+  // Mirror modelSource into a ref for the async fetch closure below: a failed
+  // refresh must not downgrade a list an earlier fetch already loaded. Synced
+  // in an effect (not during render) so the write happens on commit — the
+  // closure that reads it runs long after, when the request settles.
+  const modelSourceRef = useRef(modelSource);
+  useEffect(() => {
+    modelSourceRef.current = modelSource;
+  }, [modelSource]);
+
+  // A project can carry its own key; a saved GLOBAL key is never round-tripped
+  // through the browser — the backend resolves that one from the credential
+  // store (the request body simply omits it).
+  const projectApiKey = mode === 'project' ? projectValues?.api_key : undefined;
+
+  // Fetch models when provider + endpoint (+ key, where one is needed)
   useEffect(() => {
     if (!initialized) return;
-    if (!provider || provider === CUSTOM_PROVIDER_KEY) return;
-    // Respect an explicit free-text choice (escape hatch / empty catalog):
-    // don't yank the user back into a dropdown by a background fetch.
-    if (modelSource === 'freetext') return;
+    if (!provider) return;
+    // Respect an explicit free-text choice: don't yank the user back into a
+    // dropdown by a background fetch.
+    if (freetextPinned) return;
 
-    // Need either a new key typed in, or existing key (global or project)
-    const hasKey = apiKey.trim() || globalSettings?.api_key_set || (mode === 'project' && projectValues?.api_key);
-    if (!hasKey) return;
+    const isCustom = provider === CUSTOM_PROVIDER_KEY;
+    const info = isCustom ? undefined : providers[provider];
+    if (!isCustom && !info) return;
+    // The registry already records who serves a model list. z.ai has no
+    // /v1/models at all (nginx 404), and MiniMax/Qwen are flagged too — honor
+    // the flag instead of paying a round trip that can only fail.
+    if (info && info.supports_model_list === false) return;
+    // Custom / self-hosted is reachable only through a typed endpoint.
+    if (isCustom && !baseUrl.trim()) return;
 
-    const info = providers[provider];
-    if (!info) return;
+    // Need a key typed in, or one already stored (global or project). Local
+    // servers reached through Custom (LM Studio / Ollama) need none.
+    const hasKey = apiKey.trim() || globalSettings?.api_key_set || projectApiKey;
+    if (!hasKey && !isCustom) return;
 
     // Do NOT clear the catalog-seeded options here — keep the suggested dropdown
     // usable while the live fetch is in flight. A success upgrades to 'api'; a
     // failure re-seeds the suggested list (or free-text for empty catalogs).
     let cancelled = false;
+    const controller = new AbortController();
     setModelsLoading(true);
 
     async function fetchModels() {
       try {
         const body: Record<string, unknown> = {
-          provider,
+          provider: isCustom ? 'custom' : provider,
           base_url: baseUrl.trim() || undefined,
+          // The Custom provider picks its own protocol, and the registry's
+          // `custom` entry always says "openai" — the backend can't infer it.
+          sdk,
         };
         if (apiKey.trim()) {
           body.api_key = apiKey.trim();
+        } else if (projectApiKey) {
+          body.api_key = projectApiKey;
         }
         // Backend returns { models: string[] }.
         const result = await api<{ models?: string[] }>('/api/v2/providers/models', {
           method: 'POST',
           body: JSON.stringify(body),
+          signal: controller.signal,
         });
         const models = result?.models ?? [];
         if (!cancelled && models.length > 0) {
@@ -442,7 +480,11 @@ export default function LLMProviderSettings({
         }
       } catch {
         if (cancelled) return;
-        // Fall back to the catalog's suggested models (free-text if none).
+        // A failed refresh must never destroy a live list an earlier fetch
+        // loaded — that downgrade was the visible "loads, then snaps back to
+        // the built-in defaults".
+        if (modelSourceRef.current === 'api') return;
+        // Otherwise fall back to the catalog's suggested models (free-text if none).
         seedModelsFromCatalog(provider);
       } finally {
         if (!cancelled) setModelsLoading(false);
@@ -452,10 +494,11 @@ export default function LLMProviderSettings({
     const timer = setTimeout(fetchModels, 400);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, provider, providers, initialized]);
+  }, [apiKey, provider, providers, initialized, baseUrl, sdk, freetextPinned, projectApiKey]);
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -491,6 +534,7 @@ export default function LLMProviderSettings({
   // Escape hatch: switch the picker to free-text entry for a custom model name.
   function enterCustomModel() {
     setModelSource('freetext');
+    setFreetextPinned(true);
     setModelOptions([]);
     setModel('');
     setModelInputValue('');
@@ -722,12 +766,15 @@ export default function LLMProviderSettings({
     <button
       type="button"
       onClick={() => setExpanded(!expanded)}
-      className="flex items-center gap-2 text-sm font-medium text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
+      // Reads as a SettingsSection heading (15px semibold) with a disclosure
+      // chevron, so a collapsed section is still a landmark on the page rather
+      // than a stray link between two headed sections.
+      className="flex items-center gap-2 text-[15px] font-semibold leading-6 text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
     >
-      {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+      {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
       <span>{t('llm.provider.heading')}</span>
       {!expanded && (
-        <span className="text-secondary font-normal ml-1">
+        <span className="text-[13px] text-secondary font-normal ml-1">
           {t('llm.project.usingDefault', {
             provider: projectValues?.provider && providers[projectValues.provider]
               ? providers[projectValues.provider].display_name

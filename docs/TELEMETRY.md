@@ -43,7 +43,10 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
     "sessions": 3,
     "turns": 41,
     "errors": { "provider_unreachable": 2 },
-    "tokens_by_provider": { "deepseek": { "in": 120000, "out": 8000 } }
+    "errors_by_provider": { "deepseek": 2 },
+    "tokens_by_provider": { "deepseek": { "in": 120000, "out": 8000 } },
+    "login_attempted": 1,
+    "login_failed": 0
   }
 }
 ```
@@ -63,7 +66,34 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
 | `counters.sessions` | int | Chat sessions created. |
 | `counters.turns` | int | Management-agent LLM responses. |
 | `counters.errors` | map | LLM failures by stable error code (`missing_api_key`, `invalid_api_key`, `model_not_found`, `provider_unreachable`, `provider_error`). Codes only — never messages. |
+| `counters.errors_by_provider` | map | The **same** failures as `errors`, counted by provider name (`deepseek`, `minimax`, `custom`, …) instead of by code. `unknown` when the failure happened before the provider was resolved. Both maps are published: `errors` is the series with history, `errors_by_provider` is what makes a failure attributable. |
 | `counters.tokens_by_provider` | map | Daily input/output token totals per provider (no per-model detail; that stays local in the budget ledger). |
+| `counters.login_attempted` | int | Sub-agent CLI sign-in jobs started (Claude Code, Codex, …). The agent slug stays local in the spool — only the daily total is sent. |
+| `counters.login_failed` | int | Of those, how many ended in failure. Together with `login_attempted` this is the only visibility into whether sub-agent setup is where activation stalls. |
+
+`counters.sessions` counts sessions at the point they are minted, so every
+path produces one: the "+ New session" button, the first-run cold-start scan,
+the workbench spawn, and the queue dispatcher (which runs each queue item in
+its own fresh session). Earlier releases counted only the button, so the
+figure was biased against exactly the heaviest users.
+
+## When Orbital does not send
+
+Beyond the Settings toggle, the sender refuses to start at all for processes
+that are not somebody's Orbital — they were flooding the dataset with
+single-ping phantom installs:
+
+- **`AGENT_OS_TELEMETRY_DISABLED`** — set to any truthy value (`1`, `true`, …)
+  to suppress all transmission for that process. Set by the test suite
+  (`tests/conftest.py`), CI (`.github/workflows/ci.yml`), and the repo dev
+  daemon (`scripts/restart-daemon.sh`).
+- **A data dir under a temp path** (`tempfile.gettempdir()`, `/tmp`,
+  `/private/var/folders`, symlinks resolved) — a structural backstop for
+  processes that forget the env var. No real install lives there.
+
+Both guards suppress **transmission only**: the local spool, the daily
+snapshot, and the Settings → Data & privacy viewer keep working, and each
+guard logs once at startup when it fires.
 
 ## Transport & retention
 

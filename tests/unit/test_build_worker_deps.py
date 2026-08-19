@@ -19,6 +19,8 @@ Covers:
 
 from unittest.mock import MagicMock
 
+from agent_os.config.provider_registry import ModelInfo
+
 import pytest
 
 from agent_os.daemon_v2.agent_manager import AgentManager
@@ -48,7 +50,7 @@ def _make_manager(project=None, projects=None, browser_manager=None):
     activity_translator = MagicMock()
     process_manager = MagicMock()
     provider_registry = MagicMock()
-    provider_registry.get_model_info.return_value = MagicMock(
+    provider_registry.get_model_info.return_value = ModelInfo(
         max_output=16384, capabilities=None, reasoning=None,
     )
     # Cross-provider base_url fallback reads the raw registry dict; a bare

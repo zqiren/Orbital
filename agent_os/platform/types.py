@@ -91,6 +91,7 @@ DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
     "api.together.xyz",
     "openrouter.ai",
     "tokendance.space",      # TokenDance router (China, Spec 47)
+    "opencode.ai",           # OpenCode Zen + Go (one host serves both tiers)
     # Python
     "pypi.org",
     "files.pythonhosted.org",

@@ -3380,6 +3380,1291 @@
         "pollution_risk": "unknown",
         "notes": "Behavior depends on the user-configured endpoint. No general statement possible."
       }
+    },
+    "opencode-zen": {
+      "display_name": "OpenCode Zen",
+      "base_url": "https://opencode.ai/zen/v1",
+      "console_url": "https://opencode.ai/auth",
+      "currency": "USD",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": [
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "deepseek-v4-pro",
+        "kimi-k3",
+        "glm-5.2",
+        "minimax-m3",
+        "deepseek-v4-flash-free",
+        "big-pickle"
+      ],
+      "notes": "Pay-as-you-go credits (auto-reload configurable), sold at cost. Orbital reaches the /chat/completions family (open models + the free tier) and the /messages family (all Claude models and Qwen) — 33 of Zen's 63 models. The GPT-5.x/Grok models are served over OpenAI's Responses API and Gemini over Google's; Orbital speaks neither, so use the OpenAI/Google providers directly for those. The free models (ids ending -free, plus big-pickle) work with NO payment method on file — verified on the wire. Note that a paid model with no balance returns HTTP 401 carrying a CreditsError body: the key is valid, the workspace just needs a payment method. Same API key as OpenCode Go. https://opencode.ai/docs/zen/ A Go subscription does NOT fund Zen: with Go active but no Zen credits, Zen's paid models still answer CreditsError while the free models keep working (verified 2026-08-19). The balance flows the other way — Go can fall back to Zen credits past a cap.",
+      "pricing": {
+        "big-pickle": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "claude-fable-5": {
+          "input_per_1m": 10.0,
+          "output_per_1m": 50.0,
+          "cached_input_per_1m": 1.0,
+          "cache_write_per_1m": 12.5
+        },
+        "claude-haiku-4-5": {
+          "input_per_1m": 1.0,
+          "output_per_1m": 5.0,
+          "cached_input_per_1m": 0.1,
+          "cache_write_per_1m": 1.25
+        },
+        "claude-opus-4-5": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 6.25
+        },
+        "claude-opus-4-6": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 6.25
+        },
+        "claude-opus-4-7": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 6.25
+        },
+        "claude-opus-4-8": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 6.25
+        },
+        "claude-opus-5": {
+          "input_per_1m": 5.0,
+          "output_per_1m": 25.0,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 6.25
+        },
+        "claude-sonnet-4-5": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0,
+          "cached_input_per_1m": 0.3,
+          "cache_write_per_1m": 3.75
+        },
+        "claude-sonnet-4-6": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0,
+          "cached_input_per_1m": 0.3,
+          "cache_write_per_1m": 3.75
+        },
+        "claude-sonnet-5": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 10.0,
+          "cached_input_per_1m": 0.2,
+          "cache_write_per_1m": 2.5
+        },
+        "deepseek-v4-flash": {
+          "input_per_1m": 0.22,
+          "output_per_1m": 0.66,
+          "cached_input_per_1m": 0.007
+        },
+        "deepseek-v4-flash-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "deepseek-v4-pro": {
+          "input_per_1m": 0.66,
+          "output_per_1m": 1.98,
+          "cached_input_per_1m": 0.022
+        },
+        "glm-5": {
+          "input_per_1m": 1.0,
+          "output_per_1m": 3.2,
+          "cached_input_per_1m": 0.2
+        },
+        "glm-5.1": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "glm-5.2": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "hy3-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "kimi-k2.5": {
+          "input_per_1m": 0.6,
+          "output_per_1m": 3.0,
+          "cached_input_per_1m": 0.1
+        },
+        "kimi-k2.6": {
+          "input_per_1m": 0.95,
+          "output_per_1m": 4.0,
+          "cached_input_per_1m": 0.16
+        },
+        "kimi-k2.7-code": {
+          "input_per_1m": 0.95,
+          "output_per_1m": 4.0,
+          "cached_input_per_1m": 0.19
+        },
+        "kimi-k3": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0,
+          "cached_input_per_1m": 0.3
+        },
+        "laguna-s-2.1-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "mimo-v2.5-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "minimax-m2.5": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06
+        },
+        "minimax-m2.7": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06
+        },
+        "minimax-m3": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06
+        },
+        "nemotron-3-ultra-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "nemotron-3.5-lightning-free": {
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0,
+          "cached_input_per_1m": 0.0
+        },
+        "qwen3.5-plus": {
+          "input_per_1m": 0.2,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.02,
+          "cache_write_per_1m": 0.25
+        },
+        "qwen3.6-plus": {
+          "input_per_1m": 0.5,
+          "output_per_1m": 3.0,
+          "cached_input_per_1m": 0.05,
+          "cache_write_per_1m": 0.625
+        },
+        "qwen3.7-max": {
+          "input_per_1m": 2.5,
+          "output_per_1m": 7.5,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 3.125
+        },
+        "qwen3.7-plus": {
+          "input_per_1m": 0.4,
+          "output_per_1m": 1.6,
+          "cached_input_per_1m": 0.04,
+          "cache_write_per_1m": 0.5
+        },
+        "_default": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0
+        }
+      },
+      "models": {
+        "big-pickle": {
+          "display_name": "Big Pickle",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          }
+        },
+        "claude-fable-5": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "model_only",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Thinking is ALWAYS on — explicit {type:'disabled'} returns 400; omit the thinking param (adaptive is implicit). Raw chain of thought never returned; display:'summarized' gives a readable summary. Sampling params rejected. Depth via output_config.effort (low..max). Requires 30-day data retention (400 under ZDR). https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5"
+          },
+          "display_name": "Claude Fable 5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-haiku-4-5": {
+          "tier": "fast",
+          "context_window": 200000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Manual extended thinking with budget_tokens. Echo-back required during tool use. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+          },
+          "display_name": "Claude Haiku 4.5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-opus-4-5": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'enabled',budget_tokens:N}",
+            "notes": "Legacy 4.5 opus extended thinking with budget_tokens."
+          },
+          "display_name": "Claude Opus 4.5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-opus-4-6": {
+          "tier": "flagship-legacy",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Legacy 4.6 opus with extended thinking."
+          },
+          "display_name": "Claude Opus 4.6",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-opus-4-7": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+          },
+          "display_name": "Claude Opus 4.7",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-opus-4-8": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "param:thinking={type:'adaptive'}",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking Same request surface as Opus 4.7; sampling params (temperature/top_p/top_k) rejected."
+          },
+          "display_name": "Claude Opus 4.8",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-opus-5": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "param:thinking={type:'adaptive'}",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking Same request surface as Opus 4.7; sampling params (temperature/top_p/top_k) rejected."
+          },
+          "display_name": "Claude Opus 5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-sonnet-4-5": {
+          "tier": "balanced",
+          "context_window": 200000,
+          "max_output": 16384,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Legacy 4.5 sonnet with extended thinking; same echo-back rule."
+          },
+          "display_name": "Claude Sonnet 4.5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-sonnet-4-6": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 64000,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "thinking",
+            "echo_back": "required",
+            "enable": "param:thinking={type:'adaptive'}",
+            "notes": "Adaptive (recommended) or manual budget_tokens (deprecated). Echo-back of thinking blocks required during tool use. https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+          },
+          "display_name": "Claude Sonnet 4.6",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "claude-sonnet-5": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 128000,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "param:thinking={type:'adaptive'}",
+            "field": "thinking",
+            "echo_back": "required",
+            "notes": "Adaptive thinking only — manual budget_tokens returns 400. Thinking blocks (with signature) must be echoed unchanged on tool-use continuations. https://platform.claude.com/docs/en/build-with-claude/extended-thinking Adaptive runs by DEFAULT when thinking is omitted; non-default sampling params rejected. New tokenizer: ~30% more tokens for the same text vs Sonnet 4.6."
+          },
+          "display_name": "Claude Sonnet 5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "deepseek-v4-flash": {
+          "tier": "hybrid",
+          "context_window": 1000000,
+          "max_output": 384000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true,
+            "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Echo-back required for tool-call turns; safest to always include reasoning_content (empty string when absent). https://api-docs.deepseek.com/guides/thinking_mode"
+          },
+          "display_name": "DeepSeek V4 Flash"
+        },
+        "deepseek-v4-flash-free": {
+          "display_name": "DeepSeek V4 Flash Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Echo-back required for tool-call turns; safest to always include reasoning_content (empty string when absent). https://api-docs.deepseek.com/guides/thinking_mode"
+          }
+        },
+        "deepseek-v4-pro": {
+          "tier": "hybrid",
+          "context_window": 1000000,
+          "max_output": 384000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true,
+            "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Docs: 'If your code does not correctly pass back reasoning_content, the API will return a 400 error.' Use thinking.type=disabled to opt out. https://api-docs.deepseek.com/guides/thinking_mode"
+          },
+          "display_name": "DeepSeek V4 Pro"
+        },
+        "glm-5": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Same hybrid model as 4.x line; thinking defaults enabled. https://docs.z.ai/api-reference/llm/chat-completion"
+          },
+          "display_name": "GLM 5"
+        },
+        "glm-5.1": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+          },
+          "display_name": "GLM 5.1"
+        },
+        "glm-5.2": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+          },
+          "display_name": "GLM 5.2"
+        },
+        "hy3-free": {
+          "display_name": "Hy3 Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Verified live on hy3-free: streams a named reasoning_content delta and accepts prior assistant turns that omit it. usage carries completion_tokens_details.reasoning_tokens."
+          }
+        },
+        "kimi-k2.5": {
+          "tier": "balanced",
+          "context_window": 262144,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid via thinking={type:enabled|disabled}; no 'keep' param so historical reasoning is not retained — echo-back not enforced. https://platform.kimi.ai/docs/api/chat"
+          },
+          "display_name": "Kimi K2.5"
+        },
+        "kimi-k2.6": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Defaults to enabled. Adds 'keep' param: keep='all' upgrades echo_back to required (preserve historical reasoning_content verbatim). https://platform.kimi.ai/docs/api/chat"
+          },
+          "display_name": "Kimi K2.6"
+        },
+        "kimi-k2.7-code": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Defaults to enabled. Adds 'keep' param: keep='all' upgrades echo_back to required (preserve historical reasoning_content verbatim). https://platform.kimi.ai/docs/api/chat"
+          },
+          "display_name": "Kimi K2.7 Code"
+        },
+        "kimi-k3": {
+          "tier": "flagship",
+          "context_window": 1048576,
+          "max_output": 131072,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "model_only",
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "notes": "Reasoning always on — no toggle (reasoning_effort supports only 'max'; do NOT send the K2.x thinking param). temperature fixed at 1.0 — omit it. Vision input rejects public image URLs (base64 or ms://<file-id> only). https://platform.kimi.ai/docs/guide/kimi-k3-quickstart"
+          },
+          "display_name": "Kimi K3"
+        },
+        "laguna-s-2.1-free": {
+          "display_name": "Laguna S 2.1 Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "notes": "No reasoning surfaced in a live tool-calling probe (2026-08-19) — neither a reasoning_content delta nor inline <think>."
+          }
+        },
+        "mimo-v2.5-free": {
+          "display_name": "MiMo-V2.5 Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          }
+        },
+        "minimax-m2.5": {
+          "tier": "balanced",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M2.5"
+        },
+        "minimax-m2.7": {
+          "tier": "flagship",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M2.7"
+        },
+        "minimax-m3": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M3 emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract, default tag 'think') peels it into reasoning_content. (A v0.6.1 inline_tag='mm:think' override was a misdiagnosis from a single malformed lone </mm:think> close tag — M3 normally uses <think>; reverted in v0.6.2.) https://platform.minimax.io/docs/api-reference/text-openai-api",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M3"
+        },
+        "nemotron-3-ultra-free": {
+          "display_name": "Nemotron 3 Ultra Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "notes": "No reasoning surfaced in a live tool-calling probe (2026-08-19) — neither a reasoning_content delta nor inline <think>."
+          }
+        },
+        "nemotron-3.5-lightning-free": {
+          "display_name": "Nemotron 3.5 Lightning Free",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": false,
+            "notes": "No reasoning surfaced in a live tool-calling probe (2026-08-19) — neither a reasoning_content delta nor inline <think>."
+          }
+        },
+        "qwen3.5-plus": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+          },
+          "display_name": "Qwen3.5 Plus",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "qwen3.6-plus": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+          },
+          "display_name": "Qwen3.6 Plus",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "qwen3.7-max": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": 32768,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Latest Qwen3.5 flagship; hybrid thinking-mode (default off). Same enable_thinking + preserve_thinking pattern.",
+            "needs_verification": true
+          },
+          "display_name": "Qwen3.7 Max",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        },
+        "qwen3.7-plus": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+          },
+          "display_name": "Qwen3.7 Plus",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen"
+        }
+      },
+      "cache": {
+        "supported": "passthrough",
+        "control": "passthrough",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "passthrough",
+        "isolation_confidence": "unknown",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "prompt_tokens_details.cached_tokens",
+        "pollution_risk": "unknown",
+        "notes": "Aggregator: caching behavior is the upstream provider's, passed through. Cached-read/write rates are published per model and are billed at the upstream discount. Verified on the wire: usage carries prompt_tokens_details.cached_tokens."
+      }
+    },
+    "opencode-go": {
+      "display_name": "OpenCode Go",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "console_url": "https://opencode.ai/auth",
+      "currency": "USD",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": [
+        "glm-5.2",
+        "kimi-k3",
+        "glm-5.3",
+        "minimax-m3",
+        "kimi-k2.7-code",
+        "mimo-v2.5",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. grok-4.5 and gpt-5.6-luna use the Responses API, which Orbital does not speak. https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
+      "pricing": {
+        "deepseek-v4-flash": {
+          "input_per_1m": 0.22,
+          "output_per_1m": 0.66,
+          "cached_input_per_1m": 0.007
+        },
+        "deepseek-v4-pro": {
+          "input_per_1m": 0.66,
+          "output_per_1m": 1.98,
+          "cached_input_per_1m": 0.022
+        },
+        "glm-5.1": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "glm-5.2": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "glm-5.3": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4,
+          "cached_input_per_1m": 0.26
+        },
+        "hy3": {
+          "input_per_1m": 0.14,
+          "output_per_1m": 0.58,
+          "cached_input_per_1m": 0.035
+        },
+        "kimi-k2.6": {
+          "input_per_1m": 0.95,
+          "output_per_1m": 4.0,
+          "cached_input_per_1m": 0.16
+        },
+        "kimi-k2.7-code": {
+          "input_per_1m": 0.95,
+          "output_per_1m": 4.0,
+          "cached_input_per_1m": 0.19
+        },
+        "kimi-k3": {
+          "input_per_1m": 3.0,
+          "output_per_1m": 15.0,
+          "cached_input_per_1m": 0.3
+        },
+        "mimo-v2.5": {
+          "input_per_1m": 0.14,
+          "output_per_1m": 0.28,
+          "cached_input_per_1m": 0.0028
+        },
+        "mimo-v2.5-pro": {
+          "input_per_1m": 0.435,
+          "output_per_1m": 0.87,
+          "cached_input_per_1m": 0.003625
+        },
+        "minimax-m2.5": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06,
+          "cache_write_per_1m": 0.375
+        },
+        "minimax-m2.7": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06,
+          "cache_write_per_1m": 0.375
+        },
+        "minimax-m3": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "cached_input_per_1m": 0.06
+        },
+        "qwen3.6-plus": {
+          "input_per_1m": 0.5,
+          "output_per_1m": 3.0,
+          "cached_input_per_1m": 0.05,
+          "cache_write_per_1m": 0.625
+        },
+        "qwen3.7-max": {
+          "input_per_1m": 2.5,
+          "output_per_1m": 7.5,
+          "cached_input_per_1m": 0.5,
+          "cache_write_per_1m": 3.125
+        },
+        "qwen3.7-plus": {
+          "input_per_1m": 0.4,
+          "output_per_1m": 1.6,
+          "cached_input_per_1m": 0.04,
+          "cache_write_per_1m": 0.5
+        },
+        "qwen3.8-max": {
+          "input_per_1m": 2.0,
+          "output_per_1m": 6.0,
+          "cached_input_per_1m": 0.25,
+          "cache_write_per_1m": 2.5
+        },
+        "_default": {
+          "input_per_1m": 1.4,
+          "output_per_1m": 4.4
+        }
+      },
+      "models": {
+        "deepseek-v4-flash": {
+          "tier": "hybrid",
+          "context_window": 1000000,
+          "max_output": 384000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true,
+            "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Echo-back required for tool-call turns; safest to always include reasoning_content (empty string when absent). https://api-docs.deepseek.com/guides/thinking_mode"
+          },
+          "display_name": "DeepSeek V4 Flash"
+        },
+        "deepseek-v4-pro": {
+          "tier": "hybrid",
+          "context_window": 1000000,
+          "max_output": 384000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true,
+            "json_mode": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "required",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking defaults enabled. Docs: 'If your code does not correctly pass back reasoning_content, the API will return a 400 error.' Use thinking.type=disabled to opt out. https://api-docs.deepseek.com/guides/thinking_mode"
+          },
+          "display_name": "DeepSeek V4 Pro"
+        },
+        "glm-5.1": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+          },
+          "display_name": "GLM-5.1"
+        },
+        "glm-5.2": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+          },
+          "display_name": "GLM-5.2"
+        },
+        "glm-5.3": {
+          "tier": "flagship",
+          "context_window": 200000,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Hybrid; thinking default enabled. Streaming delta carries reasoning_content. https://docs.z.ai/guides/llm/glm-5.1"
+          },
+          "display_name": "GLM-5.3"
+        },
+        "hy3": {
+          "display_name": "Hy3",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Verified live on hy3-free: streams a named reasoning_content delta and accepts prior assistant turns that omit it. usage carries completion_tokens_details.reasoning_tokens."
+          }
+        },
+        "kimi-k2.6": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Defaults to enabled. Adds 'keep' param: keep='all' upgrades echo_back to required (preserve historical reasoning_content verbatim). https://platform.kimi.ai/docs/api/chat"
+          },
+          "display_name": "Kimi K2.6"
+        },
+        "kimi-k2.7-code": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "notes": "Defaults to enabled. Adds 'keep' param: keep='all' upgrades echo_back to required (preserve historical reasoning_content verbatim). https://platform.kimi.ai/docs/api/chat"
+          },
+          "display_name": "Kimi K2.7 Code"
+        },
+        "kimi-k3": {
+          "tier": "flagship",
+          "context_window": 1048576,
+          "max_output": 131072,
+          "capabilities": {
+            "streaming": true,
+            "tool_use": true,
+            "vision": true
+          },
+          "reasoning": {
+            "supported": true,
+            "enable": "model_only",
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "notes": "Reasoning always on — no toggle (reasoning_effort supports only 'max'; do NOT send the K2.x thinking param). temperature fixed at 1.0 — omit it. Vision input rejects public image URLs (base64 or ms://<file-id> only). https://platform.kimi.ai/docs/guide/kimi-k3-quickstart"
+          },
+          "display_name": "Kimi K3"
+        },
+        "mimo-v2.5": {
+          "display_name": "MiMo-V2.5",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          }
+        },
+        "mimo-v2.5-pro": {
+          "display_name": "MiMo-V2.5-Pro",
+          "context_window": 128000,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          }
+        },
+        "minimax-m2.5": {
+          "tier": "balanced",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M2.5",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "minimax-m2.7": {
+          "tier": "flagship",
+          "context_window": 196608,
+          "max_output": 8192,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M2-series emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract) peels it into reasoning_content. Confirm specifics on https://platform.minimax.io/docs.",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M2.7",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "minimax-m3": {
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": null,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": null,
+            "echo_back": "optional",
+            "enable": "model_only",
+            "notes": "Inline-think: M3 emits reasoning in <think>…</think> within content; Orbital's InlineThinkSplitter (field=null contract, default tag 'think') peels it into reasoning_content. (A v0.6.1 inline_tag='mm:think' override was a misdiagnosis from a single malformed lone </mm:think> close tag — M3 normally uses <think>; reverted in v0.6.2.) https://platform.minimax.io/docs/api-reference/text-openai-api",
+            "needs_verification": true
+          },
+          "display_name": "MiniMax M3",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "qwen3.6-plus": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+          },
+          "display_name": "Qwen3.6 Plus",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "qwen3.7-max": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": 32768,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Latest Qwen3.5 flagship; hybrid thinking-mode (default off). Same enable_thinking + preserve_thinking pattern.",
+            "needs_verification": true
+          },
+          "display_name": "Qwen3.7 Max",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "qwen3.7-plus": {
+          "tier": "balanced",
+          "context_window": 1000000,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Hybrid; thinking default off. https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+          },
+          "display_name": "Qwen3.7 Plus",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        },
+        "qwen3.8-max": {
+          "tier": "flagship",
+          "context_window": 262144,
+          "max_output": 32768,
+          "capabilities": {
+            "vision": true,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:enable_thinking=true",
+            "notes": "Latest Qwen3.5 flagship; hybrid thinking-mode (default off). Same enable_thinking + preserve_thinking pattern.",
+            "needs_verification": true
+          },
+          "display_name": "Qwen3.8 Max",
+          "sdk": "anthropic",
+          "base_url": "https://opencode.ai/zen/go"
+        }
+      },
+      "cache": {
+        "supported": "passthrough",
+        "control": "passthrough",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "passthrough",
+        "isolation_confidence": "unknown",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": true,
+        "observability_field": "prompt_tokens_details.cached_tokens",
+        "pollution_risk": "unknown",
+        "notes": "Aggregator: caching behavior is the upstream provider's, passed through. Cached-read/write rates are published per model and are billed at the upstream discount. Verified on the wire: usage carries prompt_tokens_details.cached_tokens."
+      }
     }
   },
   "defaults": {

@@ -1112,68 +1112,18 @@ async def delete_project(project_id: str):
 
 @router.post("/agents/start")
 async def start_agent(req: StartAgentRequest):
-    from agent_os.daemon_v2.models import AgentConfig
-
     project = _project_store.get_project(req.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    autonomy_str = project.get("autonomy", "hands_off")
-    try:
-        autonomy = Autonomy(autonomy_str)
-    except ValueError:
-        autonomy = Autonomy.HANDS_OFF
+    # Config comes from the canonical builder, same as every other start path
+    # (inject auto-start, queue, triggers, cold-start scan). This route used to
+    # carry a partial copy of the provider/endpoint rules — it had the
+    # crosses-provider guard but not the provider-tracks-model rule — so a
+    # project inheriting the global model while pinning its own stale provider
+    # reached the wrong endpoint. See tests/unit/test_agent_config_parity.py.
+    config = _agent_manager._build_agent_config_from_project(req.project_id)
 
-    # Use global settings as fallback for missing project-level LLM config
-    global_settings = _settings_store.get() if _settings_store else None
-    cred_key = _credential_store.get_api_key() if _credential_store else None
-    api_key = (project.get("api_key")
-               or cred_key
-               or (global_settings.llm.api_key if global_settings else None)
-               or "")
-    base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-    model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
-
-    # Resolve fallback models: project-level > global-level > empty
-    from agent_os.daemon_v2.models import FallbackModelEntry
-    raw_fallbacks = project.get("llm_fallback_models")
-    if not raw_fallbacks and global_settings:
-        raw_fallbacks = [fb.model_dump() for fb in global_settings.llm.fallback_models]
-    fallback_models = []
-    for fb in (raw_fallbacks or []):
-        fb_key = fb.get("api_key") or api_key  # inherit primary key if empty
-        fallback_models.append(FallbackModelEntry(
-            provider=fb.get("provider", "custom"),
-            model=fb.get("model", ""),
-            base_url=fb.get("base_url"),
-            api_key=fb_key,
-            sdk=fb.get("sdk", "openai"),
-        ))
-
-    config = AgentConfig(
-        workspace=project["workspace"],
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        autonomy=autonomy,
-        sdk=project.get("sdk", "openai"),
-        provider=project.get("provider", "custom"),
-        project_name=project.get("name", ""),
-        project_instructions=project.get("instructions", ""),
-        sub_agent_deployment_instructions=(project.get(
-            "sub_agent_deployment_instructions", ""
-        ) or ""),
-        agent_slug=project.get("agent_slug", "built-in"),
-        enabled_sub_agents=project.get("enabled_sub_agents", []),
-        disabled_sub_agents=project.get("disabled_sub_agents", []),
-        agent_credentials=project.get("agent_credentials", {}),
-        is_scratch=project.get("is_scratch", False),
-        agent_name=project.get("agent_name", project.get("name", "")),
-        global_preferences_path="",
-        llm_fallback_models=fallback_models,
-        budget_limit_usd=project.get("budget_limit_usd"),
-        budget_action=project.get("budget_action", "pause"),
-    )
     try:
         await _agent_manager.start_agent(
             req.project_id, config,
@@ -1702,11 +1652,11 @@ async def new_session(project_id: str, req: SessionScopedRequest | None = None):
     ``session_id`` + ``session_uuid`` and returns them; writes no file and
     touches no running session. The UI navigates to the new ``session_id`` and
     the session materializes on the first message. The body ``session_id`` is
-    accepted for compatibility but ignored — a new session is always fresh."""
-    from agent_os import telemetry
+    accepted for compatibility but ignored — a new session is always fresh.
 
-    telemetry.emit("session_created")
-    telemetry.latch("first_session")
+    The ``session_created`` telemetry emit lives in ``new_session()`` itself
+    (spec 063 §3), not here — a route handler only ever measures one of the
+    four callers."""
     result = await _agent_manager.new_session(
         project_id, session_id=(req.session_id if req else None),
     )
@@ -2664,6 +2614,11 @@ class FetchModelsRequest(BaseModel):
     provider: str = "custom"
     api_key: str | None = None
     base_url: str | None = None
+    # The Custom provider exposes an SDK picker, and the registry's `custom`
+    # entry always says "openai" — so the request must be able to carry the
+    # protocol, or an Anthropic-format endpoint gets listed at the OpenAI path
+    # with the OpenAI auth header. None = fall back to the registry entry.
+    sdk: str | None = None
 
 
 _CHAT_PROTOCOL_PREFIXES = ("openai:chat-completions", "anthropic:messages")
@@ -2707,19 +2662,34 @@ async def fetch_models(req: FetchModelsRequest):
     # entirely when there is no key — a keyless local server needs none, and an
     # empty `Bearer ` (trailing space) is an illegal HTTP header value that
     # httpx rejects.
-    sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
+    sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
+
+    # The frontend clears the API-key field once a key is persisted, and its
+    # body omits `api_key` when the field is empty — so the post-save steady
+    # state sends no key at all. Fall back to the stored global key exactly as
+    # /providers/test does; otherwise every key-gated provider (11 of 14 answer
+    # /models with 401/403 unauthenticated) silently drops back to the static
+    # suggested list right after the user saves.
+    api_key = req.api_key
+    if not (api_key or "").strip() and _credential_store is not None:
+        api_key = _credential_store.get_api_key() or ""
+
     if sdk == "anthropic":
         models_url = base_url.rstrip("/") + "/v1/models"
         headers = {"anthropic-version": "2023-06-01"}
-        if req.api_key:
-            headers["x-api-key"] = req.api_key
+        if api_key:
+            headers["x-api-key"] = api_key
     else:
         models_url = base_url.rstrip("/") + "/models"
         headers = {}
-        if req.api_key:
-            headers["Authorization"] = f"Bearer {req.api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    # Fail fast. A blocked or slow /models endpoint holds the model picker in
+    # its loading state for the whole timeout before falling back to the
+    # suggested list, which reads as "the app is broken" long before it
+    # resolves (api.mistral.ai: ~10s to a TLS failure from a CN network).
+    async with httpx.AsyncClient(timeout=6) as client:
         try:
             resp = await client.get(models_url, headers=headers)
             resp.raise_for_status()
@@ -2729,7 +2699,60 @@ async def fetch_models(req: FetchModelsRequest):
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Provider returned {e.response.status_code}")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            # str(httpx.ReadTimeout()) is "" — the most likely failure here is
+            # exactly the one that would report nothing at all.
+            raise HTTPException(status_code=502, detail=str(e) or type(e).__name__)
+
+
+# Phrases that mean the CREDENTIAL was rejected. Everything else a gateway
+# refuses a request for — no payment method, a region gate, a quota, an
+# unenrolled model — also arrives as 401/403, and calling those "Invalid API
+# key" sends the user to re-issue a key that works fine. Reported from the
+# field on OpenCode Go: deepseek-v4-flash answers 403 RegionError until the
+# workspace opts into China hosting. Auth phrasing is a small stable set; the
+# reasons a request can be refused are open-ended, so the allowlist covers
+# auth and everything else passes through in the provider's own words.
+_AUTH_FAILURE_PHRASES = (
+    "api key", "apikey", "api-key",
+    "authentication", "unauthorized", "invalid token", "invalid credentials",
+)
+
+
+def _unwrap_provider_message(raw: str) -> str:
+    """Pull the provider's sentence out of an SDK envelope.
+
+    SDK errors arrive as ``Error code: 403 - {'type': 'error', 'error':
+    {'message': '...'}}`` — a Python repr, which is unreadable in a red UI
+    line. Return the innermost ``message`` when the envelope parses, else the
+    raw string unchanged.
+    """
+    import ast
+
+    body = raw.split(" - ", 1)[1] if " - " in raw else raw
+    try:
+        parsed = ast.literal_eval(body.strip())
+    except (ValueError, SyntaxError):
+        return raw
+    for _ in range(4):  # {'error': {'error': {...}}} nests at most a little
+        if not isinstance(parsed, dict):
+            break
+        msg = parsed.get("message")
+        if isinstance(msg, str) and msg:
+            return msg
+        nxt = parsed.get("error")
+        if nxt is None:
+            break
+        parsed = nxt
+    return raw
+
+
+def _describe_auth_failure(raw: str | None) -> str:
+    """Map a 401/403 to display text: the stable "Invalid API key" only when
+    the provider says the credential was the problem."""
+    message = raw or ""
+    if any(p in message.lower() for p in _AUTH_FAILURE_PHRASES):
+        return "Invalid API key"
+    return _unwrap_provider_message(message)
 
 
 class TestConnectionRequest(BaseModel):
@@ -2752,6 +2775,16 @@ async def test_connection(req: TestConnectionRequest):
     provider_info = _provider_registry.get_provider_data(req.provider) if _provider_registry else None
     base_url = req.base_url or (provider_info["base_url"] if provider_info else None)
     sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
+
+    # Per-model endpoint override wins over both: the frontend can only send
+    # the PROVIDER-level sdk, so on a mixed-protocol aggregator (OpenCode
+    # Zen/Go) Test Connection would otherwise fail on a model that works in a
+    # real turn. Models without an override leave the user's choice intact —
+    # that is every Custom / self-hosted endpoint.
+    if _provider_registry is not None:
+        _mi = _provider_registry.get_model_info(req.provider, req.model)
+        sdk = _mi.sdk or sdk
+        base_url = _mi.base_url or base_url
 
     from agent_os.agent.providers.openai_compat import LLMProvider
     from agent_os.agent.providers.types import LLMError, ContextOverflowError
@@ -2780,8 +2813,8 @@ async def test_connection(req: TestConnectionRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except LLMError as e:
         status = e.status_code or 500
-        if status == 401 or status == 403:
-            detail = "Invalid API key"
+        if status in (401, 403):
+            detail = _describe_auth_failure(e.message)
         elif status == 404:
             detail = f"Model '{req.model}' not found on this provider"
         elif status == 429:

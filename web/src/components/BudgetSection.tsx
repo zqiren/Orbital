@@ -172,11 +172,8 @@ export default function BudgetSection({
         : 'text-primary';
 
   return (
+    // Heading comes from the enclosing SettingsSection.
     <div>
-      <label className="block text-sm font-medium text-primary mb-2">
-        {t('settings.budget.label')}
-      </label>
-
       <div className="space-y-4">
         {/* Limit-as-sentence row */}
         <div className="flex items-center gap-2 flex-wrap text-sm text-primary">

@@ -219,3 +219,179 @@ def test_providers_test_keyless_stays_keyless_without_stored_key(provider_client
         )
     assert resp.status_code == 200, resp.text
     assert captured["api_key"] == ""
+
+
+# --- Model-list: stored-key fallback, request sdk, fail-fast timeout ----------
+#
+# Same bug class as the Test-Connection fallback above, on the sibling endpoint.
+# The frontend clears the API-key field after a save (`doSave` -> setApiKey(''))
+# and only puts `api_key` in the /providers/models body when the field is
+# non-empty — but `apiKey` is in the fetch effect's dep array, so clearing it
+# RE-FIRES the fetch with no key at all. 11 of the 14 registry providers answer
+# /models with 401/403 when unauthenticated, so the live model list silently
+# reverted to the static suggested list the moment the user pressed Save.
+
+
+def _fake_httpx_client(captured: dict, payload: dict | None = None):
+    """httpx.AsyncClient stand-in that records ctor kwargs + the GET it makes."""
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload if payload is not None else {"data": [{"id": "m-1"}]}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            captured["client_kwargs"] = kw
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers or {}
+            return FakeResp()
+
+    return FakeClient
+
+
+def test_providers_models_falls_back_to_stored_global_key(provider_client, monkeypatch):
+    """Empty api_key + a saved global key = list models with the stored key.
+
+    This is the post-save steady state: the key field is empty, so the body
+    carries no api_key, and the provider 401s without one.
+    """
+    import httpx
+
+    store = MagicMock()
+    store.get_api_key.return_value = "sk-stored-global-key"
+    monkeypatch.setattr(agents_v2, "_credential_store", store)
+
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_httpx_client(captured))
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={"provider": "deepseek", "base_url": "https://api.deepseek.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["headers"].get("Authorization") == "Bearer sk-stored-global-key"
+
+
+def test_providers_models_typed_key_wins_over_stored_key(provider_client, monkeypatch):
+    """A key typed into the field lists models for THAT key — the
+    try-before-you-save flow must not silently query the old stored key."""
+    import httpx
+
+    store = MagicMock()
+    store.get_api_key.return_value = "sk-stored-global-key"
+    monkeypatch.setattr(agents_v2, "_credential_store", store)
+
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_httpx_client(captured))
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-typed-fresh-key",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["headers"].get("Authorization") == "Bearer sk-typed-fresh-key"
+
+
+def test_providers_models_keyless_stays_keyless_without_stored_key(
+    provider_client, monkeypatch
+):
+    """No typed key and no stored key = keyless request (LM Studio / Ollama).
+    The fixture pins _credential_store to None."""
+    import httpx
+
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_httpx_client(captured))
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={"base_url": "http://localhost:1234/v1"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "Authorization" not in captured["headers"], captured["headers"]
+
+
+def test_providers_models_honors_request_sdk(provider_client, monkeypatch):
+    """The Custom provider exposes an SDK dropdown, so an Anthropic-format
+    endpoint must be listed via /v1/models + x-api-key. The handler used to
+    read `sdk` off the registry entry only — and the registry's `custom` entry
+    says "openai" — so custom+anthropic hit the wrong path with the wrong
+    auth header. Also the path a per-model SDK override needs (OpenCode Go)."""
+    import httpx
+
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_httpx_client(captured))
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={
+            "base_url": "https://router.example/anthropic",
+            "api_key": "sk-k",
+            "sdk": "anthropic",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["url"] == "https://router.example/anthropic/v1/models"
+    assert captured["headers"].get("x-api-key") == "sk-k"
+    assert "Authorization" not in captured["headers"]
+
+
+def test_providers_models_uses_fail_fast_timeout(provider_client, monkeypatch):
+    """A blocked or slow /models endpoint must fail fast, not hold the picker
+    spinning. 15s left the model dropdown loading long past the point a user
+    reads it as broken (api.mistral.ai: ~10s to a TLS failure from CN)."""
+    import httpx
+
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_httpx_client(captured))
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={"base_url": "http://localhost:1234/v1"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["client_kwargs"]["timeout"] <= 8
+
+
+def test_providers_models_timeout_reports_a_non_empty_detail(provider_client, monkeypatch):
+    """`str(httpx.ReadTimeout())` is the empty string, so a timed-out model
+    fetch used to surface as `{"detail": ""}` — a blank error is unreadable in
+    the daemon log and in any client that shows it. Fall back to the exception
+    class name."""
+    import httpx
+
+    class BoomClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(httpx, "AsyncClient", BoomClient)
+
+    resp = provider_client.post(
+        "/api/v2/providers/models",
+        json={"base_url": "http://127.0.0.1:9912/v1"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"].strip(), resp.text

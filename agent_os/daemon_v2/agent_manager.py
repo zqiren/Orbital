@@ -404,7 +404,8 @@ class AgentManager:
 
     def _broadcast(self, project_id: str, payload: dict,
                    session_id: str | None = None) -> None:
-        """Wrap ``self._ws.broadcast`` to stamp an additive ``session_id`` field.
+        """Wrap ``self._ws.broadcast`` to stamp additive ``session_id`` and
+        ``project_id`` fields.
 
         The existing project-keyed subscription model is unchanged — every
         client subscribed to ``project_id`` still receives the payload.
@@ -418,6 +419,10 @@ class AgentManager:
         # Don't overwrite a session_id already set by the caller (rare,
         # but cleaner than special-casing): the call site's choice wins.
         payload.setdefault("session_id", sid)
+        # Same treatment for project_id: routing is by subscription, so the
+        # field was absent from most payloads — and the frontend filters WS
+        # events on it, silently dropping every event that lacked it.
+        payload.setdefault("project_id", project_id)
         self._ws.broadcast(project_id, payload)
 
     def _prevent_sleep_if_needed(self) -> None:
@@ -571,8 +576,17 @@ class AgentManager:
         def _headers_for(provider_key: str) -> dict | None:
             return self._provider_registry.get_provider_data(provider_key).get("extra_headers")
 
+        # Per-model endpoint override (registry ``sdk``/``base_url``). An
+        # aggregator serves different models over different wire protocols
+        # under one key — OpenCode Go puts minimax-m3 on Anthropic /messages
+        # and deepseek-v4-pro on OpenAI /chat/completions — so the protocol
+        # can only be resolved once the model is known. None (every model of
+        # every single-protocol provider) inherits the config, leaving the
+        # Custom/self-hosted escape hatch and user-typed endpoints untouched.
         provider = LLMProvider(
-            config.model, api_key, config.base_url, sdk=config.sdk,
+            config.model, api_key,
+            model_info.base_url or config.base_url,
+            sdk=model_info.sdk or config.sdk,
             max_output=model_info.max_output,
             capabilities=model_info.capabilities,
             reasoning=model_info.reasoning,
@@ -587,7 +601,9 @@ class AgentManager:
                 getattr(fb, 'provider', 'custom'), fb.model,
             )
             fallback_providers.append(
-                LLMProvider(fb.model, fb_key, fb.base_url, sdk=fb.sdk,
+                LLMProvider(fb.model, fb_key,
+                            fb_info.base_url or fb.base_url,
+                            sdk=fb_info.sdk or fb.sdk,
                             max_output=fb_info.max_output,
                             capabilities=fb_info.capabilities,
                             reasoning=fb_info.reasoning,
@@ -598,7 +614,9 @@ class AgentManager:
         if config.utility_model:
             utility_info = self._provider_registry.get_model_info(config.provider, config.utility_model)
             utility_provider = LLMProvider(
-                config.utility_model, config.api_key, config.base_url, sdk=config.sdk,
+                config.utility_model, config.api_key,
+                utility_info.base_url or config.base_url,
+                sdk=utility_info.sdk or config.sdk,
                 reasoning=utility_info.reasoning,
                 provider=config.provider,
                 extra_headers=_headers_for(config.provider),
@@ -1483,10 +1501,20 @@ class AgentManager:
     def _build_agent_config_from_project(self, project_id: str) -> AgentConfig:
         """Construct an AgentConfig for ``project_id`` from the project store.
 
-        Used by auto-start paths (inject_message Case 3 and the queue items
-        route) so the same derivation logic — autonomy resolution, sub-agent
-        availability, API key/model/base_url fallback through credential and
-        settings stores — runs in one place.
+        The single derivation site for EVERY path that starts an agent for a
+        project — chat/inject auto-start, the queue items route, scheduled and
+        file-watch triggers, the ``/agents/start`` route, cold-start scan, and
+        hot-resume live-resolve. Autonomy resolution, sub-agent availability,
+        API key/model/base_url/provider resolution through the credential and
+        settings stores, and the fallback chain all run here and only here.
+
+        That is a hard invariant, not a convenience: when the trigger path
+        carried its own copy it resolved each LLM field independently and
+        paired a project's stale ``base_url`` snapshot with the current global
+        key, so every scheduled run 401'd while chat on the same project and
+        session worked. ``tests/unit/test_agent_config_parity.py`` pins the
+        parity. Callers needing extra fields set them on the returned
+        dataclass — they must not re-derive anything resolved here.
 
         Raises:
             KeyError: if no project exists for ``project_id``.
@@ -1575,6 +1603,30 @@ class AgentManager:
             else:
                 base_url = (global_settings.llm.base_url if global_settings else None) or project.get("base_url")
 
+        # Fallback chain: project-level > global-level > empty. Resolved here
+        # rather than per-caller because every start path deserves the same
+        # chain — it used to live only in the /agents/start route, so a
+        # trigger fire, a queue auto-start, an inject auto-start and a
+        # cold-start scan all ran with no fallback at all and died on the
+        # first transient the primary threw.
+        from agent_os.daemon_v2.models import FallbackModelEntry
+
+        raw_fallbacks = project.get("llm_fallback_models")
+        if not raw_fallbacks and global_settings:
+            raw_fallbacks = [
+                fb.model_dump() for fb in (global_settings.llm.fallback_models or [])
+            ]
+        fallback_models = [
+            FallbackModelEntry(
+                provider=fb.get("provider", "custom"),
+                model=fb.get("model", ""),
+                base_url=fb.get("base_url"),
+                api_key=fb.get("api_key") or api_key,  # inherit primary key if empty
+                sdk=fb.get("sdk", "openai"),
+            )
+            for fb in (raw_fallbacks or [])
+        ]
+
         return AgentConfig(
             workspace=project["workspace"],
             model=model,
@@ -1592,6 +1644,9 @@ class AgentManager:
             disabled_sub_agents=list(disabled),
             is_scratch=project.get("is_scratch", False),
             agent_name=project.get("agent_name", project.get("name", "")),
+            agent_slug=project.get("agent_slug", "built-in"),
+            agent_credentials=project.get("agent_credentials", {}),
+            llm_fallback_models=fallback_models,
             budget_limit_usd=project.get("budget_limit_usd"),
             budget_action=project.get("budget_action", "pause"),
         )
@@ -1881,12 +1936,16 @@ class AgentManager:
             # gets a session system row plus a classified agent.status error.
             # BaseException so a CancelledError supersede is surfaced too; the
             # exception is always re-raised, never swallowed.
-            self._record_start_failure(project_id, session_id, session, exc)
+            self._record_start_failure(
+                project_id, session_id, session, exc,
+                provider=getattr(config, "provider", None),
+            )
             raise
         return "started"
 
     def _record_start_failure(self, project_id: str, session_id: str,
-                              session: "Session", exc: BaseException) -> None:
+                              session: "Session", exc: BaseException,
+                              provider: str | None = None) -> None:
         """Surface a failed/superseded agent start (bug #59).
 
         Writes a visible system row into the (already materialized) session so
@@ -1923,7 +1982,11 @@ class AgentManager:
                 project_id, session_id,
             )
         try:
-            self._record_loop_error(project_id, session_id, surfaced)
+            # The handle does not exist yet on a start failure, so the caller's
+            # config is the only provider source telemetry can use here.
+            self._record_loop_error(
+                project_id, session_id, surfaced, provider=provider,
+            )
         except Exception:
             logger.exception(
                 "failed to broadcast start failure for %s/%s",
@@ -2585,8 +2648,29 @@ class AgentManager:
             event["error_code"] = error_code
         self._last_terminal_events[make_session_key(project_id, session_id)] = event
 
+    def _provider_for_error(self, project_id: str, session_id: str,
+                            explicit: str | None = None) -> str:
+        """Best-effort provider key for ``llm_error`` attribution (spec 063 §4).
+
+        Order: what the caller knows (start failures still hold the config) →
+        the running handle's config snapshot → ``"unknown"``, the same
+        fallback ``rollup.py`` uses for tokens when the provider is
+        unresolved at failure time.
+        """
+        if explicit:
+            return str(explicit)
+        try:
+            handle = self._handles.get(make_session_key(project_id, session_id))
+            provider = (getattr(handle, "config_snapshot", None) or {}).get("provider")
+            if provider:
+                return str(provider)
+        except Exception:
+            pass
+        return "unknown"
+
     def _record_loop_error(self, project_id: str, session_id: str,
-                           exc: BaseException) -> None:
+                           exc: BaseException,
+                           provider: str | None = None) -> None:
         """Surface a loop/start failure: log with traceback, record a
         classified terminal event, and broadcast agent.status error with the
         stable ``error_code`` so the frontend can show an actionable message
@@ -2600,10 +2684,19 @@ class AgentManager:
         )
         # Persist the structured code (spec 046 §4): local-only debugging value,
         # so it spools even when the telemetry toggle is off (Q2). Code enum
-        # only — never the message, which can carry paths/model names.
+        # only — never the message, which can carry paths/model names. The
+        # provider enum rides along (spec 063 §4) so an error can be attributed
+        # to a vendor; provider names already travel in tokens_by_provider.
         from agent_os import telemetry
 
-        telemetry.emit("llm_error", {"error_code": code}, always_spool=True)
+        telemetry.emit(
+            "llm_error",
+            {
+                "error_code": code,
+                "provider": self._provider_for_error(project_id, session_id, provider),
+            },
+            always_spool=True,
+        )
         self._set_last_terminal_event(
             project_id, session_id, "error", details=message, error_code=code,
         )
@@ -3122,6 +3215,16 @@ class AgentManager:
             "new_session(%s): minted uuid %s (uuid-only; F1 retired)",
             project_id, new_session_uuid,
         )
+        # Telemetry sessions counter (spec 063 §3): this mint point is the
+        # chokepoint all four callers cross — the "+ new session" button, the
+        # cold-start scan, the workbench seeded spawn and the queue dispatcher
+        # (one fresh session per item). It used to live in the route, so three
+        # of the four were uncounted and `counters.sessions` measured a button.
+        # Same discipline `turn_completed` gets from riding ledger.append_event.
+        from agent_os import telemetry
+
+        telemetry.emit("session_created")
+        telemetry.latch("first_session")
         return {
             "status": "ok",
             "session_id": new_session_uuid,

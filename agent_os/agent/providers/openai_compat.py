@@ -527,7 +527,12 @@ class LLMProvider:
             response_iter = await self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools or None,
+                # OMIT `tools` when empty. `tools=None` serializes to
+                # "tools": null, which strict gateways reject outright:
+                # GLM-5.2 via OpenCode Go answers 400 "Input should be a
+                # valid list, field: 'tools', value: None". The Anthropic
+                # path already only sets the key when it has one.
+                **({"tools": tools} if tools else {}),
                 stream=True,
                 stream_options={"include_usage": True},
             )
@@ -555,7 +560,7 @@ class LLMProvider:
                     response_iter = await self._openai_client.chat.completions.create(
                         model=self.model,
                         messages=flat_messages,
-                        tools=tools or None,
+                        **({"tools": tools} if tools else {}),
                         stream=True,
                         stream_options={"include_usage": True},
                     )
@@ -574,60 +579,74 @@ class LLMProvider:
             if self._inline_think_mode() else None
         )
 
-        async for chunk in response_iter:
-            if not chunk.choices:
-                if chunk.usage is not None:
+        # The iteration is classified exactly like the create() call above.
+        # It used to sit outside any guard, so a connection dropped MID-stream
+        # (httpx.RemoteProtocolError "incomplete chunked read", a reset peer)
+        # escaped as a raw SDK exception — not an LLMError — and therefore
+        # bypassed both the loop's retry/rotate path and its error-row writer,
+        # leaving the session with the user's message and nothing after it.
+        # `_stream_anthropic` has always guarded its iteration this way.
+        # CancelledError/GeneratorExit are BaseException, so cancel_turn() and
+        # consumer close still propagate untouched.
+        try:
+            async for chunk in response_iter:
+                if not chunk.choices:
+                    if chunk.usage is not None:
+                        usage = _make_token_usage(chunk.usage)
+                        _log_cache_audit(self.model, usage)
+                        yield StreamChunk(
+                            is_final=True,
+                            usage=usage,
+                        )
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+                text = delta.content or ""
+                tc_delta = delta.tool_calls or []
+                reasoning = getattr(delta, "reasoning_content", None) or ""
+
+                if splitter is not None and text:
+                    visible, think = splitter.feed(text)
+                    text = visible
+                    reasoning = reasoning + think
+
+                if choice.finish_reason is not None and chunk.usage is not None:
+                    usage = _make_token_usage(chunk.usage)
+                    _log_cache_audit(self.model, usage)
+                    yield StreamChunk(
+                        text=text,
+                        tool_calls_delta=tc_delta,
+                        is_final=True,
+                        usage=usage,
+                        reasoning_content=reasoning,
+                        finish_reason=choice.finish_reason,
+                    )
+                elif chunk.usage is not None and not text and not tc_delta and not reasoning:
                     usage = _make_token_usage(chunk.usage)
                     _log_cache_audit(self.model, usage)
                     yield StreamChunk(
                         is_final=True,
                         usage=usage,
                     )
-                continue
+                else:
+                    yield StreamChunk(
+                        text=text,
+                        tool_calls_delta=tc_delta,
+                        reasoning_content=reasoning,
+                        finish_reason=choice.finish_reason,
+                    )
 
-            choice = chunk.choices[0]
-            delta = choice.delta
-            text = delta.content or ""
-            tc_delta = delta.tool_calls or []
-            reasoning = getattr(delta, "reasoning_content", None) or ""
-
-            if splitter is not None and text:
-                visible, think = splitter.feed(text)
-                text = visible
-                reasoning = reasoning + think
-
-            if choice.finish_reason is not None and chunk.usage is not None:
-                usage = _make_token_usage(chunk.usage)
-                _log_cache_audit(self.model, usage)
-                yield StreamChunk(
-                    text=text,
-                    tool_calls_delta=tc_delta,
-                    is_final=True,
-                    usage=usage,
-                    reasoning_content=reasoning,
-                    finish_reason=choice.finish_reason,
-                )
-            elif chunk.usage is not None and not text and not tc_delta and not reasoning:
-                usage = _make_token_usage(chunk.usage)
-                _log_cache_audit(self.model, usage)
-                yield StreamChunk(
-                    is_final=True,
-                    usage=usage,
-                )
-            else:
-                yield StreamChunk(
-                    text=text,
-                    tool_calls_delta=tc_delta,
-                    reasoning_content=reasoning,
-                    finish_reason=choice.finish_reason,
-                )
-
-        # Flush any buffered inline-think remainder (an unclosed <think> block,
-        # or a trailing partial tag) once the upstream stream is exhausted.
-        if splitter is not None:
-            visible, think = splitter.flush()
-            if visible or think:
-                yield StreamChunk(text=visible, reasoning_content=think)
+            # Flush any buffered inline-think remainder (an unclosed <think>
+            # block, or a trailing partial tag) once the stream is exhausted.
+            if splitter is not None:
+                visible, think = splitter.flush()
+                if visible or think:
+                    yield StreamChunk(text=visible, reasoning_content=think)
+        except (ContextOverflowError, LLMError):
+            raise
+        except Exception as exc:
+            _classify_error(exc)
 
     async def _stream_anthropic(self, messages, tools=None) -> AsyncIterator[StreamChunk]:
         """Anthropic SDK streaming path with adapter translation."""
@@ -703,7 +722,7 @@ class LLMProvider:
             response = await self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools or None,
+                **({"tools": tools} if tools else {}),
                 stream=False,
                 **extra_kwargs,
             )

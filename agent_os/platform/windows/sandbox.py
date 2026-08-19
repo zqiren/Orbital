@@ -229,6 +229,9 @@ class SandboxAccountManager:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                # net.exe emits ANSI-localized text on non-English Windows —
+                # strict UTF-8 decoding would crash the pipe reader thread.
+                errors="replace",
                 timeout=15,
                 stdin=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,

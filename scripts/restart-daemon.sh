@@ -41,6 +41,11 @@ fi
 # 3. Start new daemon
 echo "[2/4] Starting daemon from $PROJECT_ROOT ..."
 cd "$PROJECT_ROOT"
+# The repo dev daemon is not a user: it must not add pings to production
+# telemetry (spec 063 §7 P0). The packaged app on the same machine already
+# provides the real signal. Export it so uvicorn's child inherits it; a caller
+# that deliberately wants sends can pre-set AGENT_OS_TELEMETRY_DISABLED=0.
+export AGENT_OS_TELEMETRY_DISABLED="${AGENT_OS_TELEMETRY_DISABLED:-1}"
 "${PYTHON:-python3}" -m uvicorn agent_os.api.app:create_app --factory --port "$PORT" --host 0.0.0.0 &
 DAEMON_PID=$!
 echo "  Daemon PID: $DAEMON_PID"

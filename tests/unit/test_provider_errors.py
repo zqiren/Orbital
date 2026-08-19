@@ -74,6 +74,7 @@ def test_classify_unknown_exception_as_provider_error():
 
 
 def _make_manager():
+    from agent_os.config.provider_registry import ProviderRegistry
     from agent_os.daemon_v2.agent_manager import AgentManager
 
     return AgentManager(
@@ -86,7 +87,10 @@ def _make_manager():
         settings_store=MagicMock(),
         credential_store=MagicMock(),
         browser_manager=MagicMock(),
-        provider_registry=MagicMock(),
+        # Real registry, not a MagicMock: every auto-created attribute on a
+        # mock is truthy, so model metadata (max_output, endpoint overrides)
+        # silently outranks the config under test.
+        provider_registry=ProviderRegistry(),
     )
 
 

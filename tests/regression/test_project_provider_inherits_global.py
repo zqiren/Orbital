@@ -116,3 +116,99 @@ def test_same_provider_project_still_inherits_global_base_url_and_key():
     cfg = mgr._build_agent_config_from_project("proj")
     assert cfg.base_url == "https://api.minimaxi.com/v1"
     assert cfg.api_key == "shared-key"
+
+
+# --- Same invariant, second entry point: POST /agents/start -----------------
+#
+# The rule above is enforced in `_build_agent_config_from_project`, but the
+# start route builds its own AgentConfig inline (it must: the canonical builder
+# omits llm_fallback_models, agent_slug, agent_credentials and
+# global_preferences_path). Its base_url/api_key fallback had no notion of
+# provider, so a project pinned to one provider with an empty endpoint field
+# silently borrowed the GLOBAL provider's endpoint — sending the project's key
+# to someone else's API. Caught live: a project on opencode-zen/hy3-free with
+# base_url unset reached tokendance.space and came back
+# `401 API 密钥不存在`.
+
+import pytest
+from unittest.mock import AsyncMock
+
+
+@pytest.fixture
+def start_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from agent_os.api.routes import agents_v2
+    from agent_os.config.provider_registry import ProviderRegistry
+
+    project = {
+        "project_id": "p1", "id": "p1", "workspace": "/tmp/ws",
+        "provider": "opencode-zen", "model": "hy3-free",
+        "api_key": "sk-project-own-key", "base_url": None,
+        "name": "p1", "autonomy": "hands_off",
+    }
+    project_store = MagicMock()
+    project_store.get_project = MagicMock(return_value=project)
+    global_llm = SimpleNamespace(
+        provider="tokendance", model="deepseek-v4-flash",
+        base_url="https://tokendance.space/gateway/v1",
+        api_key="sk-global-tokendance-key", fallback_models=[],
+    )
+    settings_store = MagicMock()
+    settings_store.get = MagicMock(return_value=SimpleNamespace(llm=global_llm))
+    credential_store = MagicMock()
+    credential_store.get_api_key = MagicMock(return_value="sk-global-tokendance-key")
+
+    manager = MagicMock()
+    manager.start_agent = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(agents_v2, "_project_store", project_store)
+    monkeypatch.setattr(agents_v2, "_settings_store", settings_store)
+    monkeypatch.setattr(agents_v2, "_credential_store", credential_store)
+    monkeypatch.setattr(agents_v2, "_agent_manager", manager)
+    monkeypatch.setattr(agents_v2, "_provider_registry", ProviderRegistry())
+
+    app = FastAPI()
+    app.include_router(agents_v2.router)
+    return TestClient(app, raise_server_exceptions=False), manager, project
+
+
+def _started_config(manager):
+    assert manager.start_agent.await_count == 1, "agent never started"
+    return manager.start_agent.await_args.args[1]
+
+
+def test_start_route_resolves_endpoint_from_the_pinned_provider(start_client):
+    client, manager, _ = start_client
+    resp = client.post("/api/v2/agents/start", json={"project_id": "p1"})
+    assert resp.status_code == 200, resp.text
+    config = _started_config(manager)
+    assert config.provider == "opencode-zen"
+    assert config.base_url == "https://opencode.ai/zen/v1"
+    assert "tokendance" not in (config.base_url or "")
+
+
+def test_start_route_does_not_lend_the_global_key_across_providers(start_client):
+    """A key belongs to the provider it was issued for. Pairing the global key
+    with another provider's endpoint is the classic wrong-provider 401."""
+    client, manager, project = start_client
+    project["api_key"] = ""
+    resp = client.post("/api/v2/agents/start", json={"project_id": "p1"})
+    assert resp.status_code in (200, 400), resp.text
+    if manager.start_agent.await_count:
+        config = _started_config(manager)
+        assert config.api_key != "sk-global-tokendance-key"
+
+
+def test_start_route_still_inherits_within_the_same_provider(start_client):
+    """Same provider: inheriting the global endpoint and key is correct and
+    is how a project left on defaults works at all."""
+    client, manager, project = start_client
+    project["provider"] = "tokendance"
+    project["model"] = "deepseek-v4-flash"
+    project["api_key"] = ""
+    resp = client.post("/api/v2/agents/start", json={"project_id": "p1"})
+    assert resp.status_code == 200, resp.text
+    config = _started_config(manager)
+    assert config.base_url == "https://tokendance.space/gateway/v1"
+    assert config.api_key == "sk-global-tokendance-key"

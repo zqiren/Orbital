@@ -27,6 +27,14 @@ export interface SettingsRailSection {
   id: string;
   /** Catalog key for the entry label — reuse the group's heading key. */
   labelKey: StringKey;
+  /**
+   * Optional chapter this entry belongs to, matching the `SettingsGroup`
+   * heading in the document. On desktop it only clusters the entries (see the
+   * note at the render site — the label itself would double the rail's
+   * height); the mobile jump menu prints it as a real `<optgroup>` label. A
+   * chapter whose sections are all absent from the DOM produces no run at all.
+   */
+  groupKey?: StringKey;
 }
 
 interface SettingsRailProps {
@@ -48,6 +56,26 @@ export function scrollToSettingsSection(container: ParentNode, id: string): bool
   if (!el) return false;
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   return true;
+}
+
+/**
+ * Split entries into consecutive same-group runs, in DOM order.
+ *
+ * Grouping is derived from the entries that survived the "is it in the DOM"
+ * filter, never from the declaration array — a chapter whose sections are all
+ * absent (scratch projects drop several) simply produces no run, so neither
+ * surface can print an empty cluster or a stray `<optgroup>`.
+ */
+function groupRuns(
+  items: SettingsRailSection[],
+): { groupKey?: StringKey; items: SettingsRailSection[] }[] {
+  const runs: { groupKey?: StringKey; items: SettingsRailSection[] }[] = [];
+  for (const item of items) {
+    const last = runs[runs.length - 1];
+    if (last && last.groupKey === item.groupKey) last.items.push(item);
+    else runs.push({ groupKey: item.groupKey, items: [item] });
+  }
+  return runs;
 }
 
 /** App-standard mobile detection (matchMedia pattern from App.tsx). */
@@ -159,11 +187,23 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
           <option value="" disabled>
             {t('settingsRail.jump')}
           </option>
-          {visible.map((s) => (
-            <option key={s.id} value={s.id}>
-              {t(s.labelKey)}
-            </option>
-          ))}
+          {groupRuns(visible).map((run) =>
+            run.groupKey ? (
+              <optgroup key={run.groupKey + run.items[0].id} label={t(run.groupKey)}>
+                {run.items.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {t(s.labelKey)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
+              run.items.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {t(s.labelKey)}
+                </option>
+              ))
+            ),
+          )}
         </Select>
       </div>
     );
@@ -175,24 +215,35 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
       aria-label={t('settingsRail.aria')}
       className="sticky top-0 self-start shrink-0 w-44 py-10 pl-6 pr-2 max-lg:hidden"
     >
-      <ul className="space-y-0.5">
-        {visible.map((s) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              onClick={() => handleJump(s.id)}
-              aria-current={activeId === s.id ? 'true' : undefined}
-              className={`block w-full text-left text-[13px] leading-5 rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
-                activeId === s.id
-                  ? 'text-primary bg-sidebar font-medium'
-                  : 'text-secondary hover:text-primary hover:bg-sidebar/60'
-              }`}
-            >
-              {t(s.labelKey)}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {/* Chapter labels are deliberately NOT repeated here. The rail is a
+          twelve-line index in a 176px column; naming the chapters a second
+          time doubled its height and competed with the entries it exists to
+          list. The grouping survives as the gap between runs — enough to
+          cluster, nothing to read. The mobile jump menu still uses real
+          <optgroup> labels: a native picker gives them for free, and a flat
+          thirteen-option select is genuinely worse to scan. */}
+      {groupRuns(visible).map((run, runIdx) => (
+        <div key={run.groupKey ?? run.items[0].id} className={runIdx > 0 ? 'mt-3.5' : ''}>
+          <ul className="space-y-0.5">
+            {run.items.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => handleJump(s.id)}
+                  aria-current={activeId === s.id ? 'true' : undefined}
+                  className={`block w-full text-left text-[13px] leading-5 rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
+                    activeId === s.id
+                      ? 'text-primary bg-sidebar font-medium'
+                      : 'text-secondary hover:text-primary hover:bg-sidebar/60'
+                  }`}
+                >
+                  {t(s.labelKey)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </nav>
   );
 }

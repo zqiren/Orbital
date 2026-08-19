@@ -32,6 +32,7 @@ nul
 # Agent OS runtime
 orbital/
 orbital-data/
+orbital-demo-data/
 orbital-test-data/
 orbital-output/
 device.json
@@ -80,7 +81,8 @@ docs/investigations/
 docs/testing/
 docs/research/
 docs/superpowers/plans/
-RUN-MANUAL-SMOKE.md
+plans/
+RUN-MANUAL-SMOKE.*
 RUN-LOG-*.md
 
 # Brand / marketing assets (local-only — used for launch video, not repo content)
@@ -91,11 +93,13 @@ orbital-launch.png
 VERIFY-*.md
 BACKLOG-*.md
 ONBOARDING.md
-# Orbital dogfooding: the curated roadmap file BACKLOG.md IS tracked; its
-# spec/diagram working dir BACKLOG/ stays local. (!BACKLOG.md is defensive —
-# nothing above matches it today, but it guards against a future BACKLOG* rule.)
+LOG-*.md
+docs/known-issues/
+# Orbital dogfooding: the roadmap is local-only. BACKLOG.md was tracked until
+# 2026-08-19; it and its spec/diagram working dir BACKLOG/ now both stay out of
+# the public repo, like the other internal working artifacts above.
 BACKLOG/
-!BACKLOG.md
+BACKLOG.md
 
 # Scratch artifacts & tool caches
 artifacts-*/
@@ -103,13 +107,23 @@ artifacts-*/
 .vite/
 tmp/
 
-# Working screenshots not referenced by README (keep only README-used images tracked)
+# Working screenshots not referenced by README (keep only README-used images
+# tracked). Naming files one by one let 20 unreferenced images accumulate, so
+# scratch capture dirs are now excluded wholesale and loose media at the repo
+# root — never a README path, always a working artifact — is excluded too.
 docs/screenshots/i18n/
 docs/screenshots/daemon-installed-only.png
 docs/screenshots/merged-subagents.png
 docs/screenshots/phase3-rendered-stream.png
 docs/screenshots/budget/*
 !docs/screenshots/budget/p3-budget-06-userpaused-queue-plain.png
+docs/screenshots/scratch/
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.mp4
+/*.mov
 uploads/
 installer/MicrosoftEdgeWebView2Setup.exe
 dist/Orbital/browsers.tar.gz

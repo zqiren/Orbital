@@ -156,6 +156,10 @@ class PermissionManager:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            # icacls emits ANSI-localized text on non-English Windows, which
+            # is invalid UTF-8 — strict decoding would kill the pipe reader
+            # thread and hand back stdout=None (see test_subprocess_encoding).
+            errors="replace",
             creationflags=win_no_window_flags(),
         )
 

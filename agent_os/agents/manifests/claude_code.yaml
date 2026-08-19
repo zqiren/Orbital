@@ -45,7 +45,11 @@ setup:
       check_command: "claude auth status --json"
       check_field: "loggedIn"
       check_value: "true"
-      setup_command: "claude login"
+      # `claude login` is NOT a subcommand — it parses as the positional
+      # prompt, so the CLI answers conversationally and exits 0 without
+      # authenticating anything (bug #64). Login lives under `auth`, the same
+      # place `_resolve_setup_command` already sends logout.
+      setup_command: "claude auth login"
       setup_label: "Log in to Claude"
   auto_detect:
     windows:

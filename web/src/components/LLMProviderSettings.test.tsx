@@ -771,3 +771,142 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     expect(screen.getByTestId('tokendance-signin-msg').className).toContain('text-error');
   });
 });
+
+// ---- Model-list fetch (live /models picker) ----
+//
+// Regression cluster: the picker loaded a live list and then silently reverted
+// to the static suggested list. Root cause was the post-save key clear (the
+// backend now falls back to the stored key), but four frontend behaviors kept
+// the picker degraded: a failed refresh clobbered a good list, the registry's
+// supports_model_list flag was never read, base_url changes never refetched,
+// and the Custom provider — the one place a user can't know model ids by
+// heart — never fetched at all.
+
+const LIST_REGISTRY: ProviderRegistry = {
+  deepseek: makeProvider({
+    display_name: 'DeepSeek',
+    base_url: 'https://api.deepseek.com',
+    supports_model_list: true,
+    suggested_models: ['suggested-only'],
+  }),
+  minimax: makeProvider({
+    display_name: 'MiniMax',
+    base_url: 'https://api.minimax.io/v1',
+    supports_model_list: false,
+    suggested_models: ['MiniMax-M3'],
+  }),
+  custom: makeProvider({ display_name: 'Custom / Self-Hosted', base_url: '' }),
+};
+
+/** api() mock that also answers /api/v2/providers/models via `onModels`. */
+function mockApiWithModels(
+  settings: MockSettings,
+  onModels: (body: Record<string, unknown>) => Promise<{ models: string[] }>,
+) {
+  apiMock.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/api/v2/settings') {
+      return {
+        llm: {
+          api_key_set: true,
+          api_key_masked: 'sk-***',
+          base_url: null,
+          model: null,
+          sdk: 'openai',
+          provider: '',
+          ...settings,
+        },
+      };
+    }
+    if (path === '/api/v2/providers') return LIST_REGISTRY;
+    if (path === '/api/v2/settings/api-key/status') {
+      return { configured: true, source: 'keyring' };
+    }
+    if (path === '/api/v2/providers/models') {
+      return onModels(JSON.parse((options?.body as string) ?? '{}'));
+    }
+    return {};
+  });
+}
+
+const modelCalls = () =>
+  apiMock.mock.calls.filter((c) => c[0] === '/api/v2/providers/models');
+
+/** Let the 400ms fetch debounce elapse (plus slack) with real timers. */
+const afterDebounce = () => new Promise((r) => setTimeout(r, 550));
+
+describe('LLMProviderSettings — model list fetch', () => {
+  it('skips the request entirely when the registry says supports_model_list=false', async () => {
+    mockApiWithModels(
+      { provider: 'minimax', base_url: 'https://api.minimax.io/v1' },
+      async () => ({ models: ['should-never-be-requested'] }),
+    );
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('minimax');
+    });
+    await afterDebounce();
+    expect(modelCalls()).toHaveLength(0);
+  });
+
+  it('fetches models for the Custom provider, sending its base_url and sdk', async () => {
+    mockApiWithModels(
+      { provider: 'custom', base_url: 'http://localhost:1234/v1' },
+      async () => ({ models: ['local-llama'] }),
+    );
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe(CUSTOM_PROVIDER_KEY);
+    });
+    await waitFor(() => expect(modelCalls().length).toBeGreaterThan(0));
+    const body = JSON.parse(modelCalls()[0][1].body as string);
+    expect(body.base_url).toBe('http://localhost:1234/v1');
+    expect(body.sdk).toBe('openai');
+  });
+
+  it('keeps an already-loaded live list when a later refresh fails', async () => {
+    let calls = 0;
+    mockApiWithModels(
+      { provider: 'deepseek', base_url: 'https://api.deepseek.com' },
+      async () => {
+        calls += 1;
+        if (calls === 1) return { models: ['live-a', 'live-b'] };
+        throw new Error('401');
+      },
+    );
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(calls).toBe(1));
+
+    // Force a refetch by editing the endpoint, and make it fail.
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const baseUrlInput = await screen.findByDisplayValue('https://api.deepseek.com');
+    fireEvent.change(baseUrlInput, { target: { value: 'https://api.deepseek.com/' } });
+    await waitFor(() => expect(calls).toBe(2));
+
+    // The live list must survive; it must NOT be replaced by suggested_models.
+    const modelInput = screen.getByPlaceholderText(/model/i);
+    fireEvent.focus(modelInput);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'live-a' })).toBeTruthy();
+    });
+    expect(screen.queryByRole('button', { name: 'suggested-only' })).toBeNull();
+  });
+
+  it('refetches when the base URL changes (region switch / manual edit)', async () => {
+    mockApiWithModels(
+      { provider: 'deepseek', base_url: 'https://api.deepseek.com' },
+      async () => ({ models: ['live-a'] }),
+    );
+    render(<LLMProviderSettings mode="global" />);
+    await waitFor(() => expect(modelCalls().length).toBe(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const baseUrlInput = await screen.findByDisplayValue('https://api.deepseek.com');
+    fireEvent.change(baseUrlInput, { target: { value: 'https://api.deepseek.cn' } });
+
+    await waitFor(() => expect(modelCalls().length).toBe(2));
+    const body = JSON.parse(modelCalls()[1][1].body as string);
+    expect(body.base_url).toBe('https://api.deepseek.cn');
+  });
+});

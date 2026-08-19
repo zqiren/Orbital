@@ -207,6 +207,84 @@ describe('SettingsRail (mobile jump menu)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Grouped rails (project settings). A group heading must never outlive the
+// sections it names — the whole point of deriving the runs from the entries
+// that survived the DOM filter rather than from the declaration array.
+// ---------------------------------------------------------------------------
+
+const GROUPED: SettingsRailSection[] = [
+  { id: 'alpha', labelKey: 'global.language', groupKey: 'settings.group.project' },
+  { id: 'beta', labelKey: 'settings.budget.label', groupKey: 'settings.group.limits' },
+  { id: 'connectors', labelKey: 'settingsRail.connectors', groupKey: 'settings.group.capabilities' },
+  { id: 'danger', labelKey: 'settings.danger.title' },
+];
+
+function GroupedHarness({ withConnectors = false }: { withConnectors?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} data-testid="settings-scroll-container">
+      <SettingsRail sections={GROUPED} containerRef={ref} />
+      <div data-settings-section="alpha">Alpha body</div>
+      {withConnectors && <div data-settings-section="connectors">Connectors body</div>}
+      <div data-settings-section="beta">Beta body</div>
+      <div data-settings-section="danger">Danger body</div>
+    </div>
+  );
+}
+
+describe('SettingsRail grouping', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('clusters the desktop rail by group without printing the chapter labels', () => {
+    render(<GroupedHarness withConnectors />);
+    const rail = screen.getByTestId('settings-rail');
+    // DOM order, not declaration order: connectors sits before beta above.
+    const labels = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(labels).toEqual(['Language', 'Connectors', 'Budget', 'Danger Zone']);
+    // One list per run — the clustering IS the grouping on this surface.
+    expect(rail.querySelectorAll('ul')).toHaveLength(4);
+    // …and the chapter names themselves never reach the rail.
+    expect(rail.textContent).not.toContain('Project');
+    expect(rail.textContent).not.toContain('Capabilities');
+    expect(rail.textContent).not.toContain('Limits & safety');
+  });
+
+  it('drops a run entirely when none of its sections are in the DOM', () => {
+    render(<GroupedHarness />);
+    const rail = screen.getByTestId('settings-rail');
+    expect(screen.queryByRole('button', { name: 'Connectors' })).not.toBeInTheDocument();
+    // 4 runs minus the absent capabilities one.
+    expect(rail.querySelectorAll('ul')).toHaveLength(3);
+  });
+
+  it('groups the mobile jump menu with optgroups, leaving ungrouped entries loose', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
+    render(<GroupedHarness withConnectors />);
+    const select = screen.getByTestId('settings-jump-menu');
+    const groups = Array.from(select.querySelectorAll('optgroup')).map((g) => [
+      g.label,
+      Array.from(g.children).map((o) => o.textContent),
+    ]);
+    expect(groups).toEqual([
+      ['Project', ['Language']],
+      ['Capabilities', ['Connectors']],
+      ['Limits & safety', ['Budget']],
+    ]);
+    const loose = Array.from(select.children)
+      .filter((c) => c.tagName === 'OPTION')
+      .map((o) => o.textContent);
+    expect(loose).toEqual(['Jump to section…', 'Danger Zone']);
+  });
+});
+
 describe('scrollToSettingsSection helper', () => {
   it('scrolls the tagged element and returns true', () => {
     const host = document.createElement('div');
