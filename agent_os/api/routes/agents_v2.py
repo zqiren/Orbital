@@ -2664,6 +2664,11 @@ class FetchModelsRequest(BaseModel):
     provider: str = "custom"
     api_key: str | None = None
     base_url: str | None = None
+    # The Custom provider exposes an SDK picker, and the registry's `custom`
+    # entry always says "openai" — so the request must be able to carry the
+    # protocol, or an Anthropic-format endpoint gets listed at the OpenAI path
+    # with the OpenAI auth header. None = fall back to the registry entry.
+    sdk: str | None = None
 
 
 _CHAT_PROTOCOL_PREFIXES = ("openai:chat-completions", "anthropic:messages")
@@ -2707,19 +2712,34 @@ async def fetch_models(req: FetchModelsRequest):
     # entirely when there is no key — a keyless local server needs none, and an
     # empty `Bearer ` (trailing space) is an illegal HTTP header value that
     # httpx rejects.
-    sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
+    sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
+
+    # The frontend clears the API-key field once a key is persisted, and its
+    # body omits `api_key` when the field is empty — so the post-save steady
+    # state sends no key at all. Fall back to the stored global key exactly as
+    # /providers/test does; otherwise every key-gated provider (11 of 14 answer
+    # /models with 401/403 unauthenticated) silently drops back to the static
+    # suggested list right after the user saves.
+    api_key = req.api_key
+    if not (api_key or "").strip() and _credential_store is not None:
+        api_key = _credential_store.get_api_key() or ""
+
     if sdk == "anthropic":
         models_url = base_url.rstrip("/") + "/v1/models"
         headers = {"anthropic-version": "2023-06-01"}
-        if req.api_key:
-            headers["x-api-key"] = req.api_key
+        if api_key:
+            headers["x-api-key"] = api_key
     else:
         models_url = base_url.rstrip("/") + "/models"
         headers = {}
-        if req.api_key:
-            headers["Authorization"] = f"Bearer {req.api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    # Fail fast. A blocked or slow /models endpoint holds the model picker in
+    # its loading state for the whole timeout before falling back to the
+    # suggested list, which reads as "the app is broken" long before it
+    # resolves (api.mistral.ai: ~10s to a TLS failure from a CN network).
+    async with httpx.AsyncClient(timeout=6) as client:
         try:
             resp = await client.get(models_url, headers=headers)
             resp.raise_for_status()
@@ -2729,7 +2749,9 @@ async def fetch_models(req: FetchModelsRequest):
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Provider returned {e.response.status_code}")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            # str(httpx.ReadTimeout()) is "" — the most likely failure here is
+            # exactly the one that would report nothing at all.
+            raise HTTPException(status_code=502, detail=str(e) or type(e).__name__)
 
 
 class TestConnectionRequest(BaseModel):
