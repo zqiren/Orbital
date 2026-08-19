@@ -211,7 +211,13 @@ describe('SubAgentSettings', () => {
   // server-side), so the UI's whole job is: offer the URL if the browser did
   // not open, and be honest about an unconfirmed outcome.
   async function renderClaudeCodeLoginCard() {
-    api.mockResolvedValueOnce([
+    // mockResolvedValue, not ...Once: the login.complete handler fires
+    // `void onChanged()`, which re-fetches the list. With a one-shot mock that
+    // refetch resolves to undefined, the card unmounts and takes the notice
+    // under test with it — a race the assertion happened to win on a warm
+    // machine and lost on CI. A persistent mock returns the same entry, so the
+    // card survives the refetch whenever it lands.
+    api.mockResolvedValue([
       makeEntry({
         slug: 'claude-code',
         name: 'Claude Code',
