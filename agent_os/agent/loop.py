@@ -757,6 +757,7 @@ class AgentLoop:
         # Diagnostics: track exit path + appended-row delta for this run.
         self._loop_exit_path = None
         rows_at_run_start = None  # set before the while; guarded in finally
+        iteration = 0  # bound here so the except-backstop can always report it
         try:
             # Resolve pending if not resuming from approval pause
             if self._session._paused_for_approval:
@@ -1709,6 +1710,29 @@ class AgentLoop:
                     "tool_continue" if _appended_this_iter > 0 else "fell_through",
                     iteration,
                 )
+
+        except Exception as e:
+            # Backstop for every failure the LLMError branch above does not
+            # own. Those escape to agent_manager._record_loop_error, which
+            # logs them and broadcasts a transient agent.status frame — and
+            # that frame is the ONLY surfacing. A run nobody had open at that
+            # instant (a 09:00 scheduled trigger) therefore died leaving the
+            # session holding the prompt and nothing after it, which reads as
+            # "the trigger fired and the agent never answered". Persist the
+            # failure where the reader will actually look, then let it
+            # propagate unchanged so the manager still logs and broadcasts.
+            #
+            # CancelledError and GeneratorExit are BaseException, so a
+            # cancel_turn()/stop still takes the loop's own cancel path.
+            self._llm_failed = True
+            try:
+                self._session.append_system(
+                    f"Run failed ({type(e).__name__}): {e}. Stopping."
+                )
+            except Exception:  # noqa: BLE001 — never mask the original failure
+                logger.exception("Failed to persist the run-failure row")
+            self._note_exit("internal_error", iteration)
+            raise
 
         finally:
             if not self._session._paused_for_approval:
