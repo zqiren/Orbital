@@ -869,6 +869,7 @@ export const STRINGS = {
   "subAgentSettings.installHint": { en: "Don't see an agent? Install its CLI, then Refresh.", zh: "没有看到所需Agent？安装其 CLI 后点击刷新。" },
   "subAgentSettings.intro": { en: "How Orbital invokes each sub-agent CLI. Daemon-level — applies to every project.", zh: "Orbital 如何调用各子 Agent CLI。守护进程级——适用于所有项目空间。" },
   "subAgentSettings.loading": { en: "Loading sub-agents...", zh: "正在加载子Agent…" },
+  "subAgentSettings.loginNote": { en: "Sub-agents that sign in through their own CLI inherit that login — if you're signed in there, you're signed in here.", zh: "通过自身 CLI 登录的子Agent 会沿用该登录状态——你在终端已登录，这里就是已登录。" },
   "subAgentSettings.noInstalled": { en: "No installed sub-agents. Install a sub-agent CLI, then Refresh.", zh: "未检测到已安装的子Agent。安装子Agent CLI 后点击刷新。" },
   "subAgentSettings.refresh": { en: "Refresh", zh: "刷新" },
   "subAgentSettings.refreshing": { en: "Refreshing...", zh: "刷新中…" },

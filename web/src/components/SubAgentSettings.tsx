@@ -242,8 +242,11 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
       <p className="text-xs text-secondary mb-1">
         {t('subAgentSettings.installHint')}
       </p>
-      <p className="text-xs text-secondary mb-4 italic">
+      <p className="text-xs text-secondary mb-1 italic">
         {t('subAgentSettings.credNote')}
+      </p>
+      <p className="text-xs text-secondary mb-4 italic">
+        {t('subAgentSettings.loginNote')}
       </p>
 
       {error && (
