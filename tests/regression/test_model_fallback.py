@@ -429,3 +429,175 @@ class TestFallbackConfig:
         from agent_os.daemon_v2.settings_store import GlobalLLMSettings
         settings = GlobalLLMSettings()
         assert settings.fallback_models == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: transient 400 from a warm provider (gateway hiccup, not a bad request)
+# ---------------------------------------------------------------------------
+
+class ScriptedProvider:
+    """Provider driven by a script of steps, one per ``stream()`` call.
+
+    ``"tool"`` emits a tool call (so the loop makes another LLM call),
+    ``"text"`` ends the turn, and an ``LLMError`` instance is raised. The last
+    step repeats forever, so ``["tool", err]`` models "answered once, then
+    fails from then on".
+    """
+
+    def __init__(self, model: str, script: list):
+        self.model = model
+        self.sdk = "openai"
+        self.provider = "custom"
+        self._script = list(script)
+        self._call_count = 0
+
+    async def stream(self, messages, tools=None):
+        step = self._script[min(self._call_count, len(self._script) - 1)]
+        self._call_count += 1
+        if isinstance(step, Exception):
+            raise step
+        if step == "tool":
+            yield StreamChunk(tool_calls_delta=[{
+                "index": 0,
+                "id": f"tc{self._call_count}",
+                "type": "function",
+                "function": {"name": "some_tool", "arguments": "{}"},
+            }])
+        else:
+            yield StreamChunk(text="Done from " + self.model)
+        yield StreamChunk(
+            is_final=True,
+            usage=TokenUsage(input_tokens=100, output_tokens=50),
+        )
+
+
+def _system_texts(session) -> list[str]:
+    return [
+        m.get("content", "") for m in session.get_messages()
+        if m["role"] == "system"
+    ]
+
+
+class TestWarmProvider400Retry:
+    """A 400 is only fatal until the provider proves it can answer.
+
+    Observed 2026-08-19: OpenCode Go returned
+    ``[unsupported_tool_schema] ... (tool_count_limit)`` on one mid-session
+    call for a tool array that had already worked on 30 consecutive calls —
+    the identical payload replayed 200 seven times afterwards. Aborting the
+    whole run on that costs the user every iteration of work in flight.
+    Structural 400s (bad schema, unsupported param, wrong model) fail a
+    provider's FIRST call, so a cold 400 must stay fatal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_400_after_a_successful_call_is_retried(self, tmp_path):
+        """Provider answers, then 400s once, then answers: run completes."""
+        session = Session.new("warm400_recover", str(tmp_path))
+
+        primary = ScriptedProvider(
+            "primary-model",
+            ["tool", LLMError("bad request", status_code=400), "text"],
+        )
+
+        builder = MockPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, builder, ctx)
+        registry = SimpleToolRegistry()
+
+        loop = AgentLoop(
+            session, primary, registry, context_mgr,
+            fallback_providers=[],
+            max_iterations=10,
+        )
+        persist_user_row(loop._session, "hello")
+        await loop.run()
+
+        assert not loop._llm_failed
+        # tool call, 400, recovery
+        assert primary._call_count == 3
+        assert not any("non-recoverable" in t for t in _system_texts(session))
+
+    @pytest.mark.asyncio
+    async def test_400_on_the_first_call_still_aborts_immediately(self, tmp_path):
+        """A cold provider's 400 is a real bad request: abort, no retry."""
+        session = Session.new("cold400_abort", str(tmp_path))
+
+        primary = AlwaysErrorProvider(
+            "primary-model",
+            LLMError("tools: array too long", status_code=400),
+        )
+        fallback = SuccessProvider("fallback-model")
+
+        builder = MockPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, builder, ctx)
+        registry = SimpleToolRegistry()
+
+        loop = AgentLoop(
+            session, primary, registry, context_mgr,
+            fallback_providers=[fallback],
+            max_iterations=10,
+        )
+        persist_user_row(loop._session, "hello")
+        await loop.run()
+
+        assert loop._llm_failed
+        assert primary._call_count == 1  # no retry ladder
+        assert fallback._call_count == 0
+        assert any("non-recoverable" in t for t in _system_texts(session))
+
+    @pytest.mark.asyncio
+    async def test_persistent_400_after_success_aborts_after_retries(self, tmp_path):
+        """A warm provider that 400s forever still terminates the run."""
+        session = Session.new("warm400_persistent", str(tmp_path))
+
+        primary = ScriptedProvider(
+            "primary-model",
+            ["tool", LLMError("bad request", status_code=400)],
+        )
+
+        builder = MockPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, builder, ctx)
+        registry = SimpleToolRegistry()
+
+        loop = AgentLoop(
+            session, primary, registry, context_mgr,
+            fallback_providers=[],
+            max_iterations=10,
+        )
+        persist_user_row(loop._session, "hello")
+        await loop.run()
+
+        assert loop._llm_failed
+        # one success + the bounded retry ladder, then stop
+        assert primary._call_count == 4
+        assert any("retries" in t.lower() for t in _system_texts(session))
+
+    @pytest.mark.asyncio
+    async def test_401_after_success_still_aborts_immediately(self, tmp_path):
+        """The warm gate is scoped to 400 — a revoked key never self-heals."""
+        session = Session.new("warm401_abort", str(tmp_path))
+
+        primary = ScriptedProvider(
+            "primary-model",
+            ["tool", LLMError("unauthorized", status_code=401)],
+        )
+
+        builder = MockPromptBuilder()
+        ctx = _make_base_prompt_context(str(tmp_path))
+        context_mgr = ContextManager(session, builder, ctx)
+        registry = SimpleToolRegistry()
+
+        loop = AgentLoop(
+            session, primary, registry, context_mgr,
+            fallback_providers=[],
+            max_iterations=10,
+        )
+        persist_user_row(loop._session, "hello")
+        await loop.run()
+
+        assert loop._llm_failed
+        assert primary._call_count == 2  # the success, then the 401 — no retry
+        assert any("non-recoverable" in t for t in _system_texts(session))

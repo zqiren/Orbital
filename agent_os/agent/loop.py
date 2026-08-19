@@ -787,6 +787,11 @@ class AgentLoop:
             _cooldowns: dict[int, float] = {}
             _COOLDOWN_SECONDS = 60.0
             _retries_on_current = 0
+            # Provider indices that have answered at least once in THIS run.
+            # Read by the 400 handler below to tell a malformed request from a
+            # gateway hiccup. Per-index, so rotating to a fresh fallback does
+            # not inherit the primary's proven-good standing.
+            _answered: set[int] = set()
 
             # Ping-pong detection state
             _pair_hashes: deque = deque(maxlen=20)
@@ -912,6 +917,7 @@ class AgentLoop:
                     consecutive_overflows = 0
                     llm_retries = 0
                     _retries_on_current = 0
+                    _answered.add(_current_idx)
                 except asyncio.CancelledError:
                     # cancel_turn() invoked while streaming. Marker + cost
                     # debit handled by cancel_turn() before propagating.
@@ -939,6 +945,26 @@ class AgentLoop:
                 except LLMError as e:
                     self._inflight_stream = None
                     category = e.category
+
+                    # A 400 from a provider that has ALREADY answered in this
+                    # run is not a malformed request — it is an upstream
+                    # hiccup the gateway mislabelled as a client error.
+                    # Observed 2026-08-19: OpenCode Go answered one mid-session
+                    # call with "[unsupported_tool_schema] ...
+                    # (tool_count_limit)" for a tool array that had just worked
+                    # on 30 consecutive calls; the identical payload replayed
+                    # 200 seven times afterwards. Aborting there threw away
+                    # eight iterations of work a single retry would have saved.
+                    # Structural 400s (bad tool schema, unsupported param,
+                    # wrong model) are deterministic and fail a provider's
+                    # FIRST call, so a cold 400 stays fatal and surfaces
+                    # instantly. Scoped to 400: a 401/403 never self-heals.
+                    if (
+                        category == ErrorCategory.ABORT
+                        and e.status_code == 400
+                        and _current_idx in _answered
+                    ):
+                        category = ErrorCategory.RETRY
 
                     # Abort: non-recoverable errors (401, 403, 400)
                     if category == ErrorCategory.ABORT:
