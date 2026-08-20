@@ -134,6 +134,37 @@ export function useSessions(projectId: string | null) {
     [projectId, refresh],
   );
 
+  // Pin/unpin a session to the top of the sidebar (spec 067). Same optimistic
+  // shape as renameSession — the row jumps immediately, then the PATCH lands;
+  // a failure reverts by refetching authoritative state rather than trying to
+  // undo locally, so the list can never disagree with the file on disk.
+  const pinSession = useCallback(
+    async (sessionId: string, pinned: boolean): Promise<boolean> => {
+      if (!projectId) throw new Error('No project selected');
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.session_id === sessionId ? { ...s, pinned } : s,
+        );
+        sessionsCache.set(projectId, next);
+        return next;
+      });
+      try {
+        await api(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ pinned }),
+          },
+        );
+        return pinned;
+      } catch (e) {
+        void refresh();
+        throw e;
+      }
+    },
+    [projectId, refresh],
+  );
+
   // Delete a session (removes its JSONL on disk). Removes the row from the
   // local list + cache on success. Rejects on failure (e.g. 409 for a running
   // session) so the caller can surface an error without mutating the list.
@@ -153,7 +184,7 @@ export function useSessions(projectId: string | null) {
     [projectId],
   );
 
-  return { sessions, loading, error, refresh, renameSession, deleteSession };
+  return { sessions, loading, error, refresh, renameSession, pinSession, deleteSession };
 }
 
 // Alias for consumers that prefer the more explicit name.

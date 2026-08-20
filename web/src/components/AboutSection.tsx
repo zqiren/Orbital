@@ -51,9 +51,8 @@ export default function AboutSection() {
 
   return (
     <div>
-      <h2 className="text-base font-semibold text-primary mb-2">
-        {t('update.about.heading')}
-      </h2>
+      {/* Section heading is the enclosing SettingsSection's `title`
+          (GlobalSettings) — see ConnectorSettings for the same note. */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-sm text-secondary font-mono" data-testid="about-version">
           {status ? t('update.about.version', { version: status.current }) : '…'}

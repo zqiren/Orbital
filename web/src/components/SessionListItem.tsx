@@ -26,6 +26,7 @@
  */
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Pin } from 'lucide-react';
 import type { SessionListEntry } from '../types';
 import { SessionStatusGlyph } from './SessionStatusGlyph';
 import { getStatusDisplay } from './sessionStatus';
@@ -40,6 +41,8 @@ export interface SessionListItemProps {
   onSelect: (sessionId: string) => void;
   /** Persist a renamed display label. Receives (sessionId, newName). */
   onRename?: (sessionId: string, name: string) => void | Promise<void>;
+  /** Pin/unpin this session. Receives (sessionId, nextPinnedState). */
+  onPin?: (sessionId: string, pinned: boolean) => void | Promise<void>;
   /** Delete this session. Receives the sessionId. */
   onDelete?: (sessionId: string) => void | Promise<void>;
 }
@@ -79,6 +82,7 @@ function SessionListItemBase({
   selected,
   onSelect,
   onRename,
+  onPin,
   onDelete,
 }: SessionListItemProps) {
   const [hovered, setHovered] = useState(false);
@@ -197,13 +201,31 @@ function SessionListItemBase({
       {/* Status glyph — only differentiating states (running/waiting/blocked/
           starting) light up; idle rows stay clean. The fixed-width slot is
           always reserved so names align across mixed-state lists. */}
+      {/* A pinned row fills the slot with a muted pin — but only while resting.
+          Status keeps the slot whenever it has something to say: it is
+          time-sensitive, whereas the pin is already announced by the row's
+          position at the top of the list. Two glyphs would need two slots and
+          would misalign every name below. */}
       <span
         aria-hidden="true"
         data-testid="session-status-glyph"
         className="w-[14px] text-center"
         style={{ color: display.color, fontSize: '13px', lineHeight: 1, flexShrink: 0 }}
       >
-        {display.resting ? '' : display.glyph}
+        {display.resting ? (
+          session.pinned ? (
+            <Pin
+              size={10}
+              className="inline text-secondary"
+              fill="currentColor"
+              data-testid="session-pin-glyph"
+            />
+          ) : (
+            ''
+          )
+        ) : (
+          display.glyph
+        )}
       </span>
 
       {/* Session name + time (or inline rename input). Machine-originated
@@ -302,6 +324,21 @@ function SessionListItemBase({
               data-testid="session-three-dot-dropdown"
               className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-elevated shadow-md py-1"
             >
+              {/* Pin leads the menu: it is the action taken most often and the
+                  only one that is reversible with no consequence. */}
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="session-action-pin"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  void onPin?.(session.session_id, !session.pinned);
+                }}
+                className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-card-hover"
+              >
+                {session.pinned ? t('sessionItem.unpin') : t('sessionItem.pin')}
+              </button>
               <button
                 type="button"
                 role="menuitem"

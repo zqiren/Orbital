@@ -303,6 +303,12 @@ export interface SessionListEntry {
   /** ISO timestamp of the last activity in this session, or null. Added in Phase 1B. */
   last_activity_at?: string | null;
   /**
+   * Pinned to the top of the session sidebar (spec 067). Persisted on the
+   * session_start meta record alongside `name`. Absent on pre-067 logs, which
+   * read as false — ordering only, never an identifier.
+   */
+  pinned?: boolean;
+  /**
    * Origin of the session, persisted in the session_start meta and emitted by
    * the list API (agent_manager.list_sessions). 'chat' is the default for
    * manually started sessions; 'queue' marks dispatcher-minted sessions and

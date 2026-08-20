@@ -18,6 +18,7 @@ afterEach(() => cleanup());
 let mockSessions: SessionListEntry[] = [];
 const renameSessionMock = vi.fn(async () => 'renamed');
 const deleteSessionMock = vi.fn(async () => undefined);
+const pinSessionMock = vi.fn(async () => true);
 
 vi.mock('../hooks/useSessions', () => ({
   useSessions: (_projectId: string | null) => ({
@@ -26,6 +27,7 @@ vi.mock('../hooks/useSessions', () => ({
     error: null,
     refresh: vi.fn(),
     renameSession: renameSessionMock,
+    pinSession: pinSessionMock,
     deleteSession: deleteSessionMock,
   }),
 }));
@@ -64,6 +66,7 @@ function makeSession(overrides: Partial<SessionListEntry> = {}): SessionListEntr
 function resetMocks() {
   mockSessions = [];
   renameSessionMock.mockClear();
+  pinSessionMock.mockClear();
   deleteSessionMock.mockClear();
 }
 
@@ -331,5 +334,141 @@ describe('SessionSidebar — delete + navigation', () => {
     const [deletedId, remaining] = onSessionDeleted.mock.calls[0];
     expect(deletedId).toBe('sess-del');
     expect((remaining as SessionListEntry[]).map((s) => s.session_id)).toEqual(['sess-keep']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pin to top (BACKLOG spec 067)
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar — pinned sessions', () => {
+  function ids() {
+    return screen
+      .getAllByTestId(/^session-list-item-/)
+      .map((el) => el.getAttribute('data-testid'));
+  }
+
+  it('pinned sessions lead the list even when far less recent', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({
+        session_id: 'fresh', session_uuid: 'u-fresh',
+        last_activity_at: '2026-08-20T12:00:00Z',
+      }),
+      makeSession({
+        session_id: 'stale-pinned', session_uuid: 'u-stale',
+        last_activity_at: '2026-01-01T00:00:00Z', pinned: true,
+      }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()).toEqual([
+      'session-list-item-stale-pinned',
+      'session-list-item-fresh',
+    ]);
+  });
+
+  it('a pin outranks a RUNNING session (the decision recorded in the sort)', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({
+        session_id: 'running-now', session_uuid: 'u-run', status: 'running',
+        last_activity_at: '2026-08-20T12:00:00Z',
+      }),
+      makeSession({
+        session_id: 'pinned-idle', session_uuid: 'u-pin',
+        last_activity_at: '2026-02-02T00:00:00Z', pinned: true,
+      }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()[0]).toBe('session-list-item-pinned-idle');
+  });
+
+  it('pinned rows stay activity-sorted among themselves', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({
+        session_id: 'pin-old', session_uuid: 'u-po',
+        last_activity_at: '2026-03-01T00:00:00Z', pinned: true,
+      }),
+      makeSession({
+        session_id: 'pin-new', session_uuid: 'u-pn',
+        last_activity_at: '2026-07-01T00:00:00Z', pinned: true,
+      }),
+      makeSession({
+        session_id: 'plain', session_uuid: 'u-pl',
+        last_activity_at: '2026-08-01T00:00:00Z',
+      }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(ids()).toEqual([
+      'session-list-item-pin-new',
+      'session-list-item-pin-old',
+      'session-list-item-plain',
+    ]);
+  });
+
+  it('renders a divider under the pinned block, and none when nothing is pinned', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'ua', pinned: true }),
+      makeSession({ session_id: 'b', session_uuid: 'ub' }),
+    ];
+    const { unmount } = render(<SessionSidebar projectId="p1" />);
+    expect(screen.getAllByTestId('session-pin-divider')).toHaveLength(1);
+    unmount();
+
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'ua' }),
+      makeSession({ session_id: 'b', session_uuid: 'ub' }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.queryByTestId('session-pin-divider')).toBeNull();
+  });
+
+  it('draws no divider when EVERY session is pinned (it would separate nothing)', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'a', session_uuid: 'ua', pinned: true }),
+      makeSession({ session_id: 'b', session_uuid: 'ub', pinned: true }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.queryByTestId('session-pin-divider')).toBeNull();
+  });
+
+  it('the row menu pins an unpinned session and unpins a pinned one', async () => {
+    const user = userEvent.setup();
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 's1', session_uuid: 'u1' })];
+    const { unmount } = render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-three-dot-trigger'));
+    expect(screen.getByTestId('session-action-pin')).toHaveTextContent('Pin to top');
+    await user.click(screen.getByTestId('session-action-pin'));
+    expect(pinSessionMock).toHaveBeenCalledWith('s1', true);
+    unmount();
+
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 's1', session_uuid: 'u1', pinned: true })];
+    render(<SessionSidebar projectId="p1" />);
+    await user.click(screen.getByTestId('session-three-dot-trigger'));
+    expect(screen.getByTestId('session-action-pin')).toHaveTextContent('Unpin');
+    await user.click(screen.getByTestId('session-action-pin'));
+    expect(pinSessionMock).toHaveBeenCalledWith('s1', false);
+  });
+
+  it('a pinned RESTING row shows the pin glyph; a running one keeps its status glyph', () => {
+    resetMocks();
+    mockSessions = [makeSession({ session_id: 'idle-pin', session_uuid: 'u1', pinned: true })];
+    const { unmount } = render(<SessionSidebar projectId="p1" />);
+    expect(screen.getByTestId('session-pin-glyph')).toBeInTheDocument();
+    unmount();
+
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'run-pin', session_uuid: 'u2', pinned: true, status: 'running' }),
+    ];
+    render(<SessionSidebar projectId="p1" />);
+    expect(screen.queryByTestId('session-pin-glyph')).toBeNull();
+    expect(screen.getByTestId('session-status-glyph').textContent).not.toBe('');
   });
 });

@@ -231,10 +231,20 @@ export default function SettingsRail({ sections, containerRef }: SettingsRailPro
                   type="button"
                   onClick={() => handleJump(s.id)}
                   aria-current={activeId === s.id ? 'true' : undefined}
+                  // The active pill tints with `card-hover`, not `sidebar`.
+                  // Both settings surfaces sit on `background` (#F4F6F9), and
+                  // `sidebar` (#F0F3F7) against it is 1.03:1 — deltas of 4/3/2
+                  // per channel, i.e. nothing. `card-hover` is the token
+                  // index.css already documents for this exact job ("full
+                  // strength for the selected row and at /50 for hover"), and
+                  // lands at 1.14:1 — just past the nav column's own selected
+                  // row (bg-nav-hover on bg-nav, 1.11:1), so the two columns
+                  // read as one system instead of the rail being three times
+                  // fainter than every other selection in the app.
                   className={`block w-full text-left text-[13px] leading-5 rounded-md px-2.5 py-1.5 transition-colors duration-150 truncate ${
                     activeId === s.id
-                      ? 'text-primary bg-sidebar font-medium'
-                      : 'text-secondary hover:text-primary hover:bg-sidebar/60'
+                      ? 'text-primary bg-card-hover font-medium'
+                      : 'text-secondary hover:text-primary hover:bg-card-hover/50'
                   }`}
                 >
                   {t(s.labelKey)}

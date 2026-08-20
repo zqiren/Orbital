@@ -33,7 +33,7 @@
  *                       route and persists.
  */
 
-import { useCallback, useMemo } from 'react';
+import { Fragment, useCallback, useMemo } from 'react';
 import { useSessions } from '../hooks/useSessions';
 import type { SessionListEntry } from '../types';
 import { SessionListItem } from './SessionListItem';
@@ -60,17 +60,25 @@ export function SessionSidebar({
   onSessionSelect,
   onSessionDeleted,
 }: SessionSidebarProps) {
-  const { sessions, loading, renameSession, deleteSession } = useSessions(projectId);
+  const { sessions, loading, renameSession, pinSession, deleteSession } =
+    useSessions(projectId);
   const t = useT();
 
-  // One unified list of ALL sessions, sorted by last-activity descending
-  // (most recent first). Null/missing timestamps sort last. Sort a copy so we
-  // never mutate the hook's array. Bug #48 (fix D): memoized (with stable
-  // useCallback handlers below) so an agent.status-triggered refresh doesn't
-  // re-sort and re-render every row on unrelated parent renders.
+  // One unified list of ALL sessions: pinned rows first (spec 067), then
+  // last-activity descending (most recent first) WITHIN each group. Null/
+  // missing timestamps sort last. Sort a copy so we never mutate the hook's
+  // array. Bug #48 (fix D): memoized (with stable useCallback handlers below)
+  // so an agent.status-triggered refresh doesn't re-sort and re-render every
+  // row on unrelated parent renders.
+  //
+  // A pin outranks liveness deliberately: a running-but-unpinned session stays
+  // below the pins and is found by its status glyph, not by its position. The
+  // alternative (float running rows above pins) would let the top of the list
+  // move on its own, which is half of what pinning exists to stop.
   const sortedSessions: SessionListEntry[] = useMemo(
     () =>
       [...sessions].sort((a, b) => {
+        if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
         const ta = a.last_activity_at ? Date.parse(a.last_activity_at) : NaN;
         const tb = b.last_activity_at ? Date.parse(b.last_activity_at) : NaN;
         const va = Number.isNaN(ta) ? -Infinity : ta;
@@ -79,6 +87,17 @@ export function SessionSidebar({
       }),
     [sessions],
   );
+
+  // Index of the last pinned row, so a hairline can separate the pinned block
+  // from the rest — the same "pinned above a rule" pattern the nav column uses
+  // for Quick Tasks. -1 when nothing is pinned, which renders no rule at all.
+  const lastPinnedIndex = useMemo(() => {
+    let last = -1;
+    sortedSessions.forEach((s, i) => {
+      if (s.pinned) last = i;
+    });
+    return last;
+  }, [sortedSessions]);
 
   const handleSelect = useCallback(
     (sessionId: string) => {
@@ -96,6 +115,17 @@ export function SessionSidebar({
       }
     },
     [renameSession],
+  );
+
+  const handlePin = useCallback(
+    async (sessionId: string, pinned: boolean) => {
+      try {
+        await pinSession(sessionId, pinned);
+      } catch (e) {
+        console.error('Failed to pin session', e);
+      }
+    },
+    [pinSession],
   );
 
   const handleDelete = useCallback(
@@ -161,15 +191,27 @@ export function SessionSidebar({
             {t('sessionSidebar.empty')}
           </p>
         )}
-        {sortedSessions.map((session) => (
-          <SessionListItem
-            key={session.session_uuid ?? session.session_id}
-            session={session}
-            selected={selectedSessionId === session.session_id}
-            onSelect={handleSelect}
-            onRename={handleRename}
-            onDelete={handleDelete}
-          />
+        {sortedSessions.map((session, index) => (
+          <Fragment key={session.session_uuid ?? session.session_id}>
+            <SessionListItem
+              session={session}
+              selected={selectedSessionId === session.session_id}
+              onSelect={handleSelect}
+              onRename={handleRename}
+              onPin={handlePin}
+              onDelete={handleDelete}
+            />
+            {/* Hairline closing the pinned block. Only rendered when there is
+                both a pin AND something under it — a rule at the very bottom
+                of the list would separate nothing. */}
+            {index === lastPinnedIndex && index < sortedSessions.length - 1 && (
+              <div
+                role="separator"
+                data-testid="session-pin-divider"
+                className="my-1 border-t border-border/60"
+              />
+            )}
+          </Fragment>
         ))}
       </div>
 

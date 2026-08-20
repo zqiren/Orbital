@@ -59,10 +59,8 @@ export default function TelemetrySettings() {
 
   return (
     <div>
-      <h2 className="text-base font-semibold text-primary mb-3">
-        {t('telemetry.heading')}
-      </h2>
-
+      {/* Section heading is the enclosing SettingsSection's `title`
+          (GlobalSettings) — see ConnectorSettings for the same note. */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <label className="block text-sm font-medium text-primary mb-1">

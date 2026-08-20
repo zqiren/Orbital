@@ -212,13 +212,15 @@ export default function SubAgentSettings({ standalone = false, onBack }: Props) 
 
   const inner = (
     <>
-      <div className="flex items-center justify-between mb-3">
-        {standalone ? (
+      {/* Embedded in GlobalSettings, the heading AND the intro line are the
+          enclosing SettingsSection's `title` / `description` — printing the
+          intro here too would say the same sentence twice, once loose and
+          once behind the ⓘ. With nothing in the left slot, `justify-between`
+          would strand Refresh on the LEFT, so the row switches to
+          `justify-end`. The standalone page still owns its own h1. */}
+      <div className={`flex items-center mb-3 ${standalone ? 'justify-between' : 'justify-end'}`}>
+        {standalone && (
           <h1 className="text-xl font-semibold text-primary">{t('subAgentSettings.title')}</h1>
-        ) : (
-          <p className="text-sm text-secondary">
-            {t('subAgentSettings.intro')}
-          </p>
         )}
         <div className="flex items-center gap-2 ml-3 shrink-0">
           <button

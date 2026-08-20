@@ -1536,34 +1536,57 @@ async def list_project_sessions(project_id: str):
     return {"project_id": project_id, "sessions": sessions}
 
 
-class SessionRenameRequest(BaseModel):
-    """Body for renaming a session (display label only). ``name`` is the new
-    human-readable label; it has no effect on routing or hydration."""
-    name: str
+class SessionPatchRequest(BaseModel):
+    """Body for updating a session's display state.
+
+    Both fields are optional and independent — send either or both. ``name`` is
+    the human-readable label; ``pinned`` holds the session at the top of the
+    sidebar (spec 067). Neither has any effect on routing or hydration.
+    """
+    name: str | None = None
+    pinned: bool | None = None
+
+
+# Back-compat alias: this body used to be rename-only.
+SessionRenameRequest = SessionPatchRequest
 
 
 @router.patch("/agents/{project_id}/sessions/{session_id}")
-async def rename_session(project_id: str, session_id: str, req: SessionRenameRequest):
-    """Rename a session's display label.
+async def patch_session(project_id: str, session_id: str, req: SessionPatchRequest):
+    """Update a session's display label and/or its pinned state.
 
-    Updates ``session.name`` in memory (when a live handle exists) and rewrites
-    the ``session_start`` meta line in the JSONL so the name persists. The name
-    is display-only — F1/F2 identifiers are unchanged.
+    Updates the live handle in memory when one exists and rewrites the
+    ``session_start`` meta line in the JSONL so the change persists. Both
+    fields are display-only — F1/F2 identifiers are unchanged.
 
-    Returns ``{"status": "renamed", "session_id", "name"}``. 404 if no session
-    with this id (F1 or F2/uuid) exists for the project.
+    Returns ``{"status", "session_id"}`` plus whichever fields were set. 400 if
+    the body sets nothing, or if ``name`` is present but empty. 404 if no
+    session with this id (F1 or F2/uuid) exists for the project.
     """
     if _project_store is not None and _project_store.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    name = (req.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name must not be empty")
+    if req.name is None and req.pinned is None:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    name = None
+    if req.name is not None:
+        name = req.name.strip()
+        # Unchanged from the rename-only contract: an explicitly-sent empty
+        # name is still a 400, never a silent no-op.
+        if not name:
+            raise HTTPException(status_code=400, detail="name must not be empty")
     try:
-        return await asyncio.to_thread(
-            _agent_manager.rename_session, project_id, session_id, name
+        await asyncio.to_thread(
+            _agent_manager.patch_session, project_id, session_id,
+            name=name, pinned=req.pinned,
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found")
+    result: dict = {"status": "patched", "session_id": session_id}
+    if name is not None:
+        result["name"] = name
+    if req.pinned is not None:
+        result["pinned"] = bool(req.pinned)
+    return result
 
 
 @router.delete("/agents/{project_id}/sessions/{session_id}")

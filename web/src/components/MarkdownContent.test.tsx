@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import MarkdownContent from './MarkdownContent';
 
 const WS = '/Users/you/repo';
@@ -255,5 +255,58 @@ describe('MarkdownContent — external links open outside the app window (task 3
     const link = container.querySelector('a[href="just-a-word"]');
     expect(link).not.toBeNull();
     expect(link?.getAttribute('target')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-code-block copy (BACKLOG spec 068)
+// ---------------------------------------------------------------------------
+
+describe('MarkdownContent — fenced code block copy', () => {
+  const writeText = vi.fn(async () => undefined);
+
+  beforeEach(() => {
+    writeText.mockClear();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText }, configurable: true, writable: true,
+    });
+  });
+
+  const FENCE = '```python\nimport os\nprint(os.getcwd())\n```';
+
+  it('copies the fence body verbatim — no language tag, no backticks', () => {
+    render(<MarkdownContent content={FENCE} />);
+    fireEvent.click(screen.getByTestId('code-block-copy'));
+    expect(writeText).toHaveBeenCalledWith('import os\nprint(os.getcwd())\n');
+  });
+
+  it('gives every fence its own button, each copying its own body', () => {
+    render(
+      <MarkdownContent content={'```\nfirst\n```\n\ntext between\n\n```\nsecond\n```'} />,
+    );
+    const buttons = screen.getAllByTestId('code-block-copy');
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
+    expect(writeText).toHaveBeenCalledWith('second\n');
+  });
+
+  it('works in the chat mode too (workspace + onOpenPath installed)', () => {
+    render(
+      <MarkdownContent content={FENCE} workspace={WS} onOpenPath={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByTestId('code-block-copy'));
+    expect(writeText).toHaveBeenCalledWith('import os\nprint(os.getcwd())\n');
+  });
+
+  it('does not put a copy button on INLINE code', () => {
+    render(<MarkdownContent content={'use `os.getcwd()` for that'} />);
+    expect(screen.queryByTestId('code-block-copy')).toBeNull();
+  });
+
+  it('the button sits OUTSIDE the overflow-x <pre> so wide code cannot scroll it away', () => {
+    const { container } = render(<MarkdownContent content={'```\nx\n```'} />);
+    const btn = screen.getByTestId('code-block-copy');
+    expect(container.querySelector('pre')?.contains(btn)).toBe(false);
+    expect(btn.closest('.group.relative')?.querySelector('pre')).not.toBeNull();
   });
 });
