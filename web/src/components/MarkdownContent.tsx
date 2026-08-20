@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import { isValidElement, useMemo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileText, PanelRightOpen } from 'lucide-react';
 import { detectWorkspacePath } from '../utils/pathDetection';
 import { useT } from '../i18n/useT';
+import CopyButton from './CopyButton';
 
 interface MarkdownContentProps {
   content: string;
@@ -101,6 +102,50 @@ function PathCard({
   );
 }
 
+/**
+ * Flatten a react-markdown child tree back to its source text.
+ *
+ * The `<pre>` renderer receives the already-built `<code>` ELEMENT, not the raw
+ * fence body, so the text has to be walked back out of it. Highlighters and the
+ * inline-path renderer can nest elements arbitrarily deep, hence the recursion
+ * rather than a `String(children)`, which would yield "[object Object]".
+ */
+function extractText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (isValidElement(node)) {
+    return extractText((node.props as { children?: ReactNode }).children);
+  }
+  return '';
+}
+
+/**
+ * A fenced code block with its own copy button (BACKLOG spec 068).
+ *
+ * The button floats over the block's top-right corner and is hover/focus
+ * revealed, so a page of code blocks does not become a page of buttons. It sits
+ * on a wrapper rather than inside the `<pre>` because `<pre>` is
+ * `overflow-x: auto` (index.css) — a child positioned there would scroll away
+ * with wide code instead of staying pinned to the visible corner.
+ */
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const t = useT();
+  const text = extractText(children);
+  return (
+    <div className="group relative">
+      <CopyButton
+        text={text}
+        size={13}
+        ariaLabel={t('chat.code.copyAria')}
+        data-testid="code-block-copy"
+        className="absolute right-1.5 top-1.5 z-10 border border-border bg-card/90 p-1 opacity-0 shadow-[0_1px_2px_rgb(0_0_0/0.04)] backdrop-blur-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+      />
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
 export default function MarkdownContent({ content, workspace, onOpenPath }: MarkdownContentProps) {
   // Kind-aware path renderers are installed ONLY when a workspace + open
   // handler are supplied (i.e. in chat) — without them, react-markdown falls
@@ -113,6 +158,13 @@ export default function MarkdownContent({ content, workspace, onOpenPath }: Mark
       return {
         a({ href, children }) {
           return renderAnchor(href, children);
+        },
+        // Per-code-block copy is installed in BOTH modes, unlike the path
+        // renderers above: copying a fence is useful wherever markdown renders
+        // (chat and the Files-tab preview alike) and depends on no chat-only
+        // prop.
+        pre({ children }) {
+          return <CodeBlock>{children}</CodeBlock>;
         },
       };
     }
@@ -145,6 +197,9 @@ export default function MarkdownContent({ content, workspace, onOpenPath }: Mark
         }
         // Inline code always renders as a chip (never a card mid-sentence).
         return <PathChip path={detected.relativePath} label={children} onOpen={open} />;
+      },
+      pre({ children }) {
+        return <CodeBlock>{children}</CodeBlock>;
       },
     };
   }, [workspace, onOpenPath]);

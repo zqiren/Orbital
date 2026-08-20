@@ -265,6 +265,14 @@ class Session:
         # Display-only: never an identifier, never used for routing/lookup.
         self.name: str | None = None
 
+        # Pinned-to-top flag (BACKLOG spec 067). Rides the SAME session_start
+        # meta record as ``name`` — per-session, no sidecar, and carried
+        # verbatim through compaction/stub-truncation by
+        # ``_collect_meta_lines``. Display/ordering only: never an identifier,
+        # never used for routing or lookup. Absent on every pre-067 log, which
+        # reads as False — so there is no migration.
+        self.pinned: bool = False
+
         # Sub-agent thread registry (TASK-resume-persistence, piece 2).
         # handle -> {"session_id", "model", "last_used_at"}: the resume
         # identity of each sub-agent thread this session owns. The composite
@@ -373,6 +381,11 @@ class Session:
                             # the field keep the "chat" default set in __init__.
                             if msg.get("origin"):
                                 session.origin = msg["origin"]
+                            # Pin state (spec 067). Absent on every pre-067
+                            # log → the False default in __init__ stands, so
+                            # unpinned is the no-migration default.
+                            if msg.get("pinned") is not None:
+                                session.pinned = bool(msg["pinned"])
                         elif msg.get("event") == "sub_agent_thread":
                             # Resume identity rows: append-only, last row per
                             # handle wins (TASK-resume-persistence).
@@ -455,7 +468,7 @@ class Session:
             derived = _derive_name(message.get("content"))
             if derived is not None:
                 self.name = derived
-                self._apply_name_to_meta(derived)
+                self._apply_meta_fields(name=derived)
 
         # Track tool_call IDs from assistant messages
         if message.get("role") == "assistant" and "tool_calls" in message:
@@ -644,22 +657,38 @@ class Session:
         name is display-only and never affects routing or hydration.
         """
         self.name = name
-        self._apply_name_to_meta(name)
+        self._apply_meta_fields(name=name)
 
-    def _apply_name_to_meta(self, name: str) -> None:
-        """Stamp ``name`` onto the session_start meta.
+    def set_pinned(self, pinned: bool) -> None:
+        """Pin/unpin this session to the top of the sidebar and persist it.
+
+        Same mechanism as ``set_name`` — in-memory field plus a stamp on the
+        ``session_start`` meta — because a pin is exactly the same KIND of
+        per-session display state as the display label. Ordering only; it never
+        affects routing or hydration.
+        """
+        self.pinned = bool(pinned)
+        self._apply_meta_fields(pinned=self.pinned)
+
+    def _apply_meta_fields(self, **fields) -> None:
+        """Stamp arbitrary fields onto the session_start meta.
 
         If the file is not yet materialized, the meta is still pending — set the
-        field there so it lands when the first write flushes it. Otherwise the
+        fields there so they land when the first write flushes it. Otherwise the
         meta is already the first physical line: rewrite it in place.
+
+        Field-agnostic on purpose: ``name`` and ``pinned`` are two writers on
+        ONE line, so giving each its own read-modify-write would let a rename
+        and a pin issued close together clobber each other. Routing both through
+        here keeps them behind the same ``_lock``/``_file_lock`` pair.
         """
         if self._pending_meta is not None:
-            self._pending_meta["name"] = name
+            self._pending_meta.update(fields)
             return
-        self._rewrite_meta_name(name)
+        self._rewrite_meta_fields(**fields)
 
-    def _rewrite_meta_name(self, name: str) -> None:
-        """Read-modify-write the session_start meta line to carry ``name``.
+    def _rewrite_meta_fields(self, **fields) -> None:
+        """Read-modify-write the session_start meta line to carry ``fields``.
 
         The JSONL is otherwise append-only; this is the one mutation of an
         existing line. Atomic via tmp-file + ``os.replace`` (same pattern as
@@ -683,7 +712,7 @@ class Session:
                     except json.JSONDecodeError:
                         continue
                     if rec.get("role") == "meta" and rec.get("event") == "session_start":
-                        rec["name"] = name
+                        rec.update(fields)
                         lines[idx] = json.dumps(rec, ensure_ascii=False) + "\n"
                         changed = True
                         break

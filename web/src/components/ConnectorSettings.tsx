@@ -33,7 +33,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../config';
 import type { Connector, ConnectorListResponse } from '../types';
 import { useT } from '../i18n/useT';
-import BetaBadge from './BetaBadge';
 import Select from './Select';
 
 /** "google" → "Google" for the provider-scoped disconnect copy. Provider ids
@@ -172,11 +171,12 @@ export default function ConnectorSettings() {
 
   return (
     <div data-testid="connector-settings">
-      <h2 className="text-base font-semibold text-primary mb-1 flex items-center gap-2">
-        {t('connectors.heading')}
-        <BetaBadge />
-      </h2>
-      <p className="text-xs text-secondary mb-1">{t('connectors.global.hint')}</p>
+      {/* Heading, Beta badge and the global hint are the enclosing
+          SettingsSection's `title` / `suffix` / `description` (GlobalSettings),
+          mirroring how project settings titles its own connectors section.
+          Rendering them here too would print the section name twice, at two
+          different weights. The beta *caveat* stays — it is a warning about
+          behaviour, not a section label. */}
       <p className="text-xs text-secondary/80 mb-3">{t('connectors.betaNote')}</p>
 
       {loadError && (

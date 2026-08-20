@@ -3597,13 +3597,37 @@ class AgentManager:
     def rename_session(self, project_id: str, session_id: str, name: str) -> dict:
         """Rename a session: update its display name in memory + on disk.
 
-        Resolves the session (F1 or F2/uuid). If a live handle exists, update
-        the in-memory ``session.name`` (which rewrites the meta line). Otherwise
-        load the on-disk session, rename it (rewrites the meta line), and let it
-        fall out of scope — the file is the source of truth and is now updated.
+        Thin wrapper over ``patch_session`` — kept because callers and tests
+        name this operation directly.
+        """
+        result = self.patch_session(project_id, session_id, name=name)
+        return {"status": "renamed", "session_id": session_id, "name": name}
+
+    def set_session_pinned(self, project_id: str, session_id: str,
+                           pinned: bool) -> dict:
+        """Pin/unpin a session to the top of the sidebar (spec 067)."""
+        self.patch_session(project_id, session_id, pinned=pinned)
+        return {
+            "status": "pinned" if pinned else "unpinned",
+            "session_id": session_id,
+            "pinned": bool(pinned),
+        }
+
+    def patch_session(self, project_id: str, session_id: str, *,
+                      name: str | None = None,
+                      pinned: bool | None = None) -> dict:
+        """Update a session's display state in memory + on disk.
+
+        Resolves the session (F1 or F2/uuid). If a live handle exists, mutate
+        the in-memory session (which rewrites the meta line). Otherwise load the
+        on-disk session, mutate it (rewrites the meta line), and let it fall out
+        of scope — the file is the source of truth and is now updated.
+
+        ``name`` and ``pinned`` are independent: passing one leaves the other
+        untouched, because each writes only its own key onto the shared
+        session_start meta record (``Session._apply_meta_fields``).
 
         Raises ``FileNotFoundError`` if no session matches → 404.
-        Returns ``{"status": "renamed", "session_id": <id>, "name": <name>}``.
         """
         resolved = self._resolve_session_uuid_on_disk(project_id, session_id)
         if resolved is None:
@@ -3612,20 +3636,26 @@ class AgentManager:
             )
         session_uuid, jsonl_path = resolved
 
-        # Live handle path: rename in memory (also rewrites the meta line).
+        def _apply(session) -> None:
+            if name is not None:
+                session.set_name(name)
+            if pinned is not None:
+                session.set_pinned(pinned)
+
+        # Live handle path: mutate in memory (also rewrites the meta line).
         for (pid, sid), handle in self._handles.items():
             if pid != project_id:
                 continue
             if sid == session_id or getattr(
                 handle.session, "session_uuid", None
             ) == session_uuid:
-                handle.session.set_name(name)
-                return {"status": "renamed", "session_id": session_id, "name": name}
+                _apply(handle.session)
+                return {"status": "patched", "session_id": session_id}
 
-        # Disk-only path: load, rename (rewrites the meta line), done.
+        # Disk-only path: load, mutate (rewrites the meta line), done.
         loaded = Session.load(jsonl_path)
-        loaded.set_name(name)
-        return {"status": "renamed", "session_id": session_id, "name": name}
+        _apply(loaded)
+        return {"status": "patched", "session_id": session_id}
 
     # ------------------------------------------------------------------
     # Sub-agent resume persistence (TASK-resume-persistence, piece 2)
@@ -3710,6 +3740,9 @@ class AgentManager:
                 # rename). None for headless sessions; frontend falls back to
                 # the first message / session id.
                 "name": getattr(handle.session, "name", None),
+                # Pinned-to-top flag (spec 067). Same session_start meta record
+                # as `name`; absent on pre-067 logs, which read as False.
+                "pinned": bool(getattr(handle.session, "pinned", False)),
                 "last_terminal_event": self._last_terminal_events.get(
                     (pid, sid),
                 ),
@@ -3816,6 +3849,7 @@ class AgentManager:
                 continue
             last_activity_at = None
             stored_name = None  # name on the session_start meta, if present
+            stored_pinned = False  # `pinned` on the same meta (spec 067)
             origin = "chat"  # session_start meta origin; legacy logs → chat
             first_user_content = None  # for name backfill
             is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
@@ -3839,6 +3873,8 @@ class AgentManager:
                                     stored_name = rec["name"]
                                 if rec.get("origin"):
                                     origin = rec["origin"]
+                                if rec.get("pinned") is not None:
+                                    stored_pinned = bool(rec["pinned"])
                             elif (rec.get("event") == "session_kind"
                                   and rec.get("kind") == "worker"):
                                 # Fanout native-worker session (spec 009 §3a):
@@ -3886,6 +3922,7 @@ class AgentManager:
                 "session_uuid": uuid,
                 "origin": origin,
                 "name": name,
+                "pinned": stored_pinned,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,
             }

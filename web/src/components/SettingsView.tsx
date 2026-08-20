@@ -430,8 +430,24 @@ export default function SettingsView({
   return (
     <div ref={scrollContainerRef} className="h-full overflow-y-auto">
     {/* Index rail beside the single scrolling document (desktop) / jump menu
-        above it (mobile). One document, one Save — no pagination. */}
-    <div className="flex justify-center max-md:block">
+        above it (mobile). One document, one Save — no pagination.
+
+        Anchored LEFT, not centred. The rail + 720px column is a fixed 896px
+        unit; centring it put half the slack on each side, so at a 1733px
+        window (1473px pane) there were 288px of dead space to the LEFT of the
+        rail — a navigation column floating in the middle of nowhere, detached
+        from the nav column it conceptually continues. Anchoring turns that
+        slack into one right-hand page margin, which is what a margin is.
+        `pl-6` + the rail's own `pl-6` puts the first rail label 48px off the
+        pane edge. At the 1200x800 default window (`desktop/main.py:1002`) the
+        pane is 940px and this is visually identical to the old centring —
+        which is why a flat max-w bump was the wrong fix: it would have
+        regressed the default size to fix the maximised one.
+
+        `max-md:pl-0` because below md this container is `block`, where the
+        padding would stack on the content's own `max-md:px-4` and make the
+        mobile page asymmetric (40px left, 16px right). */}
+    <div className="flex justify-start pl-6 max-md:pl-0 max-md:block">
     <SettingsRail
       sections={PROJECT_SETTINGS_SECTIONS}
       containerRef={scrollContainerRef}

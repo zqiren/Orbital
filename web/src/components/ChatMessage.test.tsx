@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import ChatMessage from './ChatMessage';
 import type { DisplayItem } from '../utils/chatTransform';
 
@@ -73,26 +73,40 @@ describe('ChatMessage — user_message with <attached_files> block', () => {
 });
 
 describe('ChatMessage — flat avatar-log layout (Design §5)', () => {
-  it('user message renders a user avatar (initials), sender·time, and content in a faint tint block', () => {
+  it('user message is right-anchored with NO avatar, a sender·time label, and a width-capped tint block', () => {
     const { container } = render(<ChatMessage message={userMsg('hello world')} />);
 
-    // Avatar: user variant, shows the "ME" placeholder initials.
-    const avatar = container.querySelector('[data-testid="message-avatar"]');
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute('data-variant')).toBe('user');
-    expect(avatar?.textContent).toBe('ME');
-    expect(avatar?.className).toContain('bg-primary');
+    // No avatar on the user side: once the row is on its own edge, position
+    // encodes identity and a "ME" square is redundant. (Reverses 33be98b's
+    // flat avatar-log, which put both speakers on one left edge.)
+    expect(container.querySelector('[data-testid="message-avatar"]')).toBeNull();
 
-    // Sender label + 24h time (timestamp is 10:23:00Z → local HH:MM).
+    // Right-anchored row.
+    const row = container.querySelector('[data-testid="user-message"]');
+    expect(row).not.toBeNull();
+    expect(row?.className).toContain('items-end');
+
+    // Sender label + 24h time survive the avatar's removal — the label line is
+    // the only carrier of "you → @target" on @mention sends.
     expect(screen.getByText('you')).toBeInTheDocument();
     expect(screen.getByText(/^· \d{2}:\d{2}$/)).toBeInTheDocument();
 
-    // Content sits in a subtle left-aligned tint block (no border, never
-    // right-aligned like the old bubble layout).
+    // Content sits in a tint block that is CAPPED, not full-bleed: an
+    // uncapped right-aligned "ok" would sit ~1200px from the reply it answers
+    // on a maximised window. Notch flips tl→tr to point back at the label.
     const content = screen.getByText('hello world');
     expect(content.className).toContain('bg-sidebar');
-    expect(container.querySelector('.justify-end')).toBeNull();
+    expect(content.className).toContain('max-w-[min(70%,680px)]');
+    expect(content.className).toContain('rounded-tr-sm');
     expect(container.querySelector('.border.rounded-lg')).toBeNull();
+  });
+
+  it('agent rows stay LEFT-anchored and keep their avatar (the asymmetry is the point)', () => {
+    const { container } = render(<ChatMessage message={agentMsg('sure thing')} />);
+    const avatar = container.querySelector('[data-testid="message-avatar"]');
+    expect(avatar?.getAttribute('data-variant')).toBe('agent');
+    expect(container.querySelector('[data-testid="user-message"]')).toBeNull();
+    expect(container.querySelector('.items-end')).toBeNull();
   });
 
   it('user message targeting a sub-agent shows "you → @target" in the label', () => {
@@ -172,5 +186,45 @@ describe('ChatMessage — configured agent name', () => {
     render(<ChatMessage message={subAgentMsg} agentName="Research Bot" />);
     expect(screen.getByText('claude-code')).toBeInTheDocument();
     expect(screen.queryByText('Research Bot')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copy (BACKLOG spec 068)
+// ---------------------------------------------------------------------------
+
+describe('ChatMessage — copy', () => {
+  // CopyButton renders nothing without a clipboard API (that is its contract on
+  // the insecure LAN surface), and jsdom ships none — so stub one, or these
+  // assert the absence of a button that was never going to render.
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async () => undefined },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('user copy carries the stripped text, NOT the <attached_files> markup', () => {
+    const raw =
+      '<attached_files>\n- /w/report.pdf (2.0 MB)\n</attached_files>\n\nsummarise this';
+    render(<ChatMessage message={userMsg(raw)} />);
+    const btn = screen.getByTestId('user-message-copy');
+    expect(btn).toBeInTheDocument();
+    // The button holds no text itself; assert via the component contract that
+    // the visible bubble text is what a copy would carry.
+    expect(screen.getByText('summarise this')).toBeInTheDocument();
+    expect(screen.queryByText(/attached_files/)).toBeNull();
+  });
+
+  it('agent rows get a copy button too', () => {
+    render(<ChatMessage message={agentMsg('here is the answer')} />);
+    expect(screen.getByTestId('agent-message-copy')).toBeInTheDocument();
+  });
+
+  it('a header-only agent row has NO copy button (it has no body to copy)', () => {
+    const headerOnly = { ...agentMsg(''), isHeaderOnly: true } as ReturnType<typeof agentMsg>;
+    render(<ChatMessage message={headerOnly} />);
+    expect(screen.queryByTestId('agent-message-copy')).toBeNull();
   });
 });

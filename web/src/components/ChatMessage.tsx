@@ -7,6 +7,7 @@ import { parseAttachmentsBlock } from '../lib/attachment-parsing';
 import AttachmentChip from './AttachmentChip';
 import MarkdownContent from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
+import CopyButton from './CopyButton';
 import { useT } from '../i18n/useT';
 
 type MessageItem = Extract<
@@ -61,21 +62,27 @@ function formatTime(timestamp: string): string {
 }
 
 /**
- * Up-to-2 uppercase chars for the user avatar. There is no first-class
- * "current user" identity in this app, so derive from a meaningful source
- * label when present, else fall back to the static "ME" placeholder.
- */
-function userInitials(source?: string): string {
-  const s = (source ?? '').trim();
-  if (!s || s === 'user' || s === 'management') return 'ME';
-  return s.slice(0, 2).toUpperCase();
-}
-
-/**
- * One message rendered as a flat avatar-log row (Design §5): a 26×26 avatar
- * box, a "<sender> · HH:MM" label line, and the content underneath — no
- * bubble background, border, or rounding. User and agent rows share the same
- * left-aligned layout.
+ * One message row. The two speakers are laid out asymmetrically:
+ *
+ *   agent / sub-agent  a flat avatar-log row (Design §5) — 26×26 avatar box,
+ *                      "<sender> · HH:MM" label line, content underneath with
+ *                      no bubble background, border, or rounding.
+ *   user               right-anchored, no avatar, a width-capped tint block
+ *                      under a right-aligned label line.
+ *
+ * The asymmetry is deliberate and is a reversal of `33be98b` ("chat
+ * conversation bubbles → flat avatar-log"), which had put both speakers on one
+ * left edge. `user_message` is 1 of 14 DisplayItem variants — the other
+ * thirteen (agent/sub-agent messages, reasoning blocks, tool capsules,
+ * approval and fanout cards, budget events, activity markers) all stay left,
+ * so this is one row type stepping out of a log rather than a two-sided chat.
+ * That is the tradeoff being bought: turn-taking becomes scannable at a glance
+ * without reading a single label, at the cost of the user's rows no longer
+ * sharing a left edge with everything else in the timeline.
+ *
+ * The user avatar was dropped rather than mirrored: side already encodes
+ * identity once the row moves, so a "ME" square would be pure redundancy
+ * paid for out of the right margin the alignment exists to create.
  */
 export default function ChatMessage({ message, agentName, workspace, onOpenPath }: ChatMessageProps) {
   const t = useT();
@@ -90,31 +97,50 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
       : t('chat.message.you');
 
     return (
-      <div className="flex gap-[10px]" title={message.timestamp}>
-        <MessageAvatar variant="user" label={userInitials() === 'ME' ? undefined : userInitials()} />
-        <div className="flex-1 min-w-0">
-          <div className="font-mono text-[11px] mb-1">
-            <span className="text-secondary">{senderLabel}</span>
-            {time && <span className="text-muted"> · {time}</span>}
-          </div>
-          {/* User content gets a faint tint block (agent rows stay flat) so
-              the conversation's turn-taking rhythm is scannable at a glance. */}
-          <div className="inline-block max-w-full rounded-lg rounded-tl-sm bg-sidebar px-3 py-2 text-[13px] leading-[1.55] text-primary whitespace-pre-wrap break-words">
-            {hasChips && (
-              <div className="flex flex-wrap gap-2 mb-2">
-                {attachments.map((a, i) => (
-                  <AttachmentChip
-                    key={`${i}-${a.path}`}
-                    filename={basename(a.path)}
-                    mime={a.mime}
-                    size={inferSize(a.sizeLabel)}
-                    status="done"
-                  />
-                ))}
-              </div>
-            )}
-            {hasText && strippedContent}
-          </div>
+      <div
+        className="flex flex-col items-end"
+        title={message.timestamp}
+        data-testid="user-message"
+      >
+        {/* No avatar on this side. Once the row is on its own edge, position
+            already says who spoke, and a "ME" square would only eat the right
+            margin the alignment exists to create. The label line stays,
+            though — it is the only carrier of `you → @{target}` on @mention
+            sends, which is real routing information, not chrome. */}
+        <div className="group font-mono text-[11px] mb-1 flex items-center gap-1.5">
+          <span className="text-secondary">{senderLabel}</span>
+          {time && <span className="text-muted">· {time}</span>}
+          {/* Copy carries the message's own text, with the <attached_files>
+              block already stripped — that block is machine markup the user
+              never typed and must not be pasted back. */}
+          <CopyButton
+            text={strippedContent}
+            ariaLabel={t('chat.message.copyAria')}
+            data-testid="user-message-copy"
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+          />
+        </div>
+        {/* The tint block is capped rather than allowed to run the pane's full
+            width: the chat pane reaches ~1200px on a maximised window, and an
+            uncapped right-aligned "ok" would sit that far from the agent reply
+            it answers. `min()` keeps it proportional on narrow/mobile panes and
+            bounded on wide ones. The corner notch flips tl→tr to point back at
+            the label above it, the way it used to point at the avatar. */}
+        <div className="inline-block max-w-[min(70%,680px)] rounded-lg rounded-tr-sm bg-sidebar px-3 py-2 text-[13px] leading-[1.55] text-primary whitespace-pre-wrap break-words">
+          {hasChips && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachments.map((a, i) => (
+                <AttachmentChip
+                  key={`${i}-${a.path}`}
+                  filename={basename(a.path)}
+                  mime={a.mime}
+                  size={inferSize(a.sizeLabel)}
+                  status="done"
+                />
+              ))}
+            </div>
+          )}
+          {hasText && strippedContent}
         </div>
       </div>
     );
@@ -142,9 +168,19 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
     >
       <MessageAvatar variant="agent" agentHandle={isSubAgent ? message.source : undefined} />
       <div className="flex-1 min-w-0">
-        <div className="font-mono text-[11px] mb-1">
+        <div className="group font-mono text-[11px] mb-1 flex items-center gap-1.5">
           <span className="text-secondary">{senderLabel}</span>
-          {time && <span className="text-muted"> · {time}</span>}
+          {time && <span className="text-muted">· {time}</span>}
+          {/* Header-only rows are an anchor for the capsule that follows and
+              carry no body — a copy button there would copy nothing. */}
+          {!isHeaderOnly && (
+            <CopyButton
+              text={message.content}
+              ariaLabel={t('chat.message.copyAria')}
+              data-testid="agent-message-copy"
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+            />
+          )}
         </div>
         {!isHeaderOnly && (
           <div className="text-[13px] leading-[1.55] text-primary break-words overflow-x-auto">
