@@ -1443,6 +1443,68 @@ async def agent_run_status(project_id: str, session_id: str | None = None):
     }
 
 
+@router.get("/agents/{project_id}/sessions/{session_id}/context")
+async def get_session_context(project_id: str, session_id: str):
+    """Context in use for one chat session, for the composer's context line.
+
+    Owns no state. The prompt size is the last MANAGEMENT row in the token
+    ledger — provider-reported, so it is the real billed prompt rather than the
+    ``len/4`` estimate ``ContextManager`` uses internally — and the window
+    comes from the registry entry for the model that actually served that call
+    (fallback rotation can change it mid-session).
+
+    ``threshold`` is where the loop will compact, computed by the SAME function
+    the loop triggers on, so the mark the UI draws cannot drift from the event
+    it predicts.
+
+    ``used: null`` means the session has never made a management call. That is
+    deliberately distinct from ``0``: the client renders nothing rather than a
+    confident empty meter.
+
+    No polling and no new WS event: every ledger append already emits
+    ``budget.spend_updated``, and the client refetches this on that.
+    """
+    from agent_os.agent.context import compaction_threshold_tokens
+    from agent_os.budget.ledger import last_context_usage
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    workspace = project.get("workspace", "")
+    latest = last_context_usage(workspace, session_id) if workspace else None
+
+    if latest is None:
+        return {
+            "project_id": project_id,
+            "session_id": session_id,
+            "used": None,
+            "window": None,
+            "threshold": None,
+            "provider": None,
+            "model": None,
+        }
+
+    provider, model = latest["provider"], latest["model"]
+    if _provider_registry is not None:
+        window = _provider_registry.get_context_window(provider, model)
+    else:
+        # No registry wired (lightweight daemons / tests). Fall back rather
+        # than 500 — the meter is better conservative than absent.
+        from agent_os.config.provider_registry import _FALLBACK_CONTEXT_WINDOW
+        window = _FALLBACK_CONTEXT_WINDOW
+
+    return {
+        "project_id": project_id,
+        "session_id": session_id,
+        "used": latest["used"],
+        "window": window,
+        "threshold": compaction_threshold_tokens(window),
+        "provider": provider,
+        "model": model,
+    }
+
+
 class PendingCancelRequest(BaseModel):
     """Body for cancelling a queued pending inject (spec 006).
 

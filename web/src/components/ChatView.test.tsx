@@ -422,11 +422,12 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
     expect(cancelling).toBeTruthy();
     expect(cancelling.disabled).toBe(true);
 
-    // Spinner is rendered (lucide-react Loader2 carries class `lucide-loader-2`
-    // or `lucide-loader-circle`; we assert presence via the animate-spin class
-    // we explicitly set on the icon).
-    const spinner = cancelling.querySelector('.animate-spin');
-    expect(spinner).toBeTruthy();
+    // Progress is shown by an arc travelling around the glyph's outline
+    // (`animate-stop-arc` drives stroke-dashoffset). It is deliberately NOT
+    // `animate-spin`: the ring is a rounded square now, and rotating that
+    // wobbles the silhouette — the exact jump StopGlyph exists to avoid.
+    expect(cancelling.querySelector('.animate-stop-arc')).toBeTruthy();
+    expect(cancelling.querySelector('.animate-spin')).toBeNull();
 
     // Textarea is disabled while cancelling.
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement;

@@ -75,6 +75,25 @@ export type DisplayItem =
   | { type: 'session_separator'; timestamp: string }
   | {
       /**
+       * The agent hit its context ceiling and summarized everything older
+       * than the last ~30% of the conversation. The daemon has always
+       * persisted this marker (`_compaction` on a system row) and this
+       * transform always dropped it, so the event was invisible despite
+       * costing a real LLM call and discarding conversation the user can
+       * still see above it.
+       *
+       * Deliberately NOT a `session_separator`, though it renders in the same
+       * divider shape: that type drives the isHistorical pass, and a
+       * compaction does not start a new session.
+       *
+       * Carries no content — the marker's body is the summary written FOR the
+       * model, not for the reader.
+       */
+      type: 'compaction_marker';
+      timestamp: string;
+    }
+  | {
+      /**
        * A compact, one-line marker rendered in the chat flow for the daemon's
        * [Sub-agent] lifecycle system messages — start, message-sent, completion
        * (with summary), failure. Surfaces the persisted record that a
@@ -706,6 +725,10 @@ export function transformChatHistory(
     const msg = messages[i];
 
     if (msg._compaction) {
+      // Surface the boundary, drop the body: the content is the summary the
+      // model reads, not something to paste into the transcript.
+      finalizeCapsule();
+      items.push({ type: 'compaction_marker', timestamp: msg.timestamp });
       i++;
       continue;
     }
@@ -1144,7 +1167,11 @@ export function transformChatHistory(
   if (lastSepIndex >= 0) {
     for (let k = 0; k <= lastSepIndex; k++) {
       const item = items[k];
-      if (item.type !== 'session_separator' && item.type !== 'approval_card') {
+      if (
+        item.type !== 'session_separator' &&
+        item.type !== 'approval_card' &&
+        item.type !== 'compaction_marker'
+      ) {
         (item as { isHistorical?: boolean }).isHistorical = true;
       }
     }

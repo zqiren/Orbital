@@ -1531,6 +1531,80 @@ class TestContextManagerShouldCompact:
         # After prepare with lots of content and small limits, usage should be high
         assert context_mgr.usage_percentage > 0.0
 
+    def _mgr(self, tmp_path, *, window, reserve=20_000):
+        session = Session.new(f"thresh_{window}", str(tmp_path))
+        return ContextManager(
+            session, MockPromptBuilder(), _make_base_prompt_context(str(tmp_path)),
+            model_context_limit=window, response_reserve=reserve,
+        )
+
+    def test_threshold_is_80pct_of_the_raw_window(self, tmp_path):
+        """Above 5x the reserve, the trigger is 80% of the FULL window.
+
+        The composer's context line marks the compaction point on a bar that
+        spans the whole window, so the mark has to land somewhere a user can
+        read. Deriving it off the usable budget put it anywhere from 31% to
+        78% depending on the model.
+        """
+        assert self._mgr(tmp_path, window=200_000).compaction_threshold_tokens == 160_000
+        assert self._mgr(tmp_path, window=1_000_000).compaction_threshold_tokens == 800_000
+
+    def test_threshold_boundary_at_five_times_the_reserve(self, tmp_path):
+        """window == 5*reserve is the last size where 80% still clears it."""
+        # 100k: 20% of the window is exactly the 20k reserve.
+        assert self._mgr(tmp_path, window=100_000).compaction_threshold_tokens == 80_000
+
+    def test_small_windows_keep_the_usable_budget_rule(self, tmp_path):
+        """Below 5x the reserve, 80% of the window would eat the reply.
+
+        32k models exist in providers.json. 80% of 32,768 leaves 6,553 tokens
+        — a third of the reserve — so those fall back to the original rule
+        and their behaviour is unchanged.
+        """
+        mgr = self._mgr(tmp_path, window=32_768)
+        assert mgr.compaction_threshold_tokens == int(0.80 * (32_768 - 20_000))
+        # And the reply reserve genuinely survives the trigger.
+        assert mgr.compaction_threshold_tokens <= 32_768 - 20_000
+
+    def test_threshold_never_strands_the_reply_reserve(self, tmp_path):
+        """The invariant the fallback exists to protect, across real sizes."""
+        for window in (32_768, 100_000, 128_000, 200_000, 1_000_000, 2_000_000):
+            mgr = self._mgr(tmp_path, window=window)
+            assert mgr.compaction_threshold_tokens <= window - 20_000, window
+
+    def test_threshold_is_never_zero(self, tmp_path):
+        """A window at/under the reserve must not read as 'always compact'.
+
+        A zero threshold would make should_compact() true on an empty context
+        and loop the agent through compaction forever. No registry entry is
+        this small today; the guard is so it can never become one.
+        """
+        for window in (20_000, 12_000, 1_000):
+            mgr = self._mgr(tmp_path, window=window)
+            assert mgr.compaction_threshold_tokens > 0, window
+            mgr._last_used_tokens = 0
+            assert mgr.should_compact() is False, window
+
+    def test_should_compact_flips_at_the_threshold(self, tmp_path):
+        """should_compact() compares measured tokens, not a budget ratio."""
+        mgr = self._mgr(tmp_path, window=200_000)
+        mgr._last_used_tokens = 159_999
+        assert mgr.should_compact() is False
+        mgr._last_used_tokens = 160_000
+        assert mgr.should_compact() is True
+
+    def test_prepare_records_measured_tokens(self, tmp_path):
+        """prepare() must leave the token count should_compact() reads."""
+        session = Session.new("measured", str(tmp_path))
+        for _ in range(40):
+            session.append({"role": "user", "content": "x" * 400, "source": "user"})
+        mgr = ContextManager(
+            session, MockPromptBuilder(), _make_base_prompt_context(str(tmp_path)),
+            model_context_limit=200_000, response_reserve=20_000,
+        )
+        mgr.prepare()
+        assert mgr._last_used_tokens > 0
+
     def test_reduce_window(self, tmp_path):
         """reduce_window() should reduce the sliding window budget."""
         session = Session.new("reduce", str(tmp_path))

@@ -4208,6 +4208,10 @@ class AgentManager:
             cm._window_factor = 1.0
         if hasattr(cm, "_last_usage_pct"):
             cm._last_usage_pct = 0.0
+        if hasattr(cm, "_last_used_tokens"):
+            # Reset with the pct: should_compact() reads this, so a stale
+            # carry-over would compact the swapped-in session on its first turn.
+            cm._last_used_tokens = 0.0
 
         handle.session = new_session
         handle.task = None

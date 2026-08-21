@@ -25,6 +25,8 @@ import { useAttachments } from '../hooks/useAttachments';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import { StopGlyph } from './StopGlyph';
+import ContextStrip from './ContextStrip';
+import { useContextUsage } from '../hooks/useContextUsage';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
@@ -598,6 +600,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
   const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
+  // Ambient context meter above the composer. Event-driven off the ledger's
+  // existing budget.spend_updated (context only moves on an LLM call), so no
+  // polling and no new WS type. Renders nothing until compaction is close.
+  const { usage: contextUsage } = useContextUsage(projectId, sessionId);
   const queueActive = queueSnapshot?.state === 'running';
   // Per-session composer drafts. Keyed by F1 sessionId so switching to
   // another session and back restores the original session's unsent text.
@@ -2184,6 +2190,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (!item) return null;
     if (item.type === 'approval_card') return `approval_card:${item.tool_call_id}`;
     if (item.type === 'session_separator') return `session_separator:${item.timestamp}`;
+    // Marker only — no content field, so it must be keyed before the content
+    // fallthrough at the end (which would crash on undefined.slice).
+    if (item.type === 'compaction_marker') return `compaction_marker:${item.timestamp}`;
     if (item.type === 'agent_notify') {
       return `agent_notify:${item.timestamp}:${item.title}`;
     }
@@ -2918,6 +2927,27 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
+            } else if (item.type === 'compaction_marker') {
+              // The agent ran out of room and summarized everything above
+              // this line. Same divider shape as the session boundary — both
+              // are "the conversation above here is not what it looks like" —
+              // but deliberately a different item type, since a compaction
+              // does not start a new session and must not grey out history.
+              // No action here: the summarization has already happened, so
+              // the new-session offer lives in ContextStrip, BEFORE the fact.
+              return (
+                <div
+                  key={`compact-${index}`}
+                  data-testid="compaction-marker"
+                  className="flex items-center gap-3 px-2 opacity-50"
+                >
+                  <div className="flex-1 border-t border-border" />
+                  <span className="text-xs text-secondary whitespace-nowrap">
+                    {t('chat.compacted')}
+                  </span>
+                  <div className="flex-1 border-t border-border" />
+                </div>
+              );
             } else if (item.type === 'agent_run') {
               // FE-A1: trailing-capsule "running" status is a render-time
               // derivation. The transform always emits `completed`; we
@@ -3347,6 +3377,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {queueActive ? (
           <ComposerDisabledPrompt onPauseQueue={stopQueue} />
         ) : (
+        <>
+        {/* Context meter. Sits above the composer rather than in the project
+            header because it is per-SESSION, and the header is per-project —
+            it would report the wrong session while browsing the session list.
+            Reuses executeNewSession verbatim: the offer is the same /new flow
+            the slash command runs, not a parallel path. */}
+        <ContextStrip usage={contextUsage} onNewSession={executeNewSession} />
         <div className="relative flex flex-col gap-2 bg-card border border-border rounded-lg shadow-[0_1px_2px_rgba(0,0,0,0.04)] px-3 py-2 transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-accent)18%,transparent)] motion-reduce:transition-none">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
@@ -3468,7 +3505,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   }}
                   disabled={isCancelling}
                   aria-label={isCancelling ? t('chat.cancelling') : t('chat.stop')}
-                  className="group shrink-0 p-1.5 rounded-full transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+                  // Muted error, not raw `text-red-500`. Two changes: it goes
+                  // through the --color-error token so it moves with the
+                  // design system, and it rests at 70% so it stops being the
+                  // only fully saturated element in a row where Plus is
+                  // text-secondary. Stopping your own agent is not a fault
+                  // (see the sub-agent 'stopped' handling above), so it should
+                  // not shout like one — the queue's own pause control already
+                  // reads this quietly. rounded-lg joins the radius ladder the
+                  // rest of the composer is built from.
+                  className="group shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-error/70 hover:text-error hover:bg-error/8 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
                   <StopGlyph cancelling={isCancelling} />
                 </button>
@@ -3507,6 +3553,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
           </div>
         </div>
+        </>
         )}
       </div>
       </>

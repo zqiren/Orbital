@@ -279,6 +279,23 @@ body {
   animation: slide-up 0.2s ease-out;
 }
 
+/* Composer stop button, cancelling state. A dash running around a STATIONARY
+   outline — deliberately not `animate-spin`. The glyph's ring used to be a
+   circle, which is rotation-invariant, so spinning the whole SVG was
+   invisible; the ring is now a rounded square, and rotating that visibly
+   wobbles the silhouette. Driving stroke-dashoffset instead keeps the shape
+   nailed in place while the arc travels, which is what StopGlyph's
+   never-changes-silhouette rule was always after. Paired with
+   `pathLength="100"` so the dash array is in percent and the geometry needs no
+   perimeter maths. */
+@keyframes stop-arc-travel {
+  to { stroke-dashoffset: -100; }
+}
+
+.animate-stop-arc {
+  animation: stop-arc-travel 1.15s linear infinite;
+}
+
 /* ---------------------------------------------------------- accessibility
    Three independent user signals, none of which the app honoured globally
    before (only 13 `motion-reduce:` variants in 2 files). */
