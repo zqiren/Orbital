@@ -327,3 +327,79 @@ describe('useSessions — delete', () => {
     expect(result.current.sessions.map((s) => s.session_id)).toEqual(['s1']);
   });
 });
+
+describe('useSessions — pinAgent (spec 074)', () => {
+  beforeEach(() => {
+    onMock.mockClear();
+    offMock.mockClear();
+    apiFn = vi.fn();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('PATCHes pinned_target with the slug and optimistically updates', async () => {
+    const sessions: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockResolvedValueOnce(undefined); // PATCH
+
+    const { result } = renderHook(() => useSessions('proj-pin'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.pinAgent('s1', 'codex');
+    });
+
+    const patchCall = apiFn.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(patchCall).toBeDefined();
+    expect(patchCall![0]).toBe('/api/v2/agents/proj-pin/sessions/s1');
+    expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({
+      pinned_target: 'codex',
+    });
+    expect(result.current.sessions[0].pinned_target).toBe('codex');
+  });
+
+  it('unpin sends an EXPLICIT null (absence means untouched on the backend)', async () => {
+    const sessions: SessionListEntry[] = [
+      makeSession({ session_id: 's1', pinned_target: 'codex' }),
+    ];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockResolvedValueOnce(undefined); // PATCH
+
+    const { result } = renderHook(() => useSessions('proj-unpin'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.pinAgent('s1', null);
+    });
+
+    const patchCall = apiFn.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(patchCall).toBeDefined();
+    // The key must be PRESENT with a null value — JSON.stringify would drop
+    // undefined, and the backend treats absence as "leave the pin alone".
+    expect((patchCall![1] as RequestInit).body as string).toContain('"pinned_target":null');
+    expect(result.current.sessions[0].pinned_target).toBeNull();
+  });
+
+  it('refetches authoritative state when the PATCH fails', async () => {
+    const sessions: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+    apiFn.mockResolvedValueOnce(sessions); // initial fetch
+    apiFn.mockRejectedValueOnce(new Error('422 unknown slug')); // PATCH fails
+    apiFn.mockResolvedValueOnce(sessions); // revert refetch
+
+    const { result } = renderHook(() => useSessions('proj-pin-fail'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await expect(
+      act(async () => {
+        await result.current.pinAgent('s1', 'not-real');
+      }),
+    ).rejects.toThrow();
+
+    await waitFor(() => {
+      expect(result.current.sessions[0].pinned_target).toBeUndefined();
+    });
+  });
+});

@@ -90,3 +90,34 @@ describe('useAgent threads session_id into lifecycle calls', () => {
     expect(lastBody()).toEqual({});
   });
 });
+
+describe('useAgent injectMessage pinned flag (spec 074)', () => {
+  it('sends pinned: true when the target came from the dropdown pin', async () => {
+    const { result } = renderHook(() => useAgent());
+    await result.current.injectMessage(
+      'p1', 'fix it', 'codex', 'nonce-1', undefined, 'sess-9', true,
+    );
+    expect(lastUrl()).toContain('/api/v2/agents/p1/inject');
+    expect(lastBody()).toEqual({
+      content: 'fix it',
+      target: 'codex',
+      nonce: 'nonce-1',
+      session_id: 'sess-9',
+      pinned: true,
+    });
+  });
+
+  it('omits pinned from the body for a plain @mention send', async () => {
+    const { result } = renderHook(() => useAgent());
+    await result.current.injectMessage(
+      'p1', 'fix it', 'codex', 'nonce-1', undefined, 'sess-9', false,
+    );
+    expect(lastBody()).not.toHaveProperty('pinned');
+  });
+
+  it('omits pinned when the argument is not given at all (legacy callers)', async () => {
+    const { result } = renderHook(() => useAgent());
+    await result.current.injectMessage('p1', 'hello', undefined, 'n2');
+    expect(lastBody()).toEqual({ content: 'hello', nonce: 'n2' });
+  });
+});

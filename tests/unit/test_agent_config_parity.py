@@ -201,6 +201,13 @@ def _llm_fields(cfg) -> dict:
         "sdk": cfg.sdk,
         "fallbacks": [(fb.provider, fb.model, fb.base_url, fb.api_key)
                       for fb in cfg.llm_fallback_models],
+        # Spec 072: every start path must derive the same auth-fallback rung.
+        "auth_fallback": (
+            (cfg.auth_fallback.provider, cfg.auth_fallback.model,
+             cfg.auth_fallback.base_url, cfg.auth_fallback.api_key,
+             cfg.auth_fallback.sdk)
+            if cfg.auth_fallback is not None else None
+        ),
     }
 
 
@@ -299,3 +306,98 @@ def test_canonical_config_carries_agent_slug_and_credentials():
     cfg = mgr._build_agent_config_from_project("p_n")
     assert cfg.agent_slug == "claude-code"
     assert cfg.agent_credentials == {"claude-code": {"token": "t"}}
+
+
+# ---- Spec 072: auth-fallback rung derivation --------------------------------
+#
+# The canonical builder attaches a wholesale GLOBAL-default snapshot as
+# ``auth_fallback`` — the rung the loop rotates to after a 401/403 rejects the
+# project key. Because every start path goes through the canonical builder
+# (pinned above), deriving it here and only here IS the parity guarantee; the
+# ``auth_fallback`` entry in ``_llm_fields`` makes the existing three-way
+# parity tests cover it too.
+
+
+def _manager_with_global_sdk(projects: dict) -> AgentManager:
+    """_manager_with_global plus an explicit global sdk (MagicMock would
+    otherwise leak a truthy mock into the sdk assertion)."""
+    mgr = _manager_with_global(projects)
+    mgr._settings_store.get().llm.sdk = "anthropic"
+    return mgr
+
+
+def test_auth_fallback_attached_when_project_key_differs():
+    """BYOK project + usable global default = a rung built wholesale from
+    global settings (provider/model/key/base_url/sdk all global)."""
+    byok = {**NORMAL, "model": "", "api_key": "sk-own-key",
+            "base_url": "https://proxy.example/v1"}
+    mgr = _manager_with_global_sdk({"p_n": byok})
+    cfg = mgr._build_agent_config_from_project("p_n")
+
+    af = cfg.auth_fallback
+    assert af is not None
+    assert af.provider == "tokendance"
+    assert af.model == "deepseek-v4-flash"
+    assert af.base_url == "https://tokendance.space/gateway/v1"
+    assert af.api_key == "sk-td-global"
+    assert af.sdk == "anthropic"
+
+
+def test_auth_fallback_absent_when_project_inherits_global_key():
+    """Nothing different to fall back to: the resolved primary key IS the
+    global key."""
+    inheriting = {**SCRATCH, "model": "", "api_key": "", "base_url": None}
+    mgr = _manager_with_global_sdk({"p_s": inheriting})
+    cfg = mgr._build_agent_config_from_project("p_s")
+    assert cfg.api_key == "sk-td-global"
+    assert cfg.auth_fallback is None
+
+
+def test_auth_fallback_absent_when_global_lacks_model_or_key():
+    byok = {**NORMAL, "model": "", "api_key": "sk-own-key"}
+
+    mgr = _manager_with_global_sdk({"p_n": byok})
+    mgr._settings_store.get().llm.model = ""
+    assert mgr._build_agent_config_from_project("p_n").auth_fallback is None
+
+    mgr = _manager_with_global_sdk({"p_n": byok})
+    mgr._settings_store.get().llm.api_key = None
+    mgr._credential_store.get_api_key = MagicMock(return_value=None)
+    assert mgr._build_agent_config_from_project("p_n").auth_fallback is None
+
+
+def test_auth_fallback_provider_built_like_the_primary():
+    """_build_auth_fallback_provider resolves registry model info (base_url /
+    sdk overrides, max_output) and the provider's static headers — the same
+    construction the primary gets in _build_llm_providers."""
+    byok = {**NORMAL, "model": "", "api_key": "sk-own-key"}
+    mgr = _manager_with_global_sdk({"p_n": byok})
+    model_info = MagicMock(base_url=None, sdk=None, max_output=16384,
+                           capabilities=None, reasoning=None)
+    mgr._provider_registry.get_model_info = MagicMock(return_value=model_info)
+    mgr._provider_registry.get_provider_data = MagicMock(
+        return_value={"extra_headers": {"X-App-Name": "orbital"}})
+
+    cfg = mgr._build_agent_config_from_project("p_n")
+    # sdk="anthropic" would construct a real Anthropic client; the wire
+    # protocol is asserted via the provider attrs, so keep the client cheap.
+    cfg.auth_fallback.sdk = "openai"
+    rung = mgr._build_auth_fallback_provider(cfg)
+
+    assert rung is not None
+    mgr._provider_registry.get_model_info.assert_any_call(
+        "tokendance", "deepseek-v4-flash")
+    assert rung.model == "deepseek-v4-flash"
+    assert rung.provider == "tokendance"
+    assert rung.api_key == "sk-td-global"
+    # No registry override → the rung's own (global) endpoint and sdk win.
+    assert rung.base_url == "https://tokendance.space/gateway/v1"
+    assert rung.sdk == "openai"
+    assert rung.extra_headers == {"X-App-Name": "orbital"}
+
+
+def test_auth_fallback_provider_none_when_config_has_no_rung():
+    mgr = _manager_with_global_sdk({"p_s": SCRATCH})
+    cfg = mgr._build_agent_config_from_project("p_s")
+    assert cfg.auth_fallback is None
+    assert mgr._build_auth_fallback_provider(cfg) is None

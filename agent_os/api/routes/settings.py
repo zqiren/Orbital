@@ -101,6 +101,9 @@ class UpdateSettingsRequest(BaseModel):
     llm_fallback_models: list[dict] | None = None
     user_preferences_content: str | None = None
     user_preferences_path: str | None = None
+    user_memory_content: str | None = None
+    user_memory_path: str | None = None
+    user_memory_enabled: bool | None = None
     scratch_workspace: str | None = None
     telemetry_enabled: bool | None = None
 
@@ -144,6 +147,10 @@ async def update_settings(req: UpdateSettingsRequest):
         current.scratch_workspace = req.scratch_workspace
     if req.user_preferences_path is not None:
         current.user_preferences_path = req.user_preferences_path
+    if req.user_memory_path is not None:
+        current.user_memory_path = req.user_memory_path
+    if req.user_memory_enabled is not None:
+        current.user_memory_enabled = req.user_memory_enabled
     if req.telemetry_enabled is not None:
         current.telemetry_enabled = req.telemetry_enabled
 
@@ -157,6 +164,19 @@ async def update_settings(req: UpdateSettingsRequest):
         os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
         with open(prefs_path, "w", encoding="utf-8") as f:
             f.write(req.user_preferences_content)
+
+    # Write user memory content to file (spec 073). Full overwrite — the
+    # Settings textarea IS the edit/prune surface. This is a SEPARATE file
+    # from user_preferences.md precisely so the prefs overwrite above can
+    # never clobber agent-filed facts (D2).
+    if req.user_memory_content is not None:
+        memory_path = current.user_memory_path
+        if not memory_path:
+            memory_path = os.path.join(os.path.expanduser("~"), "orbital", "user_memory.md")
+            current.user_memory_path = memory_path
+        os.makedirs(os.path.dirname(memory_path), exist_ok=True)
+        with open(memory_path, "w", encoding="utf-8") as f:
+            f.write(req.user_memory_content)
 
     _settings_store.update(current)
 

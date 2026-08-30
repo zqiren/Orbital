@@ -910,3 +910,30 @@ describe('LLMProviderSettings — model list fetch', () => {
     expect(body.base_url).toBe('https://api.deepseek.cn');
   });
 });
+
+// ---- Spec 072: project API-key auth-fallback hint ----
+
+describe('LLMProviderSettings — project-key auth-fallback hint (Spec 072)', () => {
+  const HINT = 'If this key is rejected, runs fall back to the global default.';
+
+  it('shows the hint under the API key field in project mode', async () => {
+    mockApi({});
+    render(
+      <LLMProviderSettings
+        mode="project"
+        projectValues={{ provider: 'deepseek', model: 'deepseek-v4-flash', sdk: 'openai' }}
+        onChange={vi.fn()}
+      />,
+    );
+    // Project mode renders collapsed — expand to reach the fields.
+    fireEvent.click(await screen.findByText('LLM Provider'));
+    expect(await screen.findByText(HINT)).toBeTruthy();
+  });
+
+  it('does not show the hint in global mode (nothing to fall back to)', async () => {
+    mockApi({});
+    render(<LLMProviderSettings mode="global" />);
+    await screen.findByText('API Key');
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+});

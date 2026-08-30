@@ -45,6 +45,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
 export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'language', labelKey: 'global.language', groupKey: 'settings.group.general' },
   { id: 'about-you', labelKey: 'global.aboutYou.label', groupKey: 'settings.group.general' },
+  { id: 'user-memory', labelKey: 'global.userMemory.label', groupKey: 'settings.group.general' },
   { id: 'quick-tasks-workspace', labelKey: 'global.scratch.label', groupKey: 'settings.group.general' },
   { id: 'llm', labelKey: 'llm.global.heading', groupKey: 'settings.group.model' },
   { id: 'fallback-models', labelKey: 'fallback.heading', groupKey: 'settings.group.model' },
@@ -61,6 +62,8 @@ export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
 
 export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [userPreferences, setUserPreferences] = useState('');
+  const [userMemory, setUserMemory] = useState('');
+  const [userMemoryEnabled, setUserMemoryEnabled] = useState(true);
   const [scratchWorkspace, setScratchWorkspace] = useState('');
   const [fallbackModels, setFallbackModels] = useState<FallbackModelEntry[]>([]);
   const [providers, setProviders] = useState<ProviderRegistry>({});
@@ -77,6 +80,8 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
       .then(r => r.json())
       .then(data => {
         setUserPreferences(data.user_preferences_content || '');
+        setUserMemory(data.user_memory_content || '');
+        setUserMemoryEnabled(data.user_memory_enabled !== false);
         setScratchWorkspace(data.scratch_workspace || '');
         setFallbackModels(data.llm?.fallback_models || []);
         setLoading(false);
@@ -97,6 +102,8 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_preferences_content: userPreferences,
+        user_memory_content: userMemory,
+        user_memory_enabled: userMemoryEnabled,
         scratch_workspace: scratchWorkspace || undefined,
         llm_fallback_models: fallbackModels,
       }),
@@ -174,6 +181,50 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
                   onChange={(e) => setUserPreferences(e.target.value)}
                   placeholder={t('global.aboutYou.placeholder')}
                   disabled={loading}
+                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
+                />
+              </SettingsSection>
+
+              {/* Spec 073 — user-level memory: agent-filed facts about the
+                  user, injected into every project's prompt. The textarea is
+                  the edit/prune surface (full overwrite on Save, like About
+                  You — the two are separate files so neither save clobbers
+                  the other); the toggle rides the same one-document Save. */}
+              <SettingsSection
+                id="user-memory"
+                title={t('global.userMemory.label')}
+                description={t('global.userMemory.hint')}
+              >
+                <div className="flex items-start justify-between gap-4 mb-3">
+                  <p className="text-xs text-secondary min-w-0">
+                    {t('global.userMemory.toggle.hint')}
+                  </p>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={userMemoryEnabled}
+                    aria-label={t('global.userMemory.toggle.label')}
+                    disabled={loading}
+                    onClick={() => setUserMemoryEnabled(!userMemoryEnabled)}
+                    data-testid="user-memory-toggle"
+                    className={`shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-150 disabled:opacity-50 ${
+                      userMemoryEnabled ? 'bg-accent' : 'bg-border'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-150 ${
+                        userMemoryEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+                <textarea
+                  rows={4}
+                  value={userMemory}
+                  onChange={(e) => setUserMemory(e.target.value)}
+                  placeholder={t('global.userMemory.placeholder')}
+                  disabled={loading || !userMemoryEnabled}
+                  data-testid="user-memory-textarea"
                   className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
                 />
               </SettingsSection>

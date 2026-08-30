@@ -40,6 +40,10 @@ class PromptContext:
     sub_agent_deployment_instructions: str = ""
     is_scratch: bool = False
     global_preferences_path: str = ""
+    # Spec 073 — user-level memory file. "" when the feature is toggled off
+    # (the config builder is the single gate); the section renders only when
+    # the file exists with content.
+    user_memory_path: str = ""
     agent_name: str = ""
     trigger_source: str | None = None   # "schedule" | "file_watch" | None
     trigger_name: str | None = None     # human-readable trigger name
@@ -112,6 +116,10 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
         "credentials, ambiguous spec, blocked by another task, etc.). Exits "
         "the loop and bypasses this item. Other tools in the same response "
         "run first, then the loop exits — call this with a clear reason."
+    ),
+    "remember_about_user": (
+        "Save a durable fact the user explicitly stated about themselves to "
+        "their user-level memory (shared across all their projects)"
     ),
 }
 
@@ -292,6 +300,7 @@ class PromptBuilder:
         semi_stable = _SEP.join(filter(None, [
             self._trigger_context(context),
             self._global_preferences(context),
+            self._user_memory(context),
             self._cross_project_scope(context),
             self._onboarding_or_directive(context),
             self._standing_rules(context),
@@ -617,6 +626,42 @@ class PromptBuilder:
             return None
         return f"## Global User Preferences\n\n{content}"
 
+    def _user_memory(self, context: PromptContext) -> str | None:
+        """User-level memory (spec 073): agent-filed facts about the user,
+        injected into EVERY project's prompt. Exactly one injection site (D8):
+        this semi_stable section — never a Layer-1 row, never the
+        truly_dynamic tail (DeepSeek hoists system rows; a per-call-changing
+        row there kills the conversation cache, backlog #38)."""
+        if not context.user_memory_path:
+            return None
+        content = self._read_truncated(context.user_memory_path)
+        if content is None:
+            return None
+        return (
+            "## About the User\n\n"
+            "Durable facts the user has stated about themselves, gathered "
+            "across all their projects (they can edit this in Global "
+            "Settings):\n\n"
+            f"{content}\n\n"
+            "Maintaining this memory:\n"
+            "- File a new fact with remember_about_user ONLY when the user "
+            "explicitly states something durable about themselves in first "
+            "person: identity/role/employer, a stable preference or habit, a "
+            "recurring person named by relationship, or a status that "
+            "persists past today.\n"
+            "- Never file an inference, a conclusion drawn from the work, or "
+            "transient session state (\"tried X today, didn't work\").\n"
+            "- Record at the stated level: one mention earns \"mentioned X "
+            "once\", not \"X enthusiast\" — and apply it at the recorded "
+            "level when you read it back.\n"
+            "- Don't re-file what is already listed above — it is in front "
+            "of you.\n"
+            "- Never file government IDs, financial account numbers, health "
+            "details, or anything about children.\n"
+            "- Surface a stored fact only when it changes the substance of "
+            "your answer. Decoration reads as surveillance."
+        )
+
     def _cross_project_scope(self, context: PromptContext) -> str | None:
         """Scratch (Quick Tasks) only: tell the model about its cross-project
         READ scope (Spec 12 §2a). The enforcement plane (multi-root file
@@ -702,7 +747,17 @@ class PromptBuilder:
             f"{orbital}/output/; you don't write deliverables there manually.\n\n"
             'When the user says "remember X", "always do X", or "don\'t do X":\n'
             f"- If it's a rule for this project → append to {orbital}/instructions/user_directives.md\n"
-            f"- If it's a personal/global preference → append to {context.global_preferences_path or '~/orbital/user_preferences.md'}\n"
+            # Spec 073: write/edit resolve against the workspace and the
+            # sandbox only grants writes there, so the old "append to
+            # ~/orbital/user_preferences.md" instruction could never succeed.
+            # The daemon-side tool is the escape hatch; when the user-memory
+            # toggle is off the tool doesn't exist, so route to Settings.
+            + (
+                "- If it's a personal/global preference → call remember_about_user\n"
+                if context.user_memory_path else
+                "- If it's a personal/global preference → suggest adding it in "
+                "Global Settings → About You (user memory is disabled)\n"
+            ) +
             '- If unclear → ask: "Should this apply to just this project or all your projects?"\n\n'
             'When the user says "forget X" or "stop doing X":\n'
             "- Remove the matching line from the appropriate file.\n\n"

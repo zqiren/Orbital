@@ -72,6 +72,72 @@ class TestGlobalPreferences:
         assert "Global User Preferences" not in semi_stable
 
 
+class TestUserMemorySection:
+    """Spec 073 §5.2/§10 — the "## About the User" section: semi_stable only,
+    immediately after Global User Preferences, absent whenever there is
+    nothing to inject."""
+
+    def _write_memory(self, tmp_path) -> str:
+        path = tmp_path / "user_memory.md"
+        path.write_text(
+            "- Works as a PM at Tencent <!--from:proj-a 2026-08-24-->\n",
+            encoding="utf-8")
+        return str(path)
+
+    def test_renders_when_file_exists(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, user_memory_path=self._write_memory(tmp_path))
+        _, semi_stable, _ = builder.build(ctx)
+        assert "## About the User" in semi_stable
+        assert "Works as a PM at Tencent" in semi_stable
+
+    def test_absent_when_path_empty(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, user_memory_path="")
+        _, semi_stable, _ = builder.build(ctx)
+        assert "## About the User" not in semi_stable
+
+    def test_absent_when_file_missing(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(
+            tmp_path, user_memory_path=str(tmp_path / "nonexistent.md"))
+        _, semi_stable, _ = builder.build(ctx)
+        assert "## About the User" not in semi_stable
+
+    def test_absent_when_toggle_off(self, tmp_path):
+        # The toggle reaches the prompt layer as an empty path — the config
+        # builder (_build_agent_config_from_project) is the single gate and
+        # leaves user_memory_path "" when user_memory_enabled is False, even
+        # though the file exists on disk.
+        memory_path = self._write_memory(tmp_path)
+        assert os.path.exists(memory_path)
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, user_memory_path="")
+        _, semi_stable, _ = builder.build(ctx)
+        assert "## About the User" not in semi_stable
+
+    def test_lands_in_semi_stable_never_cached_or_dynamic(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, user_memory_path=self._write_memory(tmp_path))
+        cached, semi_stable, truly_dynamic = builder.build(ctx)
+        assert "## About the User" in semi_stable
+        assert "## About the User" not in cached
+        assert "## About the User" not in truly_dynamic
+
+    def test_ordered_immediately_after_global_preferences(self, tmp_path):
+        prefs_path = tmp_path / "prefs.md"
+        prefs_path.write_text("Prefer concise replies", encoding="utf-8")
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(
+            tmp_path,
+            global_preferences_path=str(prefs_path),
+            user_memory_path=self._write_memory(tmp_path))
+        _, semi_stable, _ = builder.build(ctx)
+        prefs_at = semi_stable.index("## Global User Preferences")
+        memory_at = semi_stable.index("## About the User")
+        assert prefs_at < memory_at
+
+
 class TestStandingRules:
     def test_standing_rules_included_when_file_exists(self, tmp_path):
         rules_dir = tmp_path / "orbital" / "instructions"
@@ -144,18 +210,33 @@ class TestMemoryManagementInstructions:
         _, semi_stable, _ = builder.build(ctx)
         assert 'forget X' in semi_stable
 
-    def test_global_preferences_path_in_memory(self, tmp_path):
+    # Spec 073: the old "append to ~/orbital/user_preferences.md" instruction
+    # was impossible (write/edit and the sandbox are workspace-scoped), so the
+    # global fork of the routing now points at the daemon-side tool — or at
+    # Settings when the user-memory toggle is off (empty path = no tool).
+    def test_global_preference_routes_to_remember_tool(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
-        prefs_path = str(tmp_path / "prefs.md")
-        ctx = _make_context(tmp_path, is_scratch=False, global_preferences_path=prefs_path)
+        ctx = _make_context(tmp_path, is_scratch=False,
+                            user_memory_path=str(tmp_path / "user_memory.md"))
         _, semi_stable, _ = builder.build(ctx)
-        assert prefs_path in semi_stable
+        assert "call remember_about_user" in semi_stable
+        assert "append to ~/orbital/user_preferences.md" not in semi_stable
 
-    def test_default_preferences_path_when_not_set(self, tmp_path):
+    def test_global_preference_routes_to_settings_when_disabled(self, tmp_path):
         builder = PromptBuilder(workspace=str(tmp_path))
-        ctx = _make_context(tmp_path, is_scratch=False, global_preferences_path="")
+        ctx = _make_context(tmp_path, is_scratch=False, user_memory_path="")
         _, semi_stable, _ = builder.build(ctx)
-        assert "~/orbital/user_preferences.md" in semi_stable
+        assert "call remember_about_user" not in semi_stable
+        assert "Global Settings" in semi_stable
+        assert "append to ~/orbital/user_preferences.md" not in semi_stable
+
+    def test_project_directive_fork_kept_verbatim(self, tmp_path):
+        builder = PromptBuilder(workspace=str(tmp_path))
+        ctx = _make_context(tmp_path, is_scratch=False)
+        _, semi_stable, _ = builder.build(ctx)
+        assert f"{tmp_path}/orbital/instructions/user_directives.md" in semi_stable
+        assert ('ask: "Should this apply to just this project or all your '
+                'projects?"') in semi_stable
 
 
 class TestAutonomyDirective:

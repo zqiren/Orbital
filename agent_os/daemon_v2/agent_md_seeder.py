@@ -175,3 +175,111 @@ def seed_project_agent_md(project_store, project_id: str) -> dict:
 
     logger.info("seeded %s into project %s", AGENT_MD_FILENAME, project_id)
     return {"status": "ok", "path": dest}
+
+
+# Prior revisions of AGENT_MD_TEMPLATE (verbatim). When the live template
+# changes, append the outgoing text here so ``reseed_project_agent_md`` can
+# still recognize a file seeded from it as UNEDITED and safely refresh it.
+# The current template is not listed — a file matching it needs no rewrite.
+_HISTORICAL_TEMPLATES: tuple[str, ...] = ()
+
+
+def reseed_project_agent_md(project_store, project_id: str) -> dict:
+    """Hash-guarded ``AGENTS.md`` refresh at pin time (spec 074 §3.6).
+
+    The guard is MANDATORY: the seeded file invites the user to edit it
+    ("your changes will not be overwritten"), so an unconditional rewrite is
+    a data-loss bug. Rewrite ONLY when the current content matches a version
+    Orbital itself seeded (the live template rendering, or a listed
+    historical one) — i.e. the file is provably unedited. Anything else is
+    left alone and logged.
+
+    Statuses:
+
+    * ``skipped_scratch`` / ``no_workspace`` — same guards as the seeder.
+    * ``seeded`` — no file existed (e.g. pre-spec-030 project, or the user
+      deleted it); the current template was written. Codex's only context
+      channel is this file, so a pin must ensure it exists.
+    * ``unchanged`` — file already matches the current template; no write.
+    * ``reseeded`` — file matched a HISTORICAL seeded version verbatim;
+      refreshed to the current template.
+    * ``skipped_user_modified`` — content matches no seeded version; the
+      file is the user's now. Left untouched, logged.
+    * ``read_failed`` / ``write_failed`` — I/O errors; never raises.
+
+    Raises:
+        ValueError: the project does not exist.
+    """
+    project = project_store.get_project(project_id)
+    if project is None:
+        raise ValueError(f"project {project_id!r} not found")
+
+    if project.get("is_scratch"):
+        return {"status": "skipped_scratch"}
+
+    workspace = project.get("workspace", "")
+    if not workspace:
+        return {"status": "no_workspace"}
+
+    fields = {
+        "project_name": project.get("name") or "(unnamed)",
+        "agent_name": project.get("agent_name") or project.get("name") or "(unnamed)",
+    }
+    current = AGENT_MD_TEMPLATE.format(**fields)
+    dest = os.path.join(workspace, AGENT_MD_FILENAME)
+
+    if not os.path.exists(dest):
+        try:
+            with open(dest, "w", encoding="utf-8", newline="\n") as f:
+                f.write(current)
+        except OSError:
+            logger.error(
+                "failed to reseed %s into project %s", AGENT_MD_FILENAME,
+                project_id, exc_info=True,
+            )
+            return {"status": "write_failed", "path": dest}
+        logger.info(
+            "reseed: %s was missing for project %s — seeded", AGENT_MD_FILENAME,
+            project_id,
+        )
+        return {"status": "seeded", "path": dest}
+
+    try:
+        with open(dest, "r", encoding="utf-8", newline="") as f:
+            existing = f.read()
+    except OSError:
+        return {"status": "read_failed", "path": dest}
+
+    # Normalize line endings for the comparison only (a CRLF checkout of an
+    # otherwise-unedited seed still counts as unedited); writes stay "\n".
+    normalized = existing.replace("\r\n", "\n")
+    if normalized == current:
+        return {"status": "unchanged", "path": dest}
+
+    for tmpl in _HISTORICAL_TEMPLATES:
+        try:
+            if normalized == tmpl.format(**fields):
+                break
+        except (KeyError, IndexError):  # a historical template with other fields
+            continue
+    else:
+        logger.info(
+            "reseed: %s for project %s was edited by the user — leaving it "
+            "untouched", AGENT_MD_FILENAME, project_id,
+        )
+        return {"status": "skipped_user_modified", "path": dest}
+
+    try:
+        with open(dest, "w", encoding="utf-8", newline="\n") as f:
+            f.write(current)
+    except OSError:
+        logger.error(
+            "failed to reseed %s into project %s", AGENT_MD_FILENAME,
+            project_id, exc_info=True,
+        )
+        return {"status": "write_failed", "path": dest}
+    logger.info(
+        "reseed: refreshed unedited %s for project %s to the current "
+        "template", AGENT_MD_FILENAME, project_id,
+    )
+    return {"status": "reseeded", "path": dest}

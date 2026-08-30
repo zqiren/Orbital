@@ -626,6 +626,29 @@ class AgentManager:
 
         return provider, fallback_providers, utility_provider, model_info
 
+    def _build_auth_fallback_provider(self, config: AgentConfig):
+        """Construct the LLMProvider for the spec-072 auth-fallback rung, or
+        None when the config carries none. Built exactly like the primary
+        (registry model info, registry static headers) but kept OUT of
+        ``_build_llm_providers``' return tuple so its four-element contract —
+        and every unpacking call site — stays unchanged. The loop holds it
+        aside and appends it to the rotation only after a 401/403."""
+        af = getattr(config, "auth_fallback", None)
+        if af is None:
+            return None
+        af_info = self._provider_registry.get_model_info(af.provider, af.model)
+        return LLMProvider(
+            af.model, af.api_key,
+            af_info.base_url or af.base_url,
+            sdk=af_info.sdk or af.sdk,
+            max_output=af_info.max_output,
+            capabilities=af_info.capabilities,
+            reasoning=af_info.reasoning,
+            provider=af.provider,
+            extra_headers=self._provider_registry.get_provider_data(
+                af.provider).get("extra_headers"),
+        )
+
     @staticmethod
     def _provider_config_changed(handle, cfg: AgentConfig) -> bool:
         """True when the session's current LLM clients no longer match the
@@ -649,6 +672,20 @@ class AgentManager:
             expected_utility = cfg.utility_model or cfg.model
             if getattr(utility, "model", None) != expected_utility:
                 return True
+        # Spec 072: the auth-fallback rung must track global-settings changes
+        # too, or a hot resume keeps offering a stale global default after a
+        # 401. Identity fields only (provider/model/key) — base_url and sdk
+        # get registry-overridden at client-build time, so comparing them
+        # against the raw config would rebuild on every resume.
+        auth_p = getattr(loop, "_auth_fallback_provider", None)
+        cfg_af = getattr(cfg, "auth_fallback", None)
+        if (auth_p is None) != (cfg_af is None):
+            return True
+        if cfg_af is not None and (
+                getattr(auth_p, "model", None) != cfg_af.model
+                or getattr(auth_p, "provider", None) != cfg_af.provider
+                or getattr(auth_p, "api_key", None) != cfg_af.api_key):
+            return True
         return False
 
     def _new_session_object(self, config: AgentConfig, session_id: str, *,
@@ -796,6 +833,9 @@ class AgentManager:
         provider, fallback_providers, utility_provider, model_info = (
             self._build_llm_providers(config)
         )
+        # Spec 072: the global-default rung the loop may rotate to after a
+        # 401/403 rejects the project key. None when nothing different exists.
+        auth_fallback_provider = self._build_auth_fallback_provider(config)
 
         # 2. Tool registry
         registry = ToolRegistry(user_credential_store=self._user_credential_store)
@@ -867,6 +907,7 @@ class AgentManager:
             is_scratch=config.is_scratch,
             agent_name=config.agent_name,
             global_preferences_path=config.global_preferences_path,
+            user_memory_path=config.user_memory_path,
             trigger_source=trigger_source,
             trigger_name=trigger_name,
             vision_enabled=model_info.capabilities.vision,
@@ -1075,6 +1116,7 @@ class AgentManager:
             session, provider, registry, context_manager, interceptor,
             utility_provider=utility_provider,
             fallback_providers=fallback_providers,
+            auth_fallback_provider=auth_fallback_provider,
             max_iterations=config.max_iterations,
             # PURE token safety-net cap (NOT budget-derived; the dollar→token
             # path was deleted in Piece 2). config.token_budget defaults to the
@@ -1191,6 +1233,21 @@ class AgentManager:
             registry.register(MarkTaskBlockedTool())
         except ImportError:
             logger.warning("queue signal tools failed to register", exc_info=True)
+        # Spec 073 — user-level memory writer. Main management loop only
+        # (including scratch/Quick Tasks); fanout workers register through
+        # build_worker_deps and never get this — they don't talk to the user.
+        # config.user_memory_path is "" when the Global Settings toggle is
+        # off, so the tool and the "## About the User" prompt section appear
+        # and disappear together (no dangling affordance).
+        if config.user_memory_path:
+            try:
+                from agent_os.agent.tools.remember_user import RememberAboutUserTool
+                registry.register(RememberAboutUserTool(
+                    user_memory_path=config.user_memory_path,
+                    project_name=config.project_name or config.agent_name or "unknown",
+                ))
+            except ImportError:
+                pass
         # Cross-project read scope (Spec 12 §2a): scratch (Quick Tasks) sessions
         # read across in-scope project workspaces; Write/Edit stay single-root.
         # Callables so a mid-session scope change applies on the next tool call.
@@ -1627,14 +1684,72 @@ class AgentManager:
             for fb in (raw_fallbacks or [])
         ]
 
+        # sdk must inherit with the model (Spec 072 rider). A project without
+        # its own model runs the GLOBAL model — on the global wire protocol. A
+        # bare project.get("sdk") default ran a global Custom/self-hosted
+        # Anthropic-compatible setup over OpenAI /chat/completions.
+        if project.get("model"):
+            sdk = project.get("sdk", "openai")
+        else:
+            sdk = (
+                (getattr(global_settings.llm, "sdk", None) if global_settings else None)
+                or project.get("sdk")
+                or "openai"
+            )
+
+        # Spec 072 — auth-fallback rung: snapshot the GLOBAL default wholesale
+        # (provider/model/key/base_url/sdk pairing is the global one, so the
+        # key↔endpoint invariants above hold for it by construction). Attached
+        # only when it is materially usable (model AND key) and its key
+        # differs from the resolved primary key — a project inheriting the
+        # global key has nothing different to fall back to. The loop reaches
+        # it only after a 401/403 rejects the project key (never on transient
+        # errors), posts a chat notice, and nothing is persisted: the next run
+        # tries the project key fresh.
+        auth_fallback = None
+        if global_settings:
+            g_llm = global_settings.llm
+            g_model = g_llm.model or ""
+            g_key = cred_key or g_llm.api_key or ""
+            if g_model and g_key and g_key != api_key:
+                auth_fallback = FallbackModelEntry(
+                    provider=g_llm.provider or "custom",
+                    model=g_model,
+                    base_url=g_llm.base_url,
+                    api_key=g_key,
+                    sdk=getattr(g_llm, "sdk", None) or "openai",
+                )
+
+        # Spec 073 §2.1 — user-scoped file paths. global_preferences_path was
+        # declared on AgentConfig and read into PromptContext, but this (only)
+        # construction site never assigned it, so the "## Global User
+        # Preferences" section silently never rendered. Both paths default to
+        # the ~/orbital siblings when Global Settings leaves them unset. The
+        # isinstance guard keeps duck-typed settings stores in tests
+        # (MagicMock) from leaking non-string paths into the prompt layer.
+        # user_memory_path stays "" when the toggle is off — the single gate
+        # for both the remember_about_user tool and the prompt section.
+        prefs_path = getattr(global_settings, "user_preferences_path", None) if global_settings else None
+        if not isinstance(prefs_path, str) or not prefs_path:
+            prefs_path = os.path.join(os.path.expanduser("~"), "orbital", "user_preferences.md")
+        memory_enabled = getattr(global_settings, "user_memory_enabled", True) if global_settings else True
+        if memory_enabled is False:
+            memory_path = ""
+        else:
+            memory_path = getattr(global_settings, "user_memory_path", None) if global_settings else None
+            if not isinstance(memory_path, str) or not memory_path:
+                memory_path = os.path.join(os.path.expanduser("~"), "orbital", "user_memory.md")
+
         return AgentConfig(
             workspace=project["workspace"],
             model=model,
             api_key=api_key,
             base_url=base_url,
             autonomy=autonomy,
-            sdk=project.get("sdk", "openai"),
+            sdk=sdk,
             provider=provider,
+            global_preferences_path=prefs_path,
+            user_memory_path=memory_path,
             project_name=project.get("name", ""),
             project_instructions=project.get("instructions", ""),
             sub_agent_deployment_instructions=(project.get(
@@ -1647,6 +1762,7 @@ class AgentManager:
             agent_slug=project.get("agent_slug", "built-in"),
             agent_credentials=project.get("agent_credentials", {}),
             llm_fallback_models=fallback_models,
+            auth_fallback=auth_fallback,
             budget_limit_usd=project.get("budget_limit_usd"),
             budget_action=project.get("budget_action", "pause"),
         )
@@ -1690,8 +1806,15 @@ class AgentManager:
         message as ``_meta`` (e.g. ``{"display_content": ...}`` for the
         fanout join summary — the UI renders the trimmed display copy while
         the LLM still sees the full ``content``).
+
+        ``meta["suppress_wake"]`` (spec 074) is the OPT-IN append-without-wake
+        flag: the row still lands in the session JSONL (durable, readable by
+        the next management turn) but never starts/hot-resumes the management
+        loop. Stamped ONLY by the lifecycle observer for ``user_pinned``
+        dispatches; an unflagged event wakes exactly as before.
         """
         session_id = self._resolve_session_id(session_id)
+        suppress_wake = bool(meta and meta.get("suppress_wake"))
         handle = self._handles.get(make_session_key(project_id, session_id))
         if handle is None:
             # Piece 3 Part C (wake-if-awaited): the handle being gone (e.g.
@@ -1721,6 +1844,10 @@ class AgentManager:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 **({"_meta": meta} if meta else {}),
             })
+            if suppress_wake:
+                # Pinned dispatch (spec 074): the row is durably on disk; the
+                # management LLM takes ZERO turns — no start_agent.
+                return "suppressed"
             try:
                 config = self._build_agent_config_from_project(project_id)
                 await self.start_agent(
@@ -1745,6 +1872,10 @@ class AgentManager:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 **({"_meta": meta} if meta else {}),
             })
+            if suppress_wake:
+                # Pinned dispatch (spec 074): append only, never start a
+                # management turn.
+                return "suppressed"
             await self._start_loop(project_id, session_id=session_id)
             return "delivered"
 
@@ -1851,6 +1982,23 @@ class AgentManager:
                 session = Session.new(resolved, workspace)
         session.append(user_msg)
         return resolved
+
+    def peek_chat_session(self, project_id: str, session_id: str | None):
+        """Resolve the inject session id and return ``(resolved_id, session)``
+        WITHOUT appending anything or waking any loop.
+
+        Read-only sibling of ``persist_mention_message`` — the spec-074 recap
+        builder needs the session's history and sub-agent thread records
+        BEFORE the current user message is persisted (so the recap covers
+        strictly prior conversation). ``session`` is ``None`` when the
+        resolved id has no live handle and no on-disk JSONL (a brand-new
+        session — nothing to recap).
+        """
+        resolved = self._sid_inject(project_id, session_id)
+        handle = self._handles.get(make_session_key(project_id, resolved))
+        if handle is not None:
+            return resolved, handle.session
+        return resolved, self._load_session_from_disk(project_id, resolved)
 
     def _start_rejection(self, project_id: str,
                          session_id: str) -> ValueError | None:
@@ -3613,9 +3761,15 @@ class AgentManager:
             "pinned": bool(pinned),
         }
 
+    # Distinguishes "field not sent" from an explicit None for
+    # ``patch_session``'s pinned_target (spec 074: explicit null CLEARS the
+    # pin, absence leaves it untouched).
+    _UNSET = object()
+
     def patch_session(self, project_id: str, session_id: str, *,
                       name: str | None = None,
-                      pinned: bool | None = None) -> dict:
+                      pinned: bool | None = None,
+                      pinned_target=_UNSET) -> dict:
         """Update a session's display state in memory + on disk.
 
         Resolves the session (F1 or F2/uuid). If a live handle exists, mutate
@@ -3623,9 +3777,13 @@ class AgentManager:
         on-disk session, mutate it (rewrites the meta line), and let it fall out
         of scope — the file is the source of truth and is now updated.
 
-        ``name`` and ``pinned`` are independent: passing one leaves the other
-        untouched, because each writes only its own key onto the shared
-        session_start meta record (``Session._apply_meta_fields``).
+        ``name``, ``pinned`` and ``pinned_target`` are independent: passing one
+        leaves the others untouched, because each writes only its own key onto
+        the shared session_start meta record (``Session._apply_meta_fields``).
+        ``pinned_target`` (spec 074) is tri-state: omitted → untouched,
+        ``None`` → clear the pin, a slug → pin. The result carries
+        ``previous_pinned_target`` whenever the field was set, so the PATCH
+        route can decide whether a retarget/unpin consolidation must fire.
 
         Raises ``FileNotFoundError`` if no session matches → 404.
         """
@@ -3636,11 +3794,17 @@ class AgentManager:
             )
         session_uuid, jsonl_path = resolved
 
+        result: dict = {"status": "patched", "session_id": session_id}
+
         def _apply(session) -> None:
             if name is not None:
                 session.set_name(name)
             if pinned is not None:
                 session.set_pinned(pinned)
+            if pinned_target is not self._UNSET:
+                result["previous_pinned_target"] = getattr(
+                    session, "pinned_target", None)
+                session.set_pinned_target(pinned_target)
 
         # Live handle path: mutate in memory (also rewrites the meta line).
         for (pid, sid), handle in self._handles.items():
@@ -3650,12 +3814,12 @@ class AgentManager:
                 handle.session, "session_uuid", None
             ) == session_uuid:
                 _apply(handle.session)
-                return {"status": "patched", "session_id": session_id}
+                return result
 
         # Disk-only path: load, mutate (rewrites the meta line), done.
         loaded = Session.load(jsonl_path)
         _apply(loaded)
-        return {"status": "patched", "session_id": session_id}
+        return result
 
     # ------------------------------------------------------------------
     # Sub-agent resume persistence (TASK-resume-persistence, piece 2)
@@ -3743,6 +3907,9 @@ class AgentManager:
                 # Pinned-to-top flag (spec 067). Same session_start meta record
                 # as `name`; absent on pre-067 logs, which read as False.
                 "pinned": bool(getattr(handle.session, "pinned", False)),
+                # Pinned sub-agent target (spec 074) — slug or None. Same meta
+                # record; absent on pre-074 logs, which read as unpinned.
+                "pinned_target": getattr(handle.session, "pinned_target", None),
                 "last_terminal_event": self._last_terminal_events.get(
                     (pid, sid),
                 ),
@@ -3850,6 +4017,7 @@ class AgentManager:
             last_activity_at = None
             stored_name = None  # name on the session_start meta, if present
             stored_pinned = False  # `pinned` on the same meta (spec 067)
+            stored_pinned_target = None  # `pinned_target` (spec 074)
             origin = "chat"  # session_start meta origin; legacy logs → chat
             first_user_content = None  # for name backfill
             is_worker = False  # session_kind:"worker" meta (spec 009 fanout)
@@ -3875,6 +4043,8 @@ class AgentManager:
                                     origin = rec["origin"]
                                 if rec.get("pinned") is not None:
                                     stored_pinned = bool(rec["pinned"])
+                                if rec.get("pinned_target"):
+                                    stored_pinned_target = rec["pinned_target"]
                             elif (rec.get("event") == "session_kind"
                                   and rec.get("kind") == "worker"):
                                 # Fanout native-worker session (spec 009 §3a):
@@ -3923,6 +4093,7 @@ class AgentManager:
                 "origin": origin,
                 "name": name,
                 "pinned": stored_pinned,
+                "pinned_target": stored_pinned_target,
                 "last_terminal_event": None,
                 "last_activity_at": last_activity_at,
             }
@@ -4467,6 +4638,7 @@ class AgentManager:
             loop._provider = provider
             loop._utility_provider = utility_provider
             loop._fallback_providers = fallback_providers
+            loop._auth_fallback_provider = self._build_auth_fallback_provider(fresh_cfg)
             handle.config_snapshot.update({
                 "model": fresh_cfg.model,
                 "provider": fresh_cfg.provider,
@@ -4654,11 +4826,17 @@ class AgentManager:
             # mid-turn, wake". Matching on the event rather than a kind list
             # is what keeps a future producer from silently re-opening the
             # gap by tagging itself with a kind nobody added here.
+            # suppress_wake (spec 074): a pinned dispatch's terminal event is
+            # the one exception — it still APPENDS (row above) but must not
+            # hot-resume the management loop. Opt-in flag stamped only by the
+            # lifecycle observer for user_pinned dispatches; every unflagged
+            # terminal keeps waking exactly as before.
             wake_on_deferred_terminal = False
             for msg in handle.session.pop_deferred_messages():
                 handle.session.append(msg)
                 meta = msg.get("_meta") or {}
-                if meta.get("event") == "sub_agent_terminal":
+                if (meta.get("event") == "sub_agent_terminal"
+                        and not meta.get("suppress_wake")):
                     wake_on_deferred_terminal = True
 
             # Check if paused for approval FIRST — don't drain the queue

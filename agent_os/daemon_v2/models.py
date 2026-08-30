@@ -145,9 +145,21 @@ class AgentConfig:
     budget_spent_usd: float = 0.0
     sdk: str = "openai"        # "openai" or "anthropic"
     provider: str = "custom"   # provider key from providers.json
+    # Spec 072 — auth-fallback rung: a wholesale snapshot of the GLOBAL default
+    # (provider/model/key/base_url/sdk), attached by the config builder only
+    # when it is materially usable AND its key differs from the resolved
+    # primary key. NOT part of llm_fallback_models: the loop appends it to the
+    # rotation only after a 401/403 proves the project key dead, so transient
+    # rotation semantics stay untouched. Never persisted — re-derived per run.
+    auth_fallback: FallbackModelEntry | None = None
     is_scratch: bool = False
     agent_name: str = ""
     global_preferences_path: str = ""
+    # Spec 073 — user-level memory file (~/orbital/user_memory.md sibling of
+    # user_preferences.md). "" means the feature is toggled off: the config
+    # builder leaves it empty when user_memory_enabled is False, which both
+    # unregisters the remember_about_user tool and omits the prompt section.
+    user_memory_path: str = ""
     llm_fallback_models: list[FallbackModelEntry] = field(default_factory=list)
     # Budget Piece 1, Task 4 — derived-cost window config. Additive; the legacy
     # budget fields above (budget_limit_usd / budget_action / budget_spent_usd)

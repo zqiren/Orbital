@@ -606,6 +606,14 @@ Include a file key only if you are archiving from it. No markdown fences, no exp
         files_modified = ", ".join(session_summary.get("files_modified", [])) or "(none)"
         message_count = session_summary.get("message_count", 0)
         tool_calls_count = session_summary.get("tool_calls_count", 0)
+        # Spec 074: one-line variant for a pinned exchange — the transcript
+        # below is the user talking to a sub-agent directly, with no
+        # management agent mediating (assistant rows are the worker's).
+        pinned_note = (
+            "\nNote: this was a direct user↔worker exchange — the user "
+            "conversed with a pinned sub-agent directly; no management agent "
+            "mediated."
+        ) if session_summary.get("pinned_exchange") else ""
 
         today = date.today().isoformat()
 
@@ -689,7 +697,7 @@ LESSONS.md:
 INDEX.md:
 {existing_index}
 
---- THIS SESSION ({message_count} messages, {tool_calls_count} tool calls) ---
+--- THIS SESSION ({message_count} messages, {tool_calls_count} tool calls) ---{pinned_note}
 Files modified: {files_modified}
 Recent conversation:
 {recent_formatted}"""
@@ -706,6 +714,8 @@ async def run_session_end_routine(
     session_uuid: str,
     bypass_idempotency: bool = False,
     project_id: str = "",
+    since_index: int | None = None,
+    pinned_exchange: bool = False,
 ) -> str:
     """Session-end cleanup: deterministic size backstop + best-effort LLM merge.
 
@@ -748,7 +758,12 @@ async def run_session_end_routine(
     today = date.today().isoformat()
 
     # ---- Part A: best-effort LLM dedup/merge (bounded input; never fatal) ----
-    summary = _build_session_summary(session)
+    # since_index / pinned_exchange (spec 074): the pinned-consolidation
+    # coordinator windows the summary to messages since its last pass and
+    # tags the prompt as a direct user↔worker exchange. Both default to the
+    # historical behavior for every existing caller.
+    summary = _build_session_summary(
+        session, since_index=since_index, pinned_exchange=pinned_exchange)
     prompt = workspace_files.build_session_end_prompt(summary)
     llm = utility_provider if utility_provider is not None else provider
     messages = [
@@ -1202,9 +1217,19 @@ def _archive_trimmed_lines(
         )
 
 
-def _build_session_summary(session) -> dict:
-    """Extract summary stats from session for the LLM prompt."""
+def _build_session_summary(session, *, since_index: int | None = None,
+                           pinned_exchange: bool = False) -> dict:
+    """Extract summary stats from session for the LLM prompt.
+
+    ``since_index`` (spec 074): consider only messages from that list index
+    on — the pinned-consolidation coordinator passes the message count at its
+    previous pass so each pass distills the NEW exchange, not a fixed tail.
+    ``pinned_exchange`` rides through to the prompt builder, which adds the
+    one-line direct user↔worker note.
+    """
     messages = session.get_messages()
+    if since_index:
+        messages = messages[since_index:]
 
     tool_calls = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
     # Extract modified files from write/edit tool results
@@ -1246,6 +1271,7 @@ def _build_session_summary(session) -> dict:
         "tool_calls_count": sum(len(m.get("tool_calls", [])) for m in tool_calls),
         "files_modified": sorted(files_modified),
         "recent_messages": recent_trimmed,
+        "pinned_exchange": pinned_exchange,
     }
 
 

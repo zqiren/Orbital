@@ -117,6 +117,7 @@ class AgentLoop:
         interceptor=None,
         utility_provider=None,
         fallback_providers=None,
+        auth_fallback_provider=None,
         max_iterations: int = 0,
         token_budget: int = 100_000_000,
         get_budget_config=None,
@@ -134,6 +135,12 @@ class AgentLoop:
         self._interceptor = interceptor
         self._utility_provider = utility_provider
         self._fallback_providers = fallback_providers or []
+        # Spec 072 — the global-default rung, built wholesale from GLOBAL
+        # settings (None when the project inherits the global key or global is
+        # unusable). Held OUTSIDE the rotation list: it joins _all_providers
+        # lazily, only after a 401/403 proves the project key dead, so
+        # transient-rotation semantics stay byte-identical until then.
+        self._auth_fallback_provider = auth_fallback_provider
         self._max_iterations = max_iterations
         # PURE token safety-net cap (NOT budget-derived). Budget Piece 2 cut the
         # dollar→token derivation that used to feed this; the gate now only
@@ -967,13 +974,90 @@ class AgentLoop:
                     ):
                         category = ErrorCategory.RETRY
 
+                    # Auth fallback (Spec 072): a 401/403 means THIS key is
+                    # dead, not the run. The "never self-heals" lesson above
+                    # is about retrying the SAME key — rotating to a
+                    # different key is exactly the self-heal that works.
+                    # Infinite-cooldown every rung sharing the rejected key,
+                    # lazily append the global-default rung (None when the
+                    # project inherits the global key or global is unusable),
+                    # and rotate. From that moment the rung is a uniform
+                    # rotation member (transient cooldowns, the per-index
+                    # _answered 400-guard). Scoped strictly to 401/403 —
+                    # 400 stays cold-ABORT exactly as above. Nothing is
+                    # persisted: the next run tries the project key fresh.
+                    _auth_abort_note = None
+                    if (
+                        category == ErrorCategory.ABORT
+                        and e.status_code in (401, 403)
+                    ):
+                        dead_key = getattr(
+                            _all_providers[_current_idx], "api_key", None,
+                        )
+                        for i, p in enumerate(_all_providers):
+                            if getattr(p, "api_key", None) == dead_key:
+                                _cooldowns[i] = float("inf")
+                        if (
+                            self._auth_fallback_provider is not None
+                            and self._auth_fallback_provider not in _all_providers
+                        ):
+                            _all_providers.append(self._auth_fallback_provider)
+                        rotated = self._rotate_provider(
+                            _all_providers, _current_idx, _cooldowns,
+                        )
+                        if rotated is not None:
+                            _current_idx = rotated
+                            _retries_on_current = 0
+                            new_provider = _all_providers[rotated]
+                            model_name = new_provider.model
+                            provider_name = getattr(
+                                new_provider, "provider", "unknown",
+                            )
+                            logger.info(
+                                "API key rejected (HTTP %s); rotating to %s/%s",
+                                e.status_code, provider_name, model_name,
+                            )
+                            self._session.append_meta(
+                                "model_swap",
+                                provider=provider_name,
+                                model=model_name,
+                                sdk=getattr(new_provider, "sdk", "unknown"),
+                                reason=(
+                                    "auth: project API key rejected "
+                                    f"(HTTP {e.status_code})"
+                                ),
+                            )
+                            self._session.append_system(
+                                f"This project's API key was rejected "
+                                f"(HTTP {e.status_code}). Using the global "
+                                f"default for this run: {provider_name} · "
+                                f"{model_name}. The project key was not "
+                                f"changed — fix or replace it in Project "
+                                f"Settings."
+                            )
+                            continue
+                        # No different-key rung left: fall through to ABORT
+                        # with a message naming the global-default status.
+                        if self._auth_fallback_provider is None:
+                            _auth_abort_note = (
+                                "The API key was rejected and the global "
+                                "default is not available as a separate "
+                                "fallback (not configured, or the same key)."
+                            )
+                        else:
+                            _auth_abort_note = (
+                                "The API key was rejected and the global "
+                                "default was also rejected."
+                            )
+
                     # Abort: non-recoverable errors (401, 403, 400)
                     if category == ErrorCategory.ABORT:
                         self._llm_failed = True
                         self.last_llm_error = e
-                        self._session.append_system(
-                            f"LLM error (non-recoverable): {e.message}. Stopping."
-                        )
+                        abort_msg = f"LLM error (non-recoverable): {e.message}."
+                        if _auth_abort_note:
+                            abort_msg += f" {_auth_abort_note}"
+                        self._session.append_system(abort_msg + " Stopping.")
                         self._note_exit("llm_error", iteration)
                         break
 

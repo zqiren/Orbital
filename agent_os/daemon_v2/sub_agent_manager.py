@@ -232,7 +232,8 @@ class SubAgentManager:
 
     async def start(self, project_id: str, handle: str, depth: int = 0,
                     *, session_id: str | None = None,
-                    announce: bool = True, fresh: bool = False) -> str:
+                    announce: bool = True, fresh: bool = False,
+                    pinned: bool = False) -> str:
         """Create adapter from config, call adapter.start(), register with process_manager.
 
         ``session_id`` selects which chat session this sub-agent attaches to.
@@ -247,6 +248,12 @@ class SubAgentManager:
         resume (a brand-new provider session) and a brand-new transcript file,
         bypassing the §4b ``.latest`` reuse. The prior thread/transcript stay
         archived on disk.
+
+        ``pinned=True`` (spec 074) marks this a pinned spawn: the rendered
+        sub-agent prompt carries the pinned-mode enrichment (direct-chat
+        statement + narrow Layer-1 write contract + retraction titles)
+        instead of the standard Layer-1 ban. Registry path only; the legacy
+        adapter path renders no prompt.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -266,7 +273,7 @@ class SubAgentManager:
         if self._registry is not None and self._setup_engine is not None:
             return await self._start_from_registry(
                 project_id, handle, session_id=session_id, announce=announce,
-                fresh=fresh,
+                fresh=fresh, pinned=pinned,
             )
 
         # Legacy path: use adapter_configs
@@ -710,11 +717,16 @@ class SubAgentManager:
     async def _start_from_registry(self, project_id: str, handle: str, depth: int = 0,
                                    *, session_id: str | None = None,
                                    announce: bool = True,
-                                   fresh: bool = False) -> str:
+                                   fresh: bool = False,
+                                   pinned: bool = False) -> str:
         """Start a sub-agent using the manifest registry and setup engine.
 
         ``fresh=True`` (BACKLOG 005 §4d) forces a reset: skip resume and mint a
         new transcript (bypass §4b reuse). See ``start``.
+
+        ``pinned=True`` (spec 074): render the pinned-mode prompt enrichment
+        (see ``start``). One flag covers SDK, pipe AND acp-sdk — the acp
+        composition persona consumes the same rendered prompt.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -842,6 +854,7 @@ class SubAgentManager:
                     namespace=None,
                     agent_slug=handle,
                     enabled_sub_agents=enabled_sub_agents,
+                    pinned=pinned,
                 )
             except Exception:
                 logger.exception(
@@ -1066,6 +1079,9 @@ class SubAgentManager:
             start_result = await self.start(
                 project_id, handle, depth=depth,
                 session_id=session_id, announce=False, fresh=fresh,
+                # Spec 074: a user_pinned dispatch spawns in pinned mode (the
+                # prompt carries the direct-chat + Layer-1 write contract).
+                pinned=(initiator == "user_pinned"),
             )
             if start_result.startswith("Error"):
                 return start_result
@@ -1122,6 +1138,18 @@ class SubAgentManager:
         session_id: str, handle: str,
     ) -> None:
         """Start one queued prompt while the session lifecycle lock is held."""
+        # Spec 074: push this dispatch's initiator into the lifecycle
+        # observer's registry BEFORE the dispatch, so the terminal event that
+        # eventually closes this turn (fired by process_manager, which has no
+        # initiator of its own) can decide whether to stamp suppress_wake.
+        # Push model on purpose — the observer is attached to this manager
+        # post-construction, so a pull-callback would depend on wiring order.
+        if self._lifecycle_observer is not None:
+            setter = getattr(
+                self._lifecycle_observer, "set_dispatch_initiator", None)
+            if setter is not None:
+                setter(project_id, handle, prompt.initiator,
+                       session_id=session_id)
         self._process_manager.set_active_dispatch(
             project_id, handle, prompt.dispatch_id, session_id=session_id)
         try:
@@ -1175,8 +1203,12 @@ class SubAgentManager:
             return
         for _prompt in dropped:
             try:
+                # initiator (spec 074): the dropped prompt's own initiator —
+                # a queued prompt never reached set_dispatch_initiator, so
+                # the observer must not guess from the registry for it.
                 await self._lifecycle_observer.on_queue_dropped(
                     project_id, handle, why=why, session_id=session_id,
+                    initiator=getattr(_prompt, "initiator", None),
                 )
             except Exception:
                 logger.exception(

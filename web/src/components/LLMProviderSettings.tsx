@@ -968,6 +968,11 @@ export default function LLMProviderSettings({
           }
           className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
         />
+        {mode === 'project' && (
+          <p className="text-xs text-secondary/70 mt-1">
+            {t('llm.apiKey.authFallbackHint')}
+          </p>
+        )}
         {mode === 'global' && globalSettings?.api_key_set && !apiKey && (
           <div className="flex items-center gap-3 mt-1">
             <p className="text-xs text-secondary">

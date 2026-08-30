@@ -24,6 +24,8 @@ import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
+import { useSessions } from '../hooks/useSessions';
 import { StopGlyph } from './StopGlyph';
 import ContextStrip from './ContextStrip';
 import { useContextUsage } from '../hooks/useContextUsage';
@@ -518,6 +520,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [mentionFilter, setMentionFilter] = useState('');
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
+  // Spec 074 — the composer "Talking to" pin. Backend truth comes from the
+  // session list (`pinned_target` on the entry); `localPin` is the
+  // optimistic overlay for the VIEWED session so the dropdown responds
+  // immediately and keeps working for a brand-new session whose JSONL has
+  // not materialized yet (the PATCH 404s until the first message lands —
+  // handleSend re-persists the pin after a successful pinned send).
+  const { sessions: pinSessions, pinAgent } = useSessions(projectId);
+  const [localPin, setLocalPin] = useState<{ sessionId: string; slug: string | null } | null>(null);
+  const backendPin = useMemo(() => {
+    if (sessionId === undefined) return null;
+    const entry = pinSessions.find(
+      (s) => s.session_id === sessionId || s.session_uuid === sessionId,
+    );
+    return entry?.pinned_target ?? null;
+  }, [pinSessions, sessionId]);
+  const pinnedTarget =
+    localPin && localPin.sessionId === sessionId ? localPin.slug : backendPin;
   const [showThinking, setShowThinking] = useState(false);
   const [showCommandDropdown, setShowCommandDropdown] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
@@ -2401,13 +2420,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return;
     }
 
-    let target: string | undefined;
-    let content = text;
-    const atMatch = text.match(/^@([\w-]+)\s+([\s\S]*)/);
-    if (atMatch) {
-      target = atMatch[1];
-      content = atMatch[2];
-    }
+    // Spec 074 target precedence: a leading @mention wins for this one
+    // message; otherwise the sticky "Talking to" pin applies; otherwise the
+    // management agent. `@orbital` is the reserved one-message manager aside
+    // — it routes down the management branch WITHOUT unpinning.
+    const resolved = resolveSendTarget(text, pinnedTarget);
+    const target = resolved.target;
+    const content = resolved.content;
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -2473,7 +2492,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         nonce,
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
         sessionId,
+        resolved.pinned,
       );
+      // A pinned send materialized the session on the backend — if the pin
+      // PATCH had failed earlier (brand-new session, 404 before the first
+      // message), persist it now so it survives reloads. `pinAgent`'s
+      // optimistic update keeps `backendPin` current on success, so this
+      // fires only while the stored value is actually behind.
+      if (
+        resolved.pinned &&
+        sessionId !== undefined &&
+        target !== undefined &&
+        backendPin !== target
+      ) {
+        void pinAgent(sessionId, target).catch(() => {});
+      }
       // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
       // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
       // when the slot frees. KEEP the optimistic bubble (unlike slot_held below,
@@ -3447,6 +3480,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ))}
             </div>
           )}
+          {/* Spec 074 — the sticky "Talking to" selector IS the sub-agent
+              pin. Renders nothing when no sub-agents are installed
+              (PinTargetSelect returns null). A PATCH failure keeps the
+              optimistic localPin; handleSend re-persists after the first
+              successful pinned send materializes a brand-new session. */}
+          <PinTargetSelect
+            agents={mentionAgents}
+            value={pinnedTarget}
+            onChange={(slug) => {
+              if (sessionId === undefined) return;
+              setLocalPin({ sessionId, slug });
+              void pinAgent(sessionId, slug).catch(() => {});
+            }}
+            disabled={sessionId === undefined}
+          />
           <div className="flex items-center gap-2">
             <input
               type="file"
