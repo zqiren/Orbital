@@ -58,7 +58,7 @@ def _mint(tmp_path, stem="chat_pin074_deadbeef"):
 
 def _start_meta(tmp_path, stem="chat_pin074_deadbeef"):
     p = tmp_path / "orbital" / "sessions" / f"{stem}.jsonl"
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         rec = json.loads(line)
@@ -799,24 +799,27 @@ class TestAgentsMdHashGuard:
         data-loss bug."""
         store, ws = _store_for(tmp_path)
         agent_md_seeder.reseed_project_agent_md(store, "proj_test")
-        edited = (ws / "AGENTS.md").read_text() + "\n## My own notes\nkeep me\n"
-        (ws / "AGENTS.md").write_text(edited)
+        # encoding pinned: the seeder writes utf-8; encoding-less read_text()
+        # decodes cp1252 on Windows and garbles the template's em-dash.
+        edited = (ws / "AGENTS.md").read_text(
+            encoding="utf-8") + "\n## My own notes\nkeep me\n"
+        (ws / "AGENTS.md").write_text(edited, encoding="utf-8")
 
         result = agent_md_seeder.reseed_project_agent_md(store, "proj_test")
         assert result["status"] == "skipped_user_modified"
-        assert (ws / "AGENTS.md").read_text() == edited
+        assert (ws / "AGENTS.md").read_text(encoding="utf-8") == edited
 
     def test_historical_seed_is_refreshed(self, tmp_path, monkeypatch):
         store, ws = _store_for(tmp_path)
         old_template = "# AGENTS.md v0\nProject: {project_name}\n"
         (ws / "AGENTS.md").write_text(old_template.format(
-            project_name="Proj074", agent_name="Proj074"))
+            project_name="Proj074", agent_name="Proj074"), encoding="utf-8")
         monkeypatch.setattr(
             agent_md_seeder, "_HISTORICAL_TEMPLATES", (old_template,))
 
         result = agent_md_seeder.reseed_project_agent_md(store, "proj_test")
         assert result["status"] == "reseeded"
-        content = (ws / "AGENTS.md").read_text()
+        content = (ws / "AGENTS.md").read_text(encoding="utf-8")
         assert content.startswith("# AGENTS.md — read this first")
 
     def test_scratch_is_skipped(self, tmp_path):
