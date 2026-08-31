@@ -24,6 +24,7 @@ from agent_os.budget.ledger import (
     LedgerEvent,
     ledger_path,
     append_event,
+    last_context_usage,
 )
 from agent_os.budget.normalize import NormalizedUsage
 
@@ -188,3 +189,86 @@ class TestReportedCostSerialization:
         )
         assert ev.reported_cost is None
         assert ev.reported_cost_currency is None
+
+
+class TestLastContextUsage:
+    """Read path behind GET /sessions/{id}/context.
+
+    The prompt size of the last management call IS the context in use: the
+    four normalized fields are disjoint, so uncached_input + cache_read +
+    cache_write reconstructs the whole prompt the provider billed for. No new
+    bookkeeping is needed to show a context meter — the ledger already has it.
+    """
+
+    def _append(self, root, *, session_id, source="management",
+                uncached=0, read=0, write=0, output=0,
+                provider="anthropic", model="claude-sonnet"):
+        append_event(
+            root,
+            LedgerEvent(
+                session_id=session_id, source=source,
+                provider=provider, model=model,
+                usage=NormalizedUsage(
+                    uncached_input=uncached, cache_read=read,
+                    cache_write=write, output=output,
+                ),
+            ),
+        )
+
+    def test_none_when_no_ledger(self, tmp_path):
+        """A session that has never made a call reports nothing, not zero."""
+        assert last_context_usage(str(tmp_path), "sess-1") is None
+
+    def test_sums_the_disjoint_input_fields(self, tmp_path):
+        """used = uncached + cache_read + cache_write. Output is NOT context."""
+        self._append(str(tmp_path), session_id="s1",
+                     uncached=1000, read=300, write=50, output=900)
+        got = last_context_usage(str(tmp_path), "s1")
+        assert got["used"] == 1350
+        assert got["provider"] == "anthropic"
+        assert got["model"] == "claude-sonnet"
+
+    def test_returns_the_latest_call_not_the_first(self, tmp_path):
+        """Context is the CURRENT prompt size, so the last row wins."""
+        self._append(str(tmp_path), session_id="s1", uncached=1000)
+        self._append(str(tmp_path), session_id="s1", uncached=4000)
+        assert last_context_usage(str(tmp_path), "s1")["used"] == 4000
+
+    def test_ignores_other_sessions(self, tmp_path):
+        """Sessions share one project ledger; the meter is per session."""
+        self._append(str(tmp_path), session_id="s1", uncached=1000)
+        self._append(str(tmp_path), session_id="s2", uncached=9000)
+        assert last_context_usage(str(tmp_path), "s1")["used"] == 1000
+
+    def test_ignores_sub_agent_rows(self, tmp_path):
+        """Sub-agents append to the same ledger but carry their OWN context.
+
+        Counting a worker's prompt as the management session's would make the
+        meter jump on every dispatch.
+        """
+        self._append(str(tmp_path), session_id="s1", uncached=1000)
+        self._append(str(tmp_path), session_id="s1",
+                     source="subagent:claude-code", uncached=90_000)
+        assert last_context_usage(str(tmp_path), "s1")["used"] == 1000
+
+    def test_none_when_session_has_only_sub_agent_rows(self, tmp_path):
+        self._append(str(tmp_path), session_id="s1",
+                     source="subagent:codex", uncached=5000)
+        assert last_context_usage(str(tmp_path), "s1") is None
+
+    def test_survives_a_corrupt_line(self, tmp_path):
+        """A torn write must not blank the meter."""
+        self._append(str(tmp_path), session_id="s1", uncached=1000)
+        with open(ledger_path(str(tmp_path)), "a", encoding="utf-8") as f:
+            f.write("{not json\n")
+        assert last_context_usage(str(tmp_path), "s1")["used"] == 1000
+
+    def test_reports_the_model_that_actually_served(self, tmp_path):
+        """Fallback rotation can change model mid-session; the window follows
+        the model that served the LAST call, not the project's pinned one."""
+        self._append(str(tmp_path), session_id="s1", uncached=1000,
+                     provider="deepseek", model="deepseek-chat")
+        self._append(str(tmp_path), session_id="s1", uncached=2000,
+                     provider="moonshot", model="kimi-k2.5")
+        got = last_context_usage(str(tmp_path), "s1")
+        assert (got["provider"], got["model"]) == ("moonshot", "kimi-k2.5")

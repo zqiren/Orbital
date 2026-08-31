@@ -56,7 +56,7 @@ def test_fresh_send_stops_live_adapter_then_respawns_fresh():
         return f"Stopped {handle}"
 
     async def fake_start(project_id, handle, depth=0, *, session_id=None,
-                         announce=True, fresh=False):
+                         announce=True, fresh=False, pinned=False):
         calls["start"].append({"handle": handle, "fresh": fresh, "announce": announce})
         skk = make_session_key(project_id, session_id)
         mgr._adapters.setdefault(skk, {})[handle] = _FakeAdapter(

@@ -309,6 +309,13 @@ export interface SessionListEntry {
    */
   pinned?: boolean;
   /**
+   * Slug of the sub-agent this chat session is pinned to (spec 074) — the
+   * composer's sticky "Talking to" selection — or null/absent when the
+   * session talks to the management agent. Same session_start meta record as
+   * `pinned`; absent on pre-074 logs, which read as unpinned.
+   */
+  pinned_target?: string | null;
+  /**
    * Origin of the session, persisted in the session_start meta and emitted by
    * the list API (agent_manager.list_sessions). 'chat' is the default for
    * manually started sessions; 'queue' marks dispatcher-minted sessions and

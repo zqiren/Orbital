@@ -162,6 +162,49 @@ describe('detectWorkspacePath — non-paths and false-positive guards', () => {
       relativePath: 'q3.html',
       kind: 'card',
     });
+  });
+});
+
+describe('detectWorkspacePath — :line / :line:col suffixes (spec 076)', () => {
+  it('strips a trailing :line from a relative path', () => {
+    expect(detectWorkspacePath('docs/notes.md:7', WS)).toEqual({
+      relativePath: 'docs/notes.md',
+      kind: 'card',
+    });
+  });
+
+  it('strips a trailing :line:col from a relative path', () => {
+    expect(detectWorkspacePath('src/main.py:7:12', WS)).toEqual({
+      relativePath: 'src/main.py',
+      kind: 'chip',
+    });
+  });
+
+  it('strips a trailing :line from an absolute in-workspace path', () => {
+    expect(detectWorkspacePath('/Users/you/repo/agent_output/README.md:7', WS)).toEqual({
+      relativePath: 'agent_output/README.md',
+      kind: 'card',
+    });
+  });
+
+  it('does NOT strip a non-numeric suffix like :7x', () => {
+    expect(detectWorkspacePath('docs/notes.md:7x', WS)).toBeNull();
+  });
+
+  it('still rejects a dotted-number string once the :line is stripped', () => {
+    // `1.2:3` strips to `1.2`, which the all-numeric guard must still catch.
+    expect(detectWorkspacePath('1.2:3', WS)).toBeNull();
+  });
+
+  it('does NOT turn a host:port into a path', () => {
+    expect(detectWorkspacePath('localhost:8000', WS)).toBeNull();
+  });
+
+  it('leaves suffix-free paths untouched', () => {
+    expect(detectWorkspacePath('q3.html', WS)).toEqual({
+      relativePath: 'q3.html',
+      kind: 'card',
+    });
     expect(detectWorkspacePath('src/v2.py', WS)).toEqual({
       relativePath: 'src/v2.py',
       kind: 'chip',

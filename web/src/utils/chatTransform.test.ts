@@ -1810,3 +1810,83 @@ describe('transformChatHistory — fanout join-summary parsing (Critical 1 + 3)'
     }
   });
 });
+
+describe('transformChatHistory — compaction marker', () => {
+  function compaction(timestamp = TS3): ChatMessage {
+    return {
+      role: 'system',
+      content: 'Summary of prior conversation.',
+      source: 'management',
+      timestamp,
+      _compaction: true,
+    } as ChatMessage;
+  }
+
+  it('surfaces the compaction row instead of dropping it', () => {
+    // The daemon has always persisted this marker and the transform has
+    // always thrown it away, so an auto-compaction — which costs a real LLM
+    // call and discards the middle of the conversation — was invisible.
+    const items = transformChatHistory([
+      user('first'),
+      compaction(),
+      { ...asst({ content: 'after', timestamp: TS4 }) },
+    ]);
+    expect(items.map((i) => i.type)).toEqual([
+      'user_message',
+      'compaction_marker',
+      'agent_message',
+    ]);
+  });
+
+  it('carries the marker timestamp', () => {
+    const items = transformChatHistory([user('x'), compaction(TS5)]);
+    const marker = items.find((i) => i.type === 'compaction_marker');
+    expect(marker).toMatchObject({ type: 'compaction_marker', timestamp: TS5 });
+  });
+
+  it('does NOT drop the summary body into the chat as an agent message', () => {
+    // The marker's content is the LLM-written summary meant for the model,
+    // not for the reader. Rendering it would dump a wall of recap text in
+    // the middle of the conversation.
+    const items = transformChatHistory([user('x'), compaction()]);
+    const texts = JSON.stringify(items);
+    expect(texts).not.toContain('Summary of prior conversation.');
+  });
+
+  it('is not a session boundary — it must not grey out the history above it', () => {
+    // session_separator drives the isHistorical pass. Reusing that type for
+    // compaction would mark every message before the compaction as belonging
+    // to an old session, which is a different (and wrong) claim.
+    const items = transformChatHistory([
+      user('before'),
+      compaction(),
+      { ...asst({ content: 'after', timestamp: TS4 }) },
+    ]);
+    expect(items.some((i) => i.type === 'session_separator')).toBe(false);
+    for (const item of items) {
+      expect((item as { isHistorical?: boolean }).isHistorical).toBeFalsy();
+    }
+  });
+
+  it('closes an open tool capsule before the marker', () => {
+    const items = transformChatHistory([
+      user('go'),
+      asst({ content: null, tool_calls: [tc('t1', 'read')], timestamp: TS2 }),
+      tool('t1', 'ok', TS2),
+      compaction(),
+    ]);
+    const order = items.map((i) => i.type);
+    expect(order.indexOf('compaction_marker')).toBeGreaterThan(order.indexOf('agent_run'));
+    expect(order[order.length - 1]).toBe('compaction_marker');
+  });
+
+  it('still greys history above a real session separator', () => {
+    const items = transformChatHistory([
+      { ...user('old'), session_id: 's1' },
+      { ...asst({ content: 'old reply', timestamp: TS2 }), session_id: 's1' },
+      { ...user('new'), session_id: 's2', timestamp: TS3 },
+    ]);
+    const first = items[0] as { isHistorical?: boolean };
+    expect(first.isHistorical).toBe(true);
+  });
+});

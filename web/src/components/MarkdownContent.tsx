@@ -28,12 +28,14 @@ interface MarkdownContentProps {
 const EXTERNAL_HREF_RE = /^(?:https?:)?\/\//i;
 
 /**
- * Render a plain anchor, externalizing http(s)/protocol-relative links so they
- * open in the system browser instead of navigating the desktop shell's single
- * webview frame (no back button — see agent_os/desktop/main.py's origin guard
- * for the defense-in-depth backstop on anything that slips past this).
- * In-page `#` anchors, relative hrefs, `mailto:`, and other schemes pass
- * through unchanged.
+ * Render an anchor with exactly three live cases (spec 076): external
+ * http(s)/protocol-relative links (externalized so they open in the system
+ * browser instead of navigating the desktop shell's single webview frame —
+ * see agent_os/desktop/main.py's origin guard for the backstop), in-page `#`
+ * anchors, and `mailto:`. Everything else — absolute file paths, undetected
+ * relative paths, foreign schemes like file:// — renders as an inert span
+ * keeping the raw href as `title`: any other same-origin href hits the SPA
+ * catch-all and reloads the whole app.
  */
 function renderAnchor(href: string | undefined, children: ReactNode) {
   if (href && EXTERNAL_HREF_RE.test(href)) {
@@ -43,7 +45,10 @@ function renderAnchor(href: string | undefined, children: ReactNode) {
       </a>
     );
   }
-  return <a href={href}>{children}</a>;
+  if (href && (href.startsWith('#') || href.toLowerCase().startsWith('mailto:'))) {
+    return <a href={href}>{children}</a>;
+  }
+  return <span title={href}>{children}</span>;
 }
 
 /** Inline clickable chip for a workspace path (source files + inline-code spans). */

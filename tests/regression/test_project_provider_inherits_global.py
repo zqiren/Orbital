@@ -35,9 +35,12 @@ def _manager(project: dict, global_llm):
     )
 
 
+# fallback_models/sdk grew on GlobalLLMSettings after this file was written;
+# the builder reads both, so the stand-in namespaces must carry them.
 GLOBAL = SimpleNamespace(
     provider="minimax", model="MiniMax-M3",
     base_url="https://api.minimaxi.com/v1", api_key=None,
+    sdk="openai", fallback_models=[],
 )
 
 
@@ -91,6 +94,7 @@ def test_cross_provider_project_does_not_inherit_global_api_key():
     global_with_key = SimpleNamespace(
         provider="minimax", model="MiniMax-M3",
         base_url="https://api.minimaxi.com/v1", api_key="minimax-key",
+        sdk="openai", fallback_models=[],
     )
     mgr = _manager(
         {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
@@ -111,6 +115,7 @@ def test_same_provider_project_still_inherits_global_base_url_and_key():
         SimpleNamespace(
             provider="minimax", model="MiniMax-M3",
             base_url="https://api.minimaxi.com/v1", api_key="shared-key",
+            sdk="openai", fallback_models=[],
         ),
     )
     cfg = mgr._build_agent_config_from_project("proj")
@@ -120,15 +125,15 @@ def test_same_provider_project_still_inherits_global_base_url_and_key():
 
 # --- Same invariant, second entry point: POST /agents/start -----------------
 #
-# The rule above is enforced in `_build_agent_config_from_project`, but the
-# start route builds its own AgentConfig inline (it must: the canonical builder
-# omits llm_fallback_models, agent_slug, agent_credentials and
-# global_preferences_path). Its base_url/api_key fallback had no notion of
-# provider, so a project pinned to one provider with an empty endpoint field
-# silently borrowed the GLOBAL provider's endpoint — sending the project's key
-# to someone else's API. Caught live: a project on opencode-zen/hy3-free with
-# base_url unset reached tokendance.space and came back
-# `401 API 密钥不存在`.
+# Historically the start route built its own AgentConfig inline, and its
+# base_url/api_key fallback had no notion of provider — a project pinned to
+# one provider with an empty endpoint field silently borrowed the GLOBAL
+# provider's endpoint, sending the project's key to someone else's API.
+# Caught live: a project on opencode-zen/hy3-free with base_url unset reached
+# tokendance.space and came back `401 API 密钥不存在`. The route now delegates
+# to `_build_agent_config_from_project` (three-way parity, see
+# tests/unit/test_agent_config_parity.py); these tests pin the resolved
+# values a real manager hands the route.
 
 import pytest
 from unittest.mock import AsyncMock
@@ -152,21 +157,33 @@ def start_client(monkeypatch):
     global_llm = SimpleNamespace(
         provider="tokendance", model="deepseek-v4-flash",
         base_url="https://tokendance.space/gateway/v1",
-        api_key="sk-global-tokendance-key", fallback_models=[],
+        api_key="sk-global-tokendance-key", sdk="openai", fallback_models=[],
     )
     settings_store = MagicMock()
     settings_store.get = MagicMock(return_value=SimpleNamespace(llm=global_llm))
     credential_store = MagicMock()
     credential_store.get_api_key = MagicMock(return_value="sk-global-tokendance-key")
 
-    manager = MagicMock()
+    # The route derives config via the manager's canonical builder, so the
+    # manager must be real; only the start itself is mocked out.
+    registry = ProviderRegistry()
+    manager = AgentManager(
+        project_store=project_store,
+        ws_manager=MagicMock(),
+        sub_agent_manager=MagicMock(),
+        activity_translator=MagicMock(),
+        process_manager=MagicMock(),
+        provider_registry=registry,
+        settings_store=settings_store,
+        credential_store=credential_store,
+    )
     manager.start_agent = AsyncMock(return_value=None)
 
     monkeypatch.setattr(agents_v2, "_project_store", project_store)
     monkeypatch.setattr(agents_v2, "_settings_store", settings_store)
     monkeypatch.setattr(agents_v2, "_credential_store", credential_store)
     monkeypatch.setattr(agents_v2, "_agent_manager", manager)
-    monkeypatch.setattr(agents_v2, "_provider_registry", ProviderRegistry())
+    monkeypatch.setattr(agents_v2, "_provider_registry", registry)
 
     app = FastAPI()
     app.include_router(agents_v2.router)
@@ -212,3 +229,107 @@ def test_start_route_still_inherits_within_the_same_provider(start_client):
     config = _started_config(manager)
     assert config.base_url == "https://tokendance.space/gateway/v1"
     assert config.api_key == "sk-global-tokendance-key"
+
+
+# --- Spec 072 rider: sdk inherits with the model -----------------------------
+#
+# `AgentConfig.sdk` was always `project.get("sdk", "openai")`, even when
+# model/provider/key/base_url all inherited globally — so a global
+# Custom/self-hosted Anthropic-compatible setup ran a project without an
+# override over OpenAI /chat/completions. When the project has no model of its
+# own, sdk resolves global.llm.sdk → project sdk → "openai".
+
+GLOBAL_ANTHROPIC_CUSTOM = SimpleNamespace(
+    provider="custom", model="my-anthropic-router",
+    base_url="https://router.example/v1", api_key="sk-router",
+    sdk="anthropic", fallback_models=[],
+)
+
+
+def test_project_without_model_inherits_global_sdk():
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "custom", "model": "",
+         "base_url": None, "sdk": "openai", "api_key": ""},
+        GLOBAL_ANTHROPIC_CUSTOM,
+    )
+    cfg = mgr._build_agent_config_from_project("proj")
+    assert cfg.model == "my-anthropic-router"
+    assert cfg.sdk == "anthropic"  # <-- the fix (was "openai")
+    # And the built client speaks the Anthropic wire protocol.
+    provider, _, _, _ = mgr._build_llm_providers(cfg)
+    assert provider.sdk == "anthropic"
+
+
+def test_project_with_own_model_keeps_its_own_sdk():
+    """A model-pinned project keeps its own protocol — the global sdk must not
+    leak into an explicitly self-hosted setup."""
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "custom", "model": "my-local-model",
+         "base_url": "http://localhost:1234/v1", "sdk": "openai", "api_key": "k"},
+        GLOBAL_ANTHROPIC_CUSTOM,
+    )
+    cfg = mgr._build_agent_config_from_project("proj")
+    assert cfg.sdk == "openai"
+
+
+# --- Spec 072: auth-fallback rung presence/absence matrix --------------------
+#
+# The rung exists exactly when the global default is materially usable
+# (model AND key) and its key differs from the resolved primary key. It is a
+# wholesale global snapshot — never a mix of project and global fields.
+
+GLOBAL_USABLE = SimpleNamespace(
+    provider="minimax", model="MiniMax-M3",
+    base_url="https://api.minimaxi.com/v1", api_key="sk-global",
+    sdk="openai", fallback_models=[],
+)
+
+
+def test_auth_rung_present_for_byok_project():
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
+         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
+         "api_key": "sk-project"},
+        GLOBAL_USABLE,
+    )
+    af = mgr._build_agent_config_from_project("proj").auth_fallback
+    assert af is not None
+    assert (af.provider, af.model, af.base_url, af.api_key, af.sdk) == (
+        "minimax", "MiniMax-M3", "https://api.minimaxi.com/v1",
+        "sk-global", "openai",
+    )
+
+
+def test_auth_rung_absent_when_project_inherits_the_global_key():
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "custom", "model": "",
+         "base_url": None, "sdk": "openai", "api_key": ""},
+        GLOBAL_USABLE,
+    )
+    cfg = mgr._build_agent_config_from_project("proj")
+    assert cfg.api_key == "sk-global"  # inherited — nothing different to try
+    assert cfg.auth_fallback is None
+
+
+def test_auth_rung_absent_when_global_has_no_key():
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
+         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
+         "api_key": "sk-project"},
+        SimpleNamespace(provider="minimax", model="MiniMax-M3",
+                        base_url="https://api.minimaxi.com/v1", api_key=None,
+                        sdk="openai", fallback_models=[]),
+    )
+    assert mgr._build_agent_config_from_project("proj").auth_fallback is None
+
+
+def test_auth_rung_absent_when_global_has_no_model():
+    mgr = _manager(
+        {"workspace": "/tmp/x", "provider": "moonshot", "model": "kimi-k2.5",
+         "base_url": "https://api.moonshot.cn/v1", "sdk": "openai",
+         "api_key": "sk-project"},
+        SimpleNamespace(provider="minimax", model=None,
+                        base_url="https://api.minimaxi.com/v1",
+                        api_key="sk-global", sdk="openai", fallback_models=[]),
+    )
+    assert mgr._build_agent_config_from_project("proj").auth_fallback is None

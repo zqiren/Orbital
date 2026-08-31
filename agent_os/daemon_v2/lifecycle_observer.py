@@ -29,6 +29,55 @@ class LifecycleObserver:
         # injection is absorbed into the group's single join summary instead
         # of firing individually.
         self.fanout_registry = None
+        # Pinned-dispatch registry (spec 074). SubAgentManager pushes the
+        # initiator of each dispatch here (``set_dispatch_initiator``) at
+        # dispatch time; the terminal-event methods below read it to decide
+        # whether to stamp the OPT-IN ``suppress_wake`` flag on their meta.
+        # Kept HERE (push model) rather than resolved through a wired-in
+        # callback because ``_lifecycle_observer`` is attached to
+        # SubAgentManager post-construction — a pull would depend on wiring
+        # order. A key stays pinned until a later non-pinned dispatch for the
+        # same (project, session, handle) overwrites it, so straggler
+        # terminals of a pinned exchange (stop, queue-drop) stay suppressed.
+        # Unknown keys read as NOT pinned — fail-open to today's wake.
+        self._pinned_dispatches: set[tuple[str, str | None, str]] = set()
+        # Quiescence hook (spec 074): ``(project_id, session_id) -> None``,
+        # wired by agents_v2.configure to the pinned-consolidation
+        # coordinator. Fired on every SUPPRESSED (pinned) terminal event so
+        # the 10-minute quiet-period timer starts/resets. None → no-op.
+        self.pinned_terminal_hook = None
+
+    def set_dispatch_initiator(self, project_id: str, handle: str,
+                               initiator: str, *,
+                               session_id: str | None = None) -> None:
+        """Record who initiated the CURRENT dispatch for this handle.
+
+        ``initiator == "user_pinned"`` marks the key pinned; anything else
+        clears it. Called by ``SubAgentManager._dispatch_prompt_locked`` for
+        every dispatch (immediate and queue-drained), so the registry always
+        reflects the latest turn's initiator when its terminal event fires.
+        """
+        key = (project_id, session_id, handle)
+        if initiator == "user_pinned":
+            self._pinned_dispatches.add(key)
+        else:
+            self._pinned_dispatches.discard(key)
+
+    def _is_pinned_dispatch(self, project_id: str, handle: str,
+                            session_id: str | None) -> bool:
+        return (project_id, session_id, handle) in self._pinned_dispatches
+
+    def _fire_pinned_terminal_hook(self, project_id: str,
+                                   session_id: str | None) -> None:
+        """Kick the quiescence timer for a pinned terminal event. Never raises."""
+        if self.pinned_terminal_hook is None:
+            return
+        try:
+            self.pinned_terminal_hook(project_id, session_id)
+        except Exception:
+            logger.exception(
+                "pinned_terminal_hook raised for %s/%s", project_id, session_id,
+            )
 
     def _absorb_terminal(self, project_id: str, handle: str,
                          session_id: str | None, *, kind: str,
@@ -131,6 +180,13 @@ class LifecycleObserver:
             meta["transcript_path"] = transcript_path
         if content != display_content:
             meta["display_content"] = display_content
+        if initiator == "user_pinned":
+            # Spec 074: while pinned the management LLM takes ZERO turns —
+            # not on dispatch either. The marker row still lands in the
+            # session JSONL (the timeline and a later management turn read
+            # it); suppress_wake only stops it from starting a loop. No
+            # supervision guidance: nobody is supervising by design.
+            meta["suppress_wake"] = True
         await self._inject(project_id, content, session_id=session_id,
                            meta=meta or None)
 
@@ -226,6 +282,7 @@ class LifecycleObserver:
                 "the user — briefly tell the user the outcome yourself."
             )
         content = display_content + guidance
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="completed",
             summary=summary_text, transcript_path=transcript_path,
@@ -236,11 +293,16 @@ class LifecycleObserver:
             # management agent only noticed its sub-agent had finished the
             # next time the user typed. Same wake tag as the negative
             # terminals below — display_content stays untouched.
+            # suppress_wake (spec 074) is OPT-IN, stamped only for pinned
+            # dispatches: the row still lands, the manager never wakes.
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "completed",
-                      "display_content": display_content},
+                      "display_content": display_content,
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.completed",
             "project_id": project_id,
@@ -254,6 +316,7 @@ class LifecycleObserver:
                        *, session_id: str | None = None) -> None:
         """Sub-agent encountered an error."""
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="error",
             summary=error, transcript_path=transcript_path,
@@ -264,8 +327,11 @@ class LifecycleObserver:
             # the management loop instead of silently appending it.
             await self._inject(
                 project_id, content, session_id=session_id,
-                meta={"event": "sub_agent_terminal", "kind": "error"},
+                meta={"event": "sub_agent_terminal", "kind": "error",
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.error",
             "project_id": project_id,
@@ -292,6 +358,7 @@ class LifecycleObserver:
         # task's dispatch-time path already recorded in the fanout group
         # (FanoutRegistry.absorb_terminal keeps the existing value when
         # passed a falsy transcript_path).
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="failed",
             summary=reason, transcript_path="",
@@ -300,8 +367,11 @@ class LifecycleObserver:
             # meta.kind (backlog #23 D1) — see on_error above.
             await self._inject(
                 project_id, content, session_id=session_id,
-                meta={"event": "sub_agent_terminal", "kind": "failed"},
+                meta={"event": "sub_agent_terminal", "kind": "failed",
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.failed",
             "project_id": project_id,
@@ -312,7 +382,8 @@ class LifecycleObserver:
 
     async def on_queue_dropped(self, project_id: str, handle: str, *,
                                why: str,
-                               session_id: str | None = None) -> None:
+                               session_id: str | None = None,
+                               initiator: str | None = None) -> None:
         """A queued prompt was discarded before it ever reached the sub-agent.
 
         Backlog #35a. These rows used to be written through ``on_failed``,
@@ -332,8 +403,18 @@ class LifecycleObserver:
         so a fanout worker's dropped queue still lands in the group's join
         summary rather than a per-worker session it no longer owns; kind maps
         to the same task status ``failed`` did, so the join is unchanged.
+
+        ``initiator`` (spec 074): the DROPPED prompt's own initiator, passed
+        by ``_mark_queued_prompts_dropped`` — a queued-but-never-dispatched
+        prompt never reached ``set_dispatch_initiator``, so the registry key
+        may reflect a different turn. Explicit beats lookup here; ``None``
+        falls back to the registry.
         """
         content = f"[Sub-agent] {handle} queued message dropped: {why}."
+        if initiator is not None:
+            pinned = initiator == "user_pinned"
+        else:
+            pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="queue_dropped",
             summary=f"queued message dropped: {why}", transcript_path="",
@@ -348,8 +429,11 @@ class LifecycleObserver:
             # it either way.
             await self._inject(
                 project_id, content, session_id=session_id,
-                meta={"event": "sub_agent_terminal", "kind": "queue_dropped"},
+                meta={"event": "sub_agent_terminal", "kind": "queue_dropped",
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
 
     async def on_user_stopped(self, project_id: str, handle: str, *,
                               terminated: list[str] | None = None,
@@ -370,6 +454,7 @@ class LifecycleObserver:
             )
         # No transcript_path parameter on this event either — "" defers to
         # the task's already-recorded transcript path (see on_failed above).
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="stopped",
             summary=content, transcript_path="",
@@ -378,8 +463,11 @@ class LifecycleObserver:
             # meta.kind (backlog #23 D1) — see on_error above.
             await self._inject(
                 project_id, content, session_id=session_id,
-                meta={"event": "sub_agent_terminal", "kind": "stopped"},
+                meta={"event": "sub_agent_terminal", "kind": "stopped",
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.stopped",
             "project_id": project_id,
@@ -407,6 +495,7 @@ class LifecycleObserver:
             f"No result was produced. The agent remains available. "
             f"Transcript: {transcript_path}"
         )
+        pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="interrupted",
             summary="turn interrupted before completion",
@@ -420,8 +509,11 @@ class LifecycleObserver:
             # `_absorb_terminal` call above.
             await self._inject(
                 project_id, content, session_id=session_id,
-                meta={"event": "sub_agent_terminal", "kind": "interrupted"},
+                meta={"event": "sub_agent_terminal", "kind": "interrupted",
+                      **({"suppress_wake": True} if pinned else {})},
             )
+        if pinned:
+            self._fire_pinned_terminal_hook(project_id, session_id)
         self._ws.broadcast(project_id, {
             "type": "sub_agent.turn_interrupted",
             "project_id": project_id,

@@ -46,6 +46,47 @@ _POSITIONAL_EVENT_TAGS: frozenset[str] = frozenset({
     "interaction_required",
 })
 
+# Fraction of the model's raw context window at which the next turn boundary
+# compacts. See compaction_threshold_tokens() for why this is taken off the raw
+# window rather than the usable budget.
+_COMPACT_FRACTION = 0.80
+
+# Tokens held back for the model's reply. The daemon never overrides this, so
+# it is also what a read-only caller (the context endpoint) must assume.
+DEFAULT_RESPONSE_RESERVE = 20_000
+
+
+def compaction_threshold_tokens(
+    window: int, reserve: int = DEFAULT_RESPONSE_RESERVE,
+) -> int:
+    """Prompt size at which the next turn boundary compacts.
+
+    ``_COMPACT_FRACTION`` of the RAW window, not of the usable budget. The
+    composer's context line draws a bar spanning the whole window and marks
+    this point on it; deriving the trigger from the budget put that mark
+    anywhere between 31% (32k models) and 78% (1M) of the bar, because the
+    fixed reply reserve is a third of a small window and a rounding error in a
+    large one. Off the raw window it sits at a flat 80% for every model in
+    ``providers.json`` bar two.
+
+    The fallback protects those two. 80% of a 32k window leaves 6.5k — a third
+    of the reserve — so anything under ``5 * reserve`` (the size at which 20%
+    of the window IS the reserve) keeps the original budget-derived rule, and
+    those models' behaviour is unchanged.
+
+    Module-level and pure on purpose: the API's context endpoint computes the
+    mark the UI draws from THIS function, so the mark cannot drift away from
+    the trigger it claims to predict.
+    """
+    if window - _COMPACT_FRACTION * window >= reserve:
+        return int(_COMPACT_FRACTION * window)
+    budget_rule = int(_COMPACT_FRACTION * (window - reserve))
+    # A window at or under the reserve makes the budget rule zero or negative,
+    # which would read as "always compact" and loop the agent through
+    # compaction forever. No registry entry is that small (32k is the floor),
+    # but the trigger must not be a landmine if one ever is.
+    return budget_rule if budget_rule > 0 else int(_COMPACT_FRACTION * window)
+
 # Frame for the per-call runtime block so the model reads it as an injected
 # runtime note rather than something the user typed (backlog #38).
 _RUNTIME_MARKER = "[runtime]"
@@ -61,7 +102,7 @@ class ContextManager:
         prompt_builder,
         base_prompt_context: PromptContext,
         model_context_limit: int = 128_000,
-        response_reserve: int = 20_000,
+        response_reserve: int = DEFAULT_RESPONSE_RESERVE,
         workspace_files=None,
         sub_agent_provider=None,
         scope_projects_provider=None,
@@ -96,6 +137,7 @@ class ContextManager:
         )  # callable() -> str
         self._cold_resume_injected: bool = False
         self._last_usage_pct: float = 0.0
+        self._last_used_tokens: float = 0.0
         self._window_factor: float = 1.0
         self._recovery_injected: bool = False
 
@@ -107,8 +149,15 @@ class ContextManager:
     def model_context_limit(self) -> int:
         return self._model_context_limit
 
+    @property
+    def compaction_threshold_tokens(self) -> int:
+        """This session's compaction trigger — see the module-level function."""
+        return compaction_threshold_tokens(
+            self._model_context_limit, self._response_reserve,
+        )
+
     def should_compact(self) -> bool:
-        return self._last_usage_pct > 0.80
+        return self._last_used_tokens >= self.compaction_threshold_tokens
 
     def reduce_window(self, factor: float = 0.5) -> None:
         self._window_factor *= factor
@@ -396,8 +445,12 @@ class ContextManager:
         # tail as a POSITIONAL turn — see _attach_runtime_block.
         self._attach_runtime_block(result, truly_dynamic)
 
-        # Update usage percentage
+        # Update usage percentage. `_last_used_tokens` is the measured prompt
+        # size and drives should_compact(); `_last_usage_pct` stays a ratio of
+        # the usable budget because that is what the sliding window and the
+        # prompt's own hygiene warnings are scaled against.
         total_tokens = sum(estimate_message_tokens(m) for m in result)
+        self._last_used_tokens = total_tokens
         if available_budget > 0:
             self._last_usage_pct = total_tokens / available_budget
         else:

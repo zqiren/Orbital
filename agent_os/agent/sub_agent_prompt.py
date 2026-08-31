@@ -40,6 +40,23 @@ def _memory_md_path(workspace: str, agent_slug: str) -> str:
     )
 
 
+def _pinned_retraction_titles(workspace: str) -> list[str]:
+    """Titles of every user retraction, for the pinned-mode contract.
+
+    Closes the append-resurrection window (spec 074 §3.5): a pinned worker
+    writes Layer-1 directly, outside the chokepoint that reconciles
+    retractions, so the prompt itself must carry the "never add entries
+    about" list until the next consolidation pass. Best-effort: an unreadable
+    file yields an empty list, never a render failure.
+    """
+    try:
+        from agent_os.agent.retractions import list_retractions
+        rs = list_retractions(ProjectPaths(workspace).orbital_dir)
+    except Exception:
+        return []
+    return [r.title for r in rs if r.title]
+
+
 def _list_skill_files(skills_dir: str) -> list[str]:
     """Return sorted skill .md filenames at the top level of skills_dir.
 
@@ -69,6 +86,8 @@ def render_sub_agent_prompt(
     namespace: str | None,
     agent_slug: str,
     enabled_sub_agents: list[str],
+    *,
+    pinned: bool = False,
 ) -> str:
     """Render the sub-agent inheritance system prompt.
 
@@ -80,6 +99,11 @@ def render_sub_agent_prompt(
             including the current one. Peers whose MEMORY.md does not yet
             exist on disk are omitted from the rendered prompt to avoid
             steering the agent to issue Read calls that fail.
+        pinned: Spec 074 — this spawn serves a chat session pinned directly
+            to this worker (no management agent mediates). The Layer-1 ban is
+            REPLACED by the narrow append/targeted-edit write contract plus
+            the current retraction titles. Non-pinned output is byte-identical
+            to before the flag existed.
 
     Returns:
         The full rendered system prompt string. Callers must not cache it.
@@ -155,16 +179,65 @@ def render_sub_agent_prompt(
         for peer_path in peers_with_memory:
             lines.append(f"- {peer_path}")
 
-    lines.append("")
-    lines.append("Do NOT modify these orbital-managed files:")
-    lines.append(
-        "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md,"
-    )
-    lines.append(
-        "instructions/, sub_agents/ (other than your own MEMORY.md)."
-    )
-    lines.append("You can read them; do not write to them.")
-    lines.append("")
+    if pinned:
+        # Spec 074 §3.5/§3.6 — pinned-mode enrichment. Replaces the standard
+        # Layer-1 ban below for pinned spawns ONLY: the user is talking to
+        # this worker directly, so it is the session's only Layer-1 writer
+        # and gets a narrow append/targeted-edit contract ("workers add, the
+        # system tidies"). A background consolidation pass stamps/dedupes.
+        lines.append("")
+        lines.append(
+            "PINNED MODE: you are conversing directly with the user; no "
+            "manager is mediating this conversation."
+        )
+        lines.append(
+            f"The user's standing goals and directives live under "
+            f"{paths.instructions_dir}{os.sep} — read them; they apply to "
+            f"you directly."
+        )
+        lines.append("")
+        lines.append("Project memory write contract (pinned mode):")
+        lines.append(
+            f"- APPEND entries to {paths.decisions} and {paths.lessons} when "
+            "a decision lands or a lesson is learned."
+        )
+        lines.append(
+            f"- APPEND to or make TARGETED EDITS of individual entries in "
+            f"{paths.project_state} to keep current state accurate."
+        )
+        lines.append(
+            "- Write plain markdown bullets — NO metadata comment grammar "
+            "(no ids, no <!--mem--> comments); the system stamps entries "
+            "mechanically."
+        )
+        lines.append(
+            "- NEVER reorganize, dedupe, trim, or rewrite these files "
+            f"wholesale, and NEVER touch {paths.index} — cleanup and project "
+            "chores stay with the system. Workers add, the system tidies."
+        )
+        retraction_titles = _pinned_retraction_titles(workspace)
+        if retraction_titles:
+            lines.append(
+                "- The user retracted these topics — NEVER add entries "
+                "about: " + "; ".join(retraction_titles) + ". They may only "
+                "return by explicit user request."
+            )
+        lines.append(
+            "Do not modify the other orbital-managed files (instructions/, "
+            "sub_agents/ other than your own MEMORY.md)."
+        )
+        lines.append("")
+    else:
+        lines.append("")
+        lines.append("Do NOT modify these orbital-managed files:")
+        lines.append(
+            "PROJECT_STATE.md, DECISIONS.md, LESSONS.md, INDEX.md,"
+        )
+        lines.append(
+            "instructions/, sub_agents/ (other than your own MEMORY.md)."
+        )
+        lines.append("You can read them; do not write to them.")
+        lines.append("")
     lines.append(
         "For your work artifacts (reports, generated files, screenshots, etc.),"
     )

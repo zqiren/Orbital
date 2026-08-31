@@ -570,3 +570,43 @@ def spend(
         "converted_total": converted_total,
         "breakdown": breakdown,
     }
+
+
+def last_context_usage(project_dir: str, session_id: str) -> dict | None:
+    """Prompt size of the most recent MANAGEMENT call for ``session_id``.
+
+    This is the whole read path behind the composer's context meter. No new
+    bookkeeping was needed for it: every management response already appends a
+    row here, and because ``NormalizedUsage``'s four fields are disjoint,
+    ``uncached_input + cache_read + cache_write`` reconstructs the exact prompt
+    the provider billed for — provider-reported, not the ``len/4`` estimate
+    ``ContextManager`` uses internally.
+
+    Sub-agent rows land in the same project ledger but carry their own
+    contexts, so they are filtered out; counting one would make the meter jump
+    on every dispatch. ``provider``/``model`` come from the row rather than the
+    project config so a mid-session fallback rotation moves the window with the
+    model that actually served.
+
+    Returns ``None`` when the session has never made a management call — the
+    caller renders nothing, which is different from rendering zero.
+    """
+    latest: dict | None = None
+    for rec in _iter_events(ledger_path(project_dir)):
+        if rec.get("session_id") != session_id:
+            continue
+        if rec.get("source") != SOURCE_MANAGEMENT:
+            continue
+        latest = rec
+    if latest is None:
+        return None
+    used = sum(
+        int(latest.get(f) or 0)
+        for f in ("uncached_input", "cache_read", "cache_write")
+    )
+    return {
+        "used": used,
+        "provider": latest.get("provider", ""),
+        "model": latest.get("model", ""),
+        "ts": latest.get("ts", ""),
+    }

@@ -27,10 +27,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.skills import SkillLoader
-from agent_os.daemon_v2.agent_md_seeder import seed_project_agent_md
+from agent_os.daemon_v2.agent_md_seeder import (
+    reseed_project_agent_md,
+    seed_project_agent_md,
+)
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
 from agent_os.daemon_v2.provider_errors import ProviderConfigError
+from agent_os.utils.file_lock import FileLockError
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.routes._attachment_formatter import (
     validate_attachments,
@@ -245,6 +249,13 @@ class InjectRequest(BaseModel):
     content: str
     target: str | None = None
     nonce: str | None = None
+    # Spec 074: True when the client resolved ``target`` from the composer's
+    # sticky "Talking to" dropdown (the session pin) rather than a leading
+    # @mention. Maps to ``initiator="user_pinned"`` — the dispatch whose
+    # terminal events are wake-suppressed (the management LLM takes zero
+    # turns). A plain @mention keeps ``initiator="user_mention"`` and today's
+    # manager-supervises semantics. Ignored without ``target``.
+    pinned: bool = False
     attachments: list[InjectAttachment] | None = None
     # F1 (user-facing chat thread id) — select which chat session within
     # the project to deliver the message to. Omitting it means "use
@@ -368,13 +379,14 @@ _credential_store = None
 _trigger_manager = None
 _provider_registry = None
 _lifecycle_observer = None
+_pinned_consolidation = None
 
 
 def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
               setup_engine=None, settings_store=None, credential_store=None,
               trigger_manager=None, provider_registry=None, lifecycle_observer=None):
     """Called by app factory to inject dependencies."""
-    global _project_store, _agent_manager, _ws_manager, _sub_agent_manager, _setup_engine, _settings_store, _credential_store, _trigger_manager, _provider_registry, _lifecycle_observer
+    global _project_store, _agent_manager, _ws_manager, _sub_agent_manager, _setup_engine, _settings_store, _credential_store, _trigger_manager, _provider_registry, _lifecycle_observer, _pinned_consolidation
     _project_store = project_store
     _agent_manager = agent_manager
     _ws_manager = ws_manager
@@ -385,6 +397,24 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
     _trigger_manager = trigger_manager
     _provider_registry = provider_registry
     _lifecycle_observer = lifecycle_observer
+    # Spec 074: pinned-chat consolidation coordinator (unpin/retarget +
+    # quiescence triggers). Built here — configure() is the one place that
+    # holds both the agent manager and the lifecycle observer — and wired to
+    # the observer's pinned-terminal hook so every suppressed terminal event
+    # starts/resets the quiet-period timer.
+    if agent_manager is not None:
+        from agent_os.daemon_v2.pinned_consolidation import (
+            PinnedConsolidationCoordinator,
+        )
+        _pinned_consolidation = PinnedConsolidationCoordinator(
+            agent_manager, project_store,
+        )
+        if lifecycle_observer is not None:
+            lifecycle_observer.pinned_terminal_hook = (
+                _pinned_consolidation.note_pinned_terminal
+            )
+    else:
+        _pinned_consolidation = None
 
 
 def _provider_currency(provider: str, model: str) -> str:
@@ -1181,12 +1211,162 @@ async def cold_start_scan(project_id: str):
     return {"status": "started", "session_id": session_id}
 
 
+# ---- Spec 074 §3.4: transcript recap preamble for pinned dispatches ----
+
+# Total budget for the recap block (mirrors _build_session_summary's cap) and
+# the per-message excerpt cap inside it.
+_RECAP_CAP_CHARS = 10_000
+_RECAP_LINE_CAP = 500
+
+# Extracts the summary text out of a completed-terminal row's display copy
+# ("[Sub-agent] {handle} completed. Summary: {text}. Transcript: {path}.").
+# Greedy body + the literal tail anchors on the LAST ". Transcript: ", so
+# summaries containing periods survive. The handle is deliberately dropped —
+# recap replies are worker-ANONYMOUS ("assistant").
+_RECAP_COMPLETED_RE = re.compile(
+    r"\[Sub-agent\] \S+ completed\. Summary: ([\s\S]*)\. Transcript: "
+)
+
+
+def _recap_scope(messages: list, handle: str) -> list:
+    """Messages after ``handle``'s last participation in this session.
+
+    Participation = a user row targeted at the handle, a dispatch-marker row
+    whose ``_meta.handle`` is the handle, or one of the handle's own terminal
+    rows (their content starts with ``[Sub-agent] {handle} `` — terminal meta
+    carries no handle field). Never participated → the whole session. An
+    empty result means the worker's own thread already holds the conversation
+    (own-thread resume) — no recap.
+    """
+    own_prefix = f"[Sub-agent] {handle} "
+    last = -1
+    for i, m in enumerate(messages):
+        meta = m.get("_meta") or {}
+        if m.get("role") == "user" and m.get("target") == handle:
+            last = i
+        elif meta.get("handle") == handle:
+            last = i
+        elif meta.get("event") == "sub_agent_terminal":
+            text = meta.get("display_content") or m.get("content") or ""
+            if isinstance(text, str) and text.startswith(own_prefix):
+                last = i
+    return messages[last + 1:]
+
+
+def _build_recap_preamble(session, handle: str) -> str:
+    """Build the capped, worker-anonymous "Conversation so far" block.
+
+    Content: user messages plus prior reply summaries — management replies
+    verbatim and sub-agent completion summaries extracted from their terminal
+    rows — every reply labeled "assistant", never naming the producing agent.
+    Framed as a visible context block (not fabricated turns), newest-favored
+    under the ~10k-char cap, prepended to the pinned worker's first message
+    by the inject route. Returns "" when there is nothing the worker missed.
+    """
+    try:
+        messages = session.get_messages()
+    except Exception:
+        return ""
+    lines: list[str] = []
+    total = 0
+    for m in reversed(_recap_scope(messages, handle)):
+        role = m.get("role")
+        content = m.get("content")
+        line = None
+        if role in ("user", "assistant"):
+            if isinstance(content, str) and content.strip():
+                label = "user" if role == "user" else "assistant"
+                line = f"{label}: {content.strip()[:_RECAP_LINE_CAP]}"
+        elif role == "system":
+            meta = m.get("_meta") or {}
+            if (meta.get("event") == "sub_agent_terminal"
+                    and meta.get("kind") == "completed"):
+                display = meta.get("display_content") or (
+                    content if isinstance(content, str) else "")
+                match = _RECAP_COMPLETED_RE.match(display)
+                if match:
+                    summary = match.group(1).strip()
+                    if summary and summary != "(no output)":
+                        line = f"assistant: {summary[:_RECAP_LINE_CAP]}"
+        if line is None:
+            continue
+        if total + len(line) > _RECAP_CAP_CHARS:
+            break
+        lines.append(line)
+        total += len(line)
+    if not lines:
+        return ""
+    lines.reverse()
+    return (
+        "Conversation so far (earlier messages in this chat, provided as "
+        "context; prior replies are labeled \"assistant\"):\n\n"
+        + "\n\n".join(lines)
+        + "\n\n--- end of conversation so far ---\n\n"
+    )
+
+
+# The session JSONL's advisory lock is held in short bursts by concurrent
+# same-process writers — the pin PATCH's load + meta-rewrite is the known
+# collider (the composer fires it fire-and-forget, so a send routinely lands
+# inside the burst). The lock itself is non-blocking with zero retries, so
+# the inject route absorbs contention here: brief exponential backoff, then
+# a clean retryable failure instead of an unhandled 500.
+_LOCK_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+async def _retry_session_lock(fn):
+    """Run ``fn``, retrying while the session file's lock is contended.
+
+    ``fn`` may return a plain value (sync call sites run each attempt on the
+    event loop, unchanged from before) or an awaitable (``asyncio.to_thread``
+    call sites); the backoff sleeps yield so the lock holder can finish. The
+    final attempt's ``FileLockError`` propagates to the caller.
+    """
+    import inspect
+
+    async def _attempt():
+        result = fn()
+        return await result if inspect.isawaitable(result) else result
+
+    for delay in _LOCK_RETRY_DELAYS:
+        try:
+            return await _attempt()
+        except FileLockError:
+            await asyncio.sleep(delay)
+    return await _attempt()
+
+
 @router.post("/agents/{project_id}/inject")
 async def inject_message(project_id: str, req: InjectRequest):
     # Verify project exists before attempting inject
     project = _project_store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Spec 074 §3.4: recap preamble for a pinned worker starting a thread
+    # that lacks this session's prior conversation. Resolved BEFORE the user
+    # message is persisted so the recap covers strictly prior rows, and the
+    # resolved concrete session id is reused for persistence (a None
+    # session_id must not be minted twice). The recap rides ONLY the
+    # dispatched message body — the persisted chat row stays the user's
+    # authored text. No LLM call anywhere in this path.
+    recap_preamble = ""
+    inject_session_id = req.session_id
+    if req.target and req.pinned and _sub_agent_manager is not None:
+        try:
+            inject_session_id, prior_session = await _retry_session_lock(
+                lambda: _agent_manager.peek_chat_session(
+                    project_id, req.session_id,
+                ))
+            if prior_session is not None:
+                recap_preamble = _build_recap_preamble(prior_session, req.target)
+        except Exception:
+            logger.warning(
+                "recap preamble build failed for %s/%s — dispatching without",
+                project_id, req.target, exc_info=True,
+            )
+            recap_preamble = ""
+            inject_session_id = req.session_id
 
     # Single-slot enforcement now lives at the MANAGER level: start_agent()
     # raises ValueError("Slot held by session …") when a different session
@@ -1239,9 +1419,22 @@ async def inject_message(project_id: str, req: InjectRequest):
         # Persist the authored user message BEFORE dispatch, and adopt the
         # resolved concrete session id for dispatch + ack + lifecycle. A pure
         # resolve-then-append: it never starts/queues the management loop.
-        mention_session_id = _agent_manager.persist_mention_message(
-            project_id, req.session_id, user_msg,
-        )
+        # ``inject_session_id`` is the recap peek's resolved id when the
+        # dispatch is pinned (identical resolution funnel), else the raw
+        # request value.
+        try:
+            mention_session_id = await _retry_session_lock(
+                lambda: _agent_manager.persist_mention_message(
+                    project_id, inject_session_id, user_msg,
+                ))
+        except FileLockError:
+            # Still contended after the whole backoff budget: refuse cleanly
+            # (retryable, message NOT persisted) rather than letting the
+            # error escape as an opaque 500 with the user's message dropped.
+            raise HTTPException(
+                status_code=503,
+                detail="Chat session is busy — please retry",
+            )
 
         # dispatch_id (TASK-dispatch-id-pairing): minted HERE, up front, so
         # it is available for logging/correlation alongside this request;
@@ -1263,11 +1456,25 @@ async def inject_message(project_id: str, req: InjectRequest):
         # marker for one physical dispatch (backlog #24 D3) — now deleted;
         # send()'s internal notification is the only one this dispatch
         # ever gets.
+        # initiator (spec 074): "user_pinned" when the target came from the
+        # composer's sticky dropdown — the wake-suppressed, zero-manager-turn
+        # dispatch class. A leading @mention (req.pinned False) keeps
+        # "user_mention" and today's manager-supervises semantics.
+        initiator = "user_pinned" if req.pinned else "user_mention"
+        if req.pinned and _pinned_consolidation is not None:
+            # A new pinned dispatch: the exchange is active again — cancel
+            # any pending quiescence consolidation timer.
+            _pinned_consolidation.note_pinned_dispatch(
+                project_id, mention_session_id)
+        dispatch_content = (
+            recap_preamble + effective_content if recap_preamble
+            else effective_content
+        )
         try:
             result = await _sub_agent_manager.send(
-                project_id, req.target, effective_content,
+                project_id, req.target, dispatch_content,
                 session_id=mention_session_id, dispatch_id=dispatch_id,
-                initiator="user_mention",
+                initiator=initiator,
             )
         except Exception:
             raise HTTPException(status_code=404, detail="No active session for project")
@@ -1443,6 +1650,68 @@ async def agent_run_status(project_id: str, session_id: str | None = None):
     }
 
 
+@router.get("/agents/{project_id}/sessions/{session_id}/context")
+async def get_session_context(project_id: str, session_id: str):
+    """Context in use for one chat session, for the composer's context line.
+
+    Owns no state. The prompt size is the last MANAGEMENT row in the token
+    ledger — provider-reported, so it is the real billed prompt rather than the
+    ``len/4`` estimate ``ContextManager`` uses internally — and the window
+    comes from the registry entry for the model that actually served that call
+    (fallback rotation can change it mid-session).
+
+    ``threshold`` is where the loop will compact, computed by the SAME function
+    the loop triggers on, so the mark the UI draws cannot drift from the event
+    it predicts.
+
+    ``used: null`` means the session has never made a management call. That is
+    deliberately distinct from ``0``: the client renders nothing rather than a
+    confident empty meter.
+
+    No polling and no new WS event: every ledger append already emits
+    ``budget.spend_updated``, and the client refetches this on that.
+    """
+    from agent_os.agent.context import compaction_threshold_tokens
+    from agent_os.budget.ledger import last_context_usage
+
+    project = _project_store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    workspace = project.get("workspace", "")
+    latest = last_context_usage(workspace, session_id) if workspace else None
+
+    if latest is None:
+        return {
+            "project_id": project_id,
+            "session_id": session_id,
+            "used": None,
+            "window": None,
+            "threshold": None,
+            "provider": None,
+            "model": None,
+        }
+
+    provider, model = latest["provider"], latest["model"]
+    if _provider_registry is not None:
+        window = _provider_registry.get_context_window(provider, model)
+    else:
+        # No registry wired (lightweight daemons / tests). Fall back rather
+        # than 500 — the meter is better conservative than absent.
+        from agent_os.config.provider_registry import _FALLBACK_CONTEXT_WINDOW
+        window = _FALLBACK_CONTEXT_WINDOW
+
+    return {
+        "project_id": project_id,
+        "session_id": session_id,
+        "used": latest["used"],
+        "window": window,
+        "threshold": compaction_threshold_tokens(window),
+        "provider": provider,
+        "model": model,
+    }
+
+
 class PendingCancelRequest(BaseModel):
     """Body for cancelling a queued pending inject (spec 006).
 
@@ -1539,12 +1808,19 @@ async def list_project_sessions(project_id: str):
 class SessionPatchRequest(BaseModel):
     """Body for updating a session's display state.
 
-    Both fields are optional and independent — send either or both. ``name`` is
+    All fields are optional and independent — send any subset. ``name`` is
     the human-readable label; ``pinned`` holds the session at the top of the
     sidebar (spec 067). Neither has any effect on routing or hydration.
+
+    ``pinned_target`` (spec 074) pins the chat session to a sub-agent: the
+    composer's sticky "Talking to" selection. Tri-state via
+    ``model_fields_set``: absent → untouched; explicit ``null`` → unpin; a
+    slug → pin (validated against the installed registry; ``orbital`` is a
+    reserved mention, never a pin target).
     """
     name: str | None = None
     pinned: bool | None = None
+    pinned_target: str | None = None
 
 
 # Back-compat alias: this body used to be rename-only.
@@ -1565,7 +1841,8 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
     """
     if _project_store is not None and _project_store.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if req.name is None and req.pinned is None:
+    target_set = "pinned_target" in req.model_fields_set
+    if req.name is None and req.pinned is None and not target_set:
         raise HTTPException(status_code=400, detail="nothing to update")
     name = None
     if req.name is not None:
@@ -1574,18 +1851,72 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
         # name is still a 400, never a silent no-op.
         if not name:
             raise HTTPException(status_code=400, detail="name must not be empty")
+    if target_set and req.pinned_target is not None:
+        # Spec 074 validation: the pin target must be an installed, non-built-in
+        # registry agent; ``@orbital`` is the reserved manager-aside mention
+        # and is rejected here explicitly, before (and regardless of) the
+        # registry-slug check.
+        slug = req.pinned_target
+        if slug.lstrip("@").lower() == "orbital":
+            raise HTTPException(
+                status_code=422,
+                detail="'orbital' is reserved for the management agent and "
+                       "cannot be pinned",
+            )
+        installed = {e["slug"] for e in _installed_sub_agents()}
+        if slug not in installed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown or uninstalled sub-agent {slug!r}",
+            )
+    patch_kwargs: dict = {"name": name, "pinned": req.pinned}
+    if target_set:
+        patch_kwargs["pinned_target"] = req.pinned_target
     try:
-        await asyncio.to_thread(
-            _agent_manager.patch_session, project_id, session_id,
-            name=name, pinned=req.pinned,
-        )
+        # Same lock-contention discipline as the inject route: the disk-path
+        # patch write-locks the session JSONL and can lose the race against a
+        # concurrent (now-retrying) pinned send — retry instead of 500ing.
+        patched = await _retry_session_lock(
+            lambda: asyncio.to_thread(
+                _agent_manager.patch_session, project_id, session_id,
+                **patch_kwargs,
+            ))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found")
+    except FileLockError:
+        raise HTTPException(
+            status_code=503, detail="Chat session is busy — please retry")
     result: dict = {"status": "patched", "session_id": session_id}
     if name is not None:
         result["name"] = name
     if req.pinned is not None:
         result["pinned"] = bool(req.pinned)
+    if target_set:
+        result["pinned_target"] = req.pinned_target
+        # Pin time (spec 074 §3.6): hash-guarded AGENTS.md refresh — codex's
+        # only context channel is reading that file from the workspace root.
+        # Guarded inside reseed_project_agent_md; a user-edited file is never
+        # rewritten. Best-effort — a pin must not fail on a seeding hiccup.
+        if req.pinned_target is not None:
+            try:
+                await asyncio.to_thread(
+                    reseed_project_agent_md, _project_store, project_id,
+                )
+            except Exception:
+                logger.warning(
+                    "AGENTS.md reseed at pin time failed for %s", project_id,
+                    exc_info=True,
+                )
+        # Unpin / retarget (spec 074 §3.5 trigger 1): any change AWAY from a
+        # currently pinned worker fires the consolidation pass — detached,
+        # single-flight; this PATCH response never waits on it.
+        previous = (patched or {}).get("previous_pinned_target")
+        if (previous and previous != req.pinned_target
+                and _pinned_consolidation is not None):
+            _pinned_consolidation.trigger(
+                project_id, session_id,
+                reason="retarget" if req.pinned_target else "unpin",
+            )
     return result
 
 

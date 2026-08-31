@@ -27,6 +27,11 @@ import { createRoot, type Root } from 'react-dom/client';
 const apiCalls: string[] = [];
 const apiWithTotalCalls: string[] = [];
 
+// Spec 074 lock-race fix: the sessions pin PATCH is gated + logged so the
+// serialize-behind-PATCH test can hold it open while a send fires.
+let sessionsPatchGate: Promise<void> | null = null;
+const sessionsPatchCalls: string[] = [];
+
 // Bug #48 (fix C): per-request capture of the AbortSignal handed to
 // apiWithTotal, plus an optional gate that holds /chat responses open so
 // tests can assert in-flight behavior (cached paint, abort-on-switch).
@@ -49,8 +54,14 @@ let runStatusHolder: string | null = null;
 let runStatusTerminalEvent: unknown = null;
 
 vi.mock('../config', () => ({
-  api: vi.fn(async (path: string) => {
+  api: vi.fn(async (path: string, opts?: { method?: string }) => {
     apiCalls.push(path);
+    // Session pin PATCH (spec 074) — gated for the lock-race test.
+    if (opts?.method === 'PATCH' && path.includes('/sessions/')) {
+      sessionsPatchCalls.push(path);
+      if (sessionsPatchGate) await sessionsPatchGate;
+      return {};
+    }
     // run-status returns the configured slot holder so ChatView can decide
     // whether the viewed session is the holder.
     if (path.includes('/run-status')) {
@@ -239,6 +250,8 @@ let root: Root;
 beforeEach(() => {
   apiCalls.length = 0;
   apiWithTotalCalls.length = 0;
+  sessionsPatchGate = null;
+  sessionsPatchCalls.length = 0;
   apiWithTotalSignals.length = 0;
   chatResponseGate = null;
   __clearChatHistoryCacheForTests();
@@ -422,11 +435,12 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
     expect(cancelling).toBeTruthy();
     expect(cancelling.disabled).toBe(true);
 
-    // Spinner is rendered (lucide-react Loader2 carries class `lucide-loader-2`
-    // or `lucide-loader-circle`; we assert presence via the animate-spin class
-    // we explicitly set on the icon).
-    const spinner = cancelling.querySelector('.animate-spin');
-    expect(spinner).toBeTruthy();
+    // Progress is shown by an arc travelling around the glyph's outline
+    // (`animate-stop-arc` drives stroke-dashoffset). It is deliberately NOT
+    // `animate-spin`: the ring is a rounded square now, and rotating that
+    // wobbles the silhouette — the exact jump StopGlyph exists to avoid.
+    expect(cancelling.querySelector('.animate-stop-arc')).toBeTruthy();
+    expect(cancelling.querySelector('.animate-spin')).toBeNull();
 
     // Textarea is disabled while cancelling.
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
@@ -543,6 +557,7 @@ function renderChat(props: {
   sessionId?: string;
   initialDraft?: string;
   onDraftConsumed?: () => void;
+  mentionAgents?: Array<{ slug: string; name: string }>;
 }) {
   return act(async () => {
     root.render(
@@ -550,7 +565,7 @@ function renderChat(props: {
         projectId="p1"
         project={project}
         agentStatus={(props.agentStatus ?? 'idle') as never}
-        mentionAgents={[]}
+        mentionAgents={props.mentionAgents ?? []}
         sessionId={props.sessionId}
         initialDraft={props.initialDraft}
         onDraftConsumed={props.onDraftConsumed}
@@ -1153,6 +1168,178 @@ describe('T5 ChatView: inject targets the viewed session', () => {
 });
 
 // ─── Spec 006: pending-input queue (frontend §3h, tests 13-19) ─────────────
+
+// Spec 074 hidden-response bug (manual-verification, 2026-08-31): a pinned
+// worker's live response bubble lives ONLY in `items` (handleSubAgentMessage
+// never mirrors it into rawMessages), and a pinned dispatch keeps the
+// management loop idle/holderless — so the Bug29-D2 reseed gate never
+// protects it. The next send pushes the optimistic row into rawMessages and
+// the wholesale reseed wipes the previous response. Fix: a sub-agent
+// terminal event for the viewed session triggers the existing catch-up
+// refetch, whose /chat response carries the server-synthesized bubble.
+describe('Spec 074: pinned worker response survives the next send (terminal catch-up)', () => {
+  const userRow = {
+    role: 'user',
+    content: 'check the announcements',
+    timestamp: '2026-08-31T09:02:29Z',
+  };
+  const markerRow = {
+    role: 'system',
+    source: 'daemon',
+    content:
+      '[Sub-agent] Message sent to codex: "check the announcements". ' +
+      'Transcript: /ws/orbital/sub_agents/codex/abc.jsonl',
+    timestamp: '2026-08-31T09:02:35Z',
+  };
+  const syntheticRow = {
+    role: 'assistant',
+    content: 'codex full answer about the memory announcement',
+    source: 'sub_agent',
+    sub_agent_handle: 'codex',
+    sub_agent_tool_rows: [],
+    sub_agent_duration: 2.0,
+    timestamp: '2026-08-31T09:02:35Z',
+    session_id: 's1',
+  };
+  const terminalRow = {
+    role: 'system',
+    source: 'daemon',
+    content:
+      '[Sub-agent] codex completed. Summary: codex full answer about the ' +
+      'memory announcement. Transcript: /ws/orbital/sub_agents/codex/abc.jsonl.',
+    timestamp: '2026-08-31T09:04:45Z',
+  };
+
+  it('refetches /chat on sub_agent.completed and keeps the response visible after a subsequent send', async () => {
+    // Server truth BEFORE completion: no synthetic bubble yet.
+    chatInitialResponse = { data: [userRow, markerRow], total: 2 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const fetchesAfterMount = apiWithTotalCalls.length;
+
+    // Live: the worker's response arrives over WS (items-only bubble).
+    await act(async () => {
+      emitWs('chat.sub_agent_message', {
+        type: 'chat.sub_agent_message',
+        project_id: 'p1',
+        session_id: 's1',
+        content: 'codex full answer about the memory announcement',
+        source: 'codex',
+        timestamp: '2026-08-31T09:04:44Z',
+      });
+    });
+    expect(container.textContent ?? '').toContain('codex full answer');
+
+    // The turn closes server-side: /chat now serves the synthetic bubble.
+    chatInitialResponse = {
+      data: [userRow, markerRow, syntheticRow, terminalRow],
+      total: 4,
+    };
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed',
+        project_id: 'p1',
+        session_id: 's1',
+        handle: 'codex',
+        summary: 'codex full answer about the memory announcement',
+      });
+    });
+    await flushEffects();
+    // The terminal event triggered the catch-up refetch.
+    expect(apiWithTotalCalls.length).toBeGreaterThan(fetchesAfterMount);
+
+    // Subsequent send: the reseed must not hide the previous response.
+    await act(async () => {
+      typeInComposer('follow-up question');
+    });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(container.textContent ?? '').toContain('codex full answer');
+  });
+
+  it('ignores terminal events for other sessions (strict session routing)', async () => {
+    chatInitialResponse = { data: [userRow, markerRow], total: 2 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const fetchesAfterMount = apiWithTotalCalls.length;
+
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed',
+        project_id: 'p1',
+        session_id: 'OTHER',
+        handle: 'codex',
+        summary: 'irrelevant',
+      });
+    });
+    await flushEffects();
+    expect(apiWithTotalCalls.length).toBe(fetchesAfterMount);
+  });
+});
+
+// Spec 074 lock-race (manual-verification bug, 2026-08-31): picking a pin
+// target fires a fire-and-forget PATCH that write-locks the session JSONL
+// server-side; a send landing inside that burst was rejected with the
+// message dropped. handleSend must serialize behind the in-flight PATCH.
+describe('Spec 074: send serializes behind the in-flight pin PATCH', () => {
+  it('holds the inject until the pin PATCH settles, then dispatches pinned', async () => {
+    let releasePatch!: () => void;
+    sessionsPatchGate = new Promise<void>((r) => { releasePatch = r; });
+
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+
+    // Open the pin dropdown and pick the worker — fires the (gated) PATCH.
+    const pinToggle = container.querySelector(
+      '[data-testid="pin-target-select"] > button',
+    ) as HTMLButtonElement;
+    await act(async () => { pinToggle.click(); });
+    const option = Array.from(
+      container.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes('Claude Code')) as HTMLButtonElement;
+    expect(option).toBeTruthy();
+    await act(async () => { option.click(); });
+    expect(sessionsPatchCalls.length).toBe(1);
+
+    await act(async () => { typeInComposer('hi worker'); });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // PATCH still in flight → the inject must NOT have fired yet.
+    expect(injectCalls.length).toBe(0);
+
+    await act(async () => {
+      releasePatch();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    // PATCH settled → the send goes out, pinned to the picked worker.
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId, pinned)
+    expect(injectCalls[0][1]).toBe('hi worker');
+    expect(injectCalls[0][2]).toBe('claude-code');
+    expect(injectCalls[0][6]).toBe(true);
+  });
+});
 
 describe('ChatView: pending-input queue (spec 006)', () => {
   // Helper: send a message that gets queued (202 queued_pending_slot) into the

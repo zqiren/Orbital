@@ -36,6 +36,12 @@ class GlobalSettings(BaseModel):
     llm: GlobalLLMSettings = GlobalLLMSettings()
     scratch_workspace: str | None = None
     user_preferences_path: str | None = None
+    # Spec 073 — user-level memory: agent-written facts about the user,
+    # injected into every project's prompt. A SEPARATE file from
+    # user_preferences.md because the prefs save is a full overwrite (D2).
+    # None resolves to ~/orbital/user_memory.md wherever the path is read.
+    user_memory_path: str | None = None
+    user_memory_enabled: bool = True
     # Budget Piece 1, Task 4 — static FX rates for cross-currency cost totals.
     # User-editable; no live lookups anywhere. Codes/numbers only.
     fx_rates: dict[str, float] = DEFAULT_FX_RATES.copy()
@@ -118,5 +124,20 @@ class SettingsStore:
                 data["user_preferences_content"] = ""
         else:
             data["user_preferences_content"] = ""
+
+        # Read user memory file content (spec 073). Unlike prefs, the file is
+        # agent-written and normally exists at the DEFAULT path before the
+        # user ever saves anything from Settings, so resolve the default here
+        # rather than requiring user_memory_path to have been set.
+        memory_path = data.get("user_memory_path") or os.path.join(
+            os.path.expanduser("~"), "orbital", "user_memory.md")
+        if os.path.exists(memory_path):
+            try:
+                with open(memory_path, "r", encoding="utf-8") as f:
+                    data["user_memory_content"] = f.read()
+            except OSError:
+                data["user_memory_content"] = ""
+        else:
+            data["user_memory_content"] = ""
 
         return data

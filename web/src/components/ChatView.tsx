@@ -24,7 +24,11 @@ import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
+import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
+import { useSessions } from '../hooks/useSessions';
 import { StopGlyph } from './StopGlyph';
+import ContextStrip from './ContextStrip';
+import { useContextUsage } from '../hooks/useContextUsage';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
@@ -342,6 +346,7 @@ import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
   SubAgentMessageEvent,
+  SubAgentLifecycleEvent,
   UserMessageEvent,
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
@@ -516,6 +521,39 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   const [mentionFilter, setMentionFilter] = useState('');
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
+  // Spec 074 — the composer "Talking to" pin. Backend truth comes from the
+  // session list (`pinned_target` on the entry); `localPin` is the
+  // optimistic overlay for the VIEWED session so the dropdown responds
+  // immediately and keeps working for a brand-new session whose JSONL has
+  // not materialized yet (the PATCH 404s until the first message lands —
+  // handleSend re-persists the pin after a successful pinned send).
+  const { sessions: pinSessions, pinAgent } = useSessions(projectId);
+  const [localPin, setLocalPin] = useState<{ sessionId: string; slug: string | null } | null>(null);
+  // The pin PATCH write-locks the session JSONL on the backend for a
+  // load+meta-rewrite burst; an inject landing inside that burst gets
+  // rejected (2026-08-31 bug: pick agent → send immediately → "Failed to
+  // send message"). Track the in-flight PATCH so handleSend can serialize
+  // behind it; outcome is irrelevant (failure keeps the optimistic pin).
+  const pinPatchInFlightRef = useRef<Promise<void> | null>(null);
+  const persistPin = useCallback((sid: string, slug: string | null) => {
+    const done: Promise<void> = pinAgent(sid, slug)
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        if (pinPatchInFlightRef.current === done) {
+          pinPatchInFlightRef.current = null;
+        }
+      });
+    pinPatchInFlightRef.current = done;
+  }, [pinAgent]);
+  const backendPin = useMemo(() => {
+    if (sessionId === undefined) return null;
+    const entry = pinSessions.find(
+      (s) => s.session_id === sessionId || s.session_uuid === sessionId,
+    );
+    return entry?.pinned_target ?? null;
+  }, [pinSessions, sessionId]);
+  const pinnedTarget =
+    localPin && localPin.sessionId === sessionId ? localPin.slug : backendPin;
   const [showThinking, setShowThinking] = useState(false);
   const [showCommandDropdown, setShowCommandDropdown] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
@@ -598,6 +636,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // task), the chat composer is replaced by ComposerDisabledPrompt — the user
   // must pause the queue first. ('idle'/'paused' leave the composer enabled.)
   const { snapshot: queueSnapshot, stopQueue } = useQueue(projectId);
+  // Ambient context meter above the composer. Event-driven off the ledger's
+  // existing budget.spend_updated (context only moves on an LLM call), so no
+  // polling and no new WS type. Renders nothing until compaction is close.
+  const { usage: contextUsage } = useContextUsage(projectId, sessionId);
   const queueActive = queueSnapshot?.state === 'running';
   // Per-session composer drafts. Keyed by F1 sessionId so switching to
   // another session and back restores the original session's unsent text.
@@ -1813,6 +1855,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       scrollToBottom();
     }
 
+    // Spec 074 hidden-response fix: the bubble appended above lives ONLY in
+    // `items` — never mirrored into rawMessages — and a pinned dispatch keeps
+    // the management loop idle/holderless, so the Bug29-D2 reseed gate does
+    // not protect it. The next send's optimistic rawMessages push then
+    // reseeds `items` wholesale and the previous response vanishes. A
+    // sub-agent terminal event for the viewed session refreshes the canonical
+    // history instead: by broadcast time the backend has persisted both the
+    // session terminal row and the transcript turn boundary (no awaits in
+    // between on the daemon's loop), so the refetched /chat page carries the
+    // server-synthesized response bubble and the reseed becomes harmless.
+    function handleSubAgentTerminal(event: WebSocketEvent) {
+      const e = event as SubAgentLifecycleEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+      refreshRawMessages();
+    }
+
     function handleUserMessage(event: WebSocketEvent) {
       const e = event as UserMessageEvent;
       if (e.project_id !== projectId) return;
@@ -2122,6 +2181,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('approval.request', handleApprovalRequest);
     on('approval.resolved', handleApprovalResolved);
     on('chat.sub_agent_message', handleSubAgentMessage);
+    // Terminal family only — 'started' persists nothing a reseed could hide.
+    on('sub_agent.completed', handleSubAgentTerminal);
+    on('sub_agent.error', handleSubAgentTerminal);
+    on('sub_agent.failed', handleSubAgentTerminal);
+    on('sub_agent.stopped', handleSubAgentTerminal);
+    on('sub_agent.turn_interrupted', handleSubAgentTerminal);
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
@@ -2139,6 +2204,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('approval.request', handleApprovalRequest);
       off('approval.resolved', handleApprovalResolved);
       off('chat.sub_agent_message', handleSubAgentMessage);
+      off('sub_agent.completed', handleSubAgentTerminal);
+      off('sub_agent.error', handleSubAgentTerminal);
+      off('sub_agent.failed', handleSubAgentTerminal);
+      off('sub_agent.stopped', handleSubAgentTerminal);
+      off('sub_agent.turn_interrupted', handleSubAgentTerminal);
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
@@ -2150,7 +2220,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('fanout.task_update', handleFanoutTaskUpdate);
       off('fanout.completed', handleFanoutCompleted);
     };
-  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
+  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble, refreshRawMessages]);
 
   // Credential-error surfacing: agent.status error events for the viewed
   // session feed the AgentErrorNotice. Events without a meaningful session
@@ -2184,6 +2254,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (!item) return null;
     if (item.type === 'approval_card') return `approval_card:${item.tool_call_id}`;
     if (item.type === 'session_separator') return `session_separator:${item.timestamp}`;
+    // Marker only — no content field, so it must be keyed before the content
+    // fallthrough at the end (which would crash on undefined.slice).
+    if (item.type === 'compaction_marker') return `compaction_marker:${item.timestamp}`;
     if (item.type === 'agent_notify') {
       return `agent_notify:${item.timestamp}:${item.title}`;
     }
@@ -2392,13 +2465,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return;
     }
 
-    let target: string | undefined;
-    let content = text;
-    const atMatch = text.match(/^@([\w-]+)\s+([\s\S]*)/);
-    if (atMatch) {
-      target = atMatch[1];
-      content = atMatch[2];
-    }
+    // Spec 074 target precedence: a leading @mention wins for this one
+    // message; otherwise the sticky "Talking to" pin applies; otherwise the
+    // management agent. `@orbital` is the reserved one-message manager aside
+    // — it routes down the management branch WITHOUT unpinning.
+    const resolved = resolveSendTarget(text, pinnedTarget);
+    const target = resolved.target;
+    const content = resolved.content;
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -2457,6 +2530,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
     try {
+      // Serialize behind a just-fired pin PATCH: it holds the session file's
+      // write lock on the backend, and an inject racing that burst gets
+      // rejected with the message dropped. Waiting out the PATCH (success or
+      // failure alike) removes the race at its source.
+      if (pinPatchInFlightRef.current) await pinPatchInFlightRef.current;
       const result = await injectMessage(
         projectId,
         content,
@@ -2464,7 +2542,21 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         nonce,
         attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
         sessionId,
+        resolved.pinned,
       );
+      // A pinned send materialized the session on the backend — if the pin
+      // PATCH had failed earlier (brand-new session, 404 before the first
+      // message), persist it now so it survives reloads. `pinAgent`'s
+      // optimistic update keeps `backendPin` current on success, so this
+      // fires only while the stored value is actually behind.
+      if (
+        resolved.pinned &&
+        sessionId !== undefined &&
+        target !== undefined &&
+        backendPin !== target
+      ) {
+        persistPin(sessionId, target);
+      }
       // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
       // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
       // when the slot frees. KEEP the optimistic bubble (unlike slot_held below,
@@ -2918,6 +3010,27 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   <div className="flex-1 border-t border-border" />
                 </div>
               );
+            } else if (item.type === 'compaction_marker') {
+              // The agent ran out of room and summarized everything above
+              // this line. Same divider shape as the session boundary — both
+              // are "the conversation above here is not what it looks like" —
+              // but deliberately a different item type, since a compaction
+              // does not start a new session and must not grey out history.
+              // No action here: the summarization has already happened, so
+              // the new-session offer lives in ContextStrip, BEFORE the fact.
+              return (
+                <div
+                  key={`compact-${index}`}
+                  data-testid="compaction-marker"
+                  className="flex items-center gap-3 px-2 opacity-50"
+                >
+                  <div className="flex-1 border-t border-border" />
+                  <span className="text-xs text-secondary whitespace-nowrap">
+                    {t('chat.compacted')}
+                  </span>
+                  <div className="flex-1 border-t border-border" />
+                </div>
+              );
             } else if (item.type === 'agent_run') {
               // FE-A1: trailing-capsule "running" status is a render-time
               // derivation. The transform always emits `completed`; we
@@ -3347,6 +3460,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         {queueActive ? (
           <ComposerDisabledPrompt onPauseQueue={stopQueue} />
         ) : (
+        <>
+        {/* Context meter. Sits above the composer rather than in the project
+            header because it is per-SESSION, and the header is per-project —
+            it would report the wrong session while browsing the session list.
+            Reuses executeNewSession verbatim: the offer is the same /new flow
+            the slash command runs, not a parallel path. */}
+        <ContextStrip usage={contextUsage} onNewSession={executeNewSession} />
         <div className="relative flex flex-col gap-2 bg-card border border-border rounded-lg shadow-[0_1px_2px_rgba(0,0,0,0.04)] px-3 py-2 transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-accent)18%,transparent)] motion-reduce:transition-none">
           {showCommandDropdown && filteredCommands.length > 0 && (
             <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
@@ -3411,6 +3531,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             </div>
           )}
           <div className="flex items-center gap-2">
+            {/* Spec 074 — the logo-only pin mark fused to the row's left edge
+                IS the sub-agent pin (Orbital's mark at rest, the worker's
+                while pinned). Renders nothing when no sub-agents are
+                installed (PinTargetSelect returns null). A PATCH failure
+                keeps the optimistic localPin; handleSend re-persists after
+                the first successful pinned send materializes a brand-new
+                session. */}
+            <PinTargetSelect
+              agents={mentionAgents}
+              value={pinnedTarget}
+              onChange={(slug) => {
+                if (sessionId === undefined) return;
+                setLocalPin({ sessionId, slug });
+                persistPin(sessionId, slug);
+              }}
+              disabled={sessionId === undefined}
+            />
             <input
               type="file"
               multiple
@@ -3433,7 +3570,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={t('chat.composer.placeholder')}
+              placeholder={pinnedTarget
+                ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })
+                : t('chat.composer.placeholder')}
               rows={1}
               disabled={isCancelling}
               className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
@@ -3468,7 +3607,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                   }}
                   disabled={isCancelling}
                   aria-label={isCancelling ? t('chat.cancelling') : t('chat.stop')}
-                  className="group shrink-0 p-1.5 rounded-full transition-colors duration-150 cursor-pointer text-red-500 hover:bg-red-500/10 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
+                  // Muted error, not raw `text-red-500`. Two changes: it goes
+                  // through the --color-error token so it moves with the
+                  // design system, and it rests at 70% so it stops being the
+                  // only fully saturated element in a row where Plus is
+                  // text-secondary. Stopping your own agent is not a fault
+                  // (see the sub-agent 'stopped' handling above), so it should
+                  // not shout like one — the queue's own pause control already
+                  // reads this quietly. rounded-lg joins the radius ladder the
+                  // rest of the composer is built from.
+                  className="group shrink-0 p-1.5 rounded-lg transition-colors duration-150 cursor-pointer text-error/70 hover:text-error hover:bg-error/8 disabled:cursor-default disabled:hover:bg-transparent max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center"
                 >
                   <StopGlyph cancelling={isCancelling} />
                 </button>
@@ -3507,6 +3655,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
             )}
           </div>
         </div>
+        </>
         )}
       </div>
       </>

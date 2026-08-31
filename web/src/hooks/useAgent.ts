@@ -130,6 +130,10 @@ export function useAgent() {
     );
   }, []);
 
+  // `pinned` (spec 074): true when `target` came from the composer's sticky
+  // "Talking to" dropdown (the session pin) rather than a leading @mention —
+  // the backend maps it to initiator="user_pinned" (wake-suppressed dispatch;
+  // the management agent takes zero turns). Omitted from the body when false.
   const injectMessage = useCallback(
     async (
       projectId: string,
@@ -138,6 +142,7 @@ export function useAgent() {
       nonce?: string,
       attachments?: Array<{ path: string; mime: string; size: number }>,
       sessionId?: string,
+      pinned?: boolean,
     ) => {
       return api<InjectResult>(
         `/api/v2/agents/${encodeURIComponent(projectId)}/inject`,
@@ -149,6 +154,7 @@ export function useAgent() {
             ...(nonce !== undefined && { nonce }),
             ...(attachments && attachments.length > 0 && { attachments }),
             ...(sessionId !== undefined && { session_id: sessionId }),
+            ...(pinned && { pinned: true }),
           }),
         },
       );

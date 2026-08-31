@@ -165,6 +165,37 @@ export function useSessions(projectId: string | null) {
     [projectId, refresh],
   );
 
+  // Pin the session to a sub-agent (spec 074): the composer's "Talking to"
+  // dropdown. `slug` pins/retargets; `null` unpins (explicit null in the
+  // PATCH body — the backend treats absence as "leave untouched"). Same
+  // optimistic shape as pinSession; a failure refetches authoritative state.
+  const pinAgent = useCallback(
+    async (sessionId: string, slug: string | null): Promise<string | null> => {
+      if (!projectId) throw new Error('No project selected');
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.session_id === sessionId ? { ...s, pinned_target: slug } : s,
+        );
+        sessionsCache.set(projectId, next);
+        return next;
+      });
+      try {
+        await api(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ pinned_target: slug }),
+          },
+        );
+        return slug;
+      } catch (e) {
+        void refresh();
+        throw e;
+      }
+    },
+    [projectId, refresh],
+  );
+
   // Delete a session (removes its JSONL on disk). Removes the row from the
   // local list + cache on success. Rejects on failure (e.g. 409 for a running
   // session) so the caller can surface an error without mutating the list.
@@ -184,7 +215,7 @@ export function useSessions(projectId: string | null) {
     [projectId],
   );
 
-  return { sessions, loading, error, refresh, renameSession, pinSession, deleteSession };
+  return { sessions, loading, error, refresh, renameSession, pinSession, pinAgent, deleteSession };
 }
 
 // Alias for consumers that prefer the more explicit name.

@@ -273,6 +273,13 @@ class Session:
         # reads as False — so there is no migration.
         self.pinned: bool = False
 
+        # Pinned sub-agent target (BACKLOG spec 074). The slug of the worker
+        # this chat session is pinned to (composer "Talking to" dropdown), or
+        # None when the session talks to the management agent. Same
+        # session_start-meta persistence as ``name``/``pinned``; absent on
+        # every pre-074 log, which reads as unpinned — no migration.
+        self.pinned_target: str | None = None
+
         # Sub-agent thread registry (TASK-resume-persistence, piece 2).
         # handle -> {"session_id", "model", "last_used_at"}: the resume
         # identity of each sub-agent thread this session owns. The composite
@@ -386,6 +393,10 @@ class Session:
                             # unpinned is the no-migration default.
                             if msg.get("pinned") is not None:
                                 session.pinned = bool(msg["pinned"])
+                            # Pinned worker target (spec 074). Same
+                            # no-migration default: absent/null reads as None.
+                            if msg.get("pinned_target"):
+                                session.pinned_target = msg["pinned_target"]
                         elif msg.get("event") == "sub_agent_thread":
                             # Resume identity rows: append-only, last row per
                             # handle wins (TASK-resume-persistence).
@@ -669,6 +680,17 @@ class Session:
         """
         self.pinned = bool(pinned)
         self._apply_meta_fields(pinned=self.pinned)
+
+    def set_pinned_target(self, target: str | None) -> None:
+        """Pin this chat session to a sub-agent (spec 074) and persist it.
+
+        ``target`` is the worker's registry slug; ``None`` clears the pin
+        (back to the management agent). Same session_start-meta mechanism as
+        ``set_name``/``set_pinned`` — an explicit ``null`` on the meta line is
+        how a cleared pin persists, and it loads back as None.
+        """
+        self.pinned_target = target if target else None
+        self._apply_meta_fields(pinned_target=self.pinned_target)
 
     def _apply_meta_fields(self, **fields) -> None:
         """Stamp arbitrary fields onto the session_start meta.
