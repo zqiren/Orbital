@@ -3480,22 +3480,24 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ))}
             </div>
           )}
-          {/* Spec 074 — the sticky "Talking to" selector IS the sub-agent
-              pin. Renders nothing when no sub-agents are installed
-              (PinTargetSelect returns null). A PATCH failure keeps the
-              optimistic localPin; handleSend re-persists after the first
-              successful pinned send materializes a brand-new session. */}
-          <PinTargetSelect
-            agents={mentionAgents}
-            value={pinnedTarget}
-            onChange={(slug) => {
-              if (sessionId === undefined) return;
-              setLocalPin({ sessionId, slug });
-              void pinAgent(sessionId, slug).catch(() => {});
-            }}
-            disabled={sessionId === undefined}
-          />
           <div className="flex items-center gap-2">
+            {/* Spec 074 — the logo-only pin mark fused to the row's left edge
+                IS the sub-agent pin (Orbital's mark at rest, the worker's
+                while pinned). Renders nothing when no sub-agents are
+                installed (PinTargetSelect returns null). A PATCH failure
+                keeps the optimistic localPin; handleSend re-persists after
+                the first successful pinned send materializes a brand-new
+                session. */}
+            <PinTargetSelect
+              agents={mentionAgents}
+              value={pinnedTarget}
+              onChange={(slug) => {
+                if (sessionId === undefined) return;
+                setLocalPin({ sessionId, slug });
+                void pinAgent(sessionId, slug).catch(() => {});
+              }}
+              disabled={sessionId === undefined}
+            />
             <input
               type="file"
               multiple
@@ -3518,7 +3520,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={t('chat.composer.placeholder')}
+              placeholder={pinnedTarget
+                ? t('chat.composer.placeholderPinned', { agent: pinnedTarget })
+                : t('chat.composer.placeholder')}
               rows={1}
               disabled={isCancelling}
               className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"

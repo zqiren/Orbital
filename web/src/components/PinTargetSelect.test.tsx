@@ -75,6 +75,10 @@ describe('resolveSendTarget precedence', () => {
 });
 
 describe('PinTargetSelect', () => {
+  /** The fused trigger button (logo mark + chevron). */
+  const trigger = () =>
+    screen.getByRole('button', { name: 'Choose who this chat talks to' });
+
   it('renders nothing when no sub-agents are installed', () => {
     const { container } = render(
       <PinTargetSelect agents={[]} value={null} onChange={() => {}} />,
@@ -82,27 +86,42 @@ describe('PinTargetSelect', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders Orbital plus every installed agent', () => {
+  it('shows the Orbital mark at rest and the pinned agent mark while pinned', () => {
+    const { rerender } = render(
+      <PinTargetSelect agents={AGENTS} value={null} onChange={() => {}} />,
+    );
+    // No agentHandle → the avatar resolves to Orbital's own mark.
+    const restAvatar = trigger().querySelector('[data-testid="message-avatar"]');
+    expect(restAvatar?.getAttribute('data-agent-handle') ?? null).toBeNull();
+    expect(trigger().title).toBe('Orbital — manager');
+
+    rerender(<PinTargetSelect agents={AGENTS} value="codex" onChange={() => {}} />);
+    const pinnedAvatar = trigger().querySelector('[data-testid="message-avatar"]');
+    expect(pinnedAvatar?.getAttribute('data-agent-handle')).toBe('codex');
+    expect(trigger().title).toBe('Codex — direct chat, Orbital stays out');
+  });
+
+  it('opens a menu listing Orbital plus every installed agent', () => {
     render(
       <PinTargetSelect agents={AGENTS} value={null} onChange={() => {}} />,
     );
-    const select = screen.getByRole('combobox');
-    const labels = Array.from(select.querySelectorAll('option')).map(
-      (o) => o.textContent,
-    );
-    expect(labels).toEqual(['Orbital', 'Claude Code', 'Codex']);
-    expect((select as HTMLSelectElement).value).toBe('');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(trigger());
+    const options = screen.getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      'Orbitalmanager', 'Claude Code', 'Codex',
+    ]);
   });
 
-  it('selecting an agent fires onChange with its slug', () => {
+  it('selecting an agent fires onChange with its slug and closes the menu', () => {
     const onChange = vi.fn();
     render(
       <PinTargetSelect agents={AGENTS} value={null} onChange={onChange} />,
     );
-    fireEvent.change(screen.getByRole('combobox'), {
-      target: { value: 'codex' },
-    });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole('option', { name: /Codex/ }));
     expect(onChange).toHaveBeenCalledWith('codex');
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 
   it('selecting Orbital fires onChange(null) — the unpin', () => {
@@ -110,8 +129,8 @@ describe('PinTargetSelect', () => {
     render(
       <PinTargetSelect agents={AGENTS} value="codex" onChange={onChange} />,
     );
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('codex');
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole('option', { name: /Orbital/ }));
     expect(onChange).toHaveBeenCalledWith(null);
   });
 
@@ -119,6 +138,22 @@ describe('PinTargetSelect', () => {
     render(
       <PinTargetSelect agents={AGENTS} value="gone-agent" onChange={() => {}} />,
     );
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('gone-agent');
+    const avatar = trigger().querySelector('[data-testid="message-avatar"]');
+    expect(avatar?.getAttribute('data-agent-handle')).toBe('gone-agent');
+    fireEvent.click(trigger());
+    // The bare slug is appended as a selectable row.
+    expect(screen.getByRole('option', { name: /gone-agent/ })).toBeTruthy();
+  });
+
+  it('Escape closes the menu without selecting', () => {
+    const onChange = vi.fn();
+    render(
+      <PinTargetSelect agents={AGENTS} value={null} onChange={onChange} />,
+    );
+    fireEvent.click(trigger());
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

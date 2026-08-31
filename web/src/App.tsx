@@ -114,10 +114,13 @@ export default function App() {
     }
   }, [selectedProjectId, selectedStatus, fetchTriggers]);
 
-  // Fetch agent availability when a project is selected. Pre-filtered to the
-  // shape the @-mention dropdown actually consumes: installed sub-agents, no
-  // 'built-in'. The fetch happens once per project select, off the chat-tab
-  // mount path, so tab switches don't block on this network call.
+  // Fetch agent availability ONCE at app mount. Pre-filtered to the shape the
+  // @-mention dropdown and the composer pin mark consume: installed
+  // sub-agents, no 'built-in'. The list is project-independent (the endpoint
+  // takes no project and probes installed CLI binaries on disk — slow), so
+  // fetching per project select and clearing meanwhile made the pin control
+  // unmount and pop in late on every session open. Stale-while-revalidate:
+  // the list is never cleared once loaded.
   // installGeneration bumps when an Orbital-managed install completes, so the
   // cached list picks up a freshly installed agent (dsh) without a reload —
   // otherwise the @-mention dropdown stays stale for the whole page lifetime.
@@ -129,9 +132,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (!selectedProjectId) return;
     let cancelled = false;
-    setAgentsAvailable(null);
     api<Array<{ slug: string; name: string; installed: boolean }>>(
       '/api/v2/agents/available',
     )
@@ -144,11 +145,13 @@ export default function App() {
       })
       .catch(() => {
         if (cancelled) return;
-        // Leave list empty on failure; @-dropdown simply shows no matches.
-        setAgentsAvailable([]);
+        // First load failed → settle on empty (the @-dropdown shows no
+        // matches). A failed REFETCH keeps the last good list instead of
+        // blanking a working control.
+        setAgentsAvailable((prev) => prev ?? []);
       });
     return () => { cancelled = true; };
-  }, [selectedProjectId, installGeneration]);
+  }, [installGeneration]);
 
   // Mobile panel swap navigation
   const [isMobile, setIsMobile] = useState(false);
