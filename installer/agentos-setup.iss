@@ -3,12 +3,12 @@
 
 [Setup]
 AppName=Orbital
-AppVersion=0.10.1
+AppVersion=0.11.0
 AppPublisher=Orbital
 DefaultDirName=C:\Orbital
 DisableDirPage=no
 DefaultGroupName=Orbital
-OutputBaseFilename=Orbital-Setup-0.10.1
+OutputBaseFilename=Orbital-Setup-0.11.0
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=..\assets\icon.ico
