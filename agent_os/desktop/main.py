@@ -45,22 +45,64 @@ if sys.platform == "win32":
 
 
 def find_free_port(preferred: int = 8000) -> int:
+    # Probe BOTH addresses the app depends on: uvicorn binds the wildcard, and
+    # the health probe + SPA connect via 127.0.0.1. Bind semantics differ per
+    # platform. Windows only conflicts EXACT-duplicate binds (specific-over-
+    # wildcard and wildcard-over-specific both coexist by default) — so the
+    # old loopback-only probe bound 127.0.0.1:8000 clean OVER a foreign
+    # 0.0.0.0:8000 socket and uvicorn's own wildcard bind then died on the
+    # duplicate with WSAEADDRINUSE (bug #75); the loopback leg also catches a
+    # foreign loopback server that would otherwise steal 127.0.0.1 routing
+    # from a "successful" wildcard bind. On macOS/Linux wildcard-vs-specific
+    # conflicts both ways, so the wildcard leg covers specific-interface
+    # occupants too. A port counts as free only when both legs bind cleanly.
+    # Bind only, never listen() (listening triggers the macOS app-firewall
+    # prompt on unsigned dev builds), and no SO_REUSEADDR (it would mask the
+    # very conflicts this probe exists to detect).
+    def _binds_cleanly(candidate: int):
+        port = candidate
+        for addr in ("0.0.0.0", "127.0.0.1"):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.bind((addr, port))
+                port = sock.getsockname()[1]
+            except OSError:
+                return None
+            finally:
+                sock.close()
+        return port
+
+    port = _binds_cleanly(preferred)
+    if port is not None:
+        return port
+    for _ in range(5):
+        port = _binds_cleanly(0)
+        if port is not None:
+            return port
+    # Last resort: a wildcard-bindable ephemeral port; boot_daemon_with_retry
+    # covers any residual conflict.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.bind(("127.0.0.1", preferred))
+        sock.bind(("0.0.0.0", 0))
+        return sock.getsockname()[1]
+    finally:
         sock.close()
-        return preferred
-    except OSError:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        return port
+
+
+def _local_opener():
+    """urllib opener for loopback health probes, bypassing every proxy.
+
+    A bare urlopen honors http_proxy env vars and the Windows registry proxy —
+    on machines running Clash/V2Ray/corp agents that routes the 127.0.0.1
+    probe through the proxy and reports a healthy daemon as down.
+    """
+    import urllib.request
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def is_already_running(port: int = 8000) -> bool:
-    import urllib.request
     try:
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v2/settings", timeout=2)
+        resp = _local_opener().open(f"http://127.0.0.1:{port}/api/v2/settings", timeout=2)
         return resp.status == 200
     except Exception:
         return False
@@ -197,18 +239,69 @@ def start_daemon(port: int):
     return server, thread
 
 
-def wait_for_daemon(port: int, timeout: int = 15) -> bool:
-    import urllib.request
+def wait_for_daemon(port: int, timeout: int = 15, server=None, thread=None) -> bool:
+    opener = _local_opener()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v2/settings", timeout=2)
+            resp = opener.open(f"http://127.0.0.1:{port}/api/v2/settings", timeout=2)
             if resp.status == 200:
                 return True
         except Exception:
             pass
+        # Fail fast on a dead daemon: a failed uvicorn bind logs ERROR and
+        # returns from server.run() without raising, so the thread dies with
+        # server.started False — polling HTTP for the rest of the window only
+        # delays the error dialog (bug #75).
+        if (
+            thread is not None
+            and not thread.is_alive()
+            and (server is None or not getattr(server, "started", False))
+        ):
+            return False
         time.sleep(0.5)
     return False
+
+
+def boot_daemon_with_retry(preferred: int):
+    """Start the daemon, retrying once on a fresh random port if the first
+    attempt dies outright (bug #75).
+
+    The port probe is inherently TOCTOU-racy, and bind failures can have
+    probe-invisible causes (Windows excluded port ranges, races) — one retry
+    converts every port-conflict variant into a working app. A live-but-slow
+    daemon is NOT retried: a second daemon beside it would just lose the
+    pid-file race. Returns (port, server, thread); port is None on failure.
+    """
+    port = find_free_port(preferred)
+    server, thread = start_daemon(port)
+    if wait_for_daemon(port, server=server, thread=thread):
+        return port, server, thread
+    if not thread.is_alive():
+        port = find_free_port(0)
+        server, thread = start_daemon(port)
+        if wait_for_daemon(port, server=server, thread=thread):
+            return port, server, thread
+    return None, server, thread
+
+
+def _stderr_log_tail(max_lines: int = 5) -> str:
+    """Last ERROR lines (or last lines) of orbital-stderr.log, for the failure
+    dialog — the generic "check logs" message points at a folder Windows hides
+    by default, which cost a full support round-trip on bug #75.
+    """
+    try:
+        try:
+            sys.stderr.flush()  # the frozen build's stderr IS this file
+        except Exception:
+            pass
+        path = os.path.join(_get_log_path(), "orbital-stderr.log")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = [line.rstrip() for line in f if line.strip()]
+        errors = [line for line in lines if "ERROR" in line]
+        return "\n".join((errors or lines)[-max_lines:])
+    except Exception:
+        return ""
 
 
 def run_smoke_test() -> int:
@@ -227,9 +320,8 @@ def run_smoke_test() -> int:
     run_migrations()
     _inherit_shell_path()
     _prepare_bundled_ripgrep()
-    port = find_free_port(8000)
-    start_daemon(port)
-    ok = wait_for_daemon(port)
+    port, _server, _thread = boot_daemon_with_retry(8000)
+    ok = port is not None
     # In a windowed (console=False) bundle sys.stdout may be redirected/None —
     # guard print so the check's exit code remains the source of truth.
     try:
@@ -1271,14 +1363,21 @@ def main():
     if is_already_running(PORT):
         port = PORT
     else:
-        port = find_free_port(PORT)
-        server, thread = start_daemon(port)
+        port, server, thread = boot_daemon_with_retry(PORT)
 
-        if not wait_for_daemon(port):
+        if port is None:
+            import html as _html
             import webview
+            detail = _stderr_log_tail()
+            detail_html = (
+                f"<pre style='white-space:pre-wrap'>{_html.escape(detail)}</pre>"
+                if detail
+                else ""
+            )
             webview.create_window(
                 "Orbital \u2014 Error",
-                html=f"<h2>Failed to start daemon</h2><p>Check logs in {_get_log_path()}</p>",
+                html=f"<h2>Failed to start daemon</h2>{detail_html}"
+                f"<p>Check logs in {_get_log_path()}</p>",
             )
             webview.start()
             return
