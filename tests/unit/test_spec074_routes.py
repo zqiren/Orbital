@@ -331,9 +331,14 @@ class TestPinnedInjectLockContention:
 
     @staticmethod
     def _lock(ws: str, sid: str):
-        from agent_os.utils.file_lock import DirectFileLock
+        # session_lock, NOT DirectFileLock: a real concurrent writer holds
+        # the platform-selected lock (flock on the JSONL on POSIX, the
+        # sibling .lock sentinel on Windows). A DirectFileLock here never
+        # contends on Windows AND its open data-file handle breaks the meta
+        # rewrite's os.replace with WinError 5 — the first CI red.
+        from agent_os.utils.file_lock import session_lock
         path = os.path.join(ws, "orbital", "sessions", f"{sid}.jsonl")
-        return DirectFileLock(path)
+        return session_lock(path)
 
     def test_send_survives_briefly_held_session_lock(self, dispatch_env):
         """Lock held for ~300ms (a realistic patch_session burst): the route
