@@ -118,8 +118,10 @@ describe('MarkdownContent — kind-aware clickable paths (spec 002)', () => {
       <MarkdownContent content="See [Q3 Dashboard](reports/q3.html) and `src/main.py`." />,
     );
     expect(screen.queryByRole('button')).toBeNull();
-    // The link is still a plain anchor; the inline code is still a <code>.
-    expect(container.querySelector('a')).not.toBeNull();
+    // Without a workspace the relative link cannot be verified → inert text
+    // (spec 076: never a live same-window anchor); inline code stays <code>.
+    expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText('Q3 Dashboard')).not.toBeNull();
     expect(container.querySelector('code')).not.toBeNull();
   });
 });
@@ -208,14 +210,14 @@ describe('MarkdownContent — external links open outside the app window (task 3
     expect(link?.getAttribute('target')).toBeNull();
   });
 
-  it('does NOT add target to a non-workspace relative link (kind-aware mode)', () => {
+  it('renders a non-workspace relative link as inert text (kind-aware mode)', () => {
     const onOpenPath = vi.fn();
     const { container } = render(
       <MarkdownContent content="See [it](just-a-word)." workspace={WS} onOpenPath={onOpenPath} />,
     );
-    const link = container.querySelector('a[href="just-a-word"]');
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute('target')).toBeNull();
+    expect(container.querySelector('a')).toBeNull();
+    const span = screen.getByText('it');
+    expect(span.getAttribute('title')).toBe('just-a-word');
   });
 
   it('still renders a workspace-path link as a card, unaffected by the external-link change', () => {
@@ -250,11 +252,80 @@ describe('MarkdownContent — external links open outside the app window (task 3
     expect(link?.getAttribute('target')).toBeNull();
   });
 
-  it('does NOT add target to a relative link when workspace/onOpenPath are omitted', () => {
+  it('renders a relative link as inert text when workspace/onOpenPath are omitted', () => {
     const { container } = render(<MarkdownContent content="See [it](just-a-word)." />);
-    const link = container.querySelector('a[href="just-a-word"]');
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute('target')).toBeNull();
+    expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText('it').getAttribute('title')).toBe('just-a-word');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Undetected links must never navigate the app window (BACKLOG spec 076)
+// ---------------------------------------------------------------------------
+
+describe('MarkdownContent — undetected links are inert (spec 076)', () => {
+  it('renders an outside-workspace absolute-path link as inert text, keeping the href as title', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="Wrote [README.md](/Users/other/place/README.md:7)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    expect(container.querySelector('a')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    const span = screen.getByText('README.md');
+    expect(span.tagName).toBe('SPAN');
+    expect(span.getAttribute('title')).toBe('/Users/other/place/README.md:7');
+  });
+
+  it('renders a file:// link as inert text (never handed to the webview)', () => {
+    const onOpenPath = vi.fn();
+    const { container } = render(
+      <MarkdownContent
+        content="See [the file](file:///etc/hosts)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    expect(container.querySelector('a')).toBeNull();
+    // react-markdown's defaultUrlTransform blanks foreign-scheme hrefs before
+    // our renderer sees them, so the span carries no title here — the point of
+    // this test is only that no live anchor reaches the webview.
+    expect(screen.getByText('the file').tagName).toBe('SPAN');
+  });
+
+  it('renders an in-workspace absolute link with a :line suffix as a card opening the stripped path', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <MarkdownContent
+        content="Wrote [README.md](/Users/you/repo/agent_output/README.md:7)."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const card = screen.getByRole('button', {
+      name: 'Open agent_output/README.md in the preview panel',
+    });
+    fireEvent.click(card);
+    expect(onOpenPath).toHaveBeenCalledWith('agent_output/README.md');
+  });
+
+  it('renders an inline-code path with a :line suffix as a chip opening the stripped path', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <MarkdownContent
+        content="Check `src/main.py:42` for the bug."
+        workspace={WS}
+        onOpenPath={onOpenPath}
+      />,
+    );
+    const chip = screen.getByRole('button', {
+      name: 'Open src/main.py in the preview panel',
+    });
+    fireEvent.click(chip);
+    expect(onOpenPath).toHaveBeenCalledWith('src/main.py');
   });
 });
 

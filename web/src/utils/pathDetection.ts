@@ -99,6 +99,13 @@ export function detectWorkspacePath(raw: string, workspace: string): DetectedPat
     if (candidate.startsWith('./')) candidate = candidate.slice(2);
   }
 
+  // Tolerate a trailing `:line` / `:line:col` reference suffix (the standard
+  // codex / Claude Code `path.md:7` convention — spec 076). The drawer has no
+  // line-jump, so the number is parsed away and discarded. Applied after the
+  // workspace-prefix strip and after URL rejection, so a `host:port` can never
+  // be touched here.
+  candidate = candidate.replace(/:\d+(?::\d+)?$/, '');
+
   // Reject traversal and anything that doesn't look like a file path.
   if (candidate.split('/').some((seg) => seg === '..')) return null;
   // Reject all-numeric "dotted number" candidates (`3.11`, `0.6.8`, `1.0`,
