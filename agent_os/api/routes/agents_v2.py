@@ -34,6 +34,7 @@ from agent_os.daemon_v2.agent_md_seeder import (
 from agent_os.daemon_v2.default_skills_installer import install_default_skills
 from agent_os.daemon_v2.sub_agent_transcript import read_sub_agent_summary
 from agent_os.daemon_v2.provider_errors import ProviderConfigError
+from agent_os.utils.file_lock import FileLockError
 from agent_os.agent.project_paths import ProjectPaths
 from agent_os.api.routes._attachment_formatter import (
     validate_attachments,
@@ -1304,6 +1305,37 @@ def _build_recap_preamble(session, handle: str) -> str:
     )
 
 
+# The session JSONL's advisory lock is held in short bursts by concurrent
+# same-process writers — the pin PATCH's load + meta-rewrite is the known
+# collider (the composer fires it fire-and-forget, so a send routinely lands
+# inside the burst). The lock itself is non-blocking with zero retries, so
+# the inject route absorbs contention here: brief exponential backoff, then
+# a clean retryable failure instead of an unhandled 500.
+_LOCK_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+async def _retry_session_lock(fn):
+    """Run ``fn``, retrying while the session file's lock is contended.
+
+    ``fn`` may return a plain value (sync call sites run each attempt on the
+    event loop, unchanged from before) or an awaitable (``asyncio.to_thread``
+    call sites); the backoff sleeps yield so the lock holder can finish. The
+    final attempt's ``FileLockError`` propagates to the caller.
+    """
+    import inspect
+
+    async def _attempt():
+        result = fn()
+        return await result if inspect.isawaitable(result) else result
+
+    for delay in _LOCK_RETRY_DELAYS:
+        try:
+            return await _attempt()
+        except FileLockError:
+            await asyncio.sleep(delay)
+    return await _attempt()
+
+
 @router.post("/agents/{project_id}/inject")
 async def inject_message(project_id: str, req: InjectRequest):
     # Verify project exists before attempting inject
@@ -1322,9 +1354,10 @@ async def inject_message(project_id: str, req: InjectRequest):
     inject_session_id = req.session_id
     if req.target and req.pinned and _sub_agent_manager is not None:
         try:
-            inject_session_id, prior_session = _agent_manager.peek_chat_session(
-                project_id, req.session_id,
-            )
+            inject_session_id, prior_session = await _retry_session_lock(
+                lambda: _agent_manager.peek_chat_session(
+                    project_id, req.session_id,
+                ))
             if prior_session is not None:
                 recap_preamble = _build_recap_preamble(prior_session, req.target)
         except Exception:
@@ -1389,9 +1422,19 @@ async def inject_message(project_id: str, req: InjectRequest):
         # ``inject_session_id`` is the recap peek's resolved id when the
         # dispatch is pinned (identical resolution funnel), else the raw
         # request value.
-        mention_session_id = _agent_manager.persist_mention_message(
-            project_id, inject_session_id, user_msg,
-        )
+        try:
+            mention_session_id = await _retry_session_lock(
+                lambda: _agent_manager.persist_mention_message(
+                    project_id, inject_session_id, user_msg,
+                ))
+        except FileLockError:
+            # Still contended after the whole backoff budget: refuse cleanly
+            # (retryable, message NOT persisted) rather than letting the
+            # error escape as an opaque 500 with the user's message dropped.
+            raise HTTPException(
+                status_code=503,
+                detail="Chat session is busy — please retry",
+            )
 
         # dispatch_id (TASK-dispatch-id-pairing): minted HERE, up front, so
         # it is available for logging/correlation alongside this request;
@@ -1830,12 +1873,19 @@ async def patch_session(project_id: str, session_id: str, req: SessionPatchReque
     if target_set:
         patch_kwargs["pinned_target"] = req.pinned_target
     try:
-        patched = await asyncio.to_thread(
-            _agent_manager.patch_session, project_id, session_id,
-            **patch_kwargs,
-        )
+        # Same lock-contention discipline as the inject route: the disk-path
+        # patch write-locks the session JSONL and can lose the race against a
+        # concurrent (now-retrying) pinned send — retry instead of 500ing.
+        patched = await _retry_session_lock(
+            lambda: asyncio.to_thread(
+                _agent_manager.patch_session, project_id, session_id,
+                **patch_kwargs,
+            ))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found")
+    except FileLockError:
+        raise HTTPException(
+            status_code=503, detail="Chat session is busy — please retry")
     result: dict = {"status": "patched", "session_id": session_id}
     if name is not None:
         result["name"] = name

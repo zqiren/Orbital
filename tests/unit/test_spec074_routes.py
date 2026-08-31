@@ -317,3 +317,97 @@ class TestPinnedInject:
 
         second = stub.sends[1]
         assert second["message"] == "second pinned message"
+
+
+# ---------------------------------------------------------------------------
+# Pin-PATCH vs. inject lock race (manual-verification bug, 2026-08-31): the
+# composer's fire-and-forget pin PATCH write-locks the session JSONL for a
+# load+meta-rewrite burst; a send landing inside that burst used to 500 (the
+# recap peek degraded gracefully but persist_mention_message had no guard).
+# ---------------------------------------------------------------------------
+
+
+class TestPinnedInjectLockContention:
+
+    @staticmethod
+    def _lock(ws: str, sid: str):
+        from agent_os.utils.file_lock import DirectFileLock
+        path = os.path.join(ws, "orbital", "sessions", f"{sid}.jsonl")
+        return DirectFileLock(path)
+
+    def test_send_survives_briefly_held_session_lock(self, dispatch_env):
+        """Lock held for ~300ms (a realistic patch_session burst): the route
+        retries both the recap peek and the persist — 200, dispatched WITH
+        the recap, and the authored row lands in the JSONL."""
+        import threading
+
+        client, stub, consolidation, pid, ws, sid = dispatch_env
+        lock = self._lock(ws, sid)
+        lock.acquire()
+        timer = threading.Timer(0.3, lock.release)
+        timer.start()
+        try:
+            resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+                "content": "racing the pin patch",
+                "target": "codex", "pinned": True, "session_id": sid,
+            })
+        finally:
+            timer.cancel()
+            lock.release()  # no-op if the timer already released
+
+        assert resp.status_code == 200, resp.text
+        assert len(stub.sends) == 1
+        # The peek retried too — recap preserved, not degraded away.
+        assert stub.sends[0]["message"].startswith("Conversation so far")
+        rows = _session_rows(ws, sid)
+        user_rows = [r for r in rows if r.get("role") == "user"]
+        assert user_rows[-1]["content"] == "racing the pin patch"
+
+    def test_pin_patch_survives_briefly_held_session_lock(self, dispatch_env):
+        """The mirror race (seen live 3/10 under contention): the pin PATCH's
+        own Session.load loses the lock to a concurrent inject. It must retry
+        the same way instead of 500ing the pin."""
+        import threading
+
+        client, stub, consolidation, pid, ws, sid = dispatch_env
+        lock = self._lock(ws, sid)
+        lock.acquire()
+        timer = threading.Timer(0.3, lock.release)
+        timer.start()
+        try:
+            resp = client.patch(
+                f"/api/v2/agents/{pid}/sessions/{sid}",
+                json={"pinned_target": "codex"},
+            )
+        finally:
+            timer.cancel()
+            lock.release()
+
+        assert resp.status_code == 200, resp.text
+        meta = [r for r in _session_rows(ws, sid)
+                if r.get("event") == "session_start"]
+        assert meta and meta[-1].get("pinned_target") == "codex"
+
+    def test_stuck_lock_returns_503_not_500(self, dispatch_env, monkeypatch):
+        """Lock held past the whole retry budget: a clean, retryable 503 —
+        never an unhandled FileLockError/500 — and nothing dispatched or
+        persisted."""
+        client, stub, consolidation, pid, ws, sid = dispatch_env
+        routes_mod = _routes_mod()
+        monkeypatch.setattr(
+            routes_mod, "_LOCK_RETRY_DELAYS", (0.01, 0.02), raising=False)
+
+        lock = self._lock(ws, sid)
+        lock.acquire()
+        try:
+            resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+                "content": "never lands",
+                "target": "codex", "pinned": True, "session_id": sid,
+            })
+        finally:
+            lock.release()
+
+        assert resp.status_code == 503, resp.text
+        assert stub.sends == []
+        rows = _session_rows(ws, sid)
+        assert all(r.get("content") != "never lands" for r in rows)

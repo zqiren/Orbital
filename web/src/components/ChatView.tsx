@@ -528,6 +528,22 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // handleSend re-persists the pin after a successful pinned send).
   const { sessions: pinSessions, pinAgent } = useSessions(projectId);
   const [localPin, setLocalPin] = useState<{ sessionId: string; slug: string | null } | null>(null);
+  // The pin PATCH write-locks the session JSONL on the backend for a
+  // load+meta-rewrite burst; an inject landing inside that burst gets
+  // rejected (2026-08-31 bug: pick agent → send immediately → "Failed to
+  // send message"). Track the in-flight PATCH so handleSend can serialize
+  // behind it; outcome is irrelevant (failure keeps the optimistic pin).
+  const pinPatchInFlightRef = useRef<Promise<void> | null>(null);
+  const persistPin = useCallback((sid: string, slug: string | null) => {
+    const done: Promise<void> = pinAgent(sid, slug)
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        if (pinPatchInFlightRef.current === done) {
+          pinPatchInFlightRef.current = null;
+        }
+      });
+    pinPatchInFlightRef.current = done;
+  }, [pinAgent]);
   const backendPin = useMemo(() => {
     if (sessionId === undefined) return null;
     const entry = pinSessions.find(
@@ -2485,6 +2501,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     if (target) setSubAgentLoading(target);
     setInjectError(null);
     try {
+      // Serialize behind a just-fired pin PATCH: it holds the session file's
+      // write lock on the backend, and an inject racing that burst gets
+      // rejected with the message dropped. Waiting out the PATCH (success or
+      // failure alike) removes the race at its source.
+      if (pinPatchInFlightRef.current) await pinPatchInFlightRef.current;
       const result = await injectMessage(
         projectId,
         content,
@@ -2505,7 +2526,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         target !== undefined &&
         backendPin !== target
       ) {
-        void pinAgent(sessionId, target).catch(() => {});
+        persistPin(sessionId, target);
       }
       // Pending-input queue (spec 006 §3h): the happy-path 202. The backend
       // ACCEPTED + queued this message behind the slot holder; it auto-dispatches
@@ -3494,7 +3515,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               onChange={(slug) => {
                 if (sessionId === undefined) return;
                 setLocalPin({ sessionId, slug });
-                void pinAgent(sessionId, slug).catch(() => {});
+                persistPin(sessionId, slug);
               }}
               disabled={sessionId === undefined}
             />

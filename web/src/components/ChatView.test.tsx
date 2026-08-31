@@ -27,6 +27,11 @@ import { createRoot, type Root } from 'react-dom/client';
 const apiCalls: string[] = [];
 const apiWithTotalCalls: string[] = [];
 
+// Spec 074 lock-race fix: the sessions pin PATCH is gated + logged so the
+// serialize-behind-PATCH test can hold it open while a send fires.
+let sessionsPatchGate: Promise<void> | null = null;
+const sessionsPatchCalls: string[] = [];
+
 // Bug #48 (fix C): per-request capture of the AbortSignal handed to
 // apiWithTotal, plus an optional gate that holds /chat responses open so
 // tests can assert in-flight behavior (cached paint, abort-on-switch).
@@ -49,8 +54,14 @@ let runStatusHolder: string | null = null;
 let runStatusTerminalEvent: unknown = null;
 
 vi.mock('../config', () => ({
-  api: vi.fn(async (path: string) => {
+  api: vi.fn(async (path: string, opts?: { method?: string }) => {
     apiCalls.push(path);
+    // Session pin PATCH (spec 074) — gated for the lock-race test.
+    if (opts?.method === 'PATCH' && path.includes('/sessions/')) {
+      sessionsPatchCalls.push(path);
+      if (sessionsPatchGate) await sessionsPatchGate;
+      return {};
+    }
     // run-status returns the configured slot holder so ChatView can decide
     // whether the viewed session is the holder.
     if (path.includes('/run-status')) {
@@ -239,6 +250,8 @@ let root: Root;
 beforeEach(() => {
   apiCalls.length = 0;
   apiWithTotalCalls.length = 0;
+  sessionsPatchGate = null;
+  sessionsPatchCalls.length = 0;
   apiWithTotalSignals.length = 0;
   chatResponseGate = null;
   __clearChatHistoryCacheForTests();
@@ -544,6 +557,7 @@ function renderChat(props: {
   sessionId?: string;
   initialDraft?: string;
   onDraftConsumed?: () => void;
+  mentionAgents?: Array<{ slug: string; name: string }>;
 }) {
   return act(async () => {
     root.render(
@@ -551,7 +565,7 @@ function renderChat(props: {
         projectId="p1"
         project={project}
         agentStatus={(props.agentStatus ?? 'idle') as never}
-        mentionAgents={[]}
+        mentionAgents={props.mentionAgents ?? []}
         sessionId={props.sessionId}
         initialDraft={props.initialDraft}
         onDraftConsumed={props.onDraftConsumed}
@@ -1154,6 +1168,62 @@ describe('T5 ChatView: inject targets the viewed session', () => {
 });
 
 // ─── Spec 006: pending-input queue (frontend §3h, tests 13-19) ─────────────
+
+// Spec 074 lock-race (manual-verification bug, 2026-08-31): picking a pin
+// target fires a fire-and-forget PATCH that write-locks the session JSONL
+// server-side; a send landing inside that burst was rejected with the
+// message dropped. handleSend must serialize behind the in-flight PATCH.
+describe('Spec 074: send serializes behind the in-flight pin PATCH', () => {
+  it('holds the inject until the pin PATCH settles, then dispatches pinned', async () => {
+    let releasePatch!: () => void;
+    sessionsPatchGate = new Promise<void>((r) => { releasePatch = r; });
+
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+
+    // Open the pin dropdown and pick the worker — fires the (gated) PATCH.
+    const pinToggle = container.querySelector(
+      '[data-testid="pin-target-select"] > button',
+    ) as HTMLButtonElement;
+    await act(async () => { pinToggle.click(); });
+    const option = Array.from(
+      container.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes('Claude Code')) as HTMLButtonElement;
+    expect(option).toBeTruthy();
+    await act(async () => { option.click(); });
+    expect(sessionsPatchCalls.length).toBe(1);
+
+    await act(async () => { typeInComposer('hi worker'); });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // PATCH still in flight → the inject must NOT have fired yet.
+    expect(injectCalls.length).toBe(0);
+
+    await act(async () => {
+      releasePatch();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    // PATCH settled → the send goes out, pinned to the picked worker.
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId, pinned)
+    expect(injectCalls[0][1]).toBe('hi worker');
+    expect(injectCalls[0][2]).toBe('claude-code');
+    expect(injectCalls[0][6]).toBe(true);
+  });
+});
 
 describe('ChatView: pending-input queue (spec 006)', () => {
   // Helper: send a message that gets queued (202 queued_pending_slot) into the
