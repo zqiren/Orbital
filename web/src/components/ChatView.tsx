@@ -346,6 +346,7 @@ import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
   SubAgentMessageEvent,
+  SubAgentLifecycleEvent,
   UserMessageEvent,
   AgentNotifyEvent,
   StateRefreshLifecycleEvent,
@@ -1854,6 +1855,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       scrollToBottom();
     }
 
+    // Spec 074 hidden-response fix: the bubble appended above lives ONLY in
+    // `items` — never mirrored into rawMessages — and a pinned dispatch keeps
+    // the management loop idle/holderless, so the Bug29-D2 reseed gate does
+    // not protect it. The next send's optimistic rawMessages push then
+    // reseeds `items` wholesale and the previous response vanishes. A
+    // sub-agent terminal event for the viewed session refreshes the canonical
+    // history instead: by broadcast time the backend has persisted both the
+    // session terminal row and the transcript turn boundary (no awaits in
+    // between on the daemon's loop), so the refetched /chat page carries the
+    // server-synthesized response bubble and the reseed becomes harmless.
+    function handleSubAgentTerminal(event: WebSocketEvent) {
+      const e = event as SubAgentLifecycleEvent;
+      if (e.project_id !== projectId) return;
+      if (!e.session_id || e.session_id !== sessionIdRef.current) return;
+      refreshRawMessages();
+    }
+
     function handleUserMessage(event: WebSocketEvent) {
       const e = event as UserMessageEvent;
       if (e.project_id !== projectId) return;
@@ -2163,6 +2181,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     on('approval.request', handleApprovalRequest);
     on('approval.resolved', handleApprovalResolved);
     on('chat.sub_agent_message', handleSubAgentMessage);
+    // Terminal family only — 'started' persists nothing a reseed could hide.
+    on('sub_agent.completed', handleSubAgentTerminal);
+    on('sub_agent.error', handleSubAgentTerminal);
+    on('sub_agent.failed', handleSubAgentTerminal);
+    on('sub_agent.stopped', handleSubAgentTerminal);
+    on('sub_agent.turn_interrupted', handleSubAgentTerminal);
     on('chat.user_message', handleUserMessage);
     on('agent.notify', handleAgentNotify);
     on('state_refresh.lifecycle', handleStateRefresh);
@@ -2180,6 +2204,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('approval.request', handleApprovalRequest);
       off('approval.resolved', handleApprovalResolved);
       off('chat.sub_agent_message', handleSubAgentMessage);
+      off('sub_agent.completed', handleSubAgentTerminal);
+      off('sub_agent.error', handleSubAgentTerminal);
+      off('sub_agent.failed', handleSubAgentTerminal);
+      off('sub_agent.stopped', handleSubAgentTerminal);
+      off('sub_agent.turn_interrupted', handleSubAgentTerminal);
       off('chat.user_message', handleUserMessage);
       off('agent.notify', handleAgentNotify);
       off('state_refresh.lifecycle', handleStateRefresh);
@@ -2191,7 +2220,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       off('fanout.task_update', handleFanoutTaskUpdate);
       off('fanout.completed', handleFanoutCompleted);
     };
-  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble]);
+  }, [projectId, project.name, on, off, scrollToBottom, removeOptimisticBubble, refreshRawMessages]);
 
   // Credential-error surfacing: agent.status error events for the viewed
   // session feed the AgentErrorNotice. Events without a meaningful session

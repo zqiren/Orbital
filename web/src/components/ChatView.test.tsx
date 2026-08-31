@@ -1169,6 +1169,122 @@ describe('T5 ChatView: inject targets the viewed session', () => {
 
 // ─── Spec 006: pending-input queue (frontend §3h, tests 13-19) ─────────────
 
+// Spec 074 hidden-response bug (manual-verification, 2026-08-31): a pinned
+// worker's live response bubble lives ONLY in `items` (handleSubAgentMessage
+// never mirrors it into rawMessages), and a pinned dispatch keeps the
+// management loop idle/holderless — so the Bug29-D2 reseed gate never
+// protects it. The next send pushes the optimistic row into rawMessages and
+// the wholesale reseed wipes the previous response. Fix: a sub-agent
+// terminal event for the viewed session triggers the existing catch-up
+// refetch, whose /chat response carries the server-synthesized bubble.
+describe('Spec 074: pinned worker response survives the next send (terminal catch-up)', () => {
+  const userRow = {
+    role: 'user',
+    content: 'check the announcements',
+    timestamp: '2026-08-31T09:02:29Z',
+  };
+  const markerRow = {
+    role: 'system',
+    source: 'daemon',
+    content:
+      '[Sub-agent] Message sent to codex: "check the announcements". ' +
+      'Transcript: /ws/orbital/sub_agents/codex/abc.jsonl',
+    timestamp: '2026-08-31T09:02:35Z',
+  };
+  const syntheticRow = {
+    role: 'assistant',
+    content: 'codex full answer about the memory announcement',
+    source: 'sub_agent',
+    sub_agent_handle: 'codex',
+    sub_agent_tool_rows: [],
+    sub_agent_duration: 2.0,
+    timestamp: '2026-08-31T09:02:35Z',
+    session_id: 's1',
+  };
+  const terminalRow = {
+    role: 'system',
+    source: 'daemon',
+    content:
+      '[Sub-agent] codex completed. Summary: codex full answer about the ' +
+      'memory announcement. Transcript: /ws/orbital/sub_agents/codex/abc.jsonl.',
+    timestamp: '2026-08-31T09:04:45Z',
+  };
+
+  it('refetches /chat on sub_agent.completed and keeps the response visible after a subsequent send', async () => {
+    // Server truth BEFORE completion: no synthetic bubble yet.
+    chatInitialResponse = { data: [userRow, markerRow], total: 2 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const fetchesAfterMount = apiWithTotalCalls.length;
+
+    // Live: the worker's response arrives over WS (items-only bubble).
+    await act(async () => {
+      emitWs('chat.sub_agent_message', {
+        type: 'chat.sub_agent_message',
+        project_id: 'p1',
+        session_id: 's1',
+        content: 'codex full answer about the memory announcement',
+        source: 'codex',
+        timestamp: '2026-08-31T09:04:44Z',
+      });
+    });
+    expect(container.textContent ?? '').toContain('codex full answer');
+
+    // The turn closes server-side: /chat now serves the synthetic bubble.
+    chatInitialResponse = {
+      data: [userRow, markerRow, syntheticRow, terminalRow],
+      total: 4,
+    };
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed',
+        project_id: 'p1',
+        session_id: 's1',
+        handle: 'codex',
+        summary: 'codex full answer about the memory announcement',
+      });
+    });
+    await flushEffects();
+    // The terminal event triggered the catch-up refetch.
+    expect(apiWithTotalCalls.length).toBeGreaterThan(fetchesAfterMount);
+
+    // Subsequent send: the reseed must not hide the previous response.
+    await act(async () => {
+      typeInComposer('follow-up question');
+    });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(container.textContent ?? '').toContain('codex full answer');
+  });
+
+  it('ignores terminal events for other sessions (strict session routing)', async () => {
+    chatInitialResponse = { data: [userRow, markerRow], total: 2 };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const fetchesAfterMount = apiWithTotalCalls.length;
+
+    await act(async () => {
+      emitWs('sub_agent.completed', {
+        type: 'sub_agent.completed',
+        project_id: 'p1',
+        session_id: 'OTHER',
+        handle: 'codex',
+        summary: 'irrelevant',
+      });
+    });
+    await flushEffects();
+    expect(apiWithTotalCalls.length).toBe(fetchesAfterMount);
+  });
+});
+
 // Spec 074 lock-race (manual-verification bug, 2026-08-31): picking a pin
 // target fires a fire-and-forget PATCH that write-locks the session JSONL
 // server-side; a send landing inside that burst was rejected with the
