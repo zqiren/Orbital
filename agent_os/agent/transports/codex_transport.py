@@ -627,6 +627,17 @@ class CodexTransport(AgentTransport):
 
         method, params = self._thread_open_request(workspace)
         result = await self._request(method, params)
+        self._thread_opened(result)
+
+    def _thread_opened(self, result: dict) -> None:
+        """Adopt the thread/start | thread/resume response's identity and
+        surface it as a ``thread_started`` event (§4a eager resume
+        persistence, parity with SDK/ACP). The id and rollout path are known
+        HERE, before any turn runs — emitting eagerly means a turn stopped
+        before its boundary still leaves a resumable record, instead of the
+        next spawn honestly reporting "fresh session — first spawn" and
+        losing the thread.
+        """
         thread = result.get("thread") or {}
         self._thread_id = thread.get("id")
         self._rollout_path = thread.get("path")
@@ -634,6 +645,14 @@ class CodexTransport(AgentTransport):
         if not self._thread_id:
             raise RuntimeError(
                 f"codex thread/start returned no thread id: {result}")
+        self._event_queue.put_nowait(TransportEvent(
+            event_type="thread_started",
+            data={
+                "session_id": self._thread_id,
+                "model": self._effective_model or self._model,
+                "rollout_path": self._rollout_path,
+            },
+        ))
 
     async def _drain_stderr(self) -> None:
         try:

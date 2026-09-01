@@ -451,6 +451,55 @@ class TestStop:
         assert all(f.get("method") != "turn/interrupt" for f in stdin.frames)
 
 
+class TestEagerThreadStarted:
+    """§4a eager resume persistence, codex parity with SDK/ACP.
+
+    The thread id + rollout path are known synchronously from the
+    thread/start | thread/resume response — surfacing them as a
+    ``thread_started`` event at open (not only in ``_turn_meta`` on the turn
+    boundary) means a turn that is STOPPED before completing still leaves a
+    resumable record. Observed regression this guards: pin codex, stop its
+    first turn, send again — the dispatch honestly reported "fresh session —
+    first spawn" and the provider thread (with the user's brief) was lost.
+    """
+
+    def test_thread_opened_emits_thread_started_with_identity(self):
+        t = CodexTransport()
+        t._model = "gpt-5.4-mini"
+        t._thread_opened({
+            "thread": {"id": "T42", "path": "/tmp/rollout-T42.jsonl"},
+            "model": "gpt-5.4",
+        })
+        assert t._thread_id == "T42"
+        assert t._rollout_path == "/tmp/rollout-T42.jsonl"
+        events = _drain(t)
+        started = [e for e in events if e.event_type == "thread_started"]
+        assert len(started) == 1
+        assert started[0].data["session_id"] == "T42"
+        assert started[0].data["rollout_path"] == "/tmp/rollout-T42.jsonl"
+        assert started[0].data["model"] == "gpt-5.4"
+
+    def test_thread_opened_without_id_raises_and_emits_nothing(self):
+        t = CodexTransport()
+        with pytest.raises(RuntimeError):
+            t._thread_opened({"thread": {}})
+        assert _drain(t) == []
+
+    def test_thread_started_chunk_reaches_process_manager_metadata(self):
+        """The generic event→chunk mapping carries the identity through as
+        metadata (what ProcessManager.consume hands to on_thread_update)."""
+        from agent_os.agent.transports.base import transport_event_to_chunk
+        t = CodexTransport()
+        t._thread_opened({
+            "thread": {"id": "T43", "path": "/tmp/rollout-T43.jsonl"},
+            "model": "gpt-5.4",
+        })
+        chunk = transport_event_to_chunk(_drain(t)[0])
+        assert chunk.chunk_type == "thread_started"
+        assert chunk.metadata["session_id"] == "T43"
+        assert chunk.metadata["rollout_path"] == "/tmp/rollout-T43.jsonl"
+
+
 class TestManagerResolution:
     def _manager(self):
         from unittest.mock import MagicMock

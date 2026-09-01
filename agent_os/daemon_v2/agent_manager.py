@@ -3836,17 +3836,20 @@ class AgentManager:
 
         Fired (via LifecycleObserver.on_thread_update) on each completed
         sub-agent turn. Composite key ``(SessionKey, handle)``: the session
-        JSONL is SessionKey-scoped and the meta row carries the handle. A
-        completion racing an eviction (session no longer hydrated) is logged
-        and dropped — the previous record, if any, remains valid.
+        JSONL is SessionKey-scoped and the meta row carries the handle.
+
+        The session may exist ONLY on disk: a pinned-worker chat (spec 074)
+        never starts the management loop, so its session is never hydrated
+        into ``_handles``. Falling back to a disk load here is what keeps the
+        worker's thread resumable across a stop — without it every completed
+        turn's identity was dropped with a warning and the next spawn was
+        honestly (and needlessly) "fresh session — first spawn".
         """
-        # Reuses the existing get_session accessor (keyword-only session_id,
-        # defined further down with the queue-era helpers).
-        session = self.get_session(project_id, session_id=session_id)
+        session = self.get_session_or_load(project_id, session_id=session_id)
         if session is None:
             logger.warning(
-                "record_sub_agent_thread: no hydrated session for %s/%s — "
-                "thread id %s for handle %s not recorded",
+                "record_sub_agent_thread: no session (live or on disk) for "
+                "%s/%s — thread id %s for handle %s not recorded",
                 project_id, session_id, claude_session_id, handle,
             )
             return
@@ -4183,6 +4186,31 @@ class AgentManager:
         session_id = self._resolve_session_id(session_id)
         handle = self._handles.get(make_session_key(project_id, session_id))
         return handle.session if handle else None
+
+    def get_session_or_load(self, project_id: str, *,
+                            session_id: str | None = None):
+        """``get_session`` with an on-disk fallback, or None.
+
+        A pinned-worker chat session (spec 074) is persisted and dispatched
+        without ever starting the management loop, so it may exist only as a
+        JSONL. Callers that read or append per-session state outside the loop
+        (sub-agent thread records, the dispatch-side resume decision) must see
+        that session too. Errors degrade to None — this runs inside the
+        dispatch path, where a missing session means an honest fresh spawn,
+        never a 500.
+        """
+        session = self.get_session(project_id, session_id=session_id)
+        if session is not None:
+            return session
+        resolved = self._resolve_session_id(session_id)
+        try:
+            return self._load_session_from_disk(project_id, resolved)
+        except Exception:
+            logger.exception(
+                "get_session_or_load: disk load failed for %s/%s",
+                project_id, resolved,
+            )
+            return None
 
     # ── Queue helpers (Phase 1) ─────────────────────────────────────────
     # F7 note: the queue is per-project, not per-session. The single-active-

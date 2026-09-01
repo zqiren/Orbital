@@ -361,10 +361,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     sub_agent_manager._lifecycle_observer = lifecycle_observer
     # Resume persistence (TASK-resume-persistence): dispatch reads the
     # per-(SessionKey, handle) thread records off the management session.
-    # (get_session's session_id is keyword-only; the resolver contract is
-    # positional (project_id, session_id).)
+    # get_session_or_load, not get_session: a pinned-worker chat session
+    # (spec 074) is never hydrated into _handles, so its thread records are
+    # only reachable through the disk fallback. (get_session_or_load's
+    # session_id is keyword-only; the resolver contract is positional
+    # (project_id, session_id).)
     sub_agent_manager._session_resolver = (
-        lambda pid, sid: agent_manager.get_session(pid, session_id=sid)
+        lambda pid, sid: agent_manager.get_session_or_load(pid, session_id=sid)
     )
 
     # 6a2. Fanout registry (spec 009, Task 2/6): join/gather core for parallel
