@@ -216,6 +216,63 @@ describe('useSessions', () => {
     expect(apiFn.mock.calls.length).toBe(callCountBeforeEvent);
   });
 
+  // Bug: a pinned-worker dispatch (spec 074) never wakes the management loop,
+  // so no agent.status ever fires — the fresh session materialized by the
+  // first pinned message stayed invisible in the sidebar until an unrelated
+  // refresh. The sub-agent lifecycle events are the signal that flow DOES
+  // emit, so the hook must refresh on them too.
+  it('subscribes to sub_agent.started and chat.sub_agent_message on mount', async () => {
+    apiFn.mockResolvedValue([]);
+
+    renderHook(() => useSessions('proj-ws-sub'));
+
+    await waitFor(() => {
+      const calls = onMock.mock.calls.map((c) => c[0]);
+      expect(calls).toContain('sub_agent.started');
+      expect(calls).toContain('chat.sub_agent_message');
+    });
+  });
+
+  it('refreshes when sub_agent.started fires for the same project', async () => {
+    const initial: SessionListEntry[] = [];
+    const updated: SessionListEntry[] = [
+      makeSession({ session_id: 'fresh-pinned', pinned_target: 'codex' }),
+    ];
+    apiFn.mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
+
+    const { result } = renderHook(() => useSessions('proj-sub-refresh'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const handlerCall = onMock.mock.calls.find((c) => c[0] === 'sub_agent.started');
+    expect(handlerCall).toBeDefined();
+    const handler = handlerCall![1] as (e: unknown) => void;
+
+    await act(async () => {
+      handler({ type: 'sub_agent.started', project_id: 'proj-sub-refresh' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessions).toEqual(updated);
+    });
+  });
+
+  it('does NOT refresh on sub_agent.started for a different project', async () => {
+    apiFn.mockResolvedValueOnce([makeSession({ session_id: 's1' })]);
+
+    const { result } = renderHook(() => useSessions('proj-sub-mine'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const callCountBeforeEvent = apiFn.mock.calls.length;
+    const handlerCall = onMock.mock.calls.find((c) => c[0] === 'sub_agent.started');
+    const handler = handlerCall![1] as (e: unknown) => void;
+
+    await act(async () => {
+      handler({ type: 'sub_agent.started', project_id: 'proj-OTHER' });
+    });
+
+    expect(apiFn.mock.calls.length).toBe(callCountBeforeEvent);
+  });
+
   it('surfaces the name field on returned session entries', async () => {
     const sessions: SessionListEntry[] = [
       makeSession({ session_id: 's1', name: 'My Login Flow' }),

@@ -372,6 +372,7 @@ import SlotHeldNotice from './SlotHeldNotice';
 import PendingInputNotice from './PendingInputNotice';
 import { ColdStartCard } from './ColdStartCard';
 import SubAgentStatusBar from './SubAgentStatusBar';
+import { useSubAgentStatus } from '../hooks/useSubAgentStatus';
 import FanoutCard, { isTerminal, type FanoutTaskState } from './FanoutCard';
 import SubAgentDrillIn from './SubAgentDrillIn';
 
@@ -554,6 +555,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }, [pinSessions, sessionId]);
   const pinnedTarget =
     localPin && localPin.sessionId === sessionId ? localPin.slug : backendPin;
+  // Spec 074: the composer must reflect the PINNED worker's run status, not
+  // only the management agent's — a pinned exchange keeps the management loop
+  // idle for its whole duration, but a send while the worker's turn is open
+  // queues behind it (sub_agent_manager FIFO), so the action must read
+  // "Queue" exactly as it does for a busy management agent. Only 'running'
+  // counts: 'background-running' means the turn is closed and a new send
+  // dispatches immediately.
+  const { agents: subAgentStatuses } = useSubAgentStatus(projectId, sessionId);
+  const pinnedWorkerRunning =
+    !!pinnedTarget &&
+    subAgentStatuses.some(
+      (a) => a.handle === pinnedTarget && a.status === 'running',
+    );
   const [showThinking, setShowThinking] = useState(false);
   const [showCommandDropdown, setShowCommandDropdown] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
@@ -3577,8 +3591,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               disabled={isCancelling}
               className="flex-1 resize-none text-[13px] max-md:text-base bg-transparent focus:outline-none leading-relaxed disabled:opacity-50"
             />
-            {(agentStatus === 'running' || agentStatus === 'waiting') ? (
+            {(agentStatus === 'running' || agentStatus === 'waiting' || pinnedWorkerRunning) ? (
               <>
+                {/* The Stop control cancels the MANAGEMENT loop — render it
+                    only when that loop is actually running. A pinned worker's
+                    open turn shows Queue alone; the worker's own stop lives
+                    on its status-bar chip. */}
+                {(agentStatus === 'running' || agentStatus === 'waiting') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -3620,6 +3639,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 >
                   <StopGlyph cancelling={isCancelling} />
                 </button>
+                )}
                 <button
                   type="button"
                   onClick={handleSend}

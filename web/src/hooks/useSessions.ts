@@ -87,16 +87,24 @@ export function useSessions(projectId: string | null) {
   // this project. agent.status covers: new_session, idle, running, waiting,
   // stopped, error, pending_approval — all the events that can change the
   // session list shape or a session's status field.
+  //
+  // A pinned-worker dispatch (spec 074) never wakes the management loop, so
+  // it emits NO agent.status at all — the fresh session materialized by the
+  // first pinned message stayed invisible in the sidebar until something
+  // unrelated refreshed it. The sub-agent lifecycle DOES speak on that path:
+  // sub_agent.started fires when the spawn-on-demand lands (just after the
+  // user row is persisted), and chat.sub_agent_message on every dispatch ack
+  // and worker reply (which also moves last_activity_at).
   useEffect(() => {
     if (!projectId) return;
     const handler = (event: WebSocketEvent) => {
-      if (event.type !== 'agent.status') return;
-      if (event.project_id !== projectIdRef.current) return;
+      if (!('project_id' in event) || event.project_id !== projectIdRef.current) return;
       void refresh();
     };
-    ws.on('agent.status', handler);
+    const events = ['agent.status', 'sub_agent.started', 'chat.sub_agent_message'] as const;
+    events.forEach((ev) => ws.on(ev, handler));
     return () => {
-      ws.off('agent.status', handler);
+      events.forEach((ev) => ws.off(ev, handler));
     };
   }, [projectId, refresh, ws]);
 

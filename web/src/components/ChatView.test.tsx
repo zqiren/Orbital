@@ -53,6 +53,13 @@ let runStatusHolder: string | null = null;
 // hydration (credential-error surfacing) after a reload.
 let runStatusTerminalEvent: unknown = null;
 
+// Configurable /sub-agents/status payload (spec 074 pinned-worker composer
+// state). Default: no sub-agents active.
+let subAgentStatusResponse: { session_id: string | null; agents: unknown[] } = {
+  session_id: null,
+  agents: [],
+};
+
 vi.mock('../config', () => ({
   api: vi.fn(async (path: string, opts?: { method?: string }) => {
     apiCalls.push(path);
@@ -75,6 +82,10 @@ vi.mock('../config', () => ({
     // pending-approval: never pending in these tests.
     if (path.includes('/pending-approval')) {
       return { pending: false };
+    }
+    // Sub-agent run status — drives the pinned-worker composer state.
+    if (path.includes('/sub-agents/status')) {
+      return subAgentStatusResponse;
     }
     // /chat?limit=1 (REST fallback) and anything else → empty list.
     return [];
@@ -266,6 +277,7 @@ beforeEach(() => {
   coldStartScanMock = async () => ({ status: 'ok' });
   runStatusHolder = null;
   runStatusTerminalEvent = null;
+  subAgentStatusResponse = { session_id: null, agents: [] };
   chatInitialResponse = { data: [], total: 0 };
   chatOlderResponse = { data: [], total: 0 };
   queueState = 'idle';
@@ -1338,6 +1350,108 @@ describe('Spec 074: send serializes behind the in-flight pin PATCH', () => {
     expect(injectCalls[0][1]).toBe('hi worker');
     expect(injectCalls[0][2]).toBe('claude-code');
     expect(injectCalls[0][6]).toBe(true);
+  });
+});
+
+// Spec 074: with a worker pinned and MID-TURN, a send queues behind the open
+// turn on the backend (sub_agent_manager FIFO) — but the composer used to
+// read only the MANAGEMENT agent's status, which stays idle for the whole
+// pinned exchange, so it showed the plain "Send" arrow and gave no hint the
+// message would wait. The composer must reflect the pinned worker's own run
+// status: an open worker turn gets the same "Queue" affordance a busy
+// management agent gets.
+describe('Spec 074: composer reflects the pinned worker run status', () => {
+  async function pinWorker() {
+    const pinToggle = container.querySelector(
+      '[data-testid="pin-target-select"] > button',
+    ) as HTMLButtonElement;
+    await act(async () => { pinToggle.click(); });
+    const option = Array.from(
+      container.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes('Claude Code')) as HTMLButtonElement;
+    await act(async () => { option.click(); });
+  }
+
+  it('shows Queue (no Send arrow, no management Stop) while the pinned worker is running', async () => {
+    subAgentStatusResponse = {
+      session_id: 's1',
+      agents: [{
+        handle: 'claude-code', display_name: 'Claude Code',
+        status: 'running', background_commands: [],
+      }],
+    };
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+    await pinWorker();
+    await flushEffects();
+
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const queueBtn = buttons.find((b) => b.textContent === 'Queue');
+    expect(queueBtn).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Send"]')).toBeNull();
+    // The management loop is idle — its Stop control must NOT appear (it
+    // would cancel nothing; the worker's own stop lives in the status bar).
+    expect(container.querySelector('button[aria-label="Stop"]')).toBeNull();
+
+    // Queue still dispatches through the normal pinned inject (the backend
+    // FIFO does the queueing).
+    await act(async () => { typeInComposer('queued follow-up'); });
+    await act(async () => {
+      queueBtn!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(injectCalls.length).toBe(1);
+    expect(injectCalls[0][1]).toBe('queued follow-up');
+    expect(injectCalls[0][2]).toBe('claude-code');
+    expect(injectCalls[0][6]).toBe(true);
+  });
+
+  it('keeps the plain Send affordance while the pinned worker is idle', async () => {
+    subAgentStatusResponse = {
+      session_id: 's1',
+      agents: [{
+        handle: 'claude-code', display_name: 'Claude Code',
+        status: 'idle', background_commands: [],
+      }],
+    };
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+    await pinWorker();
+    await flushEffects();
+
+    expect(container.querySelector('button[aria-label="Send"]')).toBeTruthy();
+    const buttons = Array.from(container.querySelectorAll('button'));
+    expect(buttons.find((b) => b.textContent === 'Queue')).toBeUndefined();
+  });
+
+  it('does NOT show Queue for a running worker that is not the pin target', async () => {
+    subAgentStatusResponse = {
+      session_id: 's1',
+      agents: [{
+        handle: 'codex', display_name: 'Codex',
+        status: 'running', background_commands: [],
+      }],
+    };
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+    });
+    await flushEffects();
+    await pinWorker();
+    await flushEffects();
+
+    expect(container.querySelector('button[aria-label="Send"]')).toBeTruthy();
   });
 });
 
