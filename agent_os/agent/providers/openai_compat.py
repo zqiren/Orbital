@@ -97,6 +97,42 @@ def _log_cache_audit(model: str, usage: TokenUsage) -> None:
     )
 
 
+# TokenDance's OAuth-key recovery contract (api-key-oauth.md#recover-key):
+# a failed gateway call carries a TokenDance-Recovery-Action response header
+# ONLY when they positively identified the recovery path; anything absent or
+# unrecognized falls through to normal error handling. The hints steer users
+# to the two recovery surfaces that exist in-app: their top-up console and
+# the re-connect link in Global Settings.
+_TOKENDANCE_RECOVERY_HINTS = {
+    "top_up_balance": (
+        "TokenDance balance is used up — top up at https://tokendance.space "
+        "(the key itself is still valid)."
+    ),
+    "reauthorize_api_key": (
+        "The TokenDance key is no longer usable (missing, disabled, expired, "
+        "or its total quota is exhausted) — re-connect TokenDance in Global "
+        "Settings to mint a fresh key."
+    ),
+    "api_key_quota": (
+        "The TokenDance key hit its daily/weekly/monthly quota — wait for "
+        "the quota to refresh, or re-connect TokenDance in Global Settings "
+        "with a higher quota."
+    ),
+}
+
+
+def _recovery_hint(exc: Exception) -> str | None:
+    """Actionable hint from a TokenDance-Recovery-Action response header."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    try:
+        action = headers.get("TokenDance-Recovery-Action")
+    except Exception:
+        return None
+    return _TOKENDANCE_RECOVERY_HINTS.get(action.strip()) if action else None
+
+
 def _classify_error(exc: Exception) -> None:
     """Map an API/network exception to ContextOverflowError or LLMError."""
     status_code = getattr(exc, "status_code", None)
@@ -107,6 +143,10 @@ def _classify_error(exc: Exception) -> None:
 
     if status_code == 400 and ("context_length" in str(exc).lower() or "context length" in str(message).lower()):
         raise ContextOverflowError(str(message)) from exc
+
+    hint = _recovery_hint(exc)
+    if hint:
+        raise LLMError(f"{message} — {hint}", status_code=status_code) from exc
 
     if status_code is not None:
         raise LLMError(str(message), status_code=status_code) from exc

@@ -900,10 +900,9 @@ export default function LLMProviderSettings({
       {/* API Key */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.apiKey')}</label>
-        {provider === 'tokendance' && mode === 'global' &&
-          (!tokendanceKeyActive || tokendanceSigninMsg) && (
+        {provider === 'tokendance' && mode === 'global' && (
           <div className="mb-2">
-            {!tokendanceKeyActive && (
+            {!tokendanceKeyActive ? (
               <>
                 <button
                   type="button"
@@ -930,6 +929,22 @@ export default function LLMProviderSettings({
                   {t('llm.tokendance.sponsor')}
                 </p>
               </>
+            ) : (
+              // A minted key can expire (user-chosen expiry at consent) or be
+              // revoked in their console; the retired big button left no way
+              // back to one-click. Same handler — the signin flow overwrites
+              // the stored key, so re-running it IS the re-provision path.
+              <button
+                type="button"
+                data-testid="tokendance-reconnect"
+                onClick={handleTokendanceSignin}
+                disabled={tokendanceSigninBusy}
+                className="text-xs text-accent hover:underline disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {tokendanceSigninBusy
+                  ? t('llm.tokendance.signin.waiting')
+                  : t('llm.tokendance.signin.reconnect')}
+              </button>
             )}
             {tokendanceSigninBusy && (
               <p className="text-xs text-secondary mt-1">{t('llm.tokendance.signin.hint')}</p>

@@ -591,7 +591,10 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     base_url: 'https://tokendance.space/gateway/v1',
   };
 
-  function mockApiWithSignin(signinImpl: () => Promise<unknown>) {
+  function mockApiWithSignin(
+    signinImpl: () => Promise<unknown>,
+    { keySet = false }: { keySet?: boolean } = {},
+  ) {
     apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
       if (path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST') {
         return signinImpl();
@@ -611,10 +614,22 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
         };
       }
       if (path === '/api/v2/settings') {
-        return { llm: { api_key_set: false, api_key_masked: '', model: null, sdk: 'openai', ...TD_SETTINGS } };
+        return {
+          llm: {
+            api_key_set: keySet,
+            api_key_masked: keySet ? 'sk-t...1111' : '',
+            model: null,
+            sdk: 'openai',
+            ...TD_SETTINGS,
+          },
+        };
       }
       if (path === '/api/v2/providers') return REGISTRY;
-      if (path === '/api/v2/settings/api-key/status') return { configured: false, source: 'none' };
+      if (path === '/api/v2/settings/api-key/status') {
+        return keySet
+          ? { configured: true, source: 'keyring' }
+          : { configured: false, source: 'none' };
+      }
       return {};
     });
   }
@@ -711,6 +726,27 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
       expect(select.value).toBe('tokendance');
     });
     expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+    // …but the low-key re-connect link takes its place: an expired or
+    // console-revoked minted key must keep a one-click path back.
+    expect(screen.getByTestId('tokendance-reconnect')).toBeTruthy();
+  });
+
+  it('re-connect re-runs the signin flow and refreshes the stored key', async () => {
+    mockApiWithSignin(
+      async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }),
+      { keySet: true },
+    );
+    render(<LLMProviderSettings mode="global" />);
+    const link = await screen.findByTestId('tokendance-reconnect');
+    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
+    fireEvent.click(link);
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    expect(apiMock).toHaveBeenCalledWith(
+      '/api/v2/providers/tokendance/signin',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    // The fresh key's mask replaces the stale one without a reload.
+    expect(screen.getByText(/sk-t\.\.\.9876/)).toBeTruthy();
   });
 
   it("still offers signin when another provider's key occupies the global slot", async () => {

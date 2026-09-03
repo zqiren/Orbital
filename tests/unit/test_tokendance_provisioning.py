@@ -185,15 +185,19 @@ async def test_invalid_minted_key_is_rejected():
         )
 
 
-def test_app_url_matches_registry_site_url():
-    """Their docs treat OAuth `app_url` (key dimension) and the X-Site-URL
-    request header as the SAME identifier — the two must never drift."""
+def test_app_url_matches_registry_attribution_header():
+    """Their app-attribution doc treats OAuth `app_url` (key dimension) and
+    the `X-App-URL` request header (request dimension, wins when present) as
+    the SAME identifier — the two must never drift, and both must byte-match
+    the App URL registered in the partner backend. X-App-URL is the ONLY
+    attribution header for new integrations (X-Site-URL is a legacy fallback;
+    nothing else participates), so the entry sends exactly one header."""
     registry_path = (
         Path(td.__file__).resolve().parents[1] / "config" / "providers.json"
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     entry = registry["providers"]["tokendance"]
-    assert entry["extra_headers"]["X-Site-URL"] == td.APP_URL
+    assert entry["extra_headers"] == {"X-App-URL": td.APP_URL}
 
 
 # ---- signin route ----

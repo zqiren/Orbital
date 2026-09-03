@@ -442,6 +442,7 @@ export const STRINGS = {
   "llm.tokendance.signin.button": { en: "Sign in to TokenDance", zh: "一键登录" },
   "llm.tokendance.signin.failed": { en: "Sign-in failed.", zh: "登录失败。" },
   "llm.tokendance.signin.hint": { en: "Complete the sign-in and confirmation in the browser window that just opened.", zh: "请在刚打开的浏览器窗口中完成登录和授权确认。" },
+  "llm.tokendance.signin.reconnect": { en: "Key expired or not working? Re-connect", zh: "Key 过期或失效？重新授权" },
   "llm.tokendance.signin.success": { en: "API key created and saved.", zh: "API Key 已创建并保存。" },
   "llm.tokendance.signin.waiting": { en: "Waiting for browser sign-in…", zh: "等待浏览器授权…" },
   "llm.tokendance.sponsor": { en: "Powered by Watcha (观猹)", zh: "由观猹 (Watcha) 提供支持" },

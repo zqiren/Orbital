@@ -3198,8 +3198,7 @@
       "default_model": "deepseek-v4-flash",
       "sdk": "openai",
       "extra_headers": {
-        "X-App-Name": "Orbital",
-        "X-Site-URL": "https://github.com/zqiren/Orbital"
+        "X-App-URL": "https://github.com/zqiren/Orbital"
       },
       "suggested_models": [
         "deepseek-v4-pro",
@@ -3208,7 +3207,7 @@
         "minimax-m3",
         "deepseek-v4-flash"
       ],
-      "notes": "China-mainland LLM API router (Watcha/观猹-incubated 'Chinese OpenRouter', Spec 47): one prepaid-credit key for DeepSeek, GLM, Qwen, Kimi, MiniMax, Seed, StepFun etc. OpenAI-compatible at /gateway/v1 with NATIVE protocol passthrough (no translation) — each model keeps its upstream reasoning/echo-back contract. Anthropic Messages also available at /gateway/v1/messages (v1 integration uses the OpenAI path). Unauthenticated GET /gateway/v1/models lists the catalog incl. non-chat models (image/video/TTS) — the models proxy filters to chat protocols via supported_protocols. Per-model pricing is set by TokenDance and shown only in their console; the _default below is a placeholder estimate pending machine-readable pricing (Spec 47 R7) — correct via pricing-overrides.json. X-App-Name/X-Site-URL attribution headers sent per their app-attribution docs.",
+      "notes": "China-mainland LLM API router (Watcha/观猹-incubated 'Chinese OpenRouter', Spec 47): one prepaid-credit key for DeepSeek, GLM, Qwen, Kimi, MiniMax, Seed, StepFun etc. OpenAI-compatible at /gateway/v1 with NATIVE protocol passthrough (no translation) — each model keeps its upstream reasoning/echo-back contract. Anthropic Messages also available at /gateway/v1/messages (v1 integration uses the OpenAI path). Unauthenticated GET /gateway/v1/models lists the catalog incl. non-chat models (image/video/TTS) — the models proxy filters to chat protocols via supported_protocols. Per-model pricing is set by TokenDance and shown only in their console; the _default below is a placeholder estimate pending machine-readable pricing (Spec 47 R7) — correct via pricing-overrides.json. Attribution (per app-attribution.md, confirmed via 产品方后台 2026-09-03): X-App-URL is the ONLY request-dimension attribution header and must byte-match the registered App URL and the OAuth app_url; X-Site-URL is a legacy fallback read only when X-App-URL is absent, and no other header (incl. X-App-Name) participates — do not add them back.",
       "pricing": {
         "_default": {
           "input_per_1m": 2.0,

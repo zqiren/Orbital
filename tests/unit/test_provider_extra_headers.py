@@ -18,7 +18,7 @@ from agent_os.agent.providers.openai_compat import LLMProvider
 from agent_os.api.routes.agents_v2 import _chat_model_ids
 from agent_os.config.provider_registry import ProviderRegistry
 
-HEADERS = {"X-App-Name": "Orbital", "X-Site-URL": "https://github.com/zqiren/Orbital"}
+HEADERS = {"X-App-URL": "https://github.com/zqiren/Orbital", "X-Custom": "seam"}
 
 
 # ---- LLMProvider header threading ----
@@ -26,27 +26,27 @@ HEADERS = {"X-App-Name": "Orbital", "X-Site-URL": "https://github.com/zqiren/Orb
 def test_openai_client_carries_extra_headers():
     p = LLMProvider("some-model", "sk-test", "https://example.com/v1",
                     sdk="openai", extra_headers=HEADERS)
-    assert p._openai_client.default_headers["X-App-Name"] == "Orbital"
-    assert p._openai_client.default_headers["X-Site-URL"] == HEADERS["X-Site-URL"]
+    assert p._openai_client.default_headers["X-App-URL"] == HEADERS["X-App-URL"]
+    assert p._openai_client.default_headers["X-Custom"] == "seam"
 
 
 def test_anthropic_client_carries_extra_headers():
     p = LLMProvider("some-model", "sk-test", "https://example.com",
                     sdk="anthropic", extra_headers=HEADERS)
-    assert p._anthropic_client.default_headers["X-App-Name"] == "Orbital"
+    assert p._anthropic_client.default_headers["X-App-URL"] == HEADERS["X-App-URL"]
 
 
 def test_no_extra_headers_is_default_and_clean():
     p = LLMProvider("some-model", "sk-test", "https://example.com/v1", sdk="openai")
     assert p.extra_headers is None
-    assert "X-App-Name" not in p._openai_client.default_headers
+    assert "X-App-URL" not in p._openai_client.default_headers
 
 
 def test_update_api_key_preserves_extra_headers():
     p = LLMProvider("some-model", "sk-test", "https://example.com/v1",
                     sdk="openai", extra_headers=HEADERS)
     p.update_api_key("sk-new")
-    assert p._openai_client.default_headers["X-App-Name"] == "Orbital"
+    assert p._openai_client.default_headers["X-App-URL"] == HEADERS["X-App-URL"]
     assert p.api_key == "sk-new"
 
 
@@ -54,14 +54,14 @@ def test_update_api_key_preserves_extra_headers_anthropic():
     p = LLMProvider("some-model", "sk-test", "https://example.com",
                     sdk="anthropic", extra_headers=HEADERS)
     p.update_api_key("sk-new")
-    assert p._anthropic_client.default_headers["X-App-Name"] == "Orbital"
+    assert p._anthropic_client.default_headers["X-App-URL"] == HEADERS["X-App-URL"]
 
 
 def test_extra_headers_copied_not_aliased():
     src = dict(HEADERS)
     p = LLMProvider("m", "k", None, sdk="openai", extra_headers=src)
-    src["X-App-Name"] = "mutated"
-    assert p.extra_headers["X-App-Name"] == "Orbital"
+    src["X-Custom"] = "mutated"
+    assert p.extra_headers["X-Custom"] == "seam"
 
 
 # ---- Bundled tokendance registry entry ----
@@ -81,10 +81,12 @@ def test_tokendance_entry_shape(tokendance):
 
 
 def test_tokendance_attribution_headers(tokendance):
-    headers = tokendance["extra_headers"]
-    # Their app-attribution doc: localhost apps MUST send X-App-Name to be tracked.
-    assert headers["X-App-Name"] == "Orbital"
-    assert headers["X-Site-URL"].startswith("https://")
+    # app-attribution.md (confirmed via partner backend 2026-09-03): X-App-URL
+    # is the only attribution header; X-Site-URL is a legacy fallback and no
+    # other header (incl. X-App-Name) participates — send exactly one.
+    assert tokendance["extra_headers"] == {
+        "X-App-URL": "https://github.com/zqiren/Orbital"
+    }
 
 
 def test_tokendance_default_pricing_present(tokendance):

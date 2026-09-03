@@ -45,9 +45,12 @@ EXCHANGE_URL = "https://tokendance.space/portal/api/v1/auth/keys"
 BALANCE_URL = "https://tokendance.space/portal/api/v1/user/balance"
 
 # Key-dimension attribution. TokenDance treats the OAuth ``app_url`` and the
-# per-request ``X-Site-URL`` header as the SAME application identifier, so
-# this value must equal the registry entry's extra_headers["X-Site-URL"]
-# (pinned together by a unit test).
+# per-request ``X-App-URL`` header as the SAME application identifier (their
+# app-attribution doc: request dimension wins, key dimension is the fallback),
+# so this value must equal the registry entry's extra_headers["X-App-URL"]
+# (pinned together by a unit test) AND the App URL registered in the partner
+# backend, byte-for-byte — protocol, path, and trailing slash all match
+# exactly on their side.
 APP_URL = "https://github.com/zqiren/Orbital"
 KEY_NAME = "Orbital"
 
