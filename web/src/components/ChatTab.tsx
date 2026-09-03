@@ -48,7 +48,7 @@ import { useChatHistory } from '../hooks/useChatHistory';
 import { useSessionMessages } from '../utils/sessionMessagesStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAnnotations } from '../hooks/useAnnotations';
-import { usePanelDockable, usePanelState, useWindowWidth } from '../hooks/usePanelState';
+import { usePanelDockable, usePanelState } from '../hooks/usePanelState';
 import {
   eventAsMessage,
   latestScreenshot,
@@ -148,11 +148,6 @@ export default function ChatTab({
   // Docked only above the push threshold and never on mobile; below it the
   // FilePreviewDrawer stays the overlay ProjectDetail owns.
   const docked = usePanelDockable();
-  // The Browser view needs room: a 1280px page in a 360px column is a
-  // thumbnail. Ask for up to 640px, but never squeeze chat below its minimum
-  // (strip 20 + sessions 260 + chat 520 reserved).
-  const windowWidth = useWindowWidth();
-  const browserMinWidth = Math.max(360, Math.min(640, windowWidth - 800));
   const {
     expanded: panelExpanded,
     view: panelView,
@@ -456,7 +451,6 @@ export default function ChatTab({
         (panelExpanded ? (
           <FilePreviewDrawer
             docked
-            minWidth={panelView === 'browser' ? browserMinWidth : undefined}
             open
             selectedPath={null}
             fileContent={null}

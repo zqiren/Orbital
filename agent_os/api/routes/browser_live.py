@@ -22,6 +22,9 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
        "button":"left"|"right"|"middle","clickCount":1,"deltaX":n,"deltaY":n,"modifiers":n}
       {"type":"key","action":"down"|"up","key":"Enter","code":"Enter","text":"a","modifiers":n}
       {"type":"text","text":"pasted text"}
+      {"type":"viewport","width":n,"height":n,"dpr":n}
+          — size the page to the panel (CSS px) so the live view fills it; the
+            screencast is restarted at width*dpr so frames are sharp on Retina.
 
 ``x``/``y`` are CSS pixels of the page viewport — the same space as a frame's
 ``width``/``height`` (taken from the screencast metadata's
@@ -145,6 +148,8 @@ class _LiveStream:
 
         self._page = None
         self._cdp = None
+        #: Last viewport the client asked for (width, height, dpr); re-applied on re-attach.
+        self._viewport: tuple[int, int, float] | None = None
         self._title = ""
         self._status = None  # None | "no_browser" | "open" | "closed"
 
@@ -214,12 +219,38 @@ class _LiveStream:
         except Exception:
             logger.debug("browser_live: screencastFrameAck failed", exc_info=True)
 
+    def _screencast_params(self) -> dict:
+        """SCREENCAST_PARAMS, sized to the client's viewport request when there
+        is one: maxWidth/maxHeight = CSS size × dpr (capped) so a Retina panel
+        gets a frame it can paint 1:1 instead of an upscaled 1280-wide one."""
+        params = dict(SCREENCAST_PARAMS)
+        if self._viewport:
+            w, h, dpr = self._viewport
+            params["maxWidth"] = min(int(w * dpr), 2560)
+            params["maxHeight"] = min(int(h * dpr), 2560)
+        return params
+
+    async def _apply_viewport(self, page) -> bool:
+        """Size the page to the client's requested viewport. False on failure."""
+        if not self._viewport:
+            return True
+        w, h, _ = self._viewport
+        try:
+            await page.set_viewport_size({"width": w, "height": h})
+            return True
+        except Exception:
+            logger.debug("browser_live: set_viewport_size failed", exc_info=True)
+            return False
+
     async def _attach(self, page) -> None:
         cdp = await page.context.new_cdp_session(page)
         self._cdp = cdp
         self._page = page
+        # A page that (re)appears gets the panel's size before the first frame,
+        # so the client never sees a frame in the wrong aspect.
+        await self._apply_viewport(page)
         cdp.on("Page.screencastFrame", self._on_screencast_frame)
-        await cdp.send("Page.startScreencast", dict(SCREENCAST_PARAMS))
+        await cdp.send("Page.startScreencast", self._screencast_params())
 
     async def _viewport_size(self, cdp) -> tuple[int, int]:
         """The page viewport in CSS pixels — the frame coordinate space.
@@ -255,10 +286,12 @@ class _LiveStream:
         cdp = self._cdp
         if cdp is None:
             return
+        params: dict = {"format": "jpeg", "quality": 60}
+        if self._viewport and self._viewport[2] > 1:
+            w, h, dpr = self._viewport
+            params["clip"] = {"x": 0, "y": 0, "width": w, "height": h, "scale": dpr}
         try:
-            shot = await cdp.send(
-                "Page.captureScreenshot", {"format": "jpeg", "quality": 60}
-            ) or {}
+            shot = await cdp.send("Page.captureScreenshot", params) or {}
         except Exception:
             logger.debug("browser_live: initial captureScreenshot failed",
                          exc_info=True)
@@ -472,12 +505,41 @@ class _LiveStream:
         if await self._cdp_send("Input.insertText", {"text": text}):
             self._count_input("text")
 
+    async def _handle_viewport(self, msg: dict) -> None:
+        """Fit the page to the panel: resize the viewport, restart the
+        screencast at the new size, and re-prime so the client repaints at
+        once. Spec 078 D9 amendment (2026-09-03): the live view should fill
+        the panel like a browser window, not sit in it as a letterboxed frame."""
+        width = _number(msg.get("width"))
+        height = _number(msg.get("height"))
+        dpr = _number(msg.get("dpr")) or 1.0
+        if (width is None or height is None
+                or not (200 <= width <= 4096) or not (200 <= height <= 4096)
+                or not (1.0 <= dpr <= 4.0)):
+            await self._send_error("viewport needs width/height in 200..4096 and dpr in 1..4")
+            return
+        self._viewport = (int(width), int(height), float(dpr))
+        page, cdp = self._page, self._cdp
+        if page is None or cdp is None:
+            return  # applied on the next attach
+        if not await self._apply_viewport(page):
+            await self._send_error("could not resize the page")
+            return
+        try:
+            await cdp.send("Page.stopScreencast", {})
+        except Exception:
+            pass
+        if await self._cdp_send("Page.startScreencast", self._screencast_params()):
+            await self._prime_frame()
+
     async def _handle(self, msg) -> None:
         if not isinstance(msg, dict):
             await self._send_error("expected a JSON object")
             return
         msg_type = msg.get("type")
-        if msg_type == "mouse":
+        if msg_type == "viewport":
+            await self._handle_viewport(msg)
+        elif msg_type == "mouse":
             await self._handle_mouse(msg)
         elif msg_type == "key":
             await self._handle_key(msg)

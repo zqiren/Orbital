@@ -33,7 +33,7 @@ export interface PanelStateApi extends PanelState {
   expandForEvent: (v: PanelView) => void;
   /** A turn started: the user's "stay collapsed" veto only lasts one run. */
   onRunStart: () => void;
-  /** A turn ended: collapse back to the handle and drop the preview. */
+  /** A turn ended: the panel STAYS as it is (user, 2026-09-03: "after the agent is done, please dont auto collapse"); only the run-scoped veto clears. */
   onRunEnd: () => void;
 }
 
@@ -147,10 +147,9 @@ export function usePanelState(
   }, [update]);
 
   const onRunEnd = useCallback(() => {
-    // Back to the handle, and back to the tree: "expanding at rest shows
-    // Files (tree) by default" — the remembered `view` survives, the preview
-    // selection does not.
-    update({ expanded: false, userCollapsedThisRun: false, file: null });
+    // D8 amended 2026-09-03: nothing moves when the turn ends. What the user
+    // was looking at stays put; only the run-scoped "keep collapsed" veto ends.
+    update({ userCollapsedThisRun: false });
   }, [update]);
 
   return {
@@ -188,16 +187,7 @@ function readNotDockable(): boolean {
   return false;
 }
 
-/** Current window width (0 on the server); re-renders on resize. */
-export function useWindowWidth(): number {
-  return useSyncExternalStore(subscribeToWindowWidth, readWindowWidth, readZeroWidth);
-}
-function readWindowWidth(): number {
-  return typeof window === 'undefined' ? 0 : window.innerWidth;
-}
-function readZeroWidth(): number {
-  return 0;
-}
+
 
 function subscribeToWindowWidth(onChange: () => void) {
   if (typeof window === 'undefined') return () => {};

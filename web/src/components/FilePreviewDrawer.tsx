@@ -10,6 +10,10 @@ import FilePreview from './FilePreview';
 import { useT } from '../i18n/useT';
 
 const FILE_PREVIEW_DRAWER_WIDTH_KEY = 'orbital:filePreviewDrawerWidth';
+/** Docked panel width is remembered separately from the overlay drawer's. */
+const WORKSPACE_PANEL_WIDTH_KEY = 'orbital:workspacePanelWidth';
+/** Reserved for what sits left of the docked panel: strip 20 + sessions 260 + chat 520. */
+const DOCKED_RESERVED_WIDTH = 800;
 const DEFAULT_DRAWER_WIDTH = 420;
 /** Spec 078 §5.1: docked, the panel starts narrower than the overlay drawer. */
 const DEFAULT_DOCKED_WIDTH = 360;
@@ -23,11 +27,21 @@ function clampPreviewDrawerWidth(width: number, availableWidth: number) {
   return Math.min(Math.max(Math.round(width), minWidth), maxWidth);
 }
 
+/**
+ * Docked default: half the window (spec 078 D13 amendment, 2026-09-03 — the
+ * user found the 360px column "very thin"), but never so wide that chat drops
+ * below its minimum, and never under the old 360.
+ */
+function defaultDockedWidth(windowWidth: number) {
+  return Math.max(DEFAULT_DOCKED_WIDTH, Math.min(Math.floor(windowWidth / 2), windowWidth - DOCKED_RESERVED_WIDTH));
+}
+
 function readSavedDrawerWidth(docked = false) {
-  const fallback = docked ? DEFAULT_DOCKED_WIDTH : DEFAULT_DRAWER_WIDTH;
-  if (typeof window === 'undefined') return fallback;
+  if (typeof window === 'undefined') return docked ? DEFAULT_DOCKED_WIDTH : DEFAULT_DRAWER_WIDTH;
+  const fallback = docked ? defaultDockedWidth(window.innerWidth) : DEFAULT_DRAWER_WIDTH;
   try {
-    const saved = Number.parseInt(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY) ?? '', 10);
+    const key = docked ? WORKSPACE_PANEL_WIDTH_KEY : FILE_PREVIEW_DRAWER_WIDTH_KEY;
+    const saved = Number.parseInt(localStorage.getItem(key) ?? '', 10);
     return Number.isFinite(saved) ? saved : fallback;
   } catch {
     return fallback;
@@ -113,11 +127,11 @@ export default function FilePreviewDrawer({
 
   const persistDrawerWidth = useCallback((width: number) => {
     try {
-      localStorage.setItem(FILE_PREVIEW_DRAWER_WIDTH_KEY, String(width));
+      localStorage.setItem(docked ? WORKSPACE_PANEL_WIDTH_KEY : FILE_PREVIEW_DRAWER_WIDTH_KEY, String(width));
     } catch {
       // localStorage may be unavailable in private/locked-down webviews.
     }
-  }, []);
+  }, [docked]);
 
   // Keep the saved width inside the current content area when the app window
   // changes size. The 80% cap leaves enough of the covered chat visible to

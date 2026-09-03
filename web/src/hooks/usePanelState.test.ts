@@ -109,13 +109,13 @@ describe('usePanelState — runtime lifecycle (D8)', () => {
     expect(result.current.expanded).toBe(true);
   });
 
-  it('collapses and drops the preview selection when the turn ends', () => {
+  it('stays expanded and keeps the preview when the turn ends (no auto-collapse)', () => {
     const { result } = mount();
     act(() => result.current.onRunStart());
     act(() => result.current.expandForEvent('files'));
     act(() => result.current.setFile('src/a.ts'));
     act(() => result.current.onRunEnd());
-    expect(result.current).toMatchObject({ expanded: false, file: null, view: 'files' });
+    expect(result.current).toMatchObject({ expanded: true, file: 'src/a.ts', view: 'files' });
   });
 
   it('remembers the view across a run so reopening lands where the user left it', () => {

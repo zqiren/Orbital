@@ -15,6 +15,18 @@ import { useBrowserLive } from '../../hooks/useBrowserLive';
 import AnnotateOverlay from './AnnotateOverlay';
 import type { Annotation, AnnotationBox, AnnotationDraft } from '../../utils/annotations';
 
+/** Largest rect with the source aspect that fits in the box, centred. */
+function fitRect(srcW: number, srcH: number, boxW: number, boxH: number) {
+  if (srcW <= 0 || srcH <= 0 || boxW <= 0 || boxH <= 0) return { x: 0, y: 0, w: boxW || 1, h: boxH || 1 };
+  const scale = Math.min(boxW / srcW, boxH / srcH);
+  const w = srcW * scale;
+  const h = srcH * scale;
+  return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h };
+}
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(Math.max(v, lo), hi);
+}
+
 export interface BrowserViewProps {
   projectId: string;
   /** Stream only while true (view visible + panel expanded). */
@@ -88,23 +100,23 @@ export default function BrowserView({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
+  const [canvasHeight, setCanvasHeight] = useState(0);
+  const frameAreaRef = useRef<HTMLDivElement | null>(null);
   // Paint the pixel buffer at device resolution: a 1280px page scaled into a
   // ~600px column is unreadable at 1× on a Retina display.
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-
-  const canvasHeight = useMemo(() => {
-    if (!frame || frame.width <= 0 || !canvasWidth) return 0;
-    return Math.round((canvasWidth * frame.height) / frame.width);
-  }, [frame, canvasWidth]);
 
   // Size the canvas to the container's width. ResizeObserver isn't available
   // in every test environment, so fall back to a window resize listener —
   // real layout changes (drawer resize) go through ResizeObserver when it
   // exists.
   useEffect(() => {
-    const el = wrapperRef.current;
+    const el = frameAreaRef.current ?? wrapperRef.current;
     if (!el) return;
-    const measure = () => setCanvasWidth(el.clientWidth);
+    const measure = () => {
+      setCanvasWidth(el.clientWidth);
+      setCanvasHeight(el.clientHeight);
+    };
     measure();
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(measure);
@@ -114,6 +126,25 @@ export default function BrowserView({
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
+
+  // Fit the page to the panel (spec 078 D9 amendment): tell the route the
+  // canvas's CSS size whenever the stream is open and the size is known, and
+  // again when a frame arrives in a different size (a fresh page opened at the
+  // browser's default viewport). Debounced; never resent for the same size.
+  const lastViewportRef = useRef<string>('');
+  useEffect(() => {
+    if (status !== 'open' || canvasWidth < 200 || canvasHeight < 200) return;
+    const w = Math.round(canvasWidth);
+    const h = Math.round(canvasHeight);
+    const key = `${w}x${h}@${dpr}`;
+    const frameMatches = frame && Math.abs(frame.width - w) <= 2 && Math.abs(frame.height - h) <= 2;
+    if (lastViewportRef.current === key && (frameMatches || !frame)) return;
+    const t = setTimeout(() => {
+      lastViewportRef.current = key;
+      send({ type: 'viewport', width: w, height: h, dpr });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [status, canvasWidth, canvasHeight, dpr, frame, send]);
 
   // Paint each incoming frame onto the canvas, coalesced with rAF so a burst
   // of screencast frames doesn't queue up multiple paints.
@@ -127,7 +158,11 @@ export default function BrowserView({
         const ctx = canvas?.getContext('2d');
         if (!canvas || !ctx) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Contain-fit: once the page has taken the panel's size the frame
+        // fills the canvas exactly; in the moment before, it is letterboxed
+        // rather than stretched.
+        const fit = fitRect(frame.width, frame.height, canvas.width, canvas.height);
+        ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
       });
     };
     img.src = frame.jpegDataUrl;
@@ -144,11 +179,13 @@ export default function BrowserView({
     const canvas = canvasRef.current;
     if (!canvas) return { width: canvasWidth || 1, height: canvasHeight || 1 };
     const rect = canvas.getBoundingClientRect();
+    const width = rect.width || canvas.clientWidth || canvasWidth || 1;
+    const aspectHeight = frame ? (width * frame.height) / frame.width : 0;
     return {
-      width: rect.width || canvas.clientWidth || canvasWidth || 1,
-      height: rect.height || canvas.clientHeight || canvasHeight || 1,
+      width,
+      height: rect.height || canvas.clientHeight || canvasHeight || aspectHeight || 1,
     };
-  }, [canvasWidth, canvasHeight]);
+  }, [canvasWidth, canvasHeight, frame]);
 
   const pagePointFromClient = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -156,9 +193,10 @@ export default function BrowserView({
       if (!canvas || !frame) return null;
       const rect = canvas.getBoundingClientRect();
       const { width, height } = getCanvasSize();
+      const fit = fitRect(frame.width, frame.height, width, height);
       return {
-        x: ((clientX - rect.left) * frame.width) / width,
-        y: ((clientY - rect.top) * frame.height) / height,
+        x: clamp(((clientX - rect.left - fit.x) * frame.width) / fit.w, 0, frame.width),
+        y: clamp(((clientY - rect.top - fit.y) * frame.height) / fit.h, 0, frame.height),
       };
     },
     [frame, getCanvasSize],
@@ -274,11 +312,12 @@ export default function BrowserView({
   const overlayBoxes = useMemo(() => {
     if (!frame) return [];
     const { width, height } = getCanvasSize();
-    const sx = width / frame.width;
-    const sy = height / frame.height;
+    const fit = fitRect(frame.width, frame.height, width, height);
+    const sx = fit.w / frame.width;
+    const sy = fit.h / frame.height;
     return annotations.filter(isBrowserAnnotation).map((a) => ({
       n: a.n,
-      box: { x: a.box.x * sx, y: a.box.y * sy, w: a.box.w * sx, h: a.box.h * sy },
+      box: { x: a.box.x * sx + fit.x, y: a.box.y * sy + fit.y, w: a.box.w * sx, h: a.box.h * sy },
     }));
   }, [annotations, frame, getCanvasSize]);
 
@@ -286,9 +325,12 @@ export default function BrowserView({
     (box: AnnotationBox, note: string) => {
       if (!frame) return;
       const { width, height } = getCanvasSize();
-      const sx = frame.width / (width || 1);
-      const sy = frame.height / (height || 1);
-      const pageBox: AnnotationBox = { x: box.x * sx, y: box.y * sy, w: box.w * sx, h: box.h * sy };
+      const fit = fitRect(frame.width, frame.height, width, height);
+      const sx = frame.width / fit.w;
+      const sy = frame.height / fit.h;
+      const pageBox: AnnotationBox = {
+        x: (box.x - fit.x) * sx, y: (box.y - fit.y) * sy, w: box.w * sx, h: box.h * sy,
+      };
       const canvas = canvasRef.current;
       const imageDataUrl = canvas ? canvas.toDataURL('image/png') : frame.jpegDataUrl;
       onAddAnnotation({ kind: 'browser', pageTitle: title, box: pageBox, note, imageDataUrl });
@@ -319,7 +361,7 @@ export default function BrowserView({
   if (hasFrame) {
     return (
       <div ref={wrapperRef} className="relative flex h-full w-full flex-col">
-        <div className="relative flex-1 overflow-hidden">
+        <div ref={frameAreaRef} className="relative flex-1 min-h-0 overflow-hidden">
           <canvas
             ref={canvasRef}
             role="img"
@@ -327,7 +369,7 @@ export default function BrowserView({
             tabIndex={0}
             width={canvasWidth ? Math.round(canvasWidth * dpr) : undefined}
             height={canvasHeight ? Math.round(canvasHeight * dpr) : undefined}
-            style={{ width: '100%', height: canvasHeight || undefined, display: 'block' }}
+            style={{ width: '100%', height: '100%', display: 'block' }}
             className="cursor-default outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}

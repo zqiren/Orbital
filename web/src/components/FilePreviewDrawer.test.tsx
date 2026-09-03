@@ -179,11 +179,28 @@ describe('FilePreviewDrawer — docked mode', () => {
     });
   });
 
-  it('honours a width the user already dragged the overlay drawer to', () => {
+  it('remembers its own width, separate from the overlay drawer', () => {
+    // The overlay drawer's width must not leak into the docked panel …
     localStorage.setItem(FILE_PREVIEW_DRAWER_WIDTH_KEY, '520');
+    const first = renderDocked();
+    expect(screen.getByTestId('workspace-panel-column')).not.toHaveStyle({
+      '--file-preview-drawer-width': '520px',
+    });
+    first.unmount();
+    // … while the panel's own remembered width is honoured.
+    localStorage.setItem('orbital:workspacePanelWidth', '520');
     renderDocked();
     expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
       '--file-preview-drawer-width': '520px',
+    });
+  });
+
+  it('defaults to half the window, capped so chat keeps its minimum', () => {
+    // jsdom's window is 1024 wide: half is 512 but 1024 − 800 reserved = 224,
+    // so the 360 floor wins.
+    renderDocked();
+    expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
+      '--file-preview-drawer-width': '360px',
     });
   });
 
@@ -197,7 +214,8 @@ describe('FilePreviewDrawer — docked mode', () => {
     expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
       '--file-preview-drawer-width': '460px',
     });
-    expect(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY)).toBe('460');
+    expect(localStorage.getItem('orbital:workspacePanelWidth')).toBe('460');
+    expect(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY)).toBeNull();
   });
 
   it('renders `children` instead of FilePreview, under the header slot', () => {

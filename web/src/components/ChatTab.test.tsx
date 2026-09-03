@@ -803,7 +803,7 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
     expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
   });
 
-  it('collapses back to the handle when the turn ends', async () => {
+  it('stays expanded when the turn ends (no auto-collapse, D8 amended)', async () => {
     const view = await act(async () =>
       render(
         <ChatTab
@@ -829,8 +829,8 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
         />,
       );
     });
-    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
-    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.queryByTestId('panel-handle')).toBeNull();
   });
 
   it('a panel collapsed during a run stays collapsed for the rest of it', async () => {

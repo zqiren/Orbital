@@ -93,6 +93,9 @@ class FakePage:
     def close_it(self):
         self._closed = True
 
+    async def set_viewport_size(self, size):
+        self.viewport_calls = getattr(self, "viewport_calls", []) + [dict(size)]
+
     async def title(self):
         return self._title
 
@@ -493,6 +496,8 @@ async def test_text_message_uses_insert_text():
     {"type": "key", "action": "sideways", "key": "a"},
     {"type": "key", "action": "down"},
     {"type": "text", "text": 42},
+    {"type": "viewport", "width": "wide", "height": 900},
+    {"type": "viewport", "width": 10, "height": 900},
     {"type": "levitate"},
     ["not", "an", "object"],
     _MALFORMED,
@@ -648,3 +653,36 @@ def test_protocol_contract_matches_the_frontend_hook():
     assert "/api/v2/agents/{project_id}/browser/live" in text
     for token in ('"frame"', '"state"', '"error"', '"mouse"', '"key"', '"text"'):
         assert token.strip('"') in text
+
+
+@pytest.mark.asyncio
+async def test_viewport_message_resizes_the_page_and_restarts_the_screencast_sharper():
+    """Spec 078 D9 amendment: the page takes the panel's size and the
+    screencast is restarted at width*dpr, then re-primed."""
+    h = await _input_harness([{"type": "viewport", "width": 640, "height": 900, "dpr": 2}])
+    try:
+        await h.wait(lambda: h.cdp.calls("Page.stopScreencast"))
+        await h.wait(lambda: len(h.cdp.calls("Page.startScreencast")) == 2)
+        page = h.browser_manager.pages[0] if hasattr(h, "browser_manager") else None
+        starts = h.cdp.calls("Page.startScreencast")
+        assert starts[0]["maxWidth"] == 1280
+        assert starts[1]["maxWidth"] == 1280 and starts[1]["maxHeight"] == 1800
+        await h.wait(lambda: len(h.cdp.calls("Page.captureScreenshot")) >= 2)
+        second = h.cdp.calls("Page.captureScreenshot")[-1]
+        assert second["clip"] == {"x": 0, "y": 0, "width": 640, "height": 900, "scale": 2.0}
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_viewport_is_applied_to_the_page_and_reapplied_on_reattach():
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: cdp.calls("Page.startScreencast"))
+        ws.push({"type": "viewport", "width": 700, "height": 500})
+        await h.wait(lambda: getattr(page, "viewport_calls", None) == [{"width": 700, "height": 500}])
+        assert h.cdp.calls("Page.startScreencast")[-1]["maxWidth"] == 700
+    finally:
+        await h.finish()

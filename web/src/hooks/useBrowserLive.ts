@@ -12,6 +12,7 @@
  *   client → server: {type:"mouse", action:"move"|"down"|"up"|"wheel", x, y, button?, clickCount?, deltaX?, deltaY?, modifiers?}
  *                    {type:"key", action:"down"|"up", key, code, text?, modifiers?}
  *                    {type:"text", text}
+ *                    {type:"viewport", width, height, dpr}  — size the page to the panel (CSS px)
  *   x/y are CSS pixels of the page viewport (same space as the frame width/height).
  * Workstream D implements.
  */
