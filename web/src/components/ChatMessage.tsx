@@ -2,8 +2,10 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { useState } from 'react';
 import type { DisplayItem } from '../utils/chatTransform';
 import { parseAttachmentsBlock } from '../lib/attachment-parsing';
+import { splitQuotesBlock } from '../utils/annotations';
 import AttachmentChip from './AttachmentChip';
 import MarkdownContent from './MarkdownContent';
 import MessageAvatar from './MessageAvatar';
@@ -87,11 +89,15 @@ function formatTime(timestamp: string): string {
 export default function ChatMessage({ message, agentName, workspace, onOpenPath }: ChatMessageProps) {
   const t = useT();
   const time = formatTime(message.timestamp);
+  // Spec 078 §5.4 step 3: the sent message shows the annotation count as a
+  // chip and keeps the quotes block folded behind it.
+  const [quotesOpen, setQuotesOpen] = useState(false);
 
   if (message.type === 'user_message') {
     const { strippedContent, attachments } = parseAttachmentsBlock(message.content);
+    const { text: bodyText, quotes, count: annotationCount } = splitQuotesBlock(strippedContent);
     const hasChips = attachments.length > 0;
-    const hasText = strippedContent.length > 0;
+    const hasText = bodyText.length > 0;
     const senderLabel = message.target
       ? t('chat.message.youTo', { target: message.target })
       : t('chat.message.you');
@@ -114,7 +120,7 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
               block already stripped — that block is machine markup the user
               never typed and must not be pasted back. */}
           <CopyButton
-            text={strippedContent}
+            text={bodyText}
             ariaLabel={t('chat.message.copyAria')}
             data-testid="user-message-copy"
             className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
@@ -140,7 +146,30 @@ export default function ChatMessage({ message, agentName, workspace, onOpenPath 
               ))}
             </div>
           )}
-          {hasText && strippedContent}
+          {hasText && bodyText}
+          {annotationCount > 0 && quotes && (
+            <div className={hasText ? 'mt-2' : ''}>
+              <button
+                type="button"
+                onClick={() => setQuotesOpen((open) => !open)}
+                aria-expanded={quotesOpen}
+                data-testid="message-annotation-chip"
+                className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
+              >
+                {annotationCount === 1
+                  ? t('composer.annotations.one')
+                  : t('composer.annotations.other', { n: annotationCount })}
+              </button>
+              {quotesOpen && (
+                <pre
+                  data-testid="message-annotation-quotes"
+                  className="mt-1.5 font-mono text-[11px] leading-[1.5] text-secondary whitespace-pre-wrap break-words"
+                >
+                  {quotes}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );

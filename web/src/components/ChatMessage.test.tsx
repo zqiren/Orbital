@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import ChatMessage from './ChatMessage';
 import type { DisplayItem } from '../utils/chatTransform';
@@ -226,5 +226,57 @@ describe('ChatMessage — copy', () => {
     const headerOnly = { ...agentMsg(''), isHeaderOnly: true } as ReturnType<typeof agentMsg>;
     render(<ChatMessage message={headerOnly} />);
     expect(screen.queryByTestId('agent-message-copy')).toBeNull();
+  });
+});
+
+// ─── Spec 078 §5.4 step 3: the quotes block folds behind a chip ────────────
+
+describe('ChatMessage — user_message with an appended Annotations block', () => {
+  const QUOTES = [
+    'Annotations:',
+    '[1] Browser · "Queue" · box 10,20 100×40 (page pixels) — see attached annotation-1.png',
+    '    note: click this one, not the ad',
+    '[2] web/src/App.tsx lines 3–4',
+    '    > const x = 1;',
+  ].join('\n');
+
+  it('shows the count as a chip and keeps the block collapsed', () => {
+    render(<ChatMessage message={userMsg(`which one?\n\n${QUOTES}`)} />);
+    expect(screen.getByText('which one?')).toBeInTheDocument();
+    expect(screen.getByTestId('message-annotation-chip')).toHaveTextContent('2 annotations');
+    // Collapsed: none of the machine markup is on screen.
+    expect(screen.queryByTestId('message-annotation-quotes')).toBeNull();
+    expect(screen.queryByText(/Annotations:/)).toBeNull();
+  });
+
+  it('expands the verbatim block on click', () => {
+    render(<ChatMessage message={userMsg(`which one?\n\n${QUOTES}`)} />);
+    fireEvent.click(screen.getByTestId('message-annotation-chip'));
+    expect(screen.getByTestId('message-annotation-quotes')).toHaveTextContent(
+      'click this one, not the ad',
+    );
+  });
+
+  it('renders a chip on an annotation-only message (no typed text)', () => {
+    render(<ChatMessage message={userMsg(QUOTES)} />);
+    expect(screen.getByTestId('message-annotation-chip')).toHaveTextContent('2 annotations');
+  });
+
+  it('works alongside an <attached_files> prefix', () => {
+    const content =
+      '<attached_files>\n' +
+      '- uploads/annotation-1.png (image/png, 12.0 KB)\n' +
+      '</attached_files>\n\n' +
+      `which one?\n\n${QUOTES}`;
+    const { container } = render(<ChatMessage message={userMsg(content)} />);
+    expect(container.textContent).toContain('annotation-1.png');
+    expect(screen.getByTestId('message-annotation-chip')).toHaveTextContent('2 annotations');
+    expect(screen.getByText('which one?')).toBeInTheDocument();
+  });
+
+  it('leaves a message with no block completely untouched', () => {
+    render(<ChatMessage message={userMsg('Annotations: are a nice idea')} />);
+    expect(screen.queryByTestId('message-annotation-chip')).toBeNull();
+    expect(screen.getByText('Annotations: are a nice idea')).toBeInTheDocument();
   });
 });

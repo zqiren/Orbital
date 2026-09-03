@@ -18,6 +18,12 @@ export interface AnnotationsApi {
   add: (draft: AnnotationDraft) => number;
   remove: (n: number) => void;
   clear: () => void;
+  /**
+   * Edit a draft's note after the fact — the composer chip expands into an
+   * editable note per annotation, so the note the overlay captured is not the
+   * last word on it.
+   */
+  updateNote: (n: number, note: string) => void;
 }
 
 interface SessionState { annotating: boolean; annotations: Annotation[]; next: number }
@@ -46,8 +52,26 @@ export function useAnnotations(sessionId: string | undefined): AnnotationsApi {
     set(sessionId, { ...cur, annotations: cur.annotations.filter((a) => a.n !== n) });
   }, [sessionId]);
   const clear = useCallback(() => set(sessionId, { ...get(sessionId), annotations: [], next: 1, annotating: false }), [sessionId]);
-  return { annotating: state.annotating, setAnnotating, annotations: state.annotations, add, remove, clear };
+  const updateNote = useCallback((n: number, note: string) => {
+    const cur = get(sessionId);
+    if (!cur.annotations.some((a) => a.n === n)) return;
+    set(sessionId, {
+      ...cur,
+      annotations: cur.annotations.map((a) => (a.n === n ? { ...a, note } : a)),
+    });
+  }, [sessionId]);
+  return { annotating: state.annotating, setAnnotating, annotations: state.annotations, add, remove, clear, updateNote };
 }
 
 /** Test helper: wipe all sessions. */
 export function __resetAnnotationsStore() { store.clear(); listeners.forEach((l) => l()); }
+
+/**
+ * Test helper: seed a session's drafts without driving the hook. Lets a
+ * component test (the composer) start from "the panel already staged these"
+ * without rendering the panel.
+ */
+export function __seedAnnotations(sessionId: string | undefined, annotations: Annotation[]) {
+  const next = annotations.reduce((m, a) => Math.max(m, a.n + 1), 1);
+  set(sessionId, { annotating: false, annotations, next });
+}
