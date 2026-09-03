@@ -22,6 +22,12 @@ export type Route =
       tab: 'queue' | 'chat' | 'files';
       sessionId?: string;
       /**
+       * Spec 078 D15: "Open in Files" from the workspace panel — the Files tab
+       * reveals and selects this workspace-relative path when it opens. A
+       * one-shot intent; the explorer keeps its own selection afterwards.
+       */
+      filesPath?: string;
+      /**
        * Which pane of the Tasks tab is showing. The tab key stays 'queue'
        * (renaming it churns the union, deep links and tests for no user
        * benefit); this only picks between the two panes inside it. Undefined

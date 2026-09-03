@@ -527,6 +527,7 @@ export const STRINGS = {
   "panel.annotation.remove": { en: "Remove annotation" },
   "panel.browser.connecting": { en: "Connecting to the browser…" },
   "panel.browser.empty": { en: "No page open yet." },
+  "panel.browser.label": { en: "Browser" },
   "panel.collapse": { en: "Hide workspace" },
   "panel.expand": { en: "Show workspace" },
   "panel.files.back": { en: "Files" },

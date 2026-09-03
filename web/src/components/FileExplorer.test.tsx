@@ -40,3 +40,27 @@ describe('FileExplorer layout', () => {
     expect(treePane).not.toHaveClass('md:block');
   });
 });
+
+describe('FileExplorer initialPath (spec 078 D15)', () => {
+  it('expands the ancestors and selects the file, fetching its content', async () => {
+    apiMock.mockImplementation((async (url: string) => {
+      if (url.includes('/files/content?')) return { path: 'docs/notes/plan.md', content: '# plan', type: 'text' };
+      if (url.endsWith('/files')) return { entries: [{ name: 'docs', type: 'directory' }] };
+      if (url.includes('path=docs%2Fnotes')) return { entries: [{ name: 'plan.md', type: 'file', size: 6 }] };
+      if (url.includes('path=docs')) return { entries: [{ name: 'notes', type: 'directory' }] };
+      return { entries: [] };
+    }) as unknown as () => Promise<{ entries: never[] }>);
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<FileExplorer projectId="project-1" initialPath="docs/notes/plan.md" />));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    const calls = (apiMock.mock.calls as unknown as unknown[][]).map((c) => String(c[0]));
+    expect(calls.some((u) => u.includes('path=docs') && !u.includes('notes'))).toBe(true);
+    expect(calls.some((u) => u.includes('path=docs%2Fnotes'))).toBe(true);
+    expect(calls.some((u) => u.includes('/files/content?path=docs%2Fnotes%2Fplan.md'))).toBe(true);
+    expect(container.textContent).toContain('plan.md');
+  });
+});

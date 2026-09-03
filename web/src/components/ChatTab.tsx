@@ -45,6 +45,7 @@ import { useSession } from '../hooks/useSession';
 import { useAgent } from '../hooks/useAgent';
 import { useFiles } from '../hooks/useFiles';
 import { useChatHistory } from '../hooks/useChatHistory';
+import { useSessionMessages } from '../utils/sessionMessagesStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAnnotations } from '../hooks/useAnnotations';
 import { usePanelDockable, usePanelState } from '../hooks/usePanelState';
@@ -161,9 +162,14 @@ export default function ChatTab({
   } = usePanelState(projectId, routeSessionId);
   const { annotating, setAnnotating, annotations, add: addAnnotation } =
     useAnnotations(routeSessionId);
-  const { messages, loadHistory, clearMessages } = useChatHistory({
+  // Spec 078 §11.5: ChatView owns the session transcript and publishes it by
+  // reference; the panel reads that same array. useChatHistory remains only
+  // as a fallback for the window before ChatView has published anything.
+  const sharedMessages = useSessionMessages(`${projectId}:${routeSessionId ?? ''}`);
+  const { messages: fetchedMessages, loadHistory, clearMessages } = useChatHistory({
     sessionId: routeSessionId ?? null,
   });
+  const messages = sharedMessages ?? fetchedMessages;
   const { saveFileContent } = useFiles();
   const { on, off } = useWebSocket();
 
@@ -194,11 +200,12 @@ export default function ChatTab({
 
   useEffect(() => {
     if (!docked || !panelExpanded || !routeSessionId) return;
+    if (sharedMessages !== null) return; // ChatView already holds the transcript
     if (loadedKeyRef.current === sessionKey && !historyStaleRef.current) return;
     loadedKeyRef.current = sessionKey;
     historyStaleRef.current = false;
     void loadHistory(projectId);
-  }, [docked, panelExpanded, projectId, routeSessionId, sessionKey, loadHistory]);
+  }, [docked, panelExpanded, projectId, routeSessionId, sessionKey, loadHistory, sharedMessages]);
 
   // Lifecycle (D8) driven by the live activity stream. Handled synchronously
   // in the socket callback rather than from a rendered `lastEvent`, so a burst
@@ -281,10 +288,9 @@ export default function ChatTab({
 
   const handleOpenInFiles = useCallback(
     (path: string) => {
-      void path; // the Files tab keeps its own selection; this only navigates
       setRoute((prev) =>
         prev.name === 'project' && prev.projectId === projectId
-          ? { ...prev, tab: 'files', settings: false, previewPath: undefined }
+          ? { ...prev, tab: 'files', settings: false, previewPath: undefined, filesPath: path }
           : prev,
       );
     },

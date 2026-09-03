@@ -41,6 +41,7 @@ import { useContextUsage } from '../hooks/useContextUsage';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
+import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMessagesStore';
 import { budgetTimelineText } from '../budget/timelineText';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
@@ -59,10 +60,10 @@ function formatToolBreakdown(counts: Record<string, number>): string {
  * produced (a page title, a workspace path, a quoted span), which the i18n
  * rules exclude. Only the bare "Browser" fallback is chrome.
  */
-function annotationSummary(a: Annotation): string {
+function annotationSummary(a: Annotation, tr: (key: StringKey) => string): string {
   switch (a.kind) {
     case 'browser':
-      return a.pageTitle || 'Browser'; // i18n-todo: needs a `panel.browser.label` key
+      return a.pageTitle || tr('panel.browser.label');
     case 'image':
       return a.path;
     case 'text':
@@ -493,6 +494,9 @@ interface PendingApproval {
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
+  // Chrome-only translator for the annotation chip's fallback label (the
+  // rest of each summary is dynamic content and stays untranslated).
+  const chromeTr = useMemo(() => (key: StringKey) => translate(locale, key), [locale]);
   // The WS effect's handler closures don't re-subscribe on locale change —
   // read the live locale through a ref (same staleness fix as sessionIdRef).
   const localeRef = useRef(locale);
@@ -512,6 +516,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // user messages, sub-agent messages, finalize-on-idle, etc.). The live tail
   // therefore layers on top of the transform-once history.
   const [rawMessages, setRawMessages] = useState<ChatMessageType[]>([]);
+  // Spec 078 §11.5: the workspace panel derives touched files and the
+  // fallback screenshot from this same transcript instead of fetching it
+  // again. Published by reference; ChatTab subscribes via useSessionMessages.
+  useEffect(() => {
+    publishSessionMessages(sessionMessagesKey(projectId, sessionId), rawMessages);
+  }, [projectId, sessionId, rawMessages]);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -3630,9 +3640,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                       <span className="font-mono text-[11px] text-secondary shrink-0">[{a.n}]</span>
                       <span
                         className="text-[11px] text-secondary truncate max-w-[40%]"
-                        title={annotationSummary(a)}
+                        title={annotationSummary(a, chromeTr)}
                       >
-                        {annotationSummary(a)}
+                        {annotationSummary(a, chromeTr)}
                       </span>
                       <input
                         value={a.note}

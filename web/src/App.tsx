@@ -648,7 +648,10 @@ export default function App() {
                   />
                 )}
                 {route.tab === 'files' && (
-                  <FileExplorer projectId={selectedProject.project_id} />
+                  <FileExplorer
+                    projectId={selectedProject.project_id}
+                    initialPath={route.name === 'project' ? route.filesPath : undefined}
+                  />
                 )}
               </ProjectDetail>
             )}
