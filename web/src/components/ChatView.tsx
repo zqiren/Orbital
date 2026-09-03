@@ -361,7 +361,7 @@ import type {
   Project,
 } from '../types';
 import ChatMessage from './ChatMessage';
-import { OpenPathContext } from './FilePreviewDrawer';
+import { OpenPathContext } from './filePreviewContext';
 import StreamingMessage from './StreamingMessage';
 import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';

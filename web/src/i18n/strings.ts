@@ -366,6 +366,7 @@ export const STRINGS = {
   "fileExplorer.uploading": { en: "Uploading...", zh: "上传中…" },
   "filePreview.close": { en: "Close preview", zh: "关闭预览" },
   "filePreview.heading": { en: "Preview", zh: "预览" },
+  "filePreview.resize": { en: "Resize file preview", zh: "调整文件预览宽度" },
   "folderPicker.browseError": { en: "Failed to browse directory", zh: "浏览目录失败" },
   "folderPicker.cancel": { en: "Cancel", zh: "取消" },
   "folderPicker.empty": { en: "No folders here.", zh: "这里没有文件夹。" },

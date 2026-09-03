@@ -2,20 +2,34 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { createContext, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { X } from 'lucide-react';
 import type { FileContent } from '../types';
 import FilePreview from './FilePreview';
 import { useT } from '../i18n/useT';
 
-/**
- * Carries the "open this workspace-relative path in the preview drawer" handler
- * down to the chat's MarkdownContent (spec 002 §3.3). Provided by
- * `ProjectDetail` — which owns `setRoute` — and consumed by `ChatView`, so the
- * handler reaches the deeply-nested renderer without prop-drilling through the
- * out-of-scope `ChatTab`. Default `null` keeps non-chat consumers inert.
- */
-export const OpenPathContext = createContext<((path: string) => void) | null>(null);
+const FILE_PREVIEW_DRAWER_WIDTH_KEY = 'orbital:filePreviewDrawerWidth';
+const DEFAULT_DRAWER_WIDTH = 420;
+const MIN_DRAWER_WIDTH = 320;
+const MAX_DRAWER_WIDTH_RATIO = 0.8;
+const KEYBOARD_RESIZE_STEP = 24;
+
+function clampPreviewDrawerWidth(width: number, availableWidth: number) {
+  const maxWidth = Math.max(0, Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO));
+  const minWidth = Math.min(MIN_DRAWER_WIDTH, maxWidth);
+  return Math.min(Math.max(Math.round(width), minWidth), maxWidth);
+}
+
+function readSavedDrawerWidth() {
+  if (typeof window === 'undefined') return DEFAULT_DRAWER_WIDTH;
+  try {
+    const saved = Number.parseInt(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY) ?? '', 10);
+    return Number.isFinite(saved) ? saved : DEFAULT_DRAWER_WIDTH;
+  } catch {
+    return DEFAULT_DRAWER_WIDTH;
+  }
+}
 
 interface FilePreviewDrawerProps {
   /** Drawer is shown iff true (driven by `route.previewPath != null`). */
@@ -50,8 +64,104 @@ export default function FilePreviewDrawer({
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const [drawerWidth, setDrawerWidth] = useState(readSavedDrawerWidth);
+  const widthRef = useRef(drawerWidth);
+  const resizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [availableWidth, setAvailableWidth] = useState(() =>
+    typeof window === 'undefined' ? DEFAULT_DRAWER_WIDTH : window.innerWidth,
+  );
+  const [isResizing, setIsResizing] = useState(false);
   // The element focused before the drawer opened, restored on close.
   const prevFocusRef = useRef<HTMLElement | null>(null);
+
+  const measureAvailableWidth = useCallback(() => {
+    const parentWidth = panelRef.current?.parentElement?.getBoundingClientRect().width ?? 0;
+    return parentWidth > 0 ? parentWidth : window.innerWidth;
+  }, []);
+
+  const updateDrawerWidth = useCallback((width: number, parentWidth = measureAvailableWidth()) => {
+    const next = clampPreviewDrawerWidth(width, parentWidth);
+    widthRef.current = next;
+    setDrawerWidth(next);
+    return next;
+  }, [measureAvailableWidth]);
+
+  const persistDrawerWidth = useCallback((width: number) => {
+    try {
+      localStorage.setItem(FILE_PREVIEW_DRAWER_WIDTH_KEY, String(width));
+    } catch {
+      // localStorage may be unavailable in private/locked-down webviews.
+    }
+  }, []);
+
+  // Keep the saved width inside the current content area when the app window
+  // changes size. The 80% cap leaves enough of the covered chat visible to
+  // preserve the drawer's overlay context.
+  useEffect(() => {
+    const handleResize = () => {
+      const parentWidth = measureAvailableWidth();
+      setAvailableWidth(parentWidth);
+      updateDrawerWidth(widthRef.current, parentWidth);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [measureAvailableWidth, open, updateDrawerWidth]);
+
+  // Pointer movement is tracked on window so dragging remains smooth even
+  // after the pointer leaves the narrow resize target.
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const start = resizeStartRef.current;
+      if (!start) return;
+      updateDrawerWidth(start.startWidth + start.startX - event.clientX);
+    };
+    const finishResize = () => {
+      resizeStartRef.current = null;
+      setIsResizing(false);
+      persistDrawerWidth(widthRef.current);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [isResizing, persistDrawerWidth, updateDrawerWidth]);
+
+  const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!open || event.button !== 0) return;
+    event.preventDefault();
+    resizeStartRef.current = {
+      startX: event.clientX,
+      startWidth: widthRef.current,
+    };
+    setIsResizing(true);
+  };
+
+  const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const maxWidth = Math.floor(measureAvailableWidth() * MAX_DRAWER_WIDTH_RATIO);
+    let nextWidth: number | null = null;
+    if (event.key === 'ArrowLeft') nextWidth = widthRef.current + KEYBOARD_RESIZE_STEP;
+    if (event.key === 'ArrowRight') nextWidth = widthRef.current - KEYBOARD_RESIZE_STEP;
+    if (event.key === 'Home') nextWidth = MIN_DRAWER_WIDTH;
+    if (event.key === 'End') nextWidth = maxWidth;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    persistDrawerWidth(updateDrawerWidth(nextWidth));
+  };
 
   // Esc-to-close while open.
   useEffect(() => {
@@ -134,11 +244,33 @@ export default function FilePreviewDrawer({
         aria-hidden={!open}
         inert={!open}
         onKeyDown={handleTrapTab}
+        style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
         className={`absolute z-40 flex flex-col bg-background shadow-xl transition-transform duration-200 ease-out
           inset-x-0 bottom-0 h-[75%] rounded-t-xl border-t border-border
-          md:inset-y-0 md:right-0 md:left-auto md:h-full md:w-[420px] md:max-w-[80%] md:rounded-none md:border-t-0 md:border-l
+          md:inset-y-0 md:right-0 md:left-auto md:h-full md:w-[var(--file-preview-drawer-width)] md:max-w-[80%] md:rounded-none md:border-t-0 md:border-l
           ${open ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full pointer-events-none'}`}
       >
+        <div
+          role="separator"
+          aria-label={t('filePreview.resize')}
+          aria-orientation="vertical"
+          aria-valuemin={Math.min(MIN_DRAWER_WIDTH, Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO))}
+          aria-valuemax={Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO)}
+          aria-valuenow={drawerWidth}
+          tabIndex={open ? 0 : -1}
+          onPointerDown={handleResizePointerDown}
+          onKeyDown={handleResizeKeyDown}
+          className={`group absolute inset-y-0 left-0 z-10 hidden w-3 -translate-x-1/2 touch-none cursor-col-resize items-center justify-center md:flex focus:outline-none ${
+            isResizing ? 'bg-accent/10' : ''
+          }`}
+        >
+          <span
+            aria-hidden
+            className={`h-full w-px transition-colors group-hover:bg-accent group-focus-visible:bg-accent ${
+              isResizing ? 'bg-accent' : 'bg-transparent'
+            }`}
+          />
+        </div>
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
           <span className="text-xs font-medium text-secondary">{t('filePreview.heading')}</span>
           <button
