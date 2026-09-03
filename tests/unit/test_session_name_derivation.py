@@ -128,3 +128,14 @@ def test_load_keeps_user_rename_verbatim(tmp_path):
                           first_user_content=QUEUE_HEADER + "the real item text")
     s = Session.load(str(path))
     assert s.name == "My renamed session"
+
+
+def test_derive_name_drops_the_annotation_quotes_block():
+    """Spec 078 §5.4: a quoted annotation must not become the session name."""
+    from agent_os.agent.session import _derive_name, _QUOTES_HEADING
+
+    content = (
+        "what is this about\n\n" + _QUOTES_HEADING + "\n"
+        "[1] AGENTS.md\n    > AGENTS.md — read this first\n    note: explain"
+    )
+    assert _derive_name(content) == "what is this about"

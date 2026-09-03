@@ -6,6 +6,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import ChatMessage from './ChatMessage';
 import type { DisplayItem } from '../utils/chatTransform';
+import { QUOTES_HEADING } from '../utils/annotations';
 
 type UserMessage = Extract<DisplayItem, { type: 'user_message' }>;
 type AgentMessage = Extract<DisplayItem, { type: 'agent_message' }>;
@@ -233,7 +234,7 @@ describe('ChatMessage — copy', () => {
 
 describe('ChatMessage — user_message with an appended Annotations block', () => {
   const QUOTES = [
-    'Annotations:',
+    QUOTES_HEADING,
     '[1] Browser · "Queue" · box 10,20 100×40 (page pixels) — see attached annotation-1.png',
     '    note: click this one, not the ad',
     '[2] web/src/App.tsx lines 3–4',
@@ -246,7 +247,7 @@ describe('ChatMessage — user_message with an appended Annotations block', () =
     expect(screen.getByTestId('message-annotation-chip')).toHaveTextContent('2 annotations');
     // Collapsed: none of the machine markup is on screen.
     expect(screen.queryByTestId('message-annotation-quotes')).toBeNull();
-    expect(screen.queryByText(/Annotations:/)).toBeNull();
+    expect(screen.queryByText(QUOTES_HEADING)).toBeNull();
   });
 
   it('expands the verbatim block on click', () => {

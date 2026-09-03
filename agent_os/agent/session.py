@@ -98,6 +98,13 @@ def is_machine_derived_name(name) -> bool:
     return name.startswith("<attached_files>") or name.startswith("[QUEUE ITEM")
 
 
+# Spec 078 §5.4: the composer appends a quotes block under this heading when
+# the user annotated the panel. It must match web/src/utils/annotations.ts
+# QUOTES_HEADING byte for byte. Stripped from derived session names so a
+# session reads as the user's own words, not the quoted file.
+_QUOTES_HEADING = "Annotations - the user is pointing at these, answer about them:"
+
+
 def _derive_name(content) -> str | None:
     """Derive a session display name from a user message's content.
 
@@ -111,6 +118,7 @@ def _derive_name(content) -> str | None:
     if not isinstance(content, str):
         return None
     text, attachment_fallback = _strip_machine_prefixes(content)
+    text = text.split("\n" + _QUOTES_HEADING, 1)[0]
     text = text.strip() or (attachment_fallback or "")
     if not text:
         return None

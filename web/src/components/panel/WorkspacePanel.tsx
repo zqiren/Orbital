@@ -62,6 +62,10 @@ export default function WorkspacePanel({
           {tab('files', t('panel.view.files'))}
           {tab('browser', t('panel.view.browser'))}
         </div>
+        {/* Annotate is a Browser-only mode: on the live page a drag would
+            otherwise be forwarded, so a mode is needed to draw a box. Files
+            needs none — selecting text shows Quote, like any document. */}
+        {view === 'browser' && (
         <button
           type="button"
           aria-pressed={annotating}
@@ -75,6 +79,7 @@ export default function WorkspacePanel({
         >
           {annotating ? t('panel.annotate.done') : t('panel.annotate')}
         </button>
+        )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {view === 'browser' ? browser : files}

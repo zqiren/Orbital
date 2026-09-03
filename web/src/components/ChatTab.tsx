@@ -481,7 +481,6 @@ export default function ChatTab({
                   file={panelFile}
                   onSelectFile={handlePanelSelectFile}
                   onOpenInFiles={handleOpenInFiles}
-                  annotating={annotating}
                   onAddAnnotation={addAnnotation}
                   onSave={handleSave}
                 />

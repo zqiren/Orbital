@@ -927,20 +927,25 @@ describe('ChatTab — what the panel is given', () => {
     expect(lastBrowserViewProps.active).toBe(true);
   });
 
-  it('turning Annotate on in the bar reaches both views', async () => {
+  it('Annotate lives on the Browser view only; Files quotes without a mode', async () => {
     await act(async () => {
       renderChatTab();
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId('panel-handle'));
     });
-    expect(lastFilesViewProps.annotating).toBe(false);
+    // Files view: no Annotate button, and FilesView is never handed the mode.
+    expect(screen.queryByTestId('panel-annotate')).toBeNull();
+    expect((lastFilesViewProps as Record<string, unknown>).annotating).toBeUndefined();
 
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Browser' }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByTestId('panel-annotate'));
     });
-    expect(lastFilesViewProps.annotating).toBe(true);
     expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(lastBrowserViewProps.annotating).toBe(true);
   });
 });
 

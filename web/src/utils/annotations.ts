@@ -26,7 +26,14 @@ export type AnnotationDraft =
  * renderer looks for when collapsing the block behind a chip on a sent
  * message, so the two must stay in step — hence one constant.
  */
-export const QUOTES_HEADING = 'Annotations:';
+/**
+ * The heading line is a one-line instruction, not a label: the user's text
+ * above it is usually terse ("what is this about"), and without the framing
+ * a fresh-session model treats the quoted material as background and answers
+ * something else. No regex-special characters — splitQuotesBlock builds a
+ * RegExp from it.
+ */
+export const QUOTES_HEADING = 'Annotations - the user is pointing at these, answer about them:';
 
 /** Annotation filename convention (§5.4 step 2): `annotation-<n>.png`. */
 export function annotationFilename(n: number): string {

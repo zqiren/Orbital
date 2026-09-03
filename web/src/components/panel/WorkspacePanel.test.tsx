@@ -82,7 +82,7 @@ describe('WorkspacePanel — the Annotate toggle', () => {
   it('reads "Annotate" when off and "Done" when on, with aria-pressed following', () => {
     const { rerender } = render(
       <WorkspacePanel
-        view="files"
+        view="browser"
         onViewChange={vi.fn()}
         annotating={false}
         onToggleAnnotate={vi.fn()}
@@ -95,7 +95,7 @@ describe('WorkspacePanel — the Annotate toggle', () => {
 
     rerender(
       <WorkspacePanel
-        view="files"
+        view="browser"
         onViewChange={vi.fn()}
         annotating
         onToggleAnnotate={vi.fn()}
@@ -107,8 +107,20 @@ describe('WorkspacePanel — the Annotate toggle', () => {
   });
 
   it('calls onToggleAnnotate when pressed', () => {
-    const { onToggleAnnotate } = renderPanel();
+    const { onToggleAnnotate } = renderPanel({ view: 'browser' });
     fireEvent.click(screen.getByTestId('panel-annotate'));
     expect(onToggleAnnotate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WorkspacePanel — Annotate is Browser-only', () => {
+  it('shows no Annotate button on the Files view (selection + Quote covers files)', () => {
+    renderPanel({ view: 'files' });
+    expect(screen.queryByRole('button', { name: 'Annotate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
+  });
+  it('shows the Annotate button on the Browser view', () => {
+    renderPanel({ view: 'browser' });
+    expect(screen.getByRole('button', { name: 'Annotate' })).toBeInTheDocument();
   });
 });

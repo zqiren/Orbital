@@ -76,7 +76,6 @@ function renderView(overrides: Partial<React.ComponentProps<typeof FilesView>> =
     file: null,
     onSelectFile: vi.fn(),
     onOpenInFiles: vi.fn(),
-    annotating: false,
     onAddAnnotation: vi.fn(),
     ...overrides,
   };
@@ -260,8 +259,8 @@ describe('FilesView — preview state', () => {
     expect(props.onOpenInFiles).toHaveBeenCalledWith('README.md');
   });
 
-  it('forwards the annotating mode to FilePreview', async () => {
-    renderView({ file: 'README.md', annotating: true });
+  it('always enables quoting in the preview — Files has no Annotate mode', async () => {
+    renderView({ file: 'README.md' });
     await settle();
     expect(lastFilePreviewProps.quoting).toBe(true);
     expect(typeof lastFilePreviewProps.onQuote).toBe('function');
@@ -275,7 +274,7 @@ describe('FilesView — preview state', () => {
 describe('FilesView — onQuote maps to the three annotation forms', () => {
   async function quote(payload: Record<string, unknown>): Promise<AnnotationDraft> {
     const onAddAnnotation = vi.fn();
-    renderView({ file: 'README.md', annotating: true, onAddAnnotation });
+    renderView({ file: 'README.md', onAddAnnotation });
     await settle();
     act(() => {
       (lastFilePreviewProps.onQuote as (q: Record<string, unknown>) => void)(payload);

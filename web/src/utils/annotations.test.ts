@@ -10,6 +10,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  QUOTES_HEADING,
   formatQuotes,
   splitQuotesBlock,
   renderAnnotatedPng,
@@ -59,7 +60,7 @@ describe('formatQuotes', () => {
   it('formats a browser box quote byte-exactly', () => {
     expect(formatQuotes([browserAnn])).toBe(
       [
-        'Annotations:',
+        QUOTES_HEADING,
         '[1] Browser · "Queue" · box 120,64 240×48 (page pixels) — see attached annotation-1.png',
         '    note: click this one, not the ad',
       ].join('\n'),
@@ -69,7 +70,7 @@ describe('formatQuotes', () => {
   it('formats an image-region quote byte-exactly', () => {
     expect(formatQuotes([imageAnn])).toBe(
       [
-        'Annotations:',
+        QUOTES_HEADING,
         '[2] orbital/output/screenshots/12.png · box 4,5 6×7 — see attached annotation-2.png',
         '    note: this button',
       ].join('\n'),
@@ -79,7 +80,7 @@ describe('formatQuotes', () => {
   it('formats a text-span quote with the line range and a verbatim > block', () => {
     expect(formatQuotes([textAnn])).toBe(
       [
-        'Annotations:',
+        QUOTES_HEADING,
         '[3] web/src/components/QueueHeader.tsx lines 14–15',
         '    > <span className="text-xs">',
         "    >   {t('queue.header.pending')}",
@@ -98,23 +99,23 @@ describe('formatQuotes', () => {
 
   it('formats a whole-file quote byte-exactly', () => {
     expect(formatQuotes([fileAnn])).toBe(
-      ['Annotations:', '[4] docs/handbook.pdf (whole file)', '    note: what does section 3 say?'].join('\n'),
+      [QUOTES_HEADING, '[4] docs/handbook.pdf (whole file)', '    note: what does section 3 say?'].join('\n'),
     );
   });
 
   it('omits the note line entirely when the note is empty or blank', () => {
     expect(formatQuotes([{ ...fileAnn, note: '' }])).toBe(
-      ['Annotations:', '[4] docs/handbook.pdf (whole file)'].join('\n'),
+      [QUOTES_HEADING, '[4] docs/handbook.pdf (whole file)'].join('\n'),
     );
     expect(formatQuotes([{ ...fileAnn, note: '   ' }])).toBe(
-      ['Annotations:', '[4] docs/handbook.pdf (whole file)'].join('\n'),
+      [QUOTES_HEADING, '[4] docs/handbook.pdf (whole file)'].join('\n'),
     );
   });
 
   it('emits a bare > for empty lines inside a quoted span', () => {
     const out = formatQuotes([{ ...textAnn, text: 'a\n\nb', lines: undefined, note: '' }]);
     expect(out.split('\n')).toEqual([
-      'Annotations:',
+      QUOTES_HEADING,
       '[3] web/src/components/QueueHeader.tsx',
       '    > a',
       '    >',
@@ -124,7 +125,7 @@ describe('formatQuotes', () => {
 
   it('keeps every annotation, in order, under one heading', () => {
     const out = formatQuotes([browserAnn, textAnn, fileAnn]);
-    expect(out.match(/^Annotations:$/gm)).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l === QUOTES_HEADING)).toHaveLength(1);
     expect(out.match(/^\[\d+\] /gm)).toHaveLength(3);
     expect(out.indexOf('[1]')).toBeLessThan(out.indexOf('[3]'));
     expect(out.indexOf('[3]')).toBeLessThan(out.indexOf('[4]'));
@@ -167,7 +168,7 @@ describe('splitQuotesBlock', () => {
   });
 
   it('ignores a bare "Annotations:" heading with no [n] item under it', () => {
-    const content = 'Annotations:\nare a new feature';
+    const content = `${QUOTES_HEADING}\nare a new feature`;
     expect(splitQuotesBlock(content).quotes).toBeNull();
   });
 
