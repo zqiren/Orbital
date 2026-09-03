@@ -19,6 +19,24 @@ export interface FilePreviewProps {
    * threading the project id). Never wired for a truncated file (see `editable`).
    */
   onSave?: (path: string, content: string) => Promise<boolean>;
+  /**
+   * Spec 078 §5.4 (workstream E): when true, selecting text shows a "Quote"
+   * affordance and `onQuote` receives {path, text, lines?}. Optional; the
+   * panel's FilesView passes them, the Files tab does not.
+   */
+  quoting?: boolean;
+  /**
+   * text present → a text-span quote; box present → an image-region quote
+   * (imageDataUrl = the rendered image for the annotated PNG); neither → a
+   * whole-file quote (binary previews). FilesView maps this to AnnotationDraft.
+   */
+  onQuote?: (quote: {
+    path: string;
+    text?: string;
+    lines?: [number, number];
+    box?: { x: number; y: number; w: number; h: number };
+    imageDataUrl?: string;
+  }) => void;
 }
 
 // Defense-in-depth CSP for the HTML preview iframe (spec 003 §0.1). The
