@@ -670,6 +670,9 @@ async def test_viewport_message_resizes_the_page_and_restarts_the_screencast_sha
         await h.wait(lambda: len(h.cdp.calls("Page.captureScreenshot")) >= 2)
         second = h.cdp.calls("Page.captureScreenshot")[-1]
         assert second["clip"] == {"x": 0, "y": 0, "width": 640, "height": 900, "scale": 2.0}
+        await h.wait(lambda: any(m.get("type") == "frame" and m.get("width") == 640 for m in h.ws.sent))
+        primed = [m for m in h.ws.sent if m.get("type") == "frame" and m.get("width") == 640][-1]
+        assert (primed["width"], primed["height"]) == (640, 900)
     finally:
         await h.finish()
 

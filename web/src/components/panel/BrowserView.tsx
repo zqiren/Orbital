@@ -125,7 +125,9 @@ export default function BrowserView({
     }
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, []);
+    // Re-run when the rendered branch changes: the live canvas area only
+    // exists once a frame has arrived, and it is that element we must watch.
+  }, [hasFrame, status]);
 
   // Fit the page to the panel (spec 078 D9 amendment): tell the route the
   // canvas's CSS size whenever the stream is open and the size is known, and

@@ -299,7 +299,12 @@ class _LiveStream:
         data = shot.get("data")
         if not data:
             return
-        width, height = await self._viewport_size(cdp)
+        if self._viewport:
+            # The size we asked the page to be is the frame's coordinate space;
+            # layout metrics can report device pixels for a moment mid-resize.
+            width, height = self._viewport[0], self._viewport[1]
+        else:
+            width, height = await self._viewport_size(cdp)
         self._pending_frame = {
             "type": "frame",
             "jpeg": data,
