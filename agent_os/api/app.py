@@ -504,6 +504,12 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     platform_routes.configure(platform_provider, agent_manager=agent_manager, browser_manager=browser_manager)
     app.include_router(platform_routes.router)
 
+    # 7c1. Live browser view (spec 078 §5.6): one WS route that screencasts
+    # the project's current page and forwards mouse/keyboard back into it.
+    from agent_os.api.routes import browser_live as browser_live_routes
+    browser_live_routes.configure(browser_manager, agent_manager=agent_manager)
+    app.include_router(browser_live_routes.router)
+
     # 7c2. Connector routes (spec 011)
     from agent_os.api.routes import connectors as connector_routes
     connector_routes.configure(connector_manager)
