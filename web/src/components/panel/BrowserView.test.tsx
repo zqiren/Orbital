@@ -324,3 +324,19 @@ describe('BrowserView — after the page closes', () => {
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+
+describe('BrowserView — a blank page is not a page', () => {
+  it('shows the empty line instead of a white live canvas when the page is about:blank', () => {
+    liveMock.mockReturnValue({
+      status: 'open',
+      frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 800, height: 600 },
+      title: '',
+      url: 'about:blank',
+      send: vi.fn(),
+    });
+    renderView();
+    expect(screen.getByText('No page open yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+});

@@ -13,8 +13,8 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
     WS  /api/v2/agents/{project_id}/browser/live[?session_id=…&token=…]
 
     server → client
-      {"type":"frame","jpeg":"<base64>","width":<css px>,"height":<css px>,"title":"…"}
-      {"type":"state","status":"no_browser"|"open"|"closed","title":"…"}
+      {"type":"frame","jpeg":"<base64>","width":<css px>,"height":<css px>,"title":"…","url":"…"}
+      {"type":"state","status":"no_browser"|"open"|"closed","title":"…","url":"…"}
       {"type":"error","message":"…"}
 
     client → server
@@ -151,6 +151,7 @@ class _LiveStream:
         #: Last viewport the client asked for (width, height, dpr); re-applied on re-attach.
         self._viewport: tuple[int, int, float] | None = None
         self._title = ""
+        self._url = ""
         self._status = None  # None | "no_browser" | "open" | "closed"
 
         # Exactly one frame may be pending. A frame that arrives while the
@@ -185,7 +186,7 @@ class _LiveStream:
         if status == self._status:
             return
         self._status = status
-        await self._send({"type": "state", "status": status, "title": self._title})
+        await self._send({"type": "state", "status": status, "title": self._title, "url": self._url})
 
     # -- CDP attach / detach -------------------------------------------
 
@@ -202,6 +203,7 @@ class _LiveStream:
                 "width": int(metadata.get("deviceWidth") or 0),
                 "height": int(metadata.get("deviceHeight") or 0),
                 "title": self._title,
+                "url": self._url,
             }
             self._frame_ready.set()
         # Ack every frame, including ones we drop — withholding the ack
@@ -311,6 +313,7 @@ class _LiveStream:
             "width": width,
             "height": height,
             "title": self._title,
+            "url": self._url,
         }
         self._frame_ready.set()
 
@@ -354,6 +357,15 @@ class _LiveStream:
         except Exception:
             return self._title
 
+    def _page_url(self, page) -> str:
+        """The page's URL (a sync property in Playwright); '' when unreadable.
+        The client uses it to tell a blank page from a real one."""
+        try:
+            value = page.url
+            return value if isinstance(value, str) else ""
+        except Exception:
+            return self._url
+
     # -- background tasks -----------------------------------------------
 
     async def _sender(self) -> None:
@@ -372,6 +384,7 @@ class _LiveStream:
                 if page is not self._page:
                     await self._detach()
                     self._title = await self._safe_title(page)
+                    self._url = self._page_url(page)
                     try:
                         await self._attach(page)
                     except Exception as exc:
@@ -386,6 +399,7 @@ class _LiveStream:
                     await self._prime_frame()
                 else:
                     self._title = await self._safe_title(page)
+                    self._url = self._page_url(page)
             else:
                 if self._page is not None:
                     await self._detach()

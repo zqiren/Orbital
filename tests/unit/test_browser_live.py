@@ -85,6 +85,7 @@ class FakePage:
     def __init__(self, cdp, title: str = "Example Domain"):
         self.context = FakeContext(cdp)
         self._title = title
+        self.url = "https://example.com/"
         self._closed = False
 
     def is_closed(self):
@@ -239,6 +240,7 @@ async def test_subscribe_starts_screencast_with_the_agreed_params():
         await h.wait(lambda: h.ws.of_type("state"))
         assert h.ws.of_type("state")[0] == {
             "type": "state", "status": "open", "title": "Example Domain",
+            "url": "https://example.com/",
         }
     finally:
         await h.finish()
@@ -257,6 +259,7 @@ async def test_attach_primes_the_client_with_a_captured_first_frame():
             "width": 1280,
             "height": 720,
             "title": "Example Domain",
+            "url": "https://example.com/",
         }
         assert cdp.calls("Page.captureScreenshot")[0] == {
             "format": "jpeg", "quality": 60,
@@ -328,6 +331,7 @@ async def test_screencast_frame_becomes_a_frame_message_and_is_acked():
             "width": 1024,
             "height": 768,
             "title": "Example Domain",
+            "url": "https://example.com/",
         }
         await h.wait(lambda: cdp.calls("Page.screencastFrameAck"))
         assert cdp.calls("Page.screencastFrameAck")[0] == {"sessionId": 7}
@@ -401,6 +405,7 @@ async def test_page_closing_mid_stream_reports_closed_then_reattaches():
         await h.wait(lambda: cdp2.calls("Page.startScreencast"))
         assert h.ws.of_type("state")[-1] == {
             "type": "state", "status": "open", "title": "Second Page",
+            "url": "https://example.com/",
         }
     finally:
         await h.finish()
@@ -687,5 +692,20 @@ async def test_viewport_is_applied_to_the_page_and_reapplied_on_reattach():
         ws.push({"type": "viewport", "width": 700, "height": 500})
         await h.wait(lambda: getattr(page, "viewport_calls", None) == [{"width": 700, "height": 500}])
         assert h.cdp.calls("Page.startScreencast")[-1]["maxWidth"] == 700
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_state_and_frames_carry_the_page_url():
+    """The client tells a blank page (about:blank) from a real one by url."""
+    page, cdp = make_page()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: any(m.get("type") == "state" for m in ws.sent))
+        assert [m for m in ws.sent if m.get("type") == "state"][0]["url"] == "https://example.com/"
+        await h.wait(lambda: any(m.get("type") == "frame" for m in ws.sent))
+        assert [m for m in ws.sent if m.get("type") == "frame"][0]["url"] == "https://example.com/"
     finally:
         await h.finish()

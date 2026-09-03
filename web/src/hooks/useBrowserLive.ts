@@ -6,8 +6,8 @@
  * Spec 078 §5.6 — live view of the agent's browser over one WS route.
  * CONTRACT FILE (protocol below is shared with the backend route):
  *   WS  /api/v2/agents/{project_id}/browser/live[?token=<relay jwt>]
- *   server → client: {type:"frame", jpeg:<base64>, width, height, title}
- *                    {type:"state", status:"no_browser"|"open"|"closed", title?}
+ *   server → client: {type:"frame", jpeg:<base64>, width, height, title, url}
+ *                    {type:"state", status:"no_browser"|"open"|"closed", title?, url?}
  *                    {type:"error", message}
  *   client → server: {type:"mouse", action:"move"|"down"|"up"|"wheel", x, y, button?, clickCount?, deltaX?, deltaY?, modifiers?}
  *                    {type:"key", action:"down"|"up", key, code, text?, modifiers?}
@@ -25,6 +25,8 @@ export interface BrowserLive {
   status: LiveStatus;
   frame: LiveFrame | null;
   title: string;
+  /** The page's URL; 'about:blank' (or '') means the agent has nothing open yet. */
+  url?: string;
   send: (msg: Record<string, unknown>) => void;
 }
 
@@ -53,6 +55,7 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
   const [status, setStatus] = useState<LiveStatus>('idle');
   const [frame, setFrame] = useState<LiveFrame | null>(null);
   const [title, setTitle] = useState('');
+  const [url, setUrl] = useState('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -115,10 +118,12 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
         // Keep the latest frame only — replacing state, never queuing.
         setFrame({ jpegDataUrl: 'data:image/jpeg;base64,' + jpeg, width, height });
         if (typeof msg.title === 'string') setTitle(msg.title);
+        if (typeof msg.url === 'string') setUrl(msg.url);
         setStatus('open');
       } else if (msg.type === 'state') {
         if (typeof msg.status === 'string') setStatus(msg.status as LiveStatus);
         if (typeof msg.title === 'string') setTitle(msg.title);
+        if (typeof msg.url === 'string') setUrl(msg.url);
       } else if (msg.type === 'error') {
         setStatus('error');
       }
@@ -174,5 +179,5 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
     // Deliberately no queue: stale input is worse than lost input.
   }, []);
 
-  return { status, frame, title, send };
+  return { status, frame, title, url, send };
 }

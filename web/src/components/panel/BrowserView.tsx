@@ -93,7 +93,10 @@ export default function BrowserView({
   onAddAnnotation,
 }: BrowserViewProps) {
   const t = useT();
-  const { status, frame, title, send } = useBrowserLive(projectId, active);
+  const { status, frame, title, url, send } = useBrowserLive(projectId, active);
+  // A page exists but nothing has been opened in it (about:blank): say so
+  // rather than streaming a white rectangle labelled Live.
+  const blankPage = status === 'open' && url === 'about:blank';
   const hasFrame = frame !== null;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -382,7 +385,7 @@ export default function BrowserView({
     };
   }, [projectId, fallback, hasFrame, getFileContent]);
 
-  if (hasFrame) {
+  if (hasFrame && !blankPage) {
     return (
       <div ref={wrapperRef} className="relative flex h-full w-full flex-col">
         <div ref={frameAreaRef} className="relative flex-1 min-h-0 overflow-hidden">
@@ -417,6 +420,14 @@ export default function BrowserView({
           <span className="shrink-0">{live ? t('panel.browser.live') : t('panel.browser.lastScreenshot')}</span>
           {title && <span className="truncate">{title}</span>}
         </div>
+      </div>
+    );
+  }
+
+  if (blankPage) {
+    return (
+      <div ref={wrapperRef} className="p-3 text-xs text-secondary">
+        {t('panel.browser.empty')}
       </div>
     );
   }

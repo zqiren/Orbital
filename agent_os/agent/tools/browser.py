@@ -1100,9 +1100,17 @@ class BrowserTool(Tool):
 
         original_page = await self._bm.get_page(self._project_id)
 
+        # Spec 078: when the agent's current page is blank (fresh session, or
+        # nothing opened yet), read the URL IN that page so the workspace
+        # panel's live view shows what was read instead of a white page. A
+        # page the agent is already using is left untouched — fetch keeps its
+        # side tab and returns to it, as before.
+        current_url = getattr(original_page, "url", "")
+        in_place = isinstance(current_url, str) and current_url in ("", "about:blank")
+
         fetch_page = None
         try:
-            fetch_page = await original_page.context.new_page()
+            fetch_page = original_page if in_place else await original_page.context.new_page()
 
             await fetch_page.goto(url, wait_until="domcontentloaded", timeout=30000)
             try:
@@ -1112,9 +1120,12 @@ class BrowserTool(Tool):
 
             text = await fetch_page.evaluate(_FETCH_EXTRACT_JS)
 
-            await fetch_page.close()
-            fetch_page = None
-            await original_page.bring_to_front()
+            if in_place:
+                fetch_page = None  # it is the agent's page now; leave it open
+            else:
+                await fetch_page.close()
+                fetch_page = None
+                await original_page.bring_to_front()
 
             if not text or not text.strip():
                 return ToolResult(content=f"No readable content extracted from {url}")
@@ -1129,7 +1140,8 @@ class BrowserTool(Tool):
 
         except Exception as e:
             try:
-                if fetch_page is not None and not fetch_page.is_closed():
+                if (fetch_page is not None and fetch_page is not original_page
+                        and not fetch_page.is_closed()):
                     await fetch_page.close()
             except Exception:
                 pass
