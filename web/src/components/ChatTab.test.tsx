@@ -18,9 +18,17 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, act, cleanup } from '@testing-library/react';
-import type { SessionListEntry, Project } from '../types';
+import { render, act, cleanup, screen, fireEvent } from '@testing-library/react';
+import type {
+  ActivityEvent,
+  AgentRunStatus,
+  ChatMessage,
+  Project,
+  SessionListEntry,
+} from '../types';
 import type { Route } from '../route';
+import { __resetPanelState } from '../hooks/usePanelState';
+import { __resetAnnotationsStore } from '../hooks/useAnnotations';
 
 afterEach(() => cleanup());
 
@@ -66,6 +74,65 @@ vi.mock('../hooks/useAgent', () => ({
   useAgent: () => ({
     newSession: mockNewSession,
   }),
+}));
+
+// ---------------------------------------------------------------------------
+// Spec 078 — the workspace panel's dependencies.
+//
+// ChatTab now subscribes to the activity stream (useWebSocket throws outside a
+// provider) and owns the panel's copy of the session transcript. Both are
+// mocked so the resolution tests above stay pure prop assertions, and so the
+// panel tests below can drive events and messages directly.
+// ---------------------------------------------------------------------------
+
+const wsHandlers = new Map<string, (event: unknown) => void>();
+const mockOn = vi.fn((type: string, fn: (event: unknown) => void) => {
+  wsHandlers.set(type, fn);
+});
+const mockOff = vi.fn((type: string) => {
+  wsHandlers.delete(type);
+});
+
+vi.mock('../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({
+    connectionState: 'connected',
+    subscribe: vi.fn(),
+    on: mockOn,
+    off: mockOff,
+  }),
+}));
+
+let mockMessages: ChatMessage[] = [];
+const mockLoadHistory = vi.fn(async () => mockMessages);
+
+vi.mock('../hooks/useChatHistory', () => ({
+  useChatHistory: () => ({
+    messages: mockMessages,
+    loading: false,
+    lastEvent: null,
+    loadHistory: mockLoadHistory,
+    mergeRealtimeEvent: vi.fn(),
+    clearMessages: vi.fn(),
+  }),
+}));
+
+// The two views are other workstreams' surfaces; capture their props instead
+// of rendering their network-backed bodies.
+let lastFilesViewProps: Record<string, unknown> = {};
+let lastBrowserViewProps: Record<string, unknown> = {};
+
+vi.mock('./panel/FilesView', () => ({
+  default: (props: Record<string, unknown>) => {
+    lastFilesViewProps = props;
+    return <div data-testid="files-view" />;
+  },
+}));
+
+vi.mock('./panel/BrowserView', () => ({
+  default: (props: Record<string, unknown>) => {
+    lastBrowserViewProps = props;
+    return <div data-testid="browser-view" />;
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -143,6 +210,26 @@ function resetMocks() {
   mockNewSession.mockResolvedValue({ status: 'ok', session_id: 'sess_minted_new' });
   lastSessionSidebarProps = {};
   lastChatViewProps = {};
+  lastFilesViewProps = {};
+  lastBrowserViewProps = {};
+  mockMessages = [];
+  mockLoadHistory.mockClear();
+  mockOn.mockClear();
+  mockOff.mockClear();
+  wsHandlers.clear();
+  __resetPanelState();
+  __resetAnnotationsStore();
+  localStorage.clear();
+  setViewportWidth(1024); // below the push threshold: no panel by default
+}
+
+/** usePanelDockable reads window.innerWidth; 1440 is the spec's reference width. */
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    value: width,
+    configurable: true,
+    writable: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -555,5 +642,354 @@ describe('ChatTab — "+ new session" creates a genuinely blank session', () => 
     // Children receive the fresh id even though it isn't in `sessions`.
     expect(lastSessionSidebarProps.selectedSessionId).toBe('sess_minted_new');
     expect(lastChatViewProps.sessionId).toBe('sess_minted_new');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 078 §5.1/§9.4 — the workspace panel column and the collapsed handle
+// ---------------------------------------------------------------------------
+
+function renderChatTab(
+  routeOverride: Partial<Extract<Route, { name: 'project' }>> = {},
+  props: { agentStatus?: AgentRunStatus } = {},
+) {
+  const route = makeRoute({ sessionId: 'sess-x', ...routeOverride });
+  const setRoute = vi.fn();
+  const view = render(
+    <ChatTab
+      project={PROJECT}
+      agentStatus={props.agentStatus ?? 'idle'}
+      mentionAgents={[]}
+      route={route}
+      setRoute={setRoute}
+    />,
+  );
+  return { ...view, route, setRoute };
+}
+
+function emitActivity(overrides: Partial<ActivityEvent> = {}) {
+  const handler = wsHandlers.get('agent.activity');
+  if (!handler) throw new Error('ChatTab did not subscribe to agent.activity');
+  act(() => {
+    handler({
+      type: 'agent.activity',
+      project_id: 'proj-1',
+      session_id: 'sess-x',
+      id: `evt-${Math.random()}`,
+      category: 'file_edit',
+      description: 'Edited src/a.ts',
+      tool_name: 'edit',
+      source: 'management',
+      timestamp: '2026-09-03T10:00:00Z',
+      ...overrides,
+    } satisfies ActivityEvent);
+  });
+}
+
+function toolCallMessage(name: string, args: Record<string, unknown>): ChatMessage {
+  return {
+    role: 'assistant',
+    content: null,
+    source: 'management',
+    timestamp: '2026-09-03T10:00:00Z',
+    tool_calls: [
+      { id: `call-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } },
+    ],
+  };
+}
+
+describe('ChatTab — panel column vs. overlay (push threshold)', () => {
+  beforeEach(() => resetMocks());
+
+  it('renders neither the handle nor the panel below the 1200px threshold', async () => {
+    setViewportWidth(1024);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    await act(async () => {
+      renderChatTab();
+    });
+    expect(screen.queryByTestId('panel-handle')).toBeNull();
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+  });
+
+  it('renders the collapsed edge handle at rest on a wide window', async () => {
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    await act(async () => {
+      renderChatTab();
+    });
+    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+  });
+
+  it('clicking the handle expands the panel as a third column beside the chat', async () => {
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    await act(async () => {
+      renderChatTab();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.queryByTestId('panel-handle')).toBeNull();
+    // The session column and the chat column are still there — three columns.
+    expect(lastSessionSidebarProps.selectedSessionId).toBe('sess-x');
+    expect(lastChatViewProps.sessionId).toBe('sess-x');
+    expect(screen.getByRole('tab', { name: 'Files' })).toBeInTheDocument();
+  });
+
+  it('the panel’s collapse button puts the handle back', async () => {
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    await act(async () => {
+      renderChatTab();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Hide workspace' }));
+    });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+  });
+});
+
+describe('ChatTab — the panel follows the agent (D8)', () => {
+  beforeEach(() => {
+    resetMocks();
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+  });
+
+  it('a browser action expands the panel on the Browser view', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ category: 'browser_automation', tool_name: 'browser', arguments: { action: 'click' } });
+
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('browser-view')).toBeInTheDocument();
+  });
+
+  it('a file edit expands on Files and opens that file’s preview', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ category: 'file_edit', tool_name: 'edit', arguments: { path: 'src/a.ts' } });
+
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(lastFilesViewProps.file).toBe('src/a.ts');
+  });
+
+  it('a command-only turn does not open the panel (§13.3)', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ category: 'command_exec', tool_name: 'shell', arguments: { command: 'ls' } });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+  });
+
+  it('ignores activity belonging to another session', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ session_id: 'sess-other', category: 'browser_automation', tool_name: 'browser' });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+  });
+
+  it('collapses back to the handle when the turn ends', async () => {
+    const view = await act(async () =>
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="running"
+          mentionAgents={[]}
+          route={makeRoute({ sessionId: 'sess-x' })}
+          setRoute={vi.fn()}
+        />,
+      ),
+    );
+    emitActivity({ category: 'file_read', tool_name: 'read', arguments: { path: 'a.md' } });
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+
+    await act(async () => {
+      view.rerender(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={makeRoute({ sessionId: 'sess-x' })}
+          setRoute={vi.fn()}
+        />,
+      );
+    });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+    expect(screen.getByTestId('panel-handle')).toBeInTheDocument();
+  });
+
+  it('a panel collapsed during a run stays collapsed for the rest of it', async () => {
+    await act(async () =>
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="running"
+          mentionAgents={[]}
+          route={makeRoute({ sessionId: 'sess-x' })}
+          setRoute={vi.fn()}
+        />,
+      ),
+    );
+    emitActivity({ category: 'file_read', tool_name: 'read', arguments: { path: 'a.md' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Hide workspace' }));
+    });
+
+    emitActivity({ category: 'browser_automation', tool_name: 'browser' });
+    emitActivity({ category: 'file_edit', tool_name: 'edit', arguments: { path: 'b.md' } });
+    expect(screen.queryByTestId('workspace-panel-column')).toBeNull();
+  });
+
+  it('shows the working dot on the handle only while the agent is running', async () => {
+    await act(async () =>
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="running"
+          mentionAgents={[]}
+          route={makeRoute({ sessionId: 'sess-x' })}
+          setRoute={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByTestId('panel-handle-working')).toBeInTheDocument();
+  });
+});
+
+describe('ChatTab — what the panel is given', () => {
+  beforeEach(() => {
+    resetMocks();
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+  });
+
+  it('derives the touched list from the session transcript', async () => {
+    mockMessages = [
+      toolCallMessage('read', { path: 'a.md' }),
+      toolCallMessage('write', { path: 'b.md' }),
+    ];
+    await act(async () => {
+      renderChatTab();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+
+    expect(mockLoadHistory).toHaveBeenCalledWith('proj-1');
+    expect(lastFilesViewProps.touched).toEqual([
+      { path: 'b.md', op: 'written', lastAt: '2026-09-03T10:00:00Z' },
+      { path: 'a.md', op: 'read', lastAt: '2026-09-03T10:00:00Z' },
+    ]);
+  });
+
+  it('adds files touched live, mid-run, without refetching the transcript', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ category: 'file_write', tool_name: 'write', arguments: { path: 'live.md' } });
+    expect(lastFilesViewProps.touched).toEqual([
+      { path: 'live.md', op: 'written', lastAt: '2026-09-03T10:00:00Z' },
+    ]);
+  });
+
+  it('gives BrowserView the session’s last screenshot as its fallback', async () => {
+    mockMessages = [
+      {
+        role: 'tool',
+        content: 'ok',
+        source: 'management',
+        timestamp: '2026-09-03T10:00:01Z',
+        tool_call_id: 'call-1',
+        _meta: { url: 'https://x', title: 'Queue', screenshot_path: '/ws/shots/12.png' },
+      },
+    ];
+    await act(async () => {
+      renderChatTab();
+    });
+    emitActivity({ category: 'browser_automation', tool_name: 'browser' });
+
+    expect(lastBrowserViewProps.fallback).toEqual({ path: '/ws/shots/12.png', title: 'Queue' });
+    expect(lastBrowserViewProps.active).toBe(true);
+  });
+
+  it('turning Annotate on in the bar reaches both views', async () => {
+    await act(async () => {
+      renderChatTab();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+    expect(lastFilesViewProps.annotating).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-annotate'));
+    });
+    expect(lastFilesViewProps.annotating).toBe(true);
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+  });
+});
+
+describe('ChatTab — route.previewPath opens the panel, not the overlay (§9.10)', () => {
+  beforeEach(() => {
+    resetMocks();
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+  });
+
+  it('a chat path click expands the panel on Files with that file', async () => {
+    await act(async () => {
+      renderChatTab({ previewPath: 'docs/plan.md' });
+    });
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(lastFilesViewProps.file).toBe('docs/plan.md');
+  });
+
+  it('going back to the tree clears route.previewPath so it cannot re-open', async () => {
+    const { setRoute, route } = await act(async () =>
+      renderChatTab({ previewPath: 'docs/plan.md' }),
+    );
+    setRoute.mockClear();
+
+    act(() => {
+      (lastFilesViewProps.onSelectFile as (path: string | null) => void)(null);
+    });
+
+    expect(setRoute).toHaveBeenCalled();
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    const updated = updater(route) as Extract<Route, { name: 'project' }>;
+    expect(updated.previewPath).toBeUndefined();
+    expect(lastFilesViewProps.file).toBeNull();
+  });
+
+  it('"Open in Files" navigates to the full-width Files tab', async () => {
+    const { setRoute, route } = await act(async () =>
+      renderChatTab({ previewPath: 'docs/plan.md' }),
+    );
+    setRoute.mockClear();
+
+    act(() => {
+      (lastFilesViewProps.onOpenInFiles as (path: string) => void)('docs/plan.md');
+    });
+
+    const updater = setRoute.mock.calls[setRoute.mock.calls.length - 1][0] as (prev: Route) => Route;
+    const updated = updater(route) as Extract<Route, { name: 'project' }>;
+    expect(updated.tab).toBe('files');
+    expect(updated.previewPath).toBeUndefined();
   });
 });

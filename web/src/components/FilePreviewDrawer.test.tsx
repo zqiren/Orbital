@@ -138,3 +138,109 @@ describe('FilePreviewDrawer — desktop resizing', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 078 D13 — docked mode (ChatTab's third column)
+// ---------------------------------------------------------------------------
+
+function renderDocked(
+  overrides: Partial<React.ComponentProps<typeof FilePreviewDrawer>> = {},
+) {
+  return render(
+    <FilePreviewDrawer
+      docked
+      open
+      selectedPath={null}
+      fileContent={null}
+      loading={false}
+      onClose={vi.fn()}
+      {...overrides}
+    />,
+  );
+}
+
+describe('FilePreviewDrawer — docked mode', () => {
+  it('renders in flow: no dialog, no modal semantics, no scrim', () => {
+    const { container } = renderDocked();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('workspace-panel-column')).toBeInTheDocument();
+    expect(container.querySelector('.bg-black\\/30')).toBeNull();
+    const column = screen.getByTestId('workspace-panel-column');
+    expect(column).not.toHaveAttribute('aria-modal');
+    expect(column).not.toHaveAttribute('inert');
+    expect(column.className).not.toContain('absolute');
+    expect(column.className).not.toContain('translate-x');
+  });
+
+  it('defaults to 360px wide instead of the overlay drawer’s 420px', () => {
+    renderDocked();
+    expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
+      '--file-preview-drawer-width': '360px',
+    });
+  });
+
+  it('honours a width the user already dragged the overlay drawer to', () => {
+    localStorage.setItem(FILE_PREVIEW_DRAWER_WIDTH_KEY, '520');
+    renderDocked();
+    expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
+      '--file-preview-drawer-width': '520px',
+    });
+  });
+
+  it('keeps the resize handle working and persists the new width', () => {
+    renderDocked();
+    const handle = screen.getByRole('separator', { name: 'Resize file preview' });
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500 });
+    fireEvent.pointerMove(window, { clientX: 400 });
+    fireEvent.pointerUp(window);
+
+    expect(screen.getByTestId('workspace-panel-column')).toHaveStyle({
+      '--file-preview-drawer-width': '460px',
+    });
+    expect(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY)).toBe('460');
+  });
+
+  it('renders `children` instead of FilePreview, under the header slot', () => {
+    renderDocked({
+      header: <span data-testid="panel-header">switch</span>,
+      children: <div data-testid="panel-body">the panel</div>,
+    });
+    expect(screen.getByTestId('panel-header')).toBeInTheDocument();
+    expect(screen.getByTestId('panel-body')).toBeInTheDocument();
+    // FilePreview's empty state must not be rendered underneath.
+    expect(screen.queryByText('Select a file to preview')).toBeNull();
+  });
+
+  it('collapses via a "Hide workspace" button rather than "Close preview"', () => {
+    const onClose = vi.fn();
+    renderDocked({ onClose });
+    expect(screen.queryByRole('button', { name: 'Close preview' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide workspace' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not trap focus, steal focus, or close on Escape', () => {
+    const onClose = vi.fn();
+    render(
+      <>
+        <button data-testid="composer">composer</button>
+        <FilePreviewDrawer
+          docked
+          open
+          selectedPath={null}
+          fileContent={null}
+          loading={false}
+          onClose={onClose}
+        >
+          <div>panel</div>
+        </FilePreviewDrawer>
+      </>,
+    );
+    const composer = screen.getByTestId('composer');
+    composer.focus();
+    expect(document.activeElement).toBe(composer);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

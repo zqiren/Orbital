@@ -15,6 +15,7 @@ import FilePreviewDrawer from './FilePreviewDrawer';
 import { OpenPathContext } from './filePreviewContext';
 import { useQueue } from '../hooks/useQueue';
 import { useFiles } from '../hooks/useFiles';
+import { usePanelDockable } from '../hooks/usePanelState';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
 import type { StringKey } from '../i18n/strings';
@@ -99,6 +100,15 @@ export default function ProjectDetail({
   // resolving after a newer one (replace-on-click).
   const latestPreviewReqRef = useRef<string | null>(null);
   const previewPath = route.previewPath ?? null;
+
+  // Spec 078 §5.1/§9.10 — on the Chat tab, above the push threshold, the
+  // docked workspace panel in ChatTab shows the preview instead. Suppressing
+  // the overlay here is what keeps a chat path click from opening BOTH. The
+  // probe-first fetch above still runs: it is what resolves an abbreviated
+  // path to a real one (and toasts a miss) before the panel is told about it.
+  // Queue and Files tabs, mobile, and narrow windows keep today's overlay.
+  const dockable = usePanelDockable();
+  const chatPanelOwnsPreview = dockable && !route.settings && route.tab === 'chat';
 
   const handleOpenPath = useCallback(
     async (path: string) => {
@@ -331,7 +341,7 @@ export default function ProjectDetail({
           )}
         </OpenPathContext.Provider>
         <FilePreviewDrawer
-          open={previewPath !== null}
+          open={previewPath !== null && !chatPanelOwnsPreview}
           // Content-driven (NOT previewPath): the drawer renders its content
           // while still off-screen so the slide-in reveals an already-painted
           // layer. Also keeps content during the close slide-out (no empty

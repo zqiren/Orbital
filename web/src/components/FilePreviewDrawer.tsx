@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
-import { X } from 'lucide-react';
+import type { CSSProperties, ReactNode } from 'react';
+import { ChevronRight, X } from 'lucide-react';
 import type { FileContent } from '../types';
 import FilePreview from './FilePreview';
 import { useT } from '../i18n/useT';
 
 const FILE_PREVIEW_DRAWER_WIDTH_KEY = 'orbital:filePreviewDrawerWidth';
 const DEFAULT_DRAWER_WIDTH = 420;
+/** Spec 078 §5.1: docked, the panel starts narrower than the overlay drawer. */
+const DEFAULT_DOCKED_WIDTH = 360;
 const MIN_DRAWER_WIDTH = 320;
 const MAX_DRAWER_WIDTH_RATIO = 0.8;
 const KEYBOARD_RESIZE_STEP = 24;
@@ -21,13 +23,14 @@ function clampPreviewDrawerWidth(width: number, availableWidth: number) {
   return Math.min(Math.max(Math.round(width), minWidth), maxWidth);
 }
 
-function readSavedDrawerWidth() {
-  if (typeof window === 'undefined') return DEFAULT_DRAWER_WIDTH;
+function readSavedDrawerWidth(docked = false) {
+  const fallback = docked ? DEFAULT_DOCKED_WIDTH : DEFAULT_DRAWER_WIDTH;
+  if (typeof window === 'undefined') return fallback;
   try {
     const saved = Number.parseInt(localStorage.getItem(FILE_PREVIEW_DRAWER_WIDTH_KEY) ?? '', 10);
-    return Number.isFinite(saved) ? saved : DEFAULT_DRAWER_WIDTH;
+    return Number.isFinite(saved) ? saved : fallback;
   } catch {
-    return DEFAULT_DRAWER_WIDTH;
+    return fallback;
   }
 }
 
@@ -41,6 +44,18 @@ interface FilePreviewDrawerProps {
   onClose: () => void;
   /** Persist an edited `.md` file (last-write-wins); forwarded to FilePreview. */
   onSave?: (path: string, content: string) => Promise<boolean>;
+  /**
+   * Spec 078 D13 — docked mode: the drawer becomes ChatTab's third grid
+   * column instead of an overlay. In flow (no absolute positioning, no
+   * transform, no scrim), no focus trap / Esc / `inert` (it is a persistent
+   * region, not a modal), default width 360. Everything else — the persisted
+   * draggable width, the resize handle, the content pane — is shared.
+   */
+  docked?: boolean;
+  /** Docked only: chrome rendered in the header row, left of the collapse button. */
+  header?: ReactNode;
+  /** Rendered in the content pane INSTEAD of `FilePreview` (the workspace panel). */
+  children?: ReactNode;
 }
 
 /**
@@ -60,11 +75,14 @@ export default function FilePreviewDrawer({
   loading,
   onClose,
   onSave,
+  docked = false,
+  header,
+  children,
 }: FilePreviewDrawerProps) {
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
-  const [drawerWidth, setDrawerWidth] = useState(readSavedDrawerWidth);
+  const [drawerWidth, setDrawerWidth] = useState(() => readSavedDrawerWidth(docked));
   const widthRef = useRef(drawerWidth);
   const resizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() =>
@@ -163,21 +181,25 @@ export default function FilePreviewDrawer({
     persistDrawerWidth(updateDrawerWidth(nextWidth));
   };
 
-  // Esc-to-close while open.
+  // Esc-to-close while open. Overlay only: docked, the panel is a persistent
+  // region and Esc belongs to whatever is inside it (the Annotate mode).
   useEffect(() => {
-    if (!open) return;
+    if (!open || docked) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, docked]);
 
   // Focus management (a11y for the aria-modal dialog): move focus into the
   // drawer when it opens; restore it to the opener (the clicked chip/card) when
   // it closes. `inert` (below) keeps the drawer's controls out of the tab order
   // while closed, so this is the only focus that lands inside it.
   useEffect(() => {
+    // Docked: nothing is being covered, so stealing focus on mount would
+    // yank the caret out of the composer every time the panel opens itself.
+    if (docked) return;
     if (open) {
       prevFocusRef.current = document.activeElement as HTMLElement | null;
       // preventScroll: the panel starts translated OFF-SCREEN and slides in.
@@ -192,7 +214,7 @@ export default function FilePreviewDrawer({
       // Same rationale on restore — don't let refocusing the opener scroll.
       if (prev && document.contains(prev)) prev.focus({ preventScroll: true });
     }
-  }, [open]);
+  }, [open, docked]);
 
   // Focus trap: keep Tab / Shift+Tab cycling within the open drawer.
   const handleTrapTab = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -222,6 +244,63 @@ export default function FilePreviewDrawer({
     }
   };
 
+  const resizeHandle = (
+    <div
+      role="separator"
+      aria-label={t('filePreview.resize')}
+      aria-orientation="vertical"
+      aria-valuemin={Math.min(MIN_DRAWER_WIDTH, Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO))}
+      aria-valuemax={Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO)}
+      aria-valuenow={drawerWidth}
+      tabIndex={open ? 0 : -1}
+      onPointerDown={handleResizePointerDown}
+      onKeyDown={handleResizeKeyDown}
+      className={`group absolute inset-y-0 left-0 z-10 hidden w-3 -translate-x-1/2 touch-none cursor-col-resize items-center justify-center md:flex focus:outline-none ${
+        isResizing ? 'bg-accent/10' : ''
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`h-full w-px transition-colors group-hover:bg-accent group-focus-visible:bg-accent ${
+          isResizing ? 'bg-accent' : 'bg-transparent'
+        }`}
+      />
+    </div>
+  );
+
+  const body = children ?? (
+    <FilePreview fileContent={fileContent} loading={loading} selectedPath={selectedPath} onSave={onSave} />
+  );
+
+  // ── Docked (spec 078 D13): a real column of ChatTab's grid ────────────────
+  if (docked) {
+    return (
+      <section
+        ref={panelRef}
+        data-testid="workspace-panel-column"
+        aria-label={t('panel.handle')}
+        style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
+        className="relative z-0 hidden md:flex h-full min-h-0 shrink-0 flex-col border-l border-border bg-background w-[var(--file-preview-drawer-width)] max-w-[80%]"
+      >
+        {resizeHandle}
+        <div className="flex items-center justify-between gap-2 pl-3 pr-2 py-1.5 border-b border-border shrink-0 min-w-0">
+          <div className="min-w-0 flex-1">{header}</div>
+          <button
+            ref={closeBtnRef}
+            type="button"
+            onClick={onClose}
+            aria-label={t('panel.collapse')}
+            className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-hidden min-h-0 flex flex-col">{body}</div>
+      </section>
+    );
+  }
+
+  // ── Overlay / mobile bottom sheet (unchanged) ─────────────────────────────
   return (
     <>
       {/* Scrim — click to dismiss; fades with the panel. */}
@@ -250,27 +329,7 @@ export default function FilePreviewDrawer({
           md:inset-y-0 md:right-0 md:left-auto md:h-full md:w-[var(--file-preview-drawer-width)] md:max-w-[80%] md:rounded-none md:border-t-0 md:border-l
           ${open ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full pointer-events-none'}`}
       >
-        <div
-          role="separator"
-          aria-label={t('filePreview.resize')}
-          aria-orientation="vertical"
-          aria-valuemin={Math.min(MIN_DRAWER_WIDTH, Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO))}
-          aria-valuemax={Math.floor(availableWidth * MAX_DRAWER_WIDTH_RATIO)}
-          aria-valuenow={drawerWidth}
-          tabIndex={open ? 0 : -1}
-          onPointerDown={handleResizePointerDown}
-          onKeyDown={handleResizeKeyDown}
-          className={`group absolute inset-y-0 left-0 z-10 hidden w-3 -translate-x-1/2 touch-none cursor-col-resize items-center justify-center md:flex focus:outline-none ${
-            isResizing ? 'bg-accent/10' : ''
-          }`}
-        >
-          <span
-            aria-hidden
-            className={`h-full w-px transition-colors group-hover:bg-accent group-focus-visible:bg-accent ${
-              isResizing ? 'bg-accent' : 'bg-transparent'
-            }`}
-          />
-        </div>
+        {resizeHandle}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
           <span className="text-xs font-medium text-secondary">{t('filePreview.heading')}</span>
           <button
@@ -283,9 +342,7 @@ export default function FilePreviewDrawer({
             <X size={16} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto min-h-0">
-          <FilePreview fileContent={fileContent} loading={loading} selectedPath={selectedPath} onSave={onSave} />
-        </div>
+        <div className="flex-1 overflow-y-auto min-h-0">{body}</div>
       </div>
     </>
   );

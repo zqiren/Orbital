@@ -27,6 +27,21 @@ export function useChatHistory(options: UseChatHistoryOptions = {}) {
   const { sessionId } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * Spec 078 §9.8 — the workspace panel needs to see EVERY activity event,
+   * `tool_result` included, to follow what the agent is doing. Those are
+   * deliberately still dropped from `messages` (a "Tool result received" row
+   * has nothing to render), so instead of un-dropping them they are exposed
+   * here as the last event seen.
+   *
+   * Caveat for consumers, verified against
+   * `agent_os/daemon_v2/activity_translator.py:193`: the live `tool_result`
+   * event carries only `{category, description: "Tool result received",
+   * tool_name: <tool_call_id>}` — NO `_meta`, so no `screenshot_path`. The
+   * browser screenshot is only readable from the persisted history row's
+   * `_meta` (or, once it lands, the live CDP stream).
+   */
+  const [lastEvent, setLastEvent] = useState<ActivityEvent | null>(null);
 
   const loadHistory = useCallback(async (projectId: string) => {
     setLoading(true);
@@ -91,6 +106,9 @@ export function useChatHistory(options: UseChatHistoryOptions = {}) {
   }
 
   function handleActivity(event: ActivityEvent) {
+    // Published to subscribers BEFORE the tool_result drop below, so the panel
+    // sees the full stream (spec 078 §9.8).
+    setLastEvent(event);
     setMessages((prev) => {
       if (event.category === 'tool_result') return prev;
       const last = prev[prev.length - 1];
@@ -165,7 +183,8 @@ export function useChatHistory(options: UseChatHistoryOptions = {}) {
 
   const clearMessages = useCallback(() => {
     setMessages([]);
+    setLastEvent(null);
   }, []);
 
-  return { messages, loading, loadHistory, mergeRealtimeEvent, clearMessages };
+  return { messages, loading, lastEvent, loadHistory, mergeRealtimeEvent, clearMessages };
 }

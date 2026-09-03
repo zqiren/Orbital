@@ -288,3 +288,64 @@ describe('ProjectDetail — calendar lens tab visibility', () => {
     expect(screen.queryByRole('button', { name: /^Workbench/i })).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 078 §5.1/§9.10 — who owns route.previewPath
+//
+// On the Chat tab, above the push threshold, the docked workspace panel
+// (rendered by ChatTab) shows the preview. ProjectDetail must suppress its
+// overlay drawer there, or a chat path click opens both at once. Everywhere
+// else — Queue, Files, settings, mobile, narrow windows — the overlay stays.
+// ---------------------------------------------------------------------------
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    value: width,
+    configurable: true,
+    writable: true,
+  });
+}
+
+describe('ProjectDetail — overlay drawer vs. the docked panel', () => {
+  afterEach(() => setViewportWidth(1024));
+
+  // The drawer is always mounted; `inert` is what says "closed" (it is off
+  // screen and out of the a11y tree, so getByRole cannot see it).
+  function drawer(container: HTMLElement) {
+    const el = container.querySelector('[role="dialog"]');
+    expect(el).not.toBeNull();
+    return el as HTMLElement;
+  }
+
+  it('keeps the overlay closed on a wide Chat tab — the panel has the preview', () => {
+    setViewportWidth(1440);
+    const { container } = renderProjectDetail({ tab: 'chat', previewPath: 'docs/plan.md' });
+    expect(drawer(container)).toHaveAttribute('inert');
+  });
+
+  it('still opens the overlay on the Chat tab below the push threshold', () => {
+    setViewportWidth(1024);
+    const { container } = renderProjectDetail({ tab: 'chat', previewPath: 'docs/plan.md' });
+    expect(drawer(container)).not.toHaveAttribute('inert');
+  });
+
+  it('still opens the overlay on the Queue and Files tabs at any width', () => {
+    setViewportWidth(1440);
+    const queue = renderProjectDetail({ tab: 'queue', previewPath: 'docs/plan.md' });
+    expect(drawer(queue.container)).not.toHaveAttribute('inert');
+    queue.unmount();
+
+    const files = renderProjectDetail({ tab: 'files', previewPath: 'docs/plan.md' });
+    expect(drawer(files.container)).not.toHaveAttribute('inert');
+  });
+
+  it('still opens the overlay over the settings surface', () => {
+    setViewportWidth(1440);
+    const { container } = renderProjectDetail({
+      tab: 'chat',
+      settings: true,
+      previewPath: 'docs/plan.md',
+    });
+    expect(drawer(container)).not.toHaveAttribute('inert');
+  });
+});
