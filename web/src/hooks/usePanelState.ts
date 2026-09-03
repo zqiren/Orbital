@@ -188,6 +188,17 @@ function readNotDockable(): boolean {
   return false;
 }
 
+/** Current window width (0 on the server); re-renders on resize. */
+export function useWindowWidth(): number {
+  return useSyncExternalStore(subscribeToWindowWidth, readWindowWidth, readZeroWidth);
+}
+function readWindowWidth(): number {
+  return typeof window === 'undefined' ? 0 : window.innerWidth;
+}
+function readZeroWidth(): number {
+  return 0;
+}
+
 function subscribeToWindowWidth(onChange: () => void) {
   if (typeof window === 'undefined') return () => {};
   window.addEventListener('resize', onChange);

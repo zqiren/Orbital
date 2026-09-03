@@ -52,6 +52,12 @@ interface FilePreviewDrawerProps {
    * draggable width, the resize handle, the content pane — is shared.
    */
   docked?: boolean;
+  /**
+   * Docked only: a floor the column will not go below (the Browser view asks
+   * for room so the agent's page is readable). The user's drag still wins
+   * when it is wider; clamped to the same 80% cap as the drag.
+   */
+  minWidth?: number;
   /** Docked only: chrome rendered in the header row, left of the collapse button. */
   header?: ReactNode;
   /** Rendered in the content pane INSTEAD of `FilePreview` (the workspace panel). */
@@ -76,6 +82,7 @@ export default function FilePreviewDrawer({
   onClose,
   onSave,
   docked = false,
+  minWidth,
   header,
   children,
 }: FilePreviewDrawerProps) {
@@ -274,12 +281,15 @@ export default function FilePreviewDrawer({
 
   // ── Docked (spec 078 D13): a real column of ChatTab's grid ────────────────
   if (docked) {
+    const dockedWidth = minWidth
+      ? Math.max(drawerWidth, clampPreviewDrawerWidth(minWidth, availableWidth))
+      : drawerWidth;
     return (
       <section
         ref={panelRef}
         data-testid="workspace-panel-column"
         aria-label={t('panel.handle')}
-        style={{ '--file-preview-drawer-width': `${drawerWidth}px` } as CSSProperties}
+        style={{ '--file-preview-drawer-width': `${dockedWidth}px` } as CSSProperties}
         className="relative z-0 hidden md:flex h-full min-h-0 shrink-0 flex-col border-l border-border bg-background w-[var(--file-preview-drawer-width)] max-w-[80%]"
       >
         {resizeHandle}

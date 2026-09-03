@@ -528,6 +528,8 @@ export const STRINGS = {
   "panel.browser.connecting": { en: "Connecting to the browser…" },
   "panel.browser.empty": { en: "No page open yet." },
   "panel.browser.label": { en: "Browser" },
+  "panel.browser.lastScreenshot": { en: "Last screenshot" },
+  "panel.browser.live": { en: "Live" },
   "panel.collapse": { en: "Hide workspace" },
   "panel.expand": { en: "Show workspace" },
   "panel.files.back": { en: "Files" },

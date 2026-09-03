@@ -88,6 +88,9 @@ export default function BrowserView({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
+  // Paint the pixel buffer at device resolution: a 1280px page scaled into a
+  // ~600px column is unreadable at 1× on a Retina display.
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
   const canvasHeight = useMemo(() => {
     if (!frame || frame.width <= 0 || !canvasWidth) return 0;
@@ -322,8 +325,8 @@ export default function BrowserView({
             role="img"
             aria-label={title}
             tabIndex={0}
-            width={canvasWidth || undefined}
-            height={canvasHeight || undefined}
+            width={canvasWidth ? Math.round(canvasWidth * dpr) : undefined}
+            height={canvasHeight ? Math.round(canvasHeight * dpr) : undefined}
             style={{ width: '100%', height: canvasHeight || undefined, display: 'block' }}
             className="cursor-default outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             onPointerMove={handlePointerMove}
@@ -339,7 +342,15 @@ export default function BrowserView({
             <AnnotateOverlay active boxes={overlayBoxes} onAdd={handleOverlayAdd} />
           )}
         </div>
-        <div className="truncate px-2 py-1 text-xs text-secondary">{title}</div>
+        <div className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-xs text-secondary">
+          <span
+            aria-hidden="true"
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: '#22C55E' }}
+          />
+          <span className="shrink-0">{t('panel.browser.live')}</span>
+          {title && <span className="truncate">{title}</span>}
+        </div>
       </div>
     );
   }
@@ -362,9 +373,10 @@ export default function BrowserView({
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
           />
         </div>
-        {fallback?.title && (
-          <div className="truncate px-2 py-1 text-xs text-secondary">{fallback.title}</div>
-        )}
+        <div className="truncate px-2 py-1 text-xs text-secondary">
+          {t('panel.browser.lastScreenshot')}
+          {fallback?.title ? ` · ${fallback.title}` : ''}
+        </div>
       </div>
     );
   }

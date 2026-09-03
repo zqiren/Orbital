@@ -130,7 +130,7 @@ describe('BrowserView — empty / connecting / fallback states', () => {
     const img = await screen.findByAltText('Last page');
     expect(img).toHaveAttribute('src', 'data:image/png;base64,ZmFrZQ==');
     expect(getFileContentMock).toHaveBeenCalledWith('p1', 'orbital/output/screenshots/x.png');
-    expect(screen.getByText('Last page')).toBeInTheDocument();
+    expect(screen.getByText('Last screenshot · Last page')).toBeInTheDocument();
   });
 
   it('falls back to the empty message when no live frame and no fallback prop', () => {
@@ -155,6 +155,7 @@ describe('BrowserView — live canvas', () => {
     expect(canvas).toHaveAttribute('aria-label', 'Example Domain');
     expect(canvas).toHaveAttribute('tabIndex', '0');
     expect(screen.getByText('Example Domain')).toBeInTheDocument();
+    expect(screen.getByText('Live')).toBeInTheDocument();
     // No URL, no dimensions, no status text in the caption (spec D9).
     expect(screen.queryByText(/open|closed|connecting/i)).not.toBeInTheDocument();
   });
