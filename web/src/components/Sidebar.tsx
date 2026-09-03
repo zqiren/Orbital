@@ -26,6 +26,7 @@ import type { Route } from '../route';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import BetaBadge from './BetaBadge';
+import { getProjectDotColor } from '../utils/projectStatus';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -134,26 +135,6 @@ function useWorkbenchCount(): number {
     };
   }, []);
   return count;
-}
-
-function getProjectDotColor(
-  projectId: string,
-  agentStatuses: Record<string, AgentRunStatus>,
-  pendingApprovals: Record<string, number>,
-): string {
-  const approvalCount = pendingApprovals[projectId] ?? 0;
-  if (approvalCount > 0) return 'bg-warning';
-
-  const status = agentStatuses[projectId] ?? 'idle';
-  switch (status) {
-    case 'running':
-    case 'waiting':
-      return 'bg-success';
-    case 'error':
-      return 'bg-error';
-    default:
-      return 'bg-idle';
-  }
 }
 
 function truncate(str: string, max: number): string {

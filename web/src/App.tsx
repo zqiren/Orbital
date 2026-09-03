@@ -25,6 +25,7 @@ import type { Route } from './route';
 import SetupGate from './components/SetupGate';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
+import EdgeStrip from './components/EdgeStrip';
 import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
@@ -485,28 +486,48 @@ export default function App() {
   const sidebarHidden = isMobile && mobileView !== 'sidebar';
   const contentHidden = isMobile && mobileView !== 'content';
 
+  // Shared across both the home-route Sidebar and the EdgeStrip flyout's
+  // Sidebar (spec 078 D3 — the flyout renders the real Sidebar, not a copy).
+  const sidebarProps = {
+    projects,
+    agentStatuses,
+    statusSummaries,
+    pendingApprovals,
+    route,
+    connectionState: mapConnectionState(ws.connectionState, daemonOnline),
+    onSelectProject: handleSelectProject,
+    onSelectCalendar: handleSelectCalendar,
+    onSelectWorkbench: handleSelectWorkbench,
+    onNewProject: handleNewProject,
+    onReorderProjects: reorderProjects,
+    onSettings: () => {
+      setRoute({ name: 'settings' });
+      setMobileView('content');
+    },
+  };
+
   return (
     <div className="flex h-dvh overflow-hidden">
       <UpdatePill />
-      <div className={sidebarHidden ? 'hidden' : 'contents'}>
-        <Sidebar
+      {/* Desktop, a project open (any tab): the 260px Sidebar hides behind a
+          20px EdgeStrip that floats it over the session column on hover
+          (spec 078 D1-D3). Every other route, and mobile always, render
+          exactly what rendered before this spec. */}
+      {route.name === 'project' && !isMobile ? (
+        <EdgeStrip
           projects={projects}
+          currentProjectId={route.projectId}
           agentStatuses={agentStatuses}
-          statusSummaries={statusSummaries}
           pendingApprovals={pendingApprovals}
-          route={route}
-          connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
-          onSelectProject={handleSelectProject}
-          onSelectCalendar={handleSelectCalendar}
-          onSelectWorkbench={handleSelectWorkbench}
-          onNewProject={handleNewProject}
-          onReorderProjects={reorderProjects}
-          onSettings={() => {
-            setRoute({ name: 'settings' });
-            setMobileView('content');
-          }}
-        />
-      </div>
+          onGoHome={() => setRoute({ name: 'list' })}
+        >
+          <Sidebar {...sidebarProps} />
+        </EdgeStrip>
+      ) : (
+        <div className={sidebarHidden ? 'hidden' : 'contents'}>
+          <Sidebar {...sidebarProps} />
+        </div>
+      )}
 
       {/* NOTE: keep a space before `${` — Tailwind's scanner will not extract a
           class that runs straight into a template-literal interpolation, so
