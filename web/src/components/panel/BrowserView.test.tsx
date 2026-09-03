@@ -302,3 +302,25 @@ describe('BrowserView — annotating', () => {
     expect(draft.box).toBeDefined();
   });
 });
+
+
+describe('BrowserView — after the page closes', () => {
+  it('keeps the last frame on screen labelled "Last screenshot" and forwards no input', () => {
+    const send = vi.fn();
+    liveMock.mockReturnValue({
+      status: 'closed',
+      frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 1000, height: 500 },
+      title: 'Example Domain',
+      send,
+    });
+    renderView();
+    expect(screen.getByText('Last screenshot')).toBeInTheDocument();
+    expect(screen.queryByText('Live')).toBeNull();
+    const canvas = screen.getByRole('img') as HTMLCanvasElement;
+    mockRect(canvas, 500, 250);
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, button: 0, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, button: 0, pointerId: 1 });
+    fireEvent.keyDown(canvas, { key: 'Enter', code: 'Enter' });
+    expect(send).not.toHaveBeenCalled();
+  });
+});

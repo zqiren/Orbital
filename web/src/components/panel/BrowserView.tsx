@@ -150,28 +150,40 @@ export default function BrowserView({
 
   // Paint each incoming frame onto the canvas, coalesced with rAF so a burst
   // of screencast frames doesn't queue up multiple paints.
+  // The last decoded frame, kept so a resize (which resets the canvas bitmap)
+  // can repaint at once instead of showing a blank until the next frame.
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const paint = useCallback(() => {
+    const img = imageRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!img || !frame || !canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Contain-fit: once the page has taken the panel's size the frame fills
+    // the canvas exactly; in the moment before, it is letterboxed rather
+    // than stretched.
+    const fit = fitRect(frame.width, frame.height, canvas.width, canvas.height);
+    ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
+  }, [frame]);
   useEffect(() => {
     if (!frame) return;
     const img = new Image();
     img.onload = () => {
+      imageRef.current = img;
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(() => {
-        const canvas = canvasRef.current;
-        const ctx = canvas?.getContext('2d');
-        if (!canvas || !ctx) return;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // Contain-fit: once the page has taken the panel's size the frame
-        // fills the canvas exactly; in the moment before, it is letterboxed
-        // rather than stretched.
-        const fit = fitRect(frame.width, frame.height, canvas.width, canvas.height);
-        ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
-      });
+      rafRef.current = requestAnimationFrame(paint);
     };
     img.src = frame.jpegDataUrl;
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
-  }, [frame]);
+  }, [frame, paint]);
+  // React re-applies width/height on resize, which wipes the bitmap: repaint.
+  useEffect(() => {
+    if (!imageRef.current) return;
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(paint);
+  }, [canvasWidth, canvasHeight, dpr, paint]);
 
   // Canvas CSS-pixel size used for input scaling and annotation mapping.
   // getBoundingClientRect (mockable even where CSS layout isn't computed)
@@ -204,18 +216,23 @@ export default function BrowserView({
     [frame, getCanvasSize],
   );
 
+  // Input only reaches a page that is actually there. After the agent's
+  // browser closes (idle eviction, stop) the last frame stays on screen as a
+  // screenshot; clicks on it would otherwise be errors on a dead page.
+  const live = status === 'open';
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (annotating) return;
+      if (annotating || !live) return;
       const p = pagePointFromClient(e.clientX, e.clientY);
       if (!p) return;
       send({ type: 'mouse', action: 'move', x: p.x, y: p.y, modifiers: modifiersFor(e) });
     },
-    [annotating, pagePointFromClient, send],
+    [annotating, pagePointFromClient, send, live],
   );
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       canvasRef.current?.focus({ preventScroll: true });
       const p = pagePointFromClient(e.clientX, e.clientY);
@@ -230,11 +247,12 @@ export default function BrowserView({
         modifiers: modifiersFor(e),
       });
     },
-    [annotating, pagePointFromClient, send],
+    [annotating, pagePointFromClient, send, live],
   );
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       const p = pagePointFromClient(e.clientX, e.clientY);
       if (!p) return;
@@ -248,11 +266,12 @@ export default function BrowserView({
         modifiers: modifiersFor(e),
       });
     },
-    [annotating, pagePointFromClient, send],
+    [annotating, pagePointFromClient, send, live],
   );
 
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       const p = pagePointFromClient(e.clientX, e.clientY);
       if (!p) return;
@@ -266,11 +285,12 @@ export default function BrowserView({
         modifiers: modifiersFor(e),
       });
     },
-    [annotating, pagePointFromClient, send],
+    [annotating, pagePointFromClient, send, live],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       if (PREVENT_DEFAULT_KEYS.has(e.key)) e.preventDefault();
       send({
@@ -282,27 +302,29 @@ export default function BrowserView({
         modifiers: modifiersFor(e),
       });
     },
-    [annotating, send],
+    [annotating, send, live],
   );
 
   const handleKeyUp = useCallback(
     (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       if (PREVENT_DEFAULT_KEYS.has(e.key)) e.preventDefault();
       send({ type: 'key', action: 'up', key: e.key, code: e.code, modifiers: modifiersFor(e) });
     },
-    [annotating, send],
+    [annotating, send, live],
   );
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLCanvasElement>) => {
+      if (!live) return;
       if (annotating) return;
       const text = e.clipboardData.getData('text');
       if (!text) return;
       e.preventDefault();
       send({ type: 'text', text });
     },
-    [annotating, send],
+    [annotating, send, live],
   );
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -372,7 +394,7 @@ export default function BrowserView({
             width={canvasWidth ? Math.round(canvasWidth * dpr) : undefined}
             height={canvasHeight ? Math.round(canvasHeight * dpr) : undefined}
             style={{ width: '100%', height: '100%', display: 'block' }}
-            className="cursor-default outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            className={`${live ? 'cursor-default' : 'cursor-not-allowed'} outline-none focus-visible:ring-2 focus-visible:ring-accent/50`}
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
@@ -390,9 +412,9 @@ export default function BrowserView({
           <span
             aria-hidden="true"
             className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: '#22C55E' }}
+            style={{ backgroundColor: live ? '#22C55E' : '#9CA3AF' }}
           />
-          <span className="shrink-0">{t('panel.browser.live')}</span>
+          <span className="shrink-0">{live ? t('panel.browser.live') : t('panel.browser.lastScreenshot')}</span>
           {title && <span className="truncate">{title}</span>}
         </div>
       </div>

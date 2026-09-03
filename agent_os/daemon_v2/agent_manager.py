@@ -3541,12 +3541,20 @@ class AgentManager:
             )
 
     async def stop_agent(self, project_id: str, *,
-                         session_id: str | None = None) -> None:
+                         session_id: str | None = None,
+                         keep_browser: bool = False) -> None:
         """Stop agent and clean up.
 
         ``session_id`` selects which chat session's loop to stop. Other
         sessions in the same project continue running. Defaults to the
         single-loop default session for back-compat.
+
+        ``keep_browser`` leaves the project's browser pages open. The idle
+        eviction sweep passes it (spec 078): the workspace panel's live view
+        shows those pages, and the user expects the page they were looking
+        at to survive the agent idling out. Pages are capped by the browser
+        manager's LRU (10), so keeping them costs bounded RAM, not growth.
+        An explicit stop still closes them.
         """
         session_id = self._resolve_session_id(session_id)
         sk = make_session_key(project_id, session_id)
@@ -3571,8 +3579,9 @@ class AgentManager:
         # Cancel idle-poll + stop sub-agents (shared with cancel_message).
         await self._stop_sub_agents(project_id, session_id=session_id)
 
-        # Close browser pages for this project
-        if self._browser_manager is not None:
+        # Close browser pages for this project (not on idle eviction — the
+        # live view keeps showing them; see ``keep_browser``).
+        if self._browser_manager is not None and not keep_browser:
             try:
                 await self._browser_manager.close_project_pages(project_id)
             except Exception:
@@ -4474,7 +4483,7 @@ class AgentManager:
             pid, sid = sk
             logger.info("evicting idle project %s session %s", pid, sid)
             try:
-                await self.stop_agent(pid, session_id=sid)
+                await self.stop_agent(pid, session_id=sid, keep_browser=True)
             except Exception:
                 logger.warning(
                     "eviction failed for %s/%s", pid, sid, exc_info=True
