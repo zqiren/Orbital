@@ -71,25 +71,52 @@ def acquire_pid_file(pid_path: Path | None = None) -> None:
     if _active_pid_path is not None and _active_pid_path.resolve() == path.resolve():
         return
 
-    if path.exists():
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Claim the file by CREATING it exclusively. Reading, judging the PID dead,
+    # and then writing are three steps, and two daemons starting together both
+    # passed the judgement before either wrote — that is how two instances came
+    # up 377 ms apart on 2026-09-04 and both ran the one-shot credential-card
+    # migration, destroying keys. O_CREAT|O_EXCL makes the claim a single
+    # atomic step, so exactly one racer can win it.
+    for attempt in (1, 2):
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(str(os.getpid()))
+            break
+
+        # The file exists. Either a live daemon owns it, or it is stale.
         try:
             existing_pid = int(path.read_text().strip())
         except (ValueError, OSError):
             existing_pid = None
 
+        # NOTE: no "is this PID our own?" shortcut here. Re-acquiring our own
+        # file is already handled by the _active_pid_path check at the top, and
+        # a shortcut on os.getpid() would make a live daemon's own PID look
+        # reclaimable — which is exactly the refusal this function exists for.
         if existing_pid is not None and _is_process_alive(existing_pid):
             raise DaemonAlreadyRunning(existing_pid)
-        else:
-            logger.warning(
-                "Stale PID file found (PID %s is dead), overwriting",
-                existing_pid,
-            )
 
-    # Write PID atomically
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(str(os.getpid()), encoding="utf-8")
-    os.replace(str(tmp_path), str(path))
+        if attempt == 2:
+            # Someone re-created it while we were clearing it. Rather than
+            # loop, defer to them: a live racer is indistinguishable from a
+            # daemon that legitimately owns the file.
+            raise DaemonAlreadyRunning(existing_pid or -1)
+
+        logger.warning(
+            "Stale PID file found (PID %s is dead), reclaiming", existing_pid,
+        )
+        try:
+            # Unlink rather than overwrite, so the retry goes back through the
+            # same exclusive create and only one racer can take it.
+            os.unlink(str(path))
+        except FileNotFoundError:
+            pass
 
     _active_pid_path = path
     atexit.register(_atexit_cleanup)

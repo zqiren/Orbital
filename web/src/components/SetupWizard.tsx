@@ -20,6 +20,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Loader2, Globe, Plug } from 'lucide-react';
 import { api, ApiError } from '../config';
+import { useCredentialCards } from '../hooks/useCredentialCards';
 import type { Connector, ConnectorListResponse } from '../types';
 import LLMProviderSettings from './LLMProviderSettings';
 import ImportProjectsStep from './ImportProjectsStep';
@@ -96,6 +97,12 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const t = useT();
   const { locale } = useLocale();
   const [step, setStep] = useState<WizardStep>('api_key');
+  const [nextError, setNextError] = useState<string | null>(null);
+  // The provider the form must EDIT. undefined while loading and when there is
+  // genuinely none, which is the true first run — there the form's create
+  // branch is right, and the new provider becomes the default by being first.
+  const { cards, defaultCardId } = useCredentialCards();
+  const defaultCard = cards.find((c) => c.id === defaultCardId) ?? undefined;
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
 
@@ -155,24 +162,40 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     (c) => c.featured && c.status === 'available',
   );
 
-  // Save settings then advance to the accounts step
+  // Save settings then advance to the accounts step.
+  //
+  // The form saves the DEFAULT provider (see the `card` prop below), so the
+  // key it just wrote is the key `llm.api_key_set` reports. Before that it
+  // minted a NEW provider on every press: a new one only becomes the default
+  // when there is none, so with a default already present (any migrated
+  // install) `api_key_set` stayed false, Next did nothing at all, and each
+  // press leaked another provider. Five accumulated on the reporting user's
+  // machine before they gave up.
   const handleNext = useCallback(async () => {
     setCheckingKey(true);
+    setNextError(null);
     try {
-      // Auto-save settings before advancing
       if (saveRef.current) {
-        await saveRef.current();
+        const ok = await saveRef.current();
+        if (!ok) {
+          // The form renders its own reason; do not also advance.
+          return;
+        }
       }
       const data = await api<{ llm: { api_key_set: boolean } }>('/api/v2/settings');
       if (data.llm.api_key_set) {
         setStep('accounts');
+      } else {
+        // Saved, yet still no usable key. Silence here is what made this look
+        // like a dead button rather than a failure.
+        setNextError(t('wizard.apiKey.notSaved'));
       }
-    } catch {
-      // ignore — user can retry
+    } catch (err: unknown) {
+      setNextError(err instanceof Error && err.message ? err.message : t('wizard.apiKey.notSaved'));
     } finally {
       setCheckingKey(false);
     }
-  }, []);
+  }, [t]);
 
   // Connector connect — the backend runs a BLOCKING loopback OAuth flow (up
   // to ~300 s while the user completes browser consent), so the card shows a
@@ -240,7 +263,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       <div className="w-full max-w-lg">
         {step === 'api_key' && (
           <WizardCard title={t('wizard.welcome')} intro={t('wizard.intro')}>
-            <LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} providerPicker="cards" />
+            {/* `card` = the default provider, so Save PUTs it. Without this the
+                form takes its "create a new one" branch every press. */}
+            <LLMProviderSettings
+              mode="global"
+              card={defaultCard}
+              hideSaveButton
+              saveRef={saveRef}
+              providerPicker="cards"
+            />
 
             {/* First-run telemetry disclosure (spec 046 §6) — one sentence,
                 non-blocking; the full inspectable payload lives in Global
@@ -267,6 +298,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   t('wizard.next')
                 )}
               </button>
+              {nextError && (
+                <p className="text-xs text-error mt-2" data-testid="wizard-next-error">
+                  {nextError}
+                </p>
+              )}
             </div>
           </WizardCard>
         )}

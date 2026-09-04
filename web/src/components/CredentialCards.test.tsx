@@ -124,45 +124,70 @@ describe('CredentialCards — the flat list', () => {
     renderList();
 
     const row = await screen.findByTestId('card-row-card_default');
+    // The name already IS "<Provider> · <model>", so the line under it carries
+    // only what the name does not: the key suffix. Repeating the setup was the
+    // bulk this redesign removed.
     expect(row.textContent).toContain('OpenCode Go · deepseek-v4-flash');
     expect(row.textContent).toContain('sk-o...wxyz');
-    expect(screen.getByTestId('card-health-card_default').textContent).toBe('Verified 2h ago');
+    // Health is a SYMBOL, not a sentence: the words are the mark's accessible
+    // name and its hover tooltip, so a list of four cards no longer reads like
+    // a changelog. Assert the accessible name — that is what a screen reader
+    // gets, and what the tooltip shows.
+    expect(screen.getByTestId('card-health-card_default').getAttribute('aria-label')).toBe(
+      'Verified 2h ago',
+    );
 
-    // A card that failed is red and says what failed, with the clock time —
-    // the 2026-09-03 402 is exactly the thing this list exists to show.
+    // A card that failed carries the failure, with the clock time — the
+    // 2026-09-03 402 is exactly the thing this list exists to show.
     const bad = screen.getByTestId('card-health-card_bad');
-    expect(bad.textContent).toContain('402 Insufficient credits');
-    expect(bad.className).toContain('text-error');
+    expect(bad.getAttribute('aria-label')).toContain('402 Insufficient credits');
+    expect(screen.getByTestId('card-health-tip-card_bad').textContent).toContain(
+      '402 Insufficient credits',
+    );
     // A migrated card with no model is flagged rather than hidden (D7).
     expect(screen.getByTestId('card-row-card_bad').textContent).toContain('needs a model');
   });
 
-  it('badges exactly the default card and offers Set default on the others', async () => {
+  it('highlights exactly the default card, and every card has the same three actions', async () => {
     mockCards([DEFAULT_CARD, BAD_CARD]);
     renderList();
-    await screen.findByTestId('card-default-card_default');
-    expect(screen.queryByTestId('card-default-card_bad')).toBeNull();
-    // The default card has nothing to promote; the others do.
-    expect(screen.queryByTestId('card-set-default-card_default')).toBeNull();
-    expect(screen.getByTestId('card-set-default-card_bad')).toBeTruthy();
+    // Selection IS the highlight — there is no separate "Set default" control
+    // to promote a card, because clicking the card is what promotes it.
+    await screen.findByTestId('card-selected-card_default');
+    expect(screen.queryByTestId('card-selected-card_bad')).toBeNull();
+    expect(screen.queryByTestId('card-set-default-card_bad')).toBeNull();
+    expect(
+      (screen.getByTestId('card-select-card_default') as HTMLElement).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      (screen.getByTestId('card-select-card_bad') as HTMLElement).getAttribute('aria-checked'),
+    ).toBe('false');
+    // Exactly three per card. A fourth is the regression this guards.
+    for (const id of ['card_default', 'card_bad']) {
+      expect(screen.getByTestId(`card-test-${id}`)).toBeTruthy();
+      expect(screen.getByTestId(`card-edit-${id}`)).toBeTruthy();
+      expect(screen.getByTestId(`card-delete-${id}`)).toBeTruthy();
+    }
   });
 
   it('says so when there are no cards yet', async () => {
     mockCards([]);
     renderList();
-    expect((await screen.findByTestId('cards-empty')).textContent).toContain('No credential cards yet');
+    expect((await screen.findByTestId('cards-list-empty')).textContent).toContain(
+      'No providers yet',
+    );
   });
 });
 
 describe('CredentialCards — row actions', () => {
-  it('Set default PUTs the default route', async () => {
+  it('selecting a card PUTs the default route', async () => {
     mockCards([DEFAULT_CARD, BAD_CARD], (path, opts) =>
       path === '/api/v2/settings/cards/card_bad/default' && opts?.method === 'PUT'
         ? { default_card_id: 'card_bad', applied: true }
         : undefined,
     );
     renderList();
-    fireEvent.click(await screen.findByTestId('card-set-default-card_bad'));
+    fireEvent.click(await screen.findByTestId('card-select-card_bad'));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith(
         '/api/v2/settings/cards/card_bad/default',
@@ -178,7 +203,7 @@ describe('CredentialCards — row actions', () => {
         : undefined,
     );
     renderList();
-    fireEvent.click(await screen.findByTestId('card-set-default-card_bad'));
+    fireEvent.click(await screen.findByTestId('card-select-card_bad'));
     // A click that records a choice but changes nothing that runs has to say
     // so, or it reads as a broken button.
     expect((await screen.findByTestId('card-note-card_bad')).textContent).toContain(
@@ -196,7 +221,9 @@ describe('CredentialCards — row actions', () => {
     renderList();
     fireEvent.click(await screen.findByTestId('card-test-card_bad'));
     await waitFor(() =>
-      expect(screen.getByTestId('card-health-card_bad').textContent).toBe('Verified just now'),
+      expect(screen.getByTestId('card-health-card_bad').getAttribute('aria-label')).toBe(
+        'Verified just now',
+      ),
     );
   });
 
@@ -231,32 +258,17 @@ describe('CredentialCards — row actions', () => {
     );
   });
 
-  it('renaming PUTs only the name, so the health line is not re-tested away', async () => {
-    mockCards([DEFAULT_CARD], (path, opts) =>
-      path === '/api/v2/settings/cards/card_default' && opts?.method === 'PUT'
-        ? { card: { ...DEFAULT_CARD, name: 'Work account' }, test: null }
-        : undefined,
-    );
+  it('the list carries no rename affordance — renaming belongs to Edit', async () => {
+    // Clicking a card is what selects it, so the name cannot also be a rename
+    // trigger. The name field lives in the Edit form, one of the three actions.
+    mockCards([DEFAULT_CARD]);
     renderList();
-    fireEvent.click(await screen.findByTestId('card-name-card_default'));
-    const input = screen.getByTestId('card-name-input-card_default');
-    fireEvent.change(input, { target: { value: 'Work account' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() => {
-      const call = apiMock.mock.calls.find(
-        ([p, o]) => p === '/api/v2/settings/cards/card_default' && (o as RequestInit)?.method === 'PUT',
-      );
-      expect(call).toBeTruthy();
-      expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ name: 'Work account' });
-    });
-    // Renaming never breaks a referrer: the id is what projects store (D3).
-    await waitFor(() =>
-      expect(screen.getByTestId('card-name-card_default').textContent).toBe('Work account'),
-    );
+    await screen.findByTestId('card-row-card_default');
+    expect(screen.queryByTestId('card-name-card_default')).toBeNull();
+    expect(screen.queryByTestId('card-name-input-card_default')).toBeNull();
   });
 
-  it('the env card cannot be renamed, edited or deleted', async () => {
+  it('the env card cannot be edited or deleted', async () => {
     const envCard = makeCard({
       id: 'env',
       name: 'Environment key',
@@ -267,9 +279,12 @@ describe('CredentialCards — row actions', () => {
     mockCards([envCard]);
     renderList();
     await screen.findByTestId('card-row-env');
-    expect((screen.getByTestId('card-name-env') as HTMLButtonElement).disabled).toBe(true);
+    // Inert rather than absent: the row still explains itself, but neither of
+    // the two destructive actions is live.
     expect((screen.getByTestId('card-edit-env') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('card-delete-env') as HTMLButtonElement).disabled).toBe(true);
+    // Testing the environment card is still allowed — it is read-only, not unusable.
+    expect((screen.getByTestId('card-test-env') as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -302,24 +317,15 @@ describe('CredentialCards — Add card', () => {
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
   });
 
-  it('the TokenDance one-click button provisions a card and refreshes the list', async () => {
-    mockCards([DEFAULT_CARD], (path, opts) =>
-      path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST'
-        ? {
-            card: makeCard({ id: 'card_td', name: 'TokenDance · deepseek-v4-flash' }),
-            test: { ok: true, status: null, code: null, message: 'ok' },
-            default_card_id: 'card_default',
-            api_key_set: true,
-            api_key_masked: 'sk-t...abcd',
-          }
-        : undefined,
-    );
+  it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {
+    // TokenDance one-click lives INSIDE the Add flow, next to the key field it
+    // replaces, so it is invisible to everyone who cannot use it rather than a
+    // top-level button they must understand in order to ignore. Prominence for
+    // the market that wants it is ordering (zh sorts it first), not visibility.
+    mockCards([DEFAULT_CARD]);
     renderList();
-    fireEvent.click(await screen.findByTestId('cards-tokendance'));
-    await waitFor(() =>
-      expect(screen.getByTestId('cards-tokendance-msg').textContent).toContain(
-        'API key created and saved.',
-      ),
-    );
+    await screen.findByTestId('cards-add');
+    expect(screen.queryByTestId('cards-tokendance')).toBeNull();
+    expect(screen.queryByTestId('cards-tokendance-msg')).toBeNull();
   });
 });
