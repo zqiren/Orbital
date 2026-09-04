@@ -1030,6 +1030,7 @@ export const STRINGS = {
   "trigger.task": { en: "Prompt", zh: "提示词" },
   "trigger.watching": { en: "Watching", zh: "监听" },
   "trigger.watchingPrefix": { en: "Watching {path}", zh: "监听 {path}" },
+  "wizard.apiKey.notSaved": { en: "That key was not saved. Check the provider and key, then try again.", zh: "密钥未保存。请检查模型服务与密钥后重试。" },
   "wizard.accounts.browserDone": { en: "Signed in — browser closed.", zh: "已登录——浏览器已关闭。" },
   "wizard.accounts.browserHeading": { en: "Agent browser sign-in", zh: "Agent浏览器登录" },
   "wizard.accounts.clientHint": { en: "A Google OAuth client isn't configured yet — you can set one up later in Settings → Connectors.", zh: "尚未配置 Google OAuth 客户端——可稍后在设置 → 连接器中配置。" },

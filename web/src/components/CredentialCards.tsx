@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Global Settings → Credential cards (spec 082 §3.9).
+ * Global Settings → LLM providers (spec 082 §3.9).
  *
  * One flat list, in the daemon's order (env card first, then last-used desc).
  * Deliberately NOT grouped by provider: a card is a *working setup*, and the
@@ -12,22 +12,29 @@
  *
  * The list itself is `CardList`, shared verbatim with project settings — same
  * rows, same highlight, same three actions. This file owns only what is
- * ABOVE the list: the intro, "Add card", and one-click sign-in. Selecting a
- * card here sets the global default; `CardList` makes that call.
+ * ABOVE the list: the intro and "Add provider". Selecting a provider here
+ * sets the global default; `CardList` makes that call.
  *
- * "Add card" opens the existing provider form as a modal. Its Save posts the
+ * TokenDance one-click is deliberately NOT here. It is a provider like the
+ * seventeen others, so it belongs inside the Add flow next to the key field
+ * it replaces (`LLMProviderSettings`, provider === 'tokendance'), where it is
+ * invisible to everyone who cannot use it instead of being a top-level button
+ * they must first understand in order to ignore. Prominence for the market
+ * that wants it is a RANKING decision, not a visibility one: `orderProviders`
+ * sorts TokenDance first for the zh locale. A wrong locale guess then costs a
+ * scroll, not a dead end.
+ *
+ * "Add provider" opens the existing provider form as a modal. Its Save posts the
  * card and the daemon runs the connection test as part of that — a failed
  * test still saves, shown red on the row, so a provider outage never blocks
  * saving (D9). The modal therefore does not close itself: the verdict is the
  * thing the user opened it for.
  */
 import { useState } from 'react';
-import { Loader2, Plus } from 'lucide-react';
-import type { ProviderRegistry, TokendanceSigninResponse } from '../types';
-import { api } from '../config';
+import { Plus } from 'lucide-react';
+import type { ProviderRegistry } from '../types';
 import { useCredentialCards } from '../hooks/useCredentialCards';
 import { useT } from '../i18n/useT';
-import watchaLogo from '../assets/watcha-logo.png';
 import CardList, { CardFormModal } from './CardList';
 
 interface CredentialCardsProps {
@@ -39,41 +46,6 @@ export default function CredentialCards({ providers }: CredentialCardsProps) {
   const { cards, defaultCardId, loading, refresh, applyCard } = useCredentialCards();
 
   const [adding, setAdding] = useState(false);
-  const [tokendanceBusy, setTokendanceBusy] = useState(false);
-  const [tokendanceMsg, setTokendanceMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(
-    null,
-  );
-
-  function errorText(err: unknown): string {
-    return err instanceof Error && err.message ? err.message : t('cards.action.failed');
-  }
-
-  async function handleTokendance() {
-    setTokendanceBusy(true);
-    setTokendanceMsg(null);
-    try {
-      // No card_id: one-click always provisions a NEW TokenDance card here
-      // and never touches another card's key (§3.6). Re-keying an existing
-      // TokenDance card is the reconnect link inside that card's Edit form.
-      const res = await api<TokendanceSigninResponse>(
-        '/api/v2/providers/tokendance/signin',
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      await refresh();
-      setTokendanceMsg({
-        kind: res.test && !res.test.ok ? 'err' : 'ok',
-        text:
-          res.test && !res.test.ok
-            ? t('cards.save.savedWithError', { message: res.test.message })
-            : t('llm.tokendance.signin.success'),
-      });
-    } catch (err: unknown) {
-      setTokendanceMsg({ kind: 'err', text: errorText(err) });
-    } finally {
-      setTokendanceBusy(false);
-    }
-  }
-
   return (
     <div data-testid="credential-cards">
       <p className="text-[13px] leading-relaxed text-secondary mb-4">{t('cards.intro')}</p>
@@ -90,32 +62,7 @@ export default function CredentialCards({ providers }: CredentialCardsProps) {
           <Plus className="w-4 h-4" />
           {t('cards.add')}
         </button>
-        <button
-          type="button"
-          data-testid="cards-tokendance"
-          onClick={handleTokendance}
-          disabled={tokendanceBusy}
-          className="inline-flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 bg-card text-primary border border-border hover:border-[#8bdc7e] hover:shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 max-md:min-h-[44px]"
-        >
-          {tokendanceBusy ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <img src={watchaLogo} alt="" className="w-5 h-5 rounded-full" aria-hidden="true" />
-          )}
-          {tokendanceBusy
-            ? t('llm.tokendance.signin.waiting')
-            : t('llm.tokendance.signin.button')}
-        </button>
       </div>
-      {tokendanceMsg && (
-        <p
-          data-testid="cards-tokendance-msg"
-          className={`text-xs mb-3 ${tokendanceMsg.kind === 'ok' ? 'text-success' : 'text-error'}`}
-        >
-          {tokendanceMsg.text}
-        </p>
-      )}
-
       <CardList
         mode="global"
         cards={cards}

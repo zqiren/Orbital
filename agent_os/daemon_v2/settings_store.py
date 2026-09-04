@@ -17,6 +17,9 @@ nothing left to pair wrongly.
 import json
 import logging
 import os
+from contextlib import contextmanager
+import time
+import sys
 import shutil
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -220,6 +223,64 @@ def region_for_base_url(provider: str, base_url: str | None,
     return "global", base_url
 
 
+@contextmanager
+def _migration_lock(data_dir: str, timeout: float = 60.0):
+    """Hold an exclusive OS lock for the whole credential-card migration.
+
+    Two daemons can start in the same second — the PID file lets a racer
+    through whenever the recorded PID is dead, and on 2026-09-04 two instances
+    started 377 ms apart on a user's machine. Both ran this one-shot
+    migration. Each minted its OWN card ids, wrote Keychain items under them,
+    and saved its own settings; the last writer won, so the surviving
+    settings.json named one instance's ids while the Keychain held the
+    other's. Every lookup missed, and because each instance's own writes
+    succeeded, nothing logged an error. Meanwhile the plaintext project keys
+    had already been stripped from projects.json — the only remaining copy.
+
+    Blocking, not try-lock: the second instance must WAIT and then re-read, so
+    it observes the first one's cards and returns without migrating. A
+    timeout bounds the wait, because a dead holder must not wedge startup.
+    """
+    os.makedirs(data_dir, exist_ok=True)
+    path = os.path.join(data_dir, ".migration.lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "card migration: lock still held after %.0fs; proceeding "
+                        "without it", timeout,
+                    )
+                    break
+                time.sleep(0.1)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(fd)
+
+
 class SettingsStore:
     """Read/write global settings from a JSON file, and own the card list."""
 
@@ -237,7 +298,13 @@ class SettingsStore:
             credential_store.bind_settings_store(self)
         if migrate:
             try:
-                self.migrate_to_cards()
+                # Under an exclusive lock, and the "already migrated?" check
+                # re-runs INSIDE it: a racing daemon that waited here must see
+                # the winner's cards and do nothing, or both mint their own ids
+                # and the surviving settings name cards whose keys were written
+                # by the other process (the 2026-09-04 data loss).
+                with _migration_lock(self._data_dir):
+                    self.migrate_to_cards()
             except Exception:
                 logger.exception(
                     "credential-card migration failed; leaving settings untouched"
@@ -674,6 +741,8 @@ class SettingsStore:
 
         # 2/3. Projects.
         project_updates: dict[str, dict] = {}
+        # pid -> the card that now owns THIS project's own plaintext key.
+        project_key_cards: dict[str, str] = {}
         for project in projects:
             pid = project.get("project_id")
             if not pid:
@@ -697,6 +766,9 @@ class SettingsStore:
                         "This card needs a model before it can run.",
                     ),
                 )
+                # Remember whose plaintext key this card now owns, so the
+                # row is only stripped if that key provably landed.
+                project_key_cards[pid] = card.id
                 if p_model:
                     update["card_id"] = card.id
                 else:
@@ -734,14 +806,18 @@ class SettingsStore:
             llm.get("fallback_models"), mint, global_card, g_key, registry,
         )
 
-        # Write the keys. A failure here is loud and leaves the card keyless
-        # with a visible error rather than pretending the key survived.
+        # Write the keys, then VERIFY each one reads back. A silent no-op
+        # backend (CI's null keyring, a locked keychain) accepts a write and
+        # returns nothing, so 'no exception' is not evidence the key is
+        # there — only a matching read-back is.
         key_errors: dict[str, dict] = {}
         for card_id, key in key_writes.items():
             if not key:
                 continue
             try:
                 self._cards.set(card_id, key)
+                if self._cards.get(card_id) != key:
+                    raise RuntimeError("read-back did not match")
             except Exception as exc:
                 logger.error(
                     "card migration: could not store the key for card %s: %s",
@@ -771,6 +847,7 @@ class SettingsStore:
                 )
 
         # 5. Persist: cards in, legacy LLM fields out.
+        #
         raw["credential_cards"] = [c.model_dump() for c in cards]
         raw["default_card_id"] = global_card.id if global_card is not None else (
             cards[0].id if cards else None
@@ -778,9 +855,26 @@ class SettingsStore:
         raw["llm"] = {"fallback_models": global_fallbacks}
         self._write_raw(raw)
 
+        # Saving a project row STRIPS its legacy llm fields, including the
+        # plaintext api_key (`project_store._LEGACY_LLM_FIELDS`). So a row may
+        # only be saved once its key is provably readable from the keychain
+        # under the new card id. A project whose write failed keeps its
+        # plaintext key and its old shape: it runs on the default provider,
+        # its card is flagged, and the key is still there to recover from.
+        # Lossy-but-visible was the old behaviour; this is not lossy at all.
         for pid, update in project_updates.items():
-            if self._project_store is not None:
-                self._project_store.update_project(pid, update)
+            if self._project_store is None:
+                continue
+            blocked = project_key_cards.get(pid)
+            if blocked and blocked in key_errors:
+                logger.error(
+                    "card migration: keeping project %s untouched — its key "
+                    "could not be stored under card %s, and saving the row "
+                    "would drop the only copy",
+                    pid, blocked,
+                )
+                continue
+            self._project_store.update_project(pid, update)
 
         summary = {
             "cards": len(cards),
@@ -833,6 +927,12 @@ class SettingsStore:
             if os.path.exists(src) and not os.path.exists(dst):
                 try:
                     shutil.copy2(src, dst)
+                    # These hold plaintext per-project keys. copy2 preserves the
+                    # source mode, which is 0644 — readable by any process
+                    # running as the user. Narrow it, and never let this file
+                    # reach telemetry, the relay, or a support bundle.
+                    os.chmod(dst, 0o600)
+                    logger.info("card migration: backed up %s -> %s", name, dst)
                 except OSError:
                     logger.warning("could not back up %s before migration", src)
 

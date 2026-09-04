@@ -317,24 +317,15 @@ describe('CredentialCards — Add card', () => {
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
   });
 
-  it('the TokenDance one-click button provisions a card and refreshes the list', async () => {
-    mockCards([DEFAULT_CARD], (path, opts) =>
-      path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST'
-        ? {
-            card: makeCard({ id: 'card_td', name: 'TokenDance · deepseek-v4-flash' }),
-            test: { ok: true, status: null, code: null, message: 'ok' },
-            default_card_id: 'card_default',
-            api_key_set: true,
-            api_key_masked: 'sk-t...abcd',
-          }
-        : undefined,
-    );
+  it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {
+    // TokenDance one-click lives INSIDE the Add flow, next to the key field it
+    // replaces, so it is invisible to everyone who cannot use it rather than a
+    // top-level button they must understand in order to ignore. Prominence for
+    // the market that wants it is ordering (zh sorts it first), not visibility.
+    mockCards([DEFAULT_CARD]);
     renderList();
-    fireEvent.click(await screen.findByTestId('cards-tokendance'));
-    await waitFor(() =>
-      expect(screen.getByTestId('cards-tokendance-msg').textContent).toContain(
-        'API key created and saved.',
-      ),
-    );
+    await screen.findByTestId('cards-add');
+    expect(screen.queryByTestId('cards-tokendance')).toBeNull();
+    expect(screen.queryByTestId('cards-tokendance-msg')).toBeNull();
   });
 });
