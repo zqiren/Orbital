@@ -152,6 +152,10 @@ export default function LLMProviderSettings({
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saveTest, setSaveTest] = useState<CardTestResult | null>(null);
+  // Card name. Renaming lives in this form because Edit is one of the
+  // card's three actions — the list carries no rename affordance of its
+  // own, since clicking a card is what selects it.
+  const [cardName, setCardName] = useState('');
 
   // Model list state
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -244,6 +248,7 @@ export default function LLMProviderSettings({
       if (card.sdk) setSdk(card.sdk);
       setModel(card.model || '');
       setModelInputValue(card.model || '');
+      setCardName(card.name || '');
     } else if (mode === 'global') {
       // Populate from global settings
       if (globalSettings) {
@@ -688,6 +693,11 @@ export default function LLMProviderSettings({
         body.base_url = typedBaseUrl;
       }
       if (apiKey.trim()) body.api_key = apiKey.trim();
+      // Only when edited: an untouched name stays auto-generated, so it
+      // keeps following provider/model the way the daemon intends.
+      if (cardName.trim() && cardName.trim() !== (card?.name ?? '')) {
+        body.name = cardName.trim();
+      }
 
       const res = card
         ? await api<CardMutationResponse>(
@@ -780,6 +790,26 @@ export default function LLMProviderSettings({
   // ---- Shared fields JSX ----
   const fieldsJSX = (
     <div className="space-y-5">
+      {/* Name — only when editing a saved card. A new card is named after its
+          provider and model by the daemon, which beats anything typed before
+          those are chosen. */}
+      {card && (
+        <div>
+          <label htmlFor="card-name-field" className="block text-sm font-medium text-primary mb-1.5">
+            {t('llm.field.name')}
+          </label>
+          <input
+            id="card-name-field"
+            type="text"
+            value={cardName}
+            data-testid="card-name-field"
+            onChange={(e) => setCardName(e.target.value)}
+            placeholder={card.name}
+            className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
+          />
+        </div>
+      )}
+
       {/* Provider */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>

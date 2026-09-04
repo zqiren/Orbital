@@ -11,7 +11,7 @@ import type {
   ProjectUpdateRequest,
 } from '../types';
 import { api, BASE_URL, isRelayMode, ApiError } from '../config';
-import CardPicker from './CardPicker';
+import CardList from './CardList';
 import MigrationNoteBanner from './MigrationNoteBanner';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import { useCredentialCards } from '../hooks/useCredentialCards';
@@ -211,7 +211,11 @@ export default function SettingsView({
   // REGISTRY is no longer fetched here: a card already resolves provider,
   // endpoint and sdk, so this screen has no provider list to render.
   const [cardId, setCardId] = useState<string | null>(project.card_id ?? null);
-  const { cards, defaultCardId } = useCredentialCards();
+  // The project surface now renders the same CardList as Global Settings,
+  // so it needs the same two mutation hooks (a delete or a test here
+  // updates the one shared list).
+  const { cards, defaultCardId, loading: cardsLoading, refresh: refreshCards,
+          applyCard } = useCredentialCards();
 
   const pid = project.project_id;
 
@@ -647,11 +651,18 @@ export default function SettingsView({
           description={t('cards.project.hint')}
         >
           <MigrationNoteBanner note={project.migration_note} cards={cards} />
-          <CardPicker
+          {/* The same list Global Settings shows: same rows, same highlight,
+              same three actions. Here the highlight means "this project runs
+              on it"; there it means "this is the default". */}
+          <CardList
+            mode="project"
             cards={cards}
             defaultCardId={defaultCardId}
             value={cardId}
             onChange={setCardId}
+            loading={cardsLoading}
+            onRefresh={refreshCards}
+            onCardUpdated={applyCard}
             data-testid="project-card-picker"
           />
         </SettingsSection>
