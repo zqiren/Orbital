@@ -157,19 +157,42 @@ class TestKeyringErrors:
 # ---------------------------------------------------------------------------
 
 class TestSettingsStoreIntegration:
-    def test_get_masked_uses_credential_store(self, tmp_path):
+    def test_get_masked_derives_the_llm_block_from_the_default_card(self, tmp_path):
+        """Spec 082 §3.8: the ``llm`` block survives, DERIVED from the default card.
+
+        It used to read the one global key slot. Cards replaced that slot, but
+        the block is kept for a release so App.tsx, SubAgentSettings.tsx and any
+        older SPA pointed at a newer daemon keep reading provider/model/key
+        status where they always did. The masking contract is unchanged: a
+        prefix, an ellipsis, a suffix, and never the raw key.
+        """
         from agent_os.daemon_v2.settings_store import SettingsStore
 
-        cred = MagicMock()
-        cred.get_api_key.return_value = "sk-test1234567890"
-        cred.get_source.return_value = "keychain"
+        ss = SettingsStore(data_dir=str(tmp_path), credential_store=MagicMock())
+        card = ss.create_card(
+            provider="anthropic", model="claude-x", api_key="sk-test1234567890",
+        )
+        ss.set_default_card(card.id)
 
-        ss = SettingsStore(data_dir=str(tmp_path), credential_store=cred)
         masked = ss.get_masked()
         assert masked["llm"]["api_key_set"] is True
         assert masked["llm"]["api_key_masked"] == "sk-t...7890"
-        assert masked["llm"]["api_key_source"] == "keychain"
-        assert "api_key" not in masked["llm"]
+        assert masked["llm"]["provider"] == "anthropic"
+        assert masked["llm"]["model"] == "claude-x"
+        assert "api_key" not in masked["llm"], "the raw key must never be serialized"
+        # And the card itself is exposed alongside, equally masked.
+        assert masked["default_card_id"] == card.id
+        assert all("api_key" not in c for c in masked["credential_cards"])
+
+    def test_get_masked_with_no_cards_reports_no_key(self, tmp_path):
+        """A store with no cards is the wizard-incomplete state, not an error."""
+        from agent_os.daemon_v2.settings_store import SettingsStore
+
+        ss = SettingsStore(data_dir=str(tmp_path), credential_store=MagicMock())
+        masked = ss.get_masked()
+        assert masked["llm"]["api_key_set"] is False
+        assert masked["credential_cards"] == []
+        assert masked["default_card_id"] is None
 
     def test_get_masked_no_credential_store_fallback(self, tmp_path):
         from agent_os.daemon_v2.settings_store import SettingsStore

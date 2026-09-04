@@ -28,6 +28,83 @@ export interface ProviderInfo {
 
 export type ProviderRegistry = Record<string, ProviderInfo>;
 
+/** One credential-card health failure (spec 082 §3.1). `code` is a stable
+ *  machine code (missing_api_key, invalid_api_key, insufficient_credits,
+ *  model_not_found, rate_limited, provider_unreachable, provider_error);
+ *  `message` is the provider's (or our) sentence, never translated. */
+export interface CredentialCardError {
+  status: number | null;
+  code: string;
+  message: string;
+  at: string;
+}
+
+/**
+ * A saved, verified working LLM setup — provider + endpoint choice + key +
+ * model (spec 082 §3.1). The raw key never reaches the browser: the card
+ * carries only `key_masked` / `key_set` / `key_source`.
+ *
+ * `id === 'env'` is the synthetic read-only card the daemon exposes while
+ * AGENT_OS_API_KEY is set; it is always listed first and always effective.
+ */
+export interface CredentialCard {
+  id: string;
+  name: string;
+  /** providers.json key, or 'custom'. */
+  provider: string;
+  region: 'global' | 'china';
+  /** Set for provider === 'custom' (or a preserved migrated endpoint). */
+  base_url: string | null;
+  sdk: 'openai' | 'anthropic' | null;
+  /** '' only on a migrated incomplete card ("needs a model"). */
+  model: string;
+  created_at: string;
+  verified_at: string | null;
+  last_used_at: string | null;
+  last_error: CredentialCardError | null;
+  key_set: boolean;
+  /** first4 + '...' + last4; '****' for keys ≤ 8 chars; '' when unset. */
+  key_masked: string;
+  key_source: 'environment' | 'keychain' | 'none';
+  /** True for the EFFECTIVE default card (the env card wins while set). */
+  is_default: boolean;
+  /** True only for the env card — it cannot be edited, re-keyed or deleted. */
+  read_only: boolean;
+}
+
+/** Result of the connection test a card save / edit / Test runs (spec 082 §3.2). */
+export interface CardTestResult {
+  ok: boolean;
+  status: number | null;
+  /** One of the CredentialCardError codes; null when ok. */
+  code: string | null;
+  message: string;
+}
+
+/** POST /settings/cards, PUT /settings/cards/{id}, POST /settings/cards/{id}/test.
+ *  `test` is null when an edit changed nothing worth re-testing. */
+export interface CardMutationResponse {
+  card: CredentialCard;
+  test: CardTestResult | null;
+}
+
+/** DELETE /settings/cards/{id} — the projects that fell back to the default. */
+export interface CardDeleteResponse {
+  id: string;
+  deleted: boolean;
+  reassigned_projects: { project_id: string; name: string }[];
+}
+
+/** POST /providers/tokendance/signin (spec 082 §3.6). The two legacy fields
+ *  are kept for older SPAs; new code reads `card`. */
+export interface TokendanceSigninResponse {
+  card?: CredentialCard;
+  test?: CardTestResult | null;
+  default_card_id?: string | null;
+  api_key_set: boolean;
+  api_key_masked: string;
+}
+
 export interface NotificationPrefs {
   task_completed?: boolean;
   errors?: boolean;
@@ -39,9 +116,27 @@ export interface Project {
   project_id: string;
   name: string;
   workspace: string;
-  model: string;
-  api_key: string;
-  base_url: string | null;
+  /**
+   * The credential card this project runs on (spec 082 §3.3). `null` — the
+   * common case — means "follow the global default card". Absent on rows
+   * served by a pre-082 daemon.
+   */
+  card_id?: string | null;
+  /**
+   * A one-line migration/repair note the card migration or a card deletion
+   * left on this project, rendered as a banner above the card picker:
+   * `card_incomplete:<card name>`, `needs_card:<provider>/<model>` or
+   * `card_deleted:<card name>`. Cleared by any save that carries `card_id`.
+   */
+  migration_note?: string | null;
+  /**
+   * Legacy per-project LLM override (pre-082). The daemon no longer emits
+   * these — a card carries provider/model/endpoint/key as one object — but
+   * they stay optional here so a newer SPA can read an older daemon's rows.
+   */
+  model?: string;
+  api_key?: string;
+  base_url?: string | null;
   autonomy: Autonomy;
   instructions: string;
   provider?: string;
@@ -101,12 +196,9 @@ export interface PendingDomainRequest {
 export interface ProjectCreateRequest {
   name: string;
   workspace: string;
-  // Optional (backend defaults both to ""): the simplified create-project
-  // modal only asks for workspace + name; empty already means "inherit the
-  // global provider/model" server-side.
-  model?: string;
-  api_key?: string;
-  base_url?: string | null;
+  /** Credential card to pin (spec 082). Omit or null = follow the global
+   *  default card — what the simplified create-project modal always does. */
+  card_id?: string | null;
   autonomy?: Autonomy;
   instructions?: string;
   provider?: string;
@@ -118,13 +210,15 @@ export interface ProjectCreateRequest {
 
 export interface ProjectUpdateRequest {
   name?: string;
-  model?: string;
-  api_key?: string;
-  base_url?: string | null;
+  /**
+   * Credential card to pin (spec 082 §3.8). Sending an explicit `null` means
+   * "follow the global default"; the field is applied whenever it is PRESENT,
+   * null included, so it must never be dropped by an `|| undefined`. Any save
+   * carrying it clears the project's `migration_note`.
+   */
+  card_id?: string | null;
   autonomy?: Autonomy;
   instructions?: string;
-  provider?: string;
-  sdk?: string;
   agent_name?: string;
   project_goals_content?: string;
   user_directives_content?: string;
@@ -986,12 +1080,21 @@ export interface FolderInfo {
   access_note: string | null;
 }
 
+/**
+ * One rung of a fallback chain (global or per-project). Since spec 082 an
+ * entry is a *card reference*: the client sends `{card_id}` and nothing else.
+ * `provider` / `model` come back as null-safe convenience copies of the
+ * referenced card so a list can be rendered without a second lookup — a
+ * dangling id yields nulls. `base_url` / `api_key` / `sdk` are legacy
+ * pre-082 fields, still tolerated on read, never sent.
+ */
 export interface FallbackModelEntry {
-  provider: string;
-  model: string;
+  card_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
   base_url?: string | null;
   api_key?: string | null;
-  sdk: string;
+  sdk?: string;
 }
 
 export interface TriggerSchedule {

@@ -11,7 +11,9 @@ actionable message ("add an API key in Settings") instead of a swallowed 500
 or a log-only traceback.
 
 Codes are part of the HTTP/WS contract with the frontend — keep them stable:
-  missing_api_key      no key on the project, credential store, or settings
+  missing_card         the project points at a credential card that no longer
+                       exists and there is no default card
+  missing_api_key      the resolved credential card carries no key
   invalid_api_key      provider rejected the key (401/403)
   model_not_found      provider returned 404 for the model/endpoint
   provider_unreachable network-level failure reaching base_url

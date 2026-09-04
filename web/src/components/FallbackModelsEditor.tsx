@@ -2,63 +2,51 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useId, useState } from 'react';
+/**
+ * The fallback chain, as an ordered list of credential cards (spec 082 §3.9).
+ *
+ * Each rung used to be a provider + model + optional key + optional endpoint
+ * typed by hand, which is the same "four fields the daemon has to pair back
+ * together" problem the cards replace. A rung is now one card reference, so a
+ * fallback can only ever be a setup that already exists and has been tested.
+ *
+ * A rung with no card yet emits `{card_id: null}`; the daemon's chain builder
+ * skips null entries, so an unfinished row is inert rather than an error.
+ */
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
-import type { FallbackModelEntry, ProviderRegistry } from '../types';
+import type { CredentialCard, FallbackModelEntry } from '../types';
 import { useT } from '../i18n/useT';
-import Select from './Select';
+import CardPicker from './CardPicker';
 
 interface FallbackModelsEditorProps {
   models: FallbackModelEntry[];
   onChange: (models: FallbackModelEntry[]) => void;
-  providers: ProviderRegistry;
+  cards: CredentialCard[];
+  defaultCardId: string | null;
 }
-
-const EMPTY_ENTRY: FallbackModelEntry = {
-  provider: 'openrouter',
-  model: '',
-  sdk: 'openai',
-};
 
 export default function FallbackModelsEditor({
   models,
   onChange,
-  providers,
+  cards,
+  defaultCardId,
 }: FallbackModelsEditorProps) {
   const [expanded, setExpanded] = useState(models.length > 0);
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState<FallbackModelEntry>({ ...EMPTY_ENTRY });
   const t = useT();
-  // Unique per mounted editor — global and project settings can both be on
-  // screen, and two <datalist> elements sharing an id would cross-wire.
-  const modelListId = `${useId()}fallback-model-options`;
-  const suggestedModels = providers[draft.provider]?.suggested_models ?? [];
 
-  function handleAdd() {
-    if (!draft.model.trim()) return;
-    const entry: FallbackModelEntry = {
-      provider: draft.provider,
-      model: draft.model.trim(),
-      sdk: draft.sdk,
-    };
-    if (draft.api_key?.trim()) entry.api_key = draft.api_key.trim();
-    if (draft.base_url?.trim()) entry.base_url = draft.base_url.trim();
-    onChange([...models, entry]);
-    setDraft({ ...EMPTY_ENTRY });
-    setAdding(false);
+  function setAt(idx: number, cardId: string | null) {
+    onChange(models.map((entry, i) => (i === idx ? { card_id: cardId } : { card_id: entry.card_id ?? null })));
   }
 
   function handleRemove(idx: number) {
-    onChange(models.filter((_, i) => i !== idx));
+    onChange(
+      models.filter((_, i) => i !== idx).map((entry) => ({ card_id: entry.card_id ?? null })),
+    );
   }
 
-  function handleProviderChange(key: string) {
-    const info = providers[key];
-    setDraft({
-      ...draft,
-      provider: key,
-      sdk: info?.sdk || 'openai',
-    });
+  function handleAdd() {
+    onChange([...models.map((entry) => ({ card_id: entry.card_id ?? null })), { card_id: null }]);
   }
 
   return (
@@ -85,136 +73,47 @@ export default function FallbackModelsEditor({
 
       {expanded && (
         <div className="space-y-3 ml-6">
-          <p className="text-xs text-secondary">
-            {t('fallback.intro')}
-          </p>
+          <p className="text-xs text-secondary">{t('fallback.intro')}</p>
 
-          {/* Existing entries */}
-          {models.map((entry, idx) => {
-            const displayProvider =
-              providers[entry.provider]?.display_name || entry.provider;
-            return (
-              <div
-                key={idx}
-                className="flex items-center justify-between bg-sidebar border border-border rounded-lg px-3 py-2"
+          {models.map((entry, idx) => (
+            <div key={idx} className="flex items-start gap-2" data-testid={`fallback-row-${idx}`}>
+              {/* The rung's position is the chain order — numbered, because
+                  "tried second" is the only thing a row's place means. */}
+              <span className="text-xs text-secondary/70 font-mono pt-2.5 w-4 shrink-0">
+                {idx + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <CardPicker
+                  cards={cards}
+                  defaultCardId={defaultCardId}
+                  value={entry.card_id ?? null}
+                  onChange={(cardId) => setAt(idx, cardId)}
+                  allowGlobalDefault={false}
+                  hideHealth
+                  data-testid={`fallback-picker-${idx}`}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRemove(idx)}
+                data-testid={`fallback-remove-${idx}`}
+                className="shrink-0 text-secondary hover:text-error transition-colors p-1 mt-1.5 max-md:min-w-[44px] max-md:min-h-[44px] flex items-center justify-center"
+                title={t('fallback.remove')}
               >
-                <div className="min-w-0 mr-2">
-                  <span className="text-sm font-medium text-primary block truncate">
-                    {entry.model}
-                  </span>
-                  <span className="text-xs text-secondary block truncate">
-                    {displayProvider}
-                    {entry.api_key ? ` ${t('fallback.customKey')}` : ''}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleRemove(idx)}
-                  className="shrink-0 text-secondary hover:text-error transition-colors p-1 max-md:min-w-[44px] max-md:min-h-[44px] flex items-center justify-center"
-                  title={t('fallback.remove')}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-
-          {/* Add form */}
-          {adding ? (
-            <div className="border border-border rounded-lg p-3 space-y-3">
-              {/* Provider */}
-              <div>
-                <label className="block text-xs font-medium text-primary mb-1">
-                  {t('llm.field.provider')}
-                </label>
-                <Select
-                  value={draft.provider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary focus:outline-none focus:border-accent transition-all duration-150"
-                >
-                  {Object.entries(providers).map(([key, info]) => (
-                    <option key={key} value={key}>
-                      {info.display_name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              {/* Model */}
-              <div>
-                <label className="block text-xs font-medium text-primary mb-1">
-                  {t('llm.field.model')}
-                </label>
-                <input
-                  type="text"
-                  list={modelListId}
-                  value={draft.model}
-                  onChange={(e) =>
-                    setDraft({ ...draft, model: e.target.value })
-                  }
-                  placeholder={t('fallback.model.placeholder')}
-                  className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
-                />
-                {/* Curated per-provider list; the input stays free-text so an
-                    unlisted or newer model ID is still enterable. */}
-                <datalist id={modelListId}>
-                  {suggestedModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              </div>
-
-              {/* API Key (optional) */}
-              <div>
-                <label className="block text-xs font-medium text-primary mb-1">
-                  {t('llm.field.apiKey')}{' '}
-                  <span className="text-secondary font-normal">
-                    {t('fallback.apiKey.optional')}
-                  </span>
-                </label>
-                <input
-                  type="password"
-                  value={draft.api_key || ''}
-                  onChange={(e) =>
-                    setDraft({ ...draft, api_key: e.target.value })
-                  }
-                  placeholder={t('fallback.apiKey.placeholder')}
-                  className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
-                />
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleAdd}
-                  disabled={!draft.model.trim()}
-                  className="text-sm font-medium text-white bg-accent rounded-lg px-4 py-1.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50"
-                >
-                  {t('fallback.add')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAdding(false);
-                    setDraft({ ...EMPTY_ENTRY });
-                  }}
-                  className="text-sm font-medium text-secondary border border-border rounded-lg px-4 py-1.5 hover:text-primary transition-all duration-150"
-                >
-                  {t('fallback.cancel')}
-                </button>
-              </div>
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className="flex items-center gap-1.5 text-sm text-secondary hover:text-accent transition-all duration-150"
-            >
-              <Plus className="w-4 h-4" />
-              {t('fallback.addCta')}
-            </button>
-          )}
+          ))}
+
+          <button
+            type="button"
+            onClick={handleAdd}
+            data-testid="fallback-add"
+            className="flex items-center gap-1.5 text-sm text-secondary hover:text-accent transition-all duration-150"
+          >
+            <Plus className="w-4 h-4" />
+            {t('fallback.addCta')}
+          </button>
         </div>
       )}
     </div>

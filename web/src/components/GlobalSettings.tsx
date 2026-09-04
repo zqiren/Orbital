@@ -5,9 +5,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import type { FallbackModelEntry, ProviderRegistry } from '../types';
+import { useCredentialCards } from '../hooks/useCredentialCards';
 import BetaBadge from './BetaBadge';
 import SettingsSection, { SettingsGroup } from './SettingsSection';
-import LLMProviderSettings from './LLMProviderSettings';
+import CredentialCards from './CredentialCards';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import CredentialStore from './CredentialStore';
 import BrowserSignInCard from './BrowserSignInCard';
@@ -47,7 +48,7 @@ export const GLOBAL_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'about-you', labelKey: 'global.aboutYou.label', groupKey: 'settings.group.general' },
   { id: 'user-memory', labelKey: 'global.userMemory.label', groupKey: 'settings.group.general' },
   { id: 'quick-tasks-workspace', labelKey: 'global.scratch.label', groupKey: 'settings.group.general' },
-  { id: 'llm', labelKey: 'llm.global.heading', groupKey: 'settings.group.model' },
+  { id: 'llm', labelKey: 'cards.heading', groupKey: 'settings.group.model' },
   { id: 'fallback-models', labelKey: 'fallback.heading', groupKey: 'settings.group.model' },
   { id: 'credentials', labelKey: 'global.credentials.label', groupKey: 'settings.group.capabilities' },
   { id: 'browser-sign-in', labelKey: 'global.browserSignIn.title', groupKey: 'settings.group.capabilities' },
@@ -67,6 +68,9 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
   const [scratchWorkspace, setScratchWorkspace] = useState('');
   const [fallbackModels, setFallbackModels] = useState<FallbackModelEntry[]>([]);
   const [providers, setProviders] = useState<ProviderRegistry>({});
+  // The card list is shared by the Credentials section and the fallback chain
+  // below it: both offer the same cards, so they must read the same list.
+  const { cards, defaultCardId } = useCredentialCards();
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const { locale, setLocale } = useLocale();
@@ -246,23 +250,20 @@ export default function GlobalSettings({ onBack }: GlobalSettingsProps) {
             </SettingsGroup>
 
             <SettingsGroup title={t('settings.group.model')}>
-              {/* Untitled, like project settings' LLM section: the child's own
-                  disclosure button is the heading. `global.intro` rides INSIDE
-                  the section rather than sitting between the chapter heading
-                  and it — a bare <p> as SettingsGroup's first child would take
-                  the `first:mt-0` reset that belongs to the first section. */}
-              <SettingsSection id="llm">
-                <p className="text-[13px] leading-relaxed text-secondary mb-4">
-                  {t('global.intro')}
-                </p>
-                <LLMProviderSettings mode="global" />
+              {/* Spec 082: the single global provider form is gone — this is
+                  the flat credential-card list. Unlike the old mount it takes
+                  a real `title`, because a list of cards has no disclosure
+                  button of its own to act as the heading. */}
+              <SettingsSection id="llm" title={t('cards.heading')}>
+                <CredentialCards providers={providers} />
               </SettingsSection>
 
               <SettingsSection id="fallback-models">
                 <FallbackModelsEditor
                   models={fallbackModels}
                   onChange={setFallbackModels}
-                  providers={providers}
+                  cards={cards}
+                  defaultCardId={defaultCardId}
                 />
               </SettingsSection>
             </SettingsGroup>

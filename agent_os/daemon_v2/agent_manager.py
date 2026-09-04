@@ -39,7 +39,6 @@ from agent_os.daemon_v2.models import (
     SessionKey,
     detect_os,
     make_session_key,
-    resolve_api_key,
     resolve_session_id,
 )
 from agent_os.queue.dispatcher import QueueDispatcher
@@ -559,13 +558,13 @@ class AgentManager:
         (fresh session) and _start_loop (hot-resume live-resolve).
 
         Raises:
-            ProviderConfigError(code="missing_api_key"): when no API key
-                resolved from the project, credential store, or settings —
-                checked here (not left to the SDK client constructor) so every
-                start path gets a typed, frontend-translatable error instead
-                of an SDK-version-dependent OpenAIError.
+            ProviderConfigError(code="missing_api_key"): when the resolved
+                credential card carries no key — checked here (not left to the
+                SDK client constructor) so every start path gets a typed,
+                frontend-translatable error instead of an SDK-version-dependent
+                OpenAIError.
         """
-        api_key = resolve_api_key({"api_key": config.api_key})
+        api_key = config.api_key
         if not api_key:
             raise ProviderConfigError(
                 "missing_api_key",
@@ -652,9 +651,19 @@ class AgentManager:
     @staticmethod
     def _provider_config_changed(handle, cfg: AgentConfig) -> bool:
         """True when the session's current LLM clients no longer match the
-        project's CURRENT config (provider/model/base_url/sdk, utility model,
-        or fallback list) — i.e. a hot resume must rebuild them."""
+        project's CURRENT config (card, provider/model/base_url/sdk, utility
+        model, or fallback list) — i.e. a hot resume must rebuild them."""
         p = handle.provider
+        # Spec 082: the card is the identity of the whole setup, so a switch
+        # to a different card rebuilds even when the two cards happen to
+        # agree on provider and model (different key, different endpoint).
+        # The resolved key is compared too, so re-keying a card in place —
+        # which never changes the id — still takes effect on the next turn.
+        snapshot_card = (getattr(handle, "config_snapshot", None) or {}).get("card_id")
+        if snapshot_card != cfg.card_id:
+            return True
+        if getattr(p, "api_key", None) != cfg.api_key:
+            return True
         if (getattr(p, "model", None) != cfg.model
                 or getattr(p, "provider", None) != cfg.provider
                 or getattr(p, "base_url", None) != cfg.base_url
@@ -708,7 +717,7 @@ class AgentManager:
         No file is created here: ``Session.new`` defers the ``session_start``
         meta and the first physical write happens on the first ``append``.
         """
-        return Session.new(
+        session = Session.new(
             session_id, config.workspace,
             session_id=session_id,
             provider=config.provider,
@@ -720,6 +729,17 @@ class AgentManager:
                 else ("queue" if queue_state == "running" else "chat")
             ),
         )
+        # Spec 082 D13 — the session pins the CARD it started on, so the chat
+        # header names the credential the turn actually ran with and a
+        # post-mortem can tell two same-model sessions apart. Stamped through
+        # the meta helper (rather than as Session.new arguments) because the
+        # session_start row already has several writers and they all have to
+        # share one read-modify-write.
+        if config.card_id or config.card_name:
+            session._apply_meta_fields(
+                card_id=config.card_id, card_name=config.card_name,
+            )
+        return session
 
     def _wire_session_observers(self, session: "Session", project_id: str,
                                 session_id: str) -> None:
@@ -732,6 +752,24 @@ class AgentManager:
         session.on_append = self._on_message(project_id, session_id)
         session.on_stream = self._on_stream(project_id, session_id)
         session.on_queue_drained = self._on_queue_drained(project_id, session_id)
+
+    def _touch_card(self, config: AgentConfig) -> None:
+        """Stamp ``last_used_at`` on the card this run resolved to (§3.5).
+
+        Once per run, at the start of one — that is what makes the card list's
+        recency order mean "what I actually work with". Never fatal: a
+        settings write that fails must not stop an agent from starting.
+        """
+        store = self._settings_store
+        if store is None or not getattr(config, "card_id", ""):
+            return
+        try:
+            store.touch_card_used(config.card_id)
+        except Exception:
+            logger.warning(
+                "could not stamp last_used_at on card %s", config.card_id,
+                exc_info=True,
+            )
 
     async def start_agent(self, project_id: str, config: AgentConfig,
                           initial_message: str | None = None,
@@ -1111,6 +1149,35 @@ class AgentManager:
                     project_id, exc_info=True,
                 )
 
+        # 11d. Credential-health sink (spec 082 §3.5). The loop calls this
+        # only for 401/402/403 on the primary rung; we translate the status
+        # into the card's stable ``last_error`` code so the card list can say
+        # "402 insufficient credits, 22:53" instead of the user rediscovering
+        # it in daemon.log. Nothing is disabled or switched (spec 072 D2).
+        card_id_for_health = config.card_id
+
+        def record_credential_error(status: int, message: str) -> None:
+            if not card_id_for_health or self._settings_store is None:
+                return
+            code = {
+                401: "invalid_api_key",
+                403: "invalid_api_key",
+                402: "insufficient_credits",
+            }.get(status, "provider_error")
+            try:
+                self._settings_store.record_card_health(
+                    card_id_for_health,
+                    error={
+                        "status": status, "code": code, "message": message,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "could not record credential error on card %s",
+                    card_id_for_health, exc_info=True,
+                )
+
         # 12. Loop
         loop = AgentLoop(
             session, provider, registry, context_manager, interceptor,
@@ -1132,6 +1199,8 @@ class AgentManager:
             # Budget threshold/trip emitter sink (Task E) — routes codes-only
             # events through the WS broadcast → relay forward path.
             on_budget_event=emit_budget_event,
+            # Card health sink (spec 082 §3.5) — 401/402/403 only.
+            on_credential_error=record_credential_error,
         )
 
         # 12-queue. When the dispatcher starts a session to run a queue item it
@@ -1176,11 +1245,14 @@ class AgentManager:
                 "autonomy": config.autonomy.value if hasattr(config.autonomy, 'value') else str(config.autonomy),
                 "provider": config.provider,
                 "sdk": config.sdk,
+                "card_id": config.card_id,
+                "card_name": config.card_name,
                 "fallback_models": [fb.model for fb in config.llm_fallback_models],
             },
             started_at=datetime.now(timezone.utc).isoformat(),
         )
         self._handles[sk] = project_handle
+        self._touch_card(config)
 
         # 10b. Cold-start: inject the Stage-1 skeleton inventory as system
         # context so the agent plans Stage-2 reads against measured sizes.
@@ -1573,8 +1645,15 @@ class AgentManager:
         parity. Callers needing extra fields set them on the returned
         dataclass — they must not re-derive anything resolved here.
 
+        Since spec 082 the LLM half is a single credential-card lookup
+        (§3.4): provider, model, key, endpoint and sdk all come from ONE card,
+        so no caller — and no branch here — can pair a key with another
+        provider's endpoint.
+
         Raises:
             KeyError: if no project exists for ``project_id``.
+            ProviderConfigError("missing_card"): if the project points at a
+                card that no longer exists and there is no default card.
         """
         from agent_os.agent.prompt_builder import Autonomy
 
@@ -1605,120 +1684,109 @@ class AgentManager:
                 if s not in disabled
             ]
 
-        # Global settings provide fallbacks for missing project-level LLM
-        # config; the credential store provides the live global API key.
+        # Spec 082 §3.4 — the LLM half of this config is ONE card lookup.
+        # What stood here was a merge: model, provider, key, endpoint and sdk
+        # each resolved independently from the project row and global
+        # settings, after which the code had to guess which half belonged
+        # with which. On 2026-09-03 that guess paired an OpenCode Go model
+        # with an OpenRouter endpoint and key on `launch-vid` and every run
+        # died on OpenRouter's 402 credit pre-flight. A credential card IS
+        # the whole working setup (provider + endpoint + key + model), so
+        # there is nothing left to pair wrongly — and the resolved values
+        # below still land on AgentConfig verbatim, which is why
+        # _build_llm_providers and the loop did not change.
         global_settings = self._settings_store.get() if self._settings_store else None
-        cred_key = self._credential_store.get_api_key() if self._credential_store else None
-        model = project.get("model") or (global_settings.llm.model if global_settings else None) or ""
+        cards = self._settings_store
 
-        # Provider must track the model. When the project pins its own model it
-        # keeps its own provider (a self-hosted/custom setup); when it leaves
-        # model empty and inherits the global model, it must inherit the global
-        # provider too — otherwise a project left at the default
-        # provider="custom" runs as custom+<global model>, and registry lookups
-        # (get_model_info(provider, model)) miss the real entry, silently
-        # bypassing model-specific behavior such as MiniMax inline-<think>
-        # reasoning separation and capability/pricing metadata.
-        if project.get("model"):
-            provider = project.get("provider") or "custom"
-        else:
-            provider = (
-                (global_settings.llm.provider if global_settings else None)
-                or project.get("provider")
-                or "custom"
-            )
+        from agent_os.daemon_v2.models import FallbackModelEntry
+        from agent_os.daemon_v2.settings_store import resolve_card_endpoint
 
-        # base_url and api_key must stay within the resolved provider. The
-        # global values belong to the GLOBAL provider — inheriting them into
-        # a project pinned to a different provider pairs a key with another
-        # provider's endpoint (the classic wrong-region/wrong-provider 401,
-        # e.g. a China-region key sent to the intl endpoint). Cross-provider,
-        # a missing base_url resolves from the registry and a missing key
-        # stays empty so the clean "no API key" error surfaces instead.
-        global_provider = global_settings.llm.provider if global_settings else None
-        crosses_provider = bool(project.get("model")) and provider != global_provider
-        if crosses_provider:
-            base_url = (project.get("base_url")
-                        or self._provider_registry.get_provider_data(provider).get("base_url"))
-            api_key = project.get("api_key") or ""
+        card = None
+        card_ref = project.get("card_id")
+        if cards is not None:
+            card = cards.resolve_card(card_ref) if card_ref else None
+            if card is None:
+                card = cards.default_card()
+                if card is None and card_ref:
+                    raise ProviderConfigError(
+                        "missing_card",
+                        "This project points at a credential card that no "
+                        "longer exists, and there is no default card to fall "
+                        "back to.",
+                    )
+
+        if card is not None:
+            provider = card.provider
+            model = card.model
+            api_key = cards.key_for(card.id)
+            card_id, card_name = card.id, card.name
+            # The registry's per-model endpoint override still wins over the
+            # card: an aggregator serves different models over different wire
+            # protocols under one key, so the protocol is only knowable once
+            # the model is.
+            info = self._provider_registry.get_model_info(provider, model)
+            card_base, card_sdk = resolve_card_endpoint(card, self._provider_registry)
+            base_url = info.base_url or card_base
+            sdk = info.sdk or card_sdk
         else:
-            api_key = (project.get("api_key")
-                       or cred_key
-                       or (global_settings.llm.api_key if global_settings else None)
-                       or "")
-            # Same invariant, inherit direction: a project that inherits the
-            # global model/provider AND the global key must inherit the global
-            # endpoint too. Project rows snapshot base_url verbatim at
-            # creation, so a project created under an earlier global provider
-            # carries a stale endpoint that would pair the CURRENT global key
-            # with the OLD provider's URL (observed: scratch project with an
-            # api.openai.com snapshot sending a TokenDance key to OpenAI →
-            # 401). A project with its OWN key keeps its own base_url — that
-            # pairing is deliberate (BYOK against a specific endpoint).
-            if project.get("api_key"):
-                base_url = project.get("base_url") or (global_settings.llm.base_url if global_settings else None)
-            else:
-                base_url = (global_settings.llm.base_url if global_settings else None) or project.get("base_url")
+            # Nothing configured yet (fresh install, no cards at all). The
+            # empty key is what surfaces the typed "missing_api_key" from
+            # _build_llm_providers on the first start attempt — the same
+            # error, from the same place, as before cards existed.
+            provider, model, api_key = "custom", "", ""
+            base_url, sdk = None, "openai"
+            card_id, card_name = "", ""
 
         # Fallback chain: project-level > global-level > empty. Resolved here
         # rather than per-caller because every start path deserves the same
         # chain — it used to live only in the /agents/start route, so a
         # trigger fire, a queue auto-start, an inject auto-start and a
         # cold-start scan all ran with no fallback at all and died on the
-        # first transient the primary threw.
-        from agent_os.daemon_v2.models import FallbackModelEntry
-
+        # first transient the primary threw. Entries are card references now;
+        # a rung whose card was deleted is SKIPPED rather than guessed at.
         raw_fallbacks = project.get("llm_fallback_models")
         if not raw_fallbacks and global_settings:
             raw_fallbacks = [
                 fb.model_dump() for fb in (global_settings.llm.fallback_models or [])
             ]
-        fallback_models = [
-            FallbackModelEntry(
-                provider=fb.get("provider", "custom"),
-                model=fb.get("model", ""),
-                base_url=fb.get("base_url"),
-                api_key=fb.get("api_key") or api_key,  # inherit primary key if empty
-                sdk=fb.get("sdk", "openai"),
-            )
-            for fb in (raw_fallbacks or [])
-        ]
+        fallback_models = []
+        for fb in (raw_fallbacks or []):
+            if not isinstance(fb, dict):
+                continue
+            fb_card = cards.resolve_card(fb.get("card_id")) if cards else None
+            if fb_card is None:
+                continue
+            fb_base, fb_sdk = resolve_card_endpoint(fb_card, self._provider_registry)
+            fallback_models.append(FallbackModelEntry(
+                provider=fb_card.provider, model=fb_card.model,
+                base_url=fb_base, sdk=fb_sdk,
+                api_key=cards.key_for(fb_card.id), card_id=fb_card.id,
+            ))
 
-        # sdk must inherit with the model (Spec 072 rider). A project without
-        # its own model runs the GLOBAL model — on the global wire protocol. A
-        # bare project.get("sdk") default ran a global Custom/self-hosted
-        # Anthropic-compatible setup over OpenAI /chat/completions.
-        if project.get("model"):
-            sdk = project.get("sdk", "openai")
-        else:
-            sdk = (
-                (getattr(global_settings.llm, "sdk", None) if global_settings else None)
-                or project.get("sdk")
-                or "openai"
-            )
-
-        # Spec 072 — auth-fallback rung: snapshot the GLOBAL default wholesale
-        # (provider/model/key/base_url/sdk pairing is the global one, so the
-        # key↔endpoint invariants above hold for it by construction). Attached
-        # only when it is materially usable (model AND key) and its key
-        # differs from the resolved primary key — a project inheriting the
-        # global key has nothing different to fall back to. The loop reaches
-        # it only after a 401/403 rejects the project key (never on transient
-        # errors), posts a chat notice, and nothing is persisted: the next run
-        # tries the project key fresh.
+        # Spec 072 — auth-fallback rung, now keyed on CARD IDENTITY (spec 082
+        # D8). Snapshot the DEFAULT card wholesale (its provider/endpoint/key
+        # pairing is internally consistent by construction) and attach it only
+        # when this project resolved to a DIFFERENT card. The old test
+        # compared key strings, which reads two cards that legitimately share
+        # one key (D2) as "nothing to fall back to". The loop reaches this
+        # rung only after a 401/403 rejects the primary key, posts a chat
+        # notice, and nothing is persisted.
         auth_fallback = None
-        if global_settings:
-            g_llm = global_settings.llm
-            g_model = g_llm.model or ""
-            g_key = cred_key or g_llm.api_key or ""
-            if g_model and g_key and g_key != api_key:
-                auth_fallback = FallbackModelEntry(
-                    provider=g_llm.provider or "custom",
-                    model=g_model,
-                    base_url=g_llm.base_url,
-                    api_key=g_key,
-                    sdk=getattr(g_llm, "sdk", None) or "openai",
-                )
+        if cards is not None and card is not None:
+            default_card = cards.default_card()
+            if (default_card is not None and default_card.id != card.id
+                    and default_card.model):
+                g_key = cards.key_for(default_card.id)
+                if g_key:
+                    g_base, g_sdk = resolve_card_endpoint(
+                        default_card, self._provider_registry,
+                    )
+                    auth_fallback = FallbackModelEntry(
+                        provider=default_card.provider,
+                        model=default_card.model,
+                        base_url=g_base, api_key=g_key, sdk=g_sdk,
+                        card_id=default_card.id,
+                    )
 
         # Spec 073 §2.1 — user-scoped file paths. global_preferences_path was
         # declared on AgentConfig and read into PromptContext, but this (only)
@@ -1763,6 +1831,8 @@ class AgentManager:
             agent_credentials=project.get("agent_credentials", {}),
             llm_fallback_models=fallback_models,
             auth_fallback=auth_fallback,
+            card_id=card_id,
+            card_name=card_name,
             budget_limit_usd=project.get("budget_limit_usd"),
             budget_action=project.get("budget_action", "pause"),
         )
@@ -4373,6 +4443,11 @@ class AgentManager:
                 sdk=snap.get("sdk", "unknown"),
                 fallback_models=snap.get("fallback_models", []),
             )
+            if snap.get("card_id") or snap.get("card_name"):
+                new_session._apply_meta_fields(
+                    card_id=snap.get("card_id", ""),
+                    card_name=snap.get("card_name", ""),
+                )
 
         new_session.on_append = self._on_message(project_id, session_id)
         new_session.on_stream = self._on_stream(project_id, session_id)
@@ -4652,6 +4727,8 @@ class AgentManager:
                 "model": fresh_cfg.model,
                 "provider": fresh_cfg.provider,
                 "sdk": fresh_cfg.sdk,
+                "card_id": fresh_cfg.card_id,
+                "card_name": fresh_cfg.card_name,
                 "fallback_models": [fb.model for fb in fresh_cfg.llm_fallback_models],
             })
             logger.info(
@@ -4660,7 +4737,7 @@ class AgentManager:
             )
         else:
             if fresh_cfg is not None:
-                fresh_key = resolve_api_key({"api_key": fresh_cfg.api_key})
+                fresh_key = fresh_cfg.api_key
             else:
                 # Legacy derivation (project unresolvable): credential store →
                 # global settings.
@@ -4679,6 +4756,9 @@ class AgentManager:
             if hasattr(loop, '_fallback_providers'):
                 for fb in loop._fallback_providers:
                     fb.update_api_key(fresh_key)
+
+        if fresh_cfg is not None:
+            self._touch_card(fresh_cfg)
 
         task = asyncio.create_task(handle.loop.run())
         task.add_done_callback(
