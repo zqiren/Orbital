@@ -71,6 +71,49 @@ class WindowsPlatformProvider(PlatformProvider):
             logger.error("setup() failed: %s", exc)
             return SetupResult(success=False, error=str(exc))
 
+    def refresh_sandbox_grants(self, workspaces: list[str] | None = None) -> None:
+        """Re-apply the W1/W3 ACLs. Call at daemon start (spec 077 §4.2).
+
+        Windows ACLs are state on the filesystem, not a policy string
+        regenerated per command like the macOS profile — so they drift. A
+        toolchain installed since setup (a new nvm, a first `cargo`) has no
+        grant, and a repository cloned into the workspace has no deny on its
+        hooks. Both are fixed by re-running the same idempotent operations:
+        each is an ``icacls`` query that writes only when the ACE is missing.
+
+        Never raises: a daemon must start even when one folder is unreadable.
+        """
+        try:
+            username = self._account_manager.get_username()
+        except Exception as exc:
+            logger.warning("refresh_sandbox_grants(): no sandbox account: %s", exc)
+            return
+        try:
+            self._permission_manager.grant_toolchain_roots(username)
+        except Exception as exc:
+            logger.warning("refresh_sandbox_grants(): toolchain grants failed: %s", exc)
+        for workspace in workspaces or []:
+            self._protect_control_files(workspace)
+
+    def _protect_control_files(self, root: str) -> None:
+        """Deny-write the control files of every repository under *root* (W3).
+
+        Applied to the root itself and to each nested repository, because a
+        workspace commonly holds several. Depth-bounded and dependency-tree
+        skipping (``find_repository_roots``), so this stays cheap enough to run
+        after a command as well as at start.
+        """
+        try:
+            username = self._account_manager.get_username()
+        except Exception:
+            return
+        try:
+            roots = [root, *self._permission_manager.find_repository_roots(root)]
+            for repo_root in dict.fromkeys(roots):
+                self._permission_manager.protect_control_files(username, repo_root)
+        except Exception as exc:
+            logger.warning("control-file protection failed under %s: %s", root, exc)
+
     async def teardown(self) -> SetupResult:
         try:
             # Stop all proxies
@@ -210,7 +253,7 @@ class WindowsPlatformProvider(PlatformProvider):
             env["NO_PROXY"] = "localhost,127.0.0.1"
         if extra_env:
             env.update(extra_env)
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._process_launcher.run_and_capture,
             command,
             args,
@@ -218,6 +261,14 @@ class WindowsPlatformProvider(PlatformProvider):
             env_vars=env,
             timeout_sec=timeout_sec,
         )
+        # Spec 077 W3: Windows ACLs need a real path — there is no Seatbelt
+        # pattern covering a file that does not exist yet — so a repository
+        # created BY this command has unprotected hooks until something
+        # re-applies the deny. Do it here, off the event loop. The residual is
+        # recorded and accepted in the spec: a single command that both clones
+        # a repository and installs a hook lands before this re-check.
+        await asyncio.to_thread(self._protect_control_files, working_dir)
+        return result
 
     async def stop_process(self, project_id: str, timeout_sec: int = 10) -> bool:
         try:
@@ -276,7 +327,13 @@ class WindowsPlatformProvider(PlatformProvider):
         self._portal_paths.setdefault(os.path.realpath(scope), {})[path] = mode
         try:
             username = self._account_manager.get_username()
-            return self._permission_manager.grant_access(username, path, acl_mode)
+            result = self._permission_manager.grant_access(username, path, acl_mode)
+            # Spec 077 W3: a writable portal is a writable root, so its own
+            # control files must be denied the moment it becomes one — the
+            # deny ACE precedes the allow just granted above.
+            if result.success and acl_mode == "read_write":
+                self._protect_control_files(path)
+            return result
         except Exception as exc:
             logger.error("grant_folder_access() failed: %s", exc)
             return PermissionResult(success=False, path=path, error=str(exc))
