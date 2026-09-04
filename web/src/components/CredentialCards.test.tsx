@@ -124,15 +124,26 @@ describe('CredentialCards — the flat list', () => {
     renderList();
 
     const row = await screen.findByTestId('card-row-card_default');
+    // The name already IS "<Provider> · <model>", so the line under it carries
+    // only what the name does not: the key suffix. Repeating the setup was the
+    // bulk this redesign removed.
     expect(row.textContent).toContain('OpenCode Go · deepseek-v4-flash');
     expect(row.textContent).toContain('sk-o...wxyz');
-    expect(screen.getByTestId('card-health-card_default').textContent).toBe('Verified 2h ago');
+    // Health is a SYMBOL, not a sentence: the words are the mark's accessible
+    // name and its hover tooltip, so a list of four cards no longer reads like
+    // a changelog. Assert the accessible name — that is what a screen reader
+    // gets, and what the tooltip shows.
+    expect(screen.getByTestId('card-health-card_default').getAttribute('aria-label')).toBe(
+      'Verified 2h ago',
+    );
 
-    // A card that failed is red and says what failed, with the clock time —
-    // the 2026-09-03 402 is exactly the thing this list exists to show.
+    // A card that failed carries the failure, with the clock time — the
+    // 2026-09-03 402 is exactly the thing this list exists to show.
     const bad = screen.getByTestId('card-health-card_bad');
-    expect(bad.textContent).toContain('402 Insufficient credits');
-    expect(bad.className).toContain('text-error');
+    expect(bad.getAttribute('aria-label')).toContain('402 Insufficient credits');
+    expect(screen.getByTestId('card-health-tip-card_bad').textContent).toContain(
+      '402 Insufficient credits',
+    );
     // A migrated card with no model is flagged rather than hidden (D7).
     expect(screen.getByTestId('card-row-card_bad').textContent).toContain('needs a model');
   });
@@ -210,7 +221,9 @@ describe('CredentialCards — row actions', () => {
     renderList();
     fireEvent.click(await screen.findByTestId('card-test-card_bad'));
     await waitFor(() =>
-      expect(screen.getByTestId('card-health-card_bad').textContent).toBe('Verified just now'),
+      expect(screen.getByTestId('card-health-card_bad').getAttribute('aria-label')).toBe(
+        'Verified just now',
+      ),
     );
   });
 

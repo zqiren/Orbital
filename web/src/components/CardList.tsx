@@ -31,7 +31,17 @@
  * rather than showing three dead controls.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, Pencil, Trash2, X, Zap } from 'lucide-react';
+import {
+  Activity,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  Loader2,
+  SquarePen,
+  Trash,
+  X,
+} from 'lucide-react';
 import type {
   CardDeleteResponse,
   CardMutationResponse,
@@ -40,6 +50,7 @@ import type {
 } from '../types';
 import { api } from '../config';
 import { cardHealth } from '../utils/cardHealth';
+import type { CardHealth } from '../utils/cardHealth';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import LLMProviderSettings from './LLMProviderSettings';
@@ -314,6 +325,7 @@ export default function CardList({
                       <span className="text-sm font-medium text-primary truncate min-w-0">
                         {card.name}
                       </span>
+                      <HealthMark health={health} cardId={card.id} />
                       {isSelected && (
                         <span
                           data-testid={`card-selected-${card.id}`}
@@ -338,36 +350,27 @@ export default function CardList({
                     </span>
 
                     <span className="block text-xs text-secondary mt-1 truncate pl-6">
-                      {providerName}
-                      {' · '}
-                      <span className="font-mono">{card.model || t('cards.needsModel')}</span>
-                      {card.key_masked ? (
+                      {/* A card's default name IS "<Provider> · <model>", so
+                          repeating it here was pure noise. Show it only when
+                          the card has been renamed and the name no longer
+                          says what it runs on. */}
+                      {namesItsSetup(card, providerName) ? null : (
                         <>
+                          {providerName}
                           {' · '}
-                          <span className="font-mono">{card.key_masked}</span>
+                          <span className="font-mono">
+                            {card.model || t('cards.needsModel')}
+                          </span>
+                          {' · '}
                         </>
+                      )}
+                      {card.key_masked ? (
+                        <span className="font-mono">{card.key_masked}</span>
                       ) : (
-                        <> {' · '}{t('cards.noKey')}</>
+                        t('cards.noKey')
                       )}
                     </span>
 
-                    <span
-                      data-testid={`card-health-${card.id}`}
-                      title={health.text}
-                      // Clamped: providers write essays into an error body, and
-                      // one three-line row in a list of one-line rows is the
-                      // "cumbersome" this redesign exists to remove. The full
-                      // text stays in the tooltip.
-                      className={`text-xs mt-0.5 pl-6 line-clamp-2 ${
-                        health.kind === 'error'
-                          ? 'text-error'
-                          : health.kind === 'verified'
-                            ? 'text-success'
-                            : 'text-secondary/70'
-                      }`}
-                    >
-                      {health.text}
-                    </span>
                   </button>
 
                   {/* Exactly three actions. Never a fourth. */}
@@ -378,7 +381,7 @@ export default function CardList({
                       busy={rowBusy === 'test'}
                       onClick={() => testCard(card)}
                     >
-                      <Zap className="w-3.5 h-3.5" />
+                      <Activity className="w-4 h-4" strokeWidth={1.5} />
                     </IconAction>
                     <IconAction
                       testId={`card-edit-${card.id}`}
@@ -389,7 +392,7 @@ export default function CardList({
                         setEditing(card);
                       }}
                     >
-                      <Pencil className="w-3.5 h-3.5" />
+                      <SquarePen className="w-4 h-4" strokeWidth={1.5} />
                     </IconAction>
                     <IconAction
                       testId={`card-delete-${card.id}`}
@@ -399,7 +402,7 @@ export default function CardList({
                       danger
                       onClick={() => deleteCard(card)}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash className="w-4 h-4" strokeWidth={1.5} />
                     </IconAction>
                   </div>
                 </div>
@@ -435,6 +438,55 @@ export default function CardList({
       )}
     </div>
   );
+}
+
+/**
+ * Health as a symbol, not a sentence.
+ *
+ * The status line used to spell itself out on every row — "Verified 3m ago",
+ * or an entire provider paragraph about credit limits — which made a list of
+ * four cards read like a changelog. The state is one of three things, so it
+ * is one of three marks, and the words appear on hover for the one card whose
+ * words you actually want.
+ */
+function HealthMark({ health, cardId }: { health: CardHealth; cardId: string }) {
+  const Icon =
+    health.kind === 'verified'
+      ? CircleCheck
+      : health.kind === 'error'
+        ? CircleAlert
+        : CircleDashed;
+  const tone =
+    health.kind === 'verified'
+      ? 'text-success'
+      : health.kind === 'error'
+        ? 'text-error'
+        : 'text-secondary/60';
+  return (
+    <span className="relative shrink-0 inline-flex group/health">
+      {/* role=img + aria-label: the text still reaches a screen reader, and
+          the button this sits inside keeps a complete accessible name. */}
+      <span role="img" aria-label={health.text} data-testid={`card-health-${cardId}`}>
+        <Icon className={`w-4 h-4 ${tone}`} strokeWidth={1.5} />
+      </span>
+      {/* Absolutely positioned, so revealing it never reflows the row. */}
+      <span
+        aria-hidden="true"
+        data-testid={`card-health-tip-${cardId}`}
+        className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-64 -translate-x-1/2 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs leading-relaxed text-primary shadow-lg group-hover/health:block"
+      >
+        {health.text}
+      </span>
+    </span>
+  );
+}
+
+/** True when the card's name already spells out its provider and model, which
+ *  is what the daemon names a card by default. */
+function namesItsSetup(card: CredentialCard, providerName: string): boolean {
+  if (!card.model) return false;
+  const name = card.name.toLowerCase();
+  return name.includes(card.model.toLowerCase()) && name.includes(providerName.toLowerCase());
 }
 
 /** The selected/unselected mark. A ring rather than a checkbox: the whole tile
