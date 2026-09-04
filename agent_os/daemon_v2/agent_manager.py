@@ -3933,11 +3933,113 @@ class AgentManager:
         # carry live status; disk-only entries are idle and get hydrated from
         # JSONL only when the user acts on them.
         seen_uuids = {s["session_uuid"] for s in sessions if s.get("session_uuid")}
+        # Spec 081: a session whose first message is queued behind the project
+        # slot has neither a handle nor a file (persist-at-dispatch, spec 006
+        # §3a). Merge the pending registry in BEFORE the disk scan so its ids
+        # join ``seen_uuids`` and a file that appears in between cannot list
+        # the same session twice.
+        pending_entries = self._pending_session_entries(project_id, seen_uuids)
+        sessions.extend(pending_entries)
+        seen_uuids |= {
+            s["session_uuid"] for s in pending_entries if s.get("session_uuid")
+        }
         sessions.extend(self._disk_session_entries(project_id, seen_uuids))
         # Stable ordering by session id (the "default"-first rule retired with
         # DEFAULT_SESSION_ID; ids are now uuids). None-safe.
         sessions.sort(key=lambda s: (s.get("session_id") or ""))
         return sessions
+
+    def _materialized_session_ids(self, project_id: str) -> set[str]:
+        """Stems of the project's on-disk session logs — a cheap ``listdir``.
+
+        Used only to stop a queued entry from shadowing a session that already
+        has a file (an idle session the user wrote to while another held the
+        slot). The disk scan itself — with its boundary checks, meta-only skip
+        rule and mtime cache — is untouched; a session's file only ever exists
+        together with its first real message, because ``Session.new`` defers
+        the ``session_start`` meta until the first physical write.
+        """
+        project = self._project_store.get_project(project_id) if self._project_store else None
+        workspace = (project or {}).get("workspace", "") if project else ""
+        if not workspace:
+            return set()
+        try:
+            fnames = os.listdir(ProjectPaths(workspace).sessions_dir)
+        except OSError:
+            return set()
+        return {f[:-len(".jsonl")] for f in fnames if f.endswith(".jsonl")}
+
+    def _pending_session_entries(self, project_id: str, seen_ids: set) -> list[dict]:
+        """Sessions whose only trace is a queued first message (spec 081).
+
+        ``list_sessions`` otherwise knows two kinds of session: a live handle
+        and a JSONL on disk. A session minted by "+ new session" whose first
+        message was enqueued while a different session held the project's
+        single slot has neither — the row is written only at dispatch (spec
+        006 §3a, exactly-once) — so it stayed invisible in the sidebar for as
+        long as the holder ran. Each such session gets one entry with status
+        ``queued``.
+
+        Snapshot the registries with ``list(...)``: the list route runs this
+        off the event loop (``agents_v2.py``), so the live lists can mutate
+        under us; a stale snapshot is corrected by the next refresh (§8).
+
+        In-flight entries (already popped by ``_maybe_dispatch_pending`` but
+        not yet persisted by its ``_fire``) still count as queued — a refresh
+        in that window must not drop the row. Tombstoned entries do not: the
+        cancel that tombstoned them has already dropped the bubble.
+
+        Same-session queued messages (``kind:"same"``, spec 006) are not here:
+        they live in a live handle's own queue, and that session is listed by
+        the handle pass.
+        """
+        snapshot = (
+            list(self._pending_inflight.get(project_id, []))
+            + list(self._pending_inject.get(project_id, []))
+        )
+        first_by_session: dict[str, PendingInject] = {}
+        for p in snapshot:
+            if p.id in self._pending_tombstoned:
+                continue
+            if p.session_id in seen_ids:
+                continue  # a live handle already carries this row
+            if make_session_key(project_id, p.session_id) in self._handles:
+                continue
+            # FIFO: the oldest surviving message names the row and dates it.
+            first_by_session.setdefault(p.session_id, p)
+        if not first_by_session:
+            return []
+        materialized = self._materialized_session_ids(project_id)
+        # Local import, as in ``_disk_session_entries``: the name helper is
+        # private to the session module and pulled in only where it is used.
+        from agent_os.agent.session import _derive_name
+        entries: list[dict] = []
+        for sid, p in first_by_session.items():
+            if sid in materialized:
+                # The disk entry — with its stored name and history — is the
+                # row, exactly as it will be after dispatch.
+                continue
+            entries.append({
+                "session_id": sid,
+                "status": "queued",
+                # Uuid-only identity (seam 3): a session that has never been
+                # written has no separate F1/F2 pair.
+                "session_uuid": sid,
+                "origin": "chat",
+                # D3: the same helper that will name the session at dispatch,
+                # so the label does not change when the row materializes.
+                "name": _derive_name(p.content),
+                "pinned": False,
+                "pinned_target": None,
+                "last_terminal_event": None,
+                # D4: the enqueue time is this session's newest activity, so
+                # the sidebar sorts the queued row to the top.
+                "last_activity_at": datetime.fromtimestamp(
+                    p.enqueued_at, tz=timezone.utc,
+                ).isoformat(),
+                "scope": self.get_session_scope(project_id, sid),
+            })
+        return entries
 
     def _disk_session_entries(self, project_id: str, seen_uuids: set) -> list[dict]:
         """Enumerate the project's on-disk session JSONLs not currently hydrated

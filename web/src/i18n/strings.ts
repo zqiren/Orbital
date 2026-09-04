@@ -682,6 +682,7 @@ export const STRINGS = {
   "scopeChip.projects.heading": { en: "Readable projects", zh: "可读取的项目" },
   "scopeChip.toggle.all": { en: "Read all projects", zh: "读取所有项目" },
   // --- end scopeChip ---
+  "session.status.queued": { en: "Queued", zh: "排队中" },
   "sessionGlyph.errored": { en: "Session errored", zh: "会话错误" },
   "sessionGlyph.errored.withDetails": { en: "Session errored: {details}", zh: "会话错误：{details}" },
   "sessionItem.aria": { en: "Session {label}", zh: "会话 {label}" },

@@ -274,7 +274,11 @@ export interface ChatMessage {
   sub_agent_duration?: number;
 }
 
-export type AgentRunStatus = 'running' | 'waiting' | 'idle' | 'error' | 'new_session' | 'pending_approval';
+// `queued` (spec 081) is a session that exists only as a queued first message:
+// another session holds the project's single slot, so nothing has been written
+// to disk yet. It is distinct from `waiting` (an idle-poll with sub-agents
+// still working) — a queued session has never run.
+export type AgentRunStatus = 'running' | 'waiting' | 'queued' | 'idle' | 'error' | 'new_session' | 'pending_approval';
 
 // Per-session record of the most recent terminal event. Returned by
 // GET /api/v2/projects/{pid}/sessions on each session entry. Lets the UI

@@ -158,6 +158,48 @@ describe('SessionSidebar — unified session list', () => {
       'session-list-item-sess-old',
     ]);
   });
+
+  // Spec 081 — a queued session is listed like any other row: it sorts to the
+  // top on its enqueue time and highlights when selected. No new row type.
+  it('a queued session sorts to the top on its enqueue time', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({
+        session_id: 'sess-holder', session_uuid: 'u1', status: 'running',
+        last_activity_at: '2026-06-01T00:00:00Z',
+      }),
+      makeSession({
+        session_id: 'sess-queued', session_uuid: 'sess-queued', status: 'queued',
+        name: 'Say hello', last_activity_at: '2026-06-01T00:05:00Z',
+      }),
+    ];
+
+    render(<SessionSidebar projectId="proj-1" />);
+
+    const items = screen.getAllByTestId(/^session-list-item-/);
+    expect(items.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'session-list-item-sess-queued',
+      'session-list-item-sess-holder',
+    ]);
+    expect(screen.getByText('Say hello')).toBeInTheDocument();
+  });
+
+  it('highlights the queued session when it is the selected one', () => {
+    resetMocks();
+    mockSessions = [
+      makeSession({ session_id: 'sess-holder', session_uuid: 'u1', status: 'running' }),
+      makeSession({ session_id: 'sess-queued', session_uuid: 'sess-queued', status: 'queued' }),
+    ];
+
+    render(<SessionSidebar projectId="proj-1" selectedSessionId="sess-queued" />);
+
+    expect(screen.getByTestId('session-list-item-sess-queued')).toHaveAttribute(
+      'aria-selected', 'true',
+    );
+    expect(screen.getByTestId('session-list-item-sess-holder')).toHaveAttribute(
+      'aria-selected', 'false',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

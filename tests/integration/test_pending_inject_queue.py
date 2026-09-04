@@ -1157,3 +1157,120 @@ async def test_on_loop_done_drain_broadcasts_pending_dispatched_per_nonce():
         assert mgr._start_loop.await_count == 1
     finally:
         await _cancel_tasks(tasks)
+
+
+# ---------------------------------------------------------------------------
+# Spec 081 — the session list carries the queued session through its whole
+# life: enqueue → dispatch → cancel, over the HTTP surface.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_list_shows_queued_session_across_enqueue_dispatch(tmp_path):
+    project_id = "proj-081-list"
+    mgr, project_store, _ = _make_agent_manager()
+    workspace = tmp_path / "ws"
+    (workspace / "orbital" / "sessions").mkdir(parents=True)
+    project_store.get_project.return_value = {
+        "project_id": project_id, "workspace": str(workspace), "name": "p",
+    }
+    tasks: list = []
+    calls: list = []
+    _, a_task = _plant_running(mgr, project_id, "sess-A", tasks=tasks)
+
+    client, saved = _build_client(mgr, project_store)
+
+    def _listed():
+        resp = client.get(f"/api/v2/projects/{project_id}/sessions")
+        assert resp.status_code == 200, resp.text
+        return {s["session_id"]: s for s in resp.json()["sessions"]}
+
+    try:
+        # Before the message: only the holder is listed (a minted-but-blank
+        # session stays invisible — spec 081 D6).
+        assert set(_listed()) == {"sess-A"}
+
+        resp = client.post(
+            f"/api/v2/agents/{project_id}/inject",
+            json={"content": "Draft the release notes", "session_id": "sess-B",
+                  "nonce": "n-b"},
+        )
+        assert resp.status_code == 202, resp.text
+
+        # The queued session is listed immediately, named by its own text.
+        rows = _listed()
+        assert set(rows) == {"sess-A", "sess-B"}
+        assert rows["sess-A"]["status"] == "running"
+        assert rows["sess-B"]["status"] == "queued"
+        assert rows["sess-B"]["name"] == "Draft the release notes"
+        assert rows["sess-B"]["session_uuid"] == "sess-B"
+        assert rows["sess-B"]["last_activity_at"] is not None
+        # D7: the row explains nothing beyond "Queued".
+        assert "holder" not in rows["sess-B"]
+        assert "position" not in rows["sess-B"]
+
+        # Dispatch: the slot frees, the pending entry becomes a live handle.
+        mgr.inject_message = _planting_inject(mgr, project_id, calls, tasks)  # type: ignore
+        a_task.cancel()
+        try:
+            await a_task
+        except asyncio.CancelledError:
+            pass
+        mgr._release_slot(project_id)
+        await _flush()
+        assert [c[0] for c in calls] == ["sess-B"]
+
+        rows = _listed()
+        assert set(rows) == {"sess-A", "sess-B"}
+        assert rows["sess-B"]["status"] == "running", "the handle owns the row"
+        assert project_id not in mgr._pending_inject
+    finally:
+        await _cancel_tasks(tasks)
+        client.close()
+        _restore(saved)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_queued_message_removes_the_row(tmp_path):
+    project_id = "proj-081-cancel"
+    mgr, project_store, _ = _make_agent_manager()
+    workspace = tmp_path / "ws"
+    (workspace / "orbital" / "sessions").mkdir(parents=True)
+    project_store.get_project.return_value = {
+        "project_id": project_id, "workspace": str(workspace), "name": "p",
+    }
+    tasks: list = []
+    _plant_running(mgr, project_id, "sess-A", tasks=tasks)
+
+    client, saved = _build_client(mgr, project_store)
+
+    def _listed():
+        resp = client.get(f"/api/v2/projects/{project_id}/sessions")
+        assert resp.status_code == 200, resp.text
+        return {s["session_id"]: s for s in resp.json()["sessions"]}
+
+    try:
+        resp = client.post(
+            f"/api/v2/agents/{project_id}/inject",
+            json={"content": "never mind", "session_id": "sess-B",
+                  "nonce": "n-b"},
+        )
+        assert resp.status_code == 202, resp.text
+        assert _listed()["sess-B"]["status"] == "queued"
+
+        # The composer's ↑ cancel (spec 006 §11c).
+        resp = client.post(
+            f"/api/v2/agents/{project_id}/pending/cancel",
+            json={"session_id": "sess-B", "nonce": "n-b"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # The session never existed on disk, so the row goes with the message.
+        assert set(_listed()) == {"sess-A"}
+        resp = client.get(f"/api/v2/agents/{project_id}/pending")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pending"] == []
+    finally:
+        await _cancel_tasks(tasks)
+        client.close()
+        _restore(saved)
