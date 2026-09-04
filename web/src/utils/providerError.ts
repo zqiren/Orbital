@@ -20,6 +20,8 @@ export interface ProviderErrorInfo {
 
 const KEY_BY_CODE: Record<string, StringKey> = {
   missing_api_key: 'agentError.missing_api_key',
+  // Spec 082: the project's credential card is gone and there is no default.
+  missing_card: 'agentError.missing_card',
   invalid_api_key: 'agentError.invalid_api_key',
   model_not_found: 'agentError.model_not_found',
   provider_unreachable: 'agentError.provider_unreachable',

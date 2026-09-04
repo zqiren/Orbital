@@ -125,6 +125,7 @@ class AgentLoop:
         on_session_end_refresh=None,
         project_dir: str | None = None,
         on_budget_event=None,
+        on_credential_error=None,
     ):
         self._session = session
         self._provider = provider
@@ -157,6 +158,15 @@ class AgentLoop:
         # codes-only budget event through the relay/WS broadcast path. When None
         # (lightweight test loops, no relay wiring), the emitter is a no-op.
         self._on_budget_event = on_budget_event
+        # Spec 082 §3.5 — credential-health sink. An optional
+        # ``on_credential_error(status: int, message: str)`` invoked ONLY for
+        # 401/402/403 on the PRIMARY provider: the "this credential is bad"
+        # set (spec 072 D1), plus 402 because the 2026-09-03 incident was
+        # exactly an OpenRouter credit pre-flight. Transient errors never
+        # reach it, and nothing is acted on — the manager writes the card's
+        # last_error so the card list can show it (spec 072 D2 stands: no
+        # auto-disable, no auto-switch).
+        self._on_credential_error = on_credential_error
         # Per-project token ledger root: the workspace, resolved to
         # {workspace}/orbital/ledger/usage.jsonl via ProjectPaths. When None,
         # ledger emission is skipped (loop runs unchanged). Also the project_dir
@@ -953,6 +963,22 @@ class AgentLoop:
                 except LLMError as e:
                     self._inflight_stream = None
                     category = e.category
+
+                    # Card health (spec 082 §3.5). Scoped to the PRIMARY rung:
+                    # a fallback's rejection says nothing about the card this
+                    # project points at, and stamping it there would paint a
+                    # working card red. Fault-isolated — a health write must
+                    # never turn an LLM error into a crashed loop.
+                    if (self._on_credential_error is not None
+                            and _current_idx == 0
+                            and e.status_code in (401, 402, 403)):
+                        try:
+                            self._on_credential_error(e.status_code, e.message)
+                        except Exception:
+                            logger.warning(
+                                "on_credential_error callback failed",
+                                exc_info=True,
+                            )
 
                     # A 400 from a provider that has ALREADY answered in this
                     # run is not a malformed request — it is an upstream

@@ -9,11 +9,12 @@ import type {
   NotificationPrefs,
   Project,
   ProjectUpdateRequest,
-  ProviderRegistry,
 } from '../types';
 import { api, BASE_URL, isRelayMode, ApiError } from '../config';
-import LLMProviderSettings, { type LLMValues } from './LLMProviderSettings';
+import CardPicker from './CardPicker';
+import MigrationNoteBanner from './MigrationNoteBanner';
 import FallbackModelsEditor from './FallbackModelsEditor';
+import { useCredentialCards } from '../hooks/useCredentialCards';
 import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
@@ -69,7 +70,7 @@ export const PROJECT_SETTINGS_SECTIONS: SettingsRailSection[] = [
   { id: 'sub-agents', labelKey: 'settings.subAgents.label', groupKey: 'settings.group.capabilities' },
   { id: 'skills', labelKey: 'settings.skills.label', groupKey: 'settings.group.capabilities' },
   { id: 'connectors', labelKey: 'settingsRail.connectors', groupKey: 'settings.group.capabilities' },
-  { id: 'llm', labelKey: 'llm.provider.heading', groupKey: 'settings.group.model' },
+  { id: 'llm', labelKey: 'cards.project.heading', groupKey: 'settings.group.model' },
   { id: 'fallback-models', labelKey: 'fallback.heading', groupKey: 'settings.group.model' },
   { id: 'autonomy', labelKey: 'autonomy.level.label', groupKey: 'settings.group.limits' },
   { id: 'budget', labelKey: 'settings.budget.label', groupKey: 'settings.group.limits' },
@@ -205,15 +206,12 @@ export default function SettingsView({
     project.llm_fallback_models || [],
   );
   const fallbackModelsRef = useRef<FallbackModelEntry[]>(fallbackModels);
-  const [providers, setProviders] = useState<ProviderRegistry>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    api<ProviderRegistry>('/api/v2/providers')
-      .then((data) => { if (!cancelled) setProviders(data); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  // The credential card this project runs on (spec 082). `null` follows the
+  // global default and is a value in its own right, not "unset". The provider
+  // REGISTRY is no longer fetched here: a card already resolves provider,
+  // endpoint and sdk, so this screen has no provider list to render.
+  const [cardId, setCardId] = useState<string | null>(project.card_id ?? null);
+  const { cards, defaultCardId } = useCredentialCards();
 
   const pid = project.project_id;
 
@@ -368,18 +366,6 @@ export default function SettingsView({
     }
   }
 
-  // Track LLM values from the shared component
-  const llmValuesRef = useRef<LLMValues>({
-    provider: project.provider,
-    model: project.model,
-    base_url: project.base_url || undefined,
-    sdk: (project.sdk as 'openai' | 'anthropic') || 'openai',
-  });
-
-  function handleLLMChange(values: LLMValues) {
-    llmValuesRef.current = values;
-  }
-
   function handleFallbackChange(models: FallbackModelEntry[]) {
     setFallbackModels(models);
     fallbackModelsRef.current = models;
@@ -387,16 +373,16 @@ export default function SettingsView({
 
   function handleSave(ev: React.FormEvent) {
     ev.preventDefault();
-    const llm = llmValuesRef.current;
     const data: ProjectUpdateRequest = {
       agent_name: agentName,
       project_goals_content: projectGoals,
       user_directives_content: standingRules,
-      model: llm.model,
+      // Always PRESENT, null included: null is the explicit "follow the
+      // global default card", and the daemon applies the field whenever it is
+      // in the body. An `|| undefined` here would make "back to default"
+      // unsavable — the wart spec 072 left behind on the old key field.
+      card_id: cardId,
       autonomy,
-      base_url: llm.base_url || undefined,
-      provider: llm.provider || undefined,
-      sdk: llm.sdk,
       llm_fallback_models: fallbackModelsRef.current,
       budget_limit_usd: budgetLimit ? parseFloat(budgetLimit) : null,
       budget_currency: budgetCurrency,
@@ -409,9 +395,6 @@ export default function SettingsView({
       pending_domain_requests: pendingDomainRequests,
       workbench_exclude_global: workbenchExcludeGlobal,
     };
-    if (llm.api_key) {
-      data.api_key = llm.api_key;
-    }
     onSave(data);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -655,19 +638,21 @@ export default function SettingsView({
         </SettingsGroup>
 
         <SettingsGroup title={t('settings.group.model')}>
-        {/* LLM Provider (collapsible, from shared component — the disclosure
-            button is its own section heading, so no `title` here). */}
-        <SettingsSection id="llm">
-          <LLMProviderSettings
-            mode="project"
-            projectValues={{
-              provider: project.provider,
-              model: project.model,
-              api_key: project.api_key,
-              base_url: project.base_url,
-              sdk: project.sdk,
-            }}
-            onChange={handleLLMChange}
+        {/* Spec 082: one card picker replaces the provider/model/endpoint/key
+            override. A project stores a card id and nothing else, so there is
+            no longer a subset of fields for the daemon to pair wrongly. */}
+        <SettingsSection
+          id="llm"
+          title={t('cards.project.heading')}
+          description={t('cards.project.hint')}
+        >
+          <MigrationNoteBanner note={project.migration_note} cards={cards} />
+          <CardPicker
+            cards={cards}
+            defaultCardId={defaultCardId}
+            value={cardId}
+            onChange={setCardId}
+            data-testid="project-card-picker"
           />
         </SettingsSection>
 
@@ -676,7 +661,8 @@ export default function SettingsView({
           <FallbackModelsEditor
             models={fallbackModels}
             onChange={handleFallbackChange}
-            providers={providers}
+            cards={cards}
+            defaultCardId={defaultCardId}
           />
         </SettingsSection>
         </SettingsGroup>

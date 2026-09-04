@@ -18,6 +18,7 @@ import { useFiles } from '../hooks/useFiles';
 import { usePanelDockable } from '../hooks/usePanelState';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
+import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
 import type { StringKey } from '../i18n/strings';
 
 interface ProjectDetailProps {
@@ -82,6 +83,9 @@ export default function ProjectDetail({
   children,
 }: ProjectDetailProps) {
   const t = useT();
+  // Names the credential the header chip shows; the same flat list the
+  // settings picker offers.
+  const { cards, defaultCardId } = useCredentialCards();
 
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
@@ -228,12 +232,25 @@ export default function ProjectDetail({
             onOpenBudgetSettings={handleOpenBudgetSettings}
           />
           {(() => {
-            // Model label: the project's pinned model, else the global default.
+            // Credential label (spec 082 D13): the card this project runs on —
+            // its own pinned card, else the global default. A card name
+            // already carries the model ("DeepSeek · deepseek-v4-flash"), so
+            // the default case reads as it always did. Falls back to the raw
+            // model id against a pre-082 daemon, which serves no cards.
             // NEVER agent_name (an identity, not a model).
-            const modelName = project.model || globalDefaultModel || '';
-            if (!modelName) return null;
+            const label =
+              resolveCard(cards, project.card_id, defaultCardId)?.name ||
+              project.model ||
+              globalDefaultModel ||
+              '';
+            if (!label) return null;
             return (
-              <span className="font-mono text-[11px] text-secondary">{modelName}</span>
+              <span
+                data-testid="project-credential-chip"
+                className="font-mono text-[11px] text-secondary truncate max-w-[220px]"
+              >
+                {label}
+              </span>
             );
           })()}
           <SettingsIcon onClick={handleSettingsClick} />

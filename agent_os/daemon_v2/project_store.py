@@ -43,7 +43,20 @@ DEFAULT_NOTIFICATION_PREFS = {
 DEFAULT_PROJECT_FIELDS: dict = {
     "default_skills_reconciled": False,
     "sub_agent_deployment_instructions": "",
+    # Spec 082 — the credential card this project runs on. None means "follow
+    # the global default card"; ``migration_note`` carries a one-line reason
+    # the UI shows above the card picker (card_incomplete / needs_card /
+    # card_deleted). Both default here so a legacy record reads as "on the
+    # default, nothing to explain" without a migration pass of its own.
+    "card_id": None,
+    "migration_note": None,
 }
+
+# Pre-cards per-project LLM fields (spec 082 §3.7 step 5). They still LOAD —
+# the migration reads them — but never survive a save: a project row must not
+# be able to carry a plaintext key again, and a stale model/base_url snapshot
+# is exactly what the card lookup exists to delete.
+_LEGACY_LLM_FIELDS = ("api_key", "model", "provider", "base_url", "sdk")
 
 # Queue runtime cap defaults. Applied lazily when reading
 # get_max_runtime_seconds so legacy projects use the default without a
@@ -185,7 +198,7 @@ class ProjectStore:
             raise ValueError(f"agent_name '{config['agent_name']}' already in use")
         project = {
             "project_id": pid,
-            **config,
+            **{k: v for k, v in config.items() if k not in _LEGACY_LLM_FIELDS},
         }
         self._projects[pid] = project
         self._save()
@@ -206,6 +219,8 @@ class ProjectStore:
         # Drop the legacy dead config on save (TASK-network-config-cleanup):
         # old records load fine, but the key does not survive a save round-trip.
         project.pop("network_extra_domains", None)
+        for field in _LEGACY_LLM_FIELDS:
+            project.pop(field, None)
         self._save()
 
     def reorder_projects(self, ordered_ids: list[str]) -> list[str]:

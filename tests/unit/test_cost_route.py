@@ -18,6 +18,7 @@ import json
 import os
 
 import pytest
+from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -78,11 +79,37 @@ class _FakeSettings:
 
 
 class _FakeSettingsStore:
+    """Settings-store double with the card surface the cost routes now call.
+
+    Spec 082: a project no longer stores its own provider/model — it stores a
+    ``card_id``, and the budget's set-once currency defaults from the provider
+    of the card the project would actually run on. Two cards are enough to
+    express the cases: one CNY provider, one USD.
+    """
+
+    CARDS = {
+        "card_moonshot": ("moonshot", "kimi-x"),
+        "card_anthropic": ("anthropic", "claude-x"),
+    }
+
     def __init__(self, fx_rates):
         self._s = _FakeSettings(fx_rates)
 
     def get(self):
         return self._s
+
+    def resolve_card(self, card_id):
+        pair = self.CARDS.get(card_id)
+        if pair is None:
+            return None
+        return SimpleNamespace(id=card_id, provider=pair[0], model=pair[1])
+
+    get_card = resolve_card
+
+    def default_card(self):
+        return self.resolve_card("card_anthropic")
+
+    stored_default_card = default_card
 
 
 @pytest.fixture
@@ -128,9 +155,10 @@ def _evt(ts="2026-06-10T12:00:00+00:00", provider="anthropic", model="claude-x",
 def _new_project(store, tmp_path, **extra):
     workspace = str(tmp_path / "ws")
     os.makedirs(workspace, exist_ok=True)
+    # Spec 082: a project references a card; provider/model/api_key are gone
+    # from the project row. card_anthropic is the fake store's default (USD).
     config = {
-        "name": "proj", "workspace": workspace, "model": "claude-x",
-        "api_key": "k", "provider": "anthropic",
+        "name": "proj", "workspace": workspace, "card_id": "card_anthropic",
     }
     config.update(extra)
     return store.create_project(config), workspace
@@ -320,9 +348,9 @@ class TestCostRouteSubagents:
 class TestBudgetCurrencySetOnce:
     def test_setting_limit_defaults_currency_from_provider(self, store, tmp_path,
                                                            make_client, override_file):
-        # Project on moonshot (CNY). Setting a limit with no explicit currency
-        # defaults budget_currency from the provider → CNY.
-        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        # Project on a moonshot card (CNY). Setting a limit with no explicit
+        # currency defaults budget_currency from that CARD's provider → CNY.
+        pid, ws = _new_project(store, tmp_path, card_id="card_moonshot")
         client = make_client(store)
         resp = client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 10.0})
         assert resp.status_code == 200
@@ -330,20 +358,19 @@ class TestBudgetCurrencySetOnce:
 
     def test_changing_provider_does_not_redenominate(self, store, tmp_path,
                                                      make_client, override_file):
-        # Limit set on moonshot → CNY. Then switch provider to anthropic (USD)
-        # WITHOUT touching the limit → currency must stay CNY.
-        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        # Limit set on a moonshot card → CNY. Then switch the project to an
+        # anthropic card (USD) WITHOUT touching the limit → must stay CNY.
+        pid, ws = _new_project(store, tmp_path, card_id="card_moonshot")
         client = make_client(store)
         client.put(f"/api/v2/projects/{pid}", json={"budget_limit_usd": 10.0})
         assert store.get_project(pid)["budget_currency"] == "CNY"
-        resp = client.put(f"/api/v2/projects/{pid}",
-                          json={"provider": "anthropic", "model": "claude-x"})
+        resp = client.put(f"/api/v2/projects/{pid}", json={"card_id": "card_anthropic"})
         assert resp.status_code == 200
         assert store.get_project(pid)["budget_currency"] == "CNY"  # unchanged
 
     def test_explicit_currency_in_put_is_honored(self, store, tmp_path,
                                                 make_client, override_file):
-        pid, ws = _new_project(store, tmp_path, provider="moonshot", model="kimi-x")
+        pid, ws = _new_project(store, tmp_path, card_id="card_moonshot")
         client = make_client(store)
         resp = client.put(f"/api/v2/projects/{pid}",
                           json={"budget_limit_usd": 10.0, "budget_currency": "USD"})

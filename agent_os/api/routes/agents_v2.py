@@ -49,20 +49,16 @@ router = APIRouter(prefix="/api/v2")
 # ---- Request/Response models ----
 
 class CreateProjectRequest(BaseModel):
+    # Spec 082: legacy `model` / `api_key` / `base_url` / `provider` / `sdk`
+    # are NOT declared here any more. They are extra fields — pydantic ignores
+    # them by default, so an older SPA never 422s; `_warn_legacy_llm_fields`
+    # logs them once. What a project stores now is a card reference.
     name: str
     workspace: str
-    # Optional (default ""): the create-project modal only ever asks for
-    # workspace + name up front. An empty string is already treated as
-    # "inherit the global provider/model" at runtime (BYOK dedup below,
-    # agent_manager.py runtime fallback) — this just stops every client from
-    # having to send placeholder empties for fields with a sensible default.
-    model: str = ""
-    api_key: str = ""
-    base_url: str | None = None
+    # None = follow the global default card.
+    card_id: str | None = None
     autonomy: str | None = None
     instructions: str | None = None
-    provider: str | None = None
-    sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
@@ -86,14 +82,14 @@ class CreateProjectRequest(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
+    # Spec 082: legacy `model` / `api_key` / `base_url` / `provider` / `sdk`
+    # are gone (see CreateProjectRequest). `card_id` is applied whenever it is
+    # PRESENT in the body — explicit null means "follow the global default" —
+    # so it cannot ride the generic drop-None merge below.
     name: str | None = None
-    model: str | None = None
-    api_key: str | None = None
-    base_url: str | None = None
+    card_id: str | None = None
     autonomy: str | None = None
     instructions: str | None = None
-    provider: str | None = None
-    sdk: str | None = None
     agent_slug: str | None = None
     enabled_sub_agents: list[str] | None = None
     disabled_sub_agents: list[str] | None = None
@@ -461,21 +457,95 @@ def _workspace_is_empty(workspace: str) -> bool:
     return True
 
 
+_LEGACY_PROJECT_LLM_WARNED: set[str] = set()
+
+
+def _warn_legacy_llm_fields(route: str) -> None:
+    """Log ONCE per route that pre-cards LLM fields were sent and ignored.
+
+    Spec 082 §3.8: `api_key` / `model` / `provider` / `base_url` / `sdk` on a
+    project body are extra fields now. They are ignored rather than rejected
+    so an older SPA against a newer daemon never 422s mid-rollout — but a
+    silent ignore is how a client keeps sending a key it thinks is being
+    saved, so it is said out loud exactly once.
+    """
+    if route in _LEGACY_PROJECT_LLM_WARNED:
+        return
+    _LEGACY_PROJECT_LLM_WARNED.add(route)
+    logger.warning(
+        "%s: legacy per-project LLM fields (api_key/model/provider/base_url/"
+        "sdk) are ignored since spec 082 — projects reference a credential "
+        "card (card_id) instead.", route,
+    )
+
+
+def _require_known_card(card_id: str | None) -> None:
+    """400 when a project body names a card that does not exist."""
+    if not card_id or _settings_store is None:
+        return
+    if _settings_store.resolve_card(card_id) is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "card_not_found",
+                    "message": "That credential card no longer exists."},
+        )
+
+
+def _card_provider_model(card_id: str | None) -> tuple[str, str]:
+    """The (provider, model) a project on ``card_id`` would actually run."""
+    if _settings_store is None:
+        return "custom", ""
+    card = (_settings_store.resolve_card(card_id) if card_id else None) \
+        or _settings_store.default_card()
+    return (card.provider, card.model) if card is not None else ("custom", "")
+
+
+def _card_refs(entries) -> list[dict]:
+    """Normalize a fallback list to ``[{card_id}]``.
+
+    Legacy five-field entries carry a key we must never persist to
+    projects.json again, so they are dropped rather than half-converted; the
+    one-shot migration already turned the ones that existed into cards.
+    """
+    out: list[dict] = []
+    dropped = 0
+    for entry in (entries or []):
+        if isinstance(entry, dict) and entry.get("card_id"):
+            out.append({"card_id": entry["card_id"]})
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "%d legacy fallback entr%s ignored — fallback entries reference "
+            "a credential card since spec 082.",
+            dropped, "y was" if dropped == 1 else "ies were",
+        )
+    return out
+
+
 def _redact_project(project: dict) -> dict:
-    """Return project dict with api_key masked."""
-    from agent_os.daemon_v2.project_store import DEFAULT_NOTIFICATION_PREFS
+    """Return the wire shape of a project row.
+
+    Spec 082: a project no longer holds a credential at all — it holds a
+    ``card_id``. The legacy LLM fields are not emitted even when an
+    un-migrated record still carries them on disk, so there is no masked-key
+    field left to leak through, and no client can round-trip a stale
+    provider/model snapshot back into the store.
+    """
+    from agent_os.daemon_v2.project_store import (
+        DEFAULT_NOTIFICATION_PREFS, _LEGACY_LLM_FIELDS,
+    )
     result = dict(project)
-    # list_projects() bypasses ProjectStore.get_project(), so normalize this
-    # legacy-safe scalar here as well to keep list/detail response parity.
+    # list_projects() bypasses ProjectStore.get_project(), so normalize these
+    # legacy-safe scalars here as well to keep list/detail response parity.
     result.setdefault("sub_agent_deployment_instructions", "")
+    result.setdefault("card_id", None)
+    result.setdefault("migration_note", None)
     # Legacy dead config (TASK-network-config-cleanup): tolerated on old
     # records, never exposed externally; dropped from disk on next save.
     result.pop("network_extra_domains", None)
-    key = result.get("api_key", "")
-    if key and len(key) > 8:
-        result["api_key"] = key[:4] + "..." + key[-4:]
-    elif key:
-        result["api_key"] = "****"
+    for field in _LEGACY_LLM_FIELDS:
+        result.pop(field, None)
     prefs = result.get("notification_prefs", {})
     result["notification_prefs"] = {**DEFAULT_NOTIFICATION_PREFS, **prefs}
     result["is_empty_workspace"] = _workspace_is_empty(result.get("workspace", ""))
@@ -576,24 +646,18 @@ def _project_sort_key(project: dict) -> float:
 async def create_project(req: CreateProjectRequest):
     if not os.path.isdir(req.workspace):
         raise HTTPException(status_code=400, detail="Workspace path does not exist")
-    # Only persist api_key if it differs from the current global key (BYOK).
-    # If it matches the global key, store empty string so the project inherits
-    # the global key at runtime rather than snapshotting a stale copy.
-    api_key_to_store = req.api_key
-    if _credential_store is not None:
-        global_key = _credential_store.get_api_key()
-        if global_key and req.api_key == global_key:
-            api_key_to_store = ""
+    _warn_legacy_llm_fields("POST /projects")
+    _require_known_card(req.card_id)
     project_data = {
         "name": req.name,
         "workspace": req.workspace,
-        "model": req.model,
-        "api_key": api_key_to_store,
-        "base_url": req.base_url,
+        # Spec 082: no model / provider / endpoint / key here any more. The
+        # BYOK dedup that used to blank a project key equal to the global one
+        # is gone with them — there is nothing left to deduplicate.
+        "card_id": req.card_id,
+        "migration_note": None,
         "autonomy": req.autonomy or "hands_off",
         "instructions": req.instructions or "",
-        "provider": req.provider or "custom",
-        "sdk": req.sdk or "openai",
         "is_scratch": req.is_scratch,
     }
     if req.agent_name is not None:
@@ -613,7 +677,7 @@ async def create_project(req: CreateProjectRequest):
     if req.notification_prefs is not None:
         project_data["notification_prefs"] = req.notification_prefs
     if req.llm_fallback_models is not None:
-        project_data["llm_fallback_models"] = req.llm_fallback_models
+        project_data["llm_fallback_models"] = _card_refs(req.llm_fallback_models)
     if req.budget_limit_usd is not None:
         project_data["budget_limit_usd"] = req.budget_limit_usd
     if req.budget_action is not None:
@@ -629,9 +693,8 @@ async def create_project(req: CreateProjectRequest):
     if req.budget_currency is not None:
         project_data["budget_currency"] = req.budget_currency
     elif req.budget_limit_usd is not None:
-        project_data["budget_currency"] = _provider_currency(
-            project_data.get("provider", "custom"), project_data.get("model", "")
-        )
+        card_provider, card_model = _card_provider_model(req.card_id)
+        project_data["budget_currency"] = _provider_currency(card_provider, card_model)
     try:
         pid = _project_store.create_project(project_data)
     except ValueError as e:
@@ -740,6 +803,18 @@ async def update_project(project_id: str, body: ProjectUpdate):
         raise HTTPException(status_code=404, detail="Project not found")
     raw_body = body.model_dump()
     updates = {k: v for k, v in raw_body.items() if v is not None}
+    _warn_legacy_llm_fields("PUT /projects/{id}")
+    # Spec 082: `card_id` is the one field where an explicit null MEANS
+    # something ("follow the global default"), so it is applied on PRESENCE in
+    # the raw body rather than riding the drop-None merge above. Any PUT that
+    # carries it also clears the migration note — the user has just answered
+    # the question the note was asking.
+    if "card_id" in body.model_fields_set:
+        _require_known_card(body.card_id)
+        updates["card_id"] = body.card_id
+        updates["migration_note"] = None
+    if "llm_fallback_models" in updates:
+        updates["llm_fallback_models"] = _card_refs(updates["llm_fallback_models"])
     if "sub_agent_deployment_instructions" in updates:
         updates["sub_agent_deployment_instructions"] = updates[
             "sub_agent_deployment_instructions"
@@ -809,8 +884,8 @@ async def update_project(project_id: str, body: ProjectUpdate):
         setting_limit = "budget_limit_usd" in updates
         already_has_currency = bool(project.get("budget_currency"))
         if setting_limit and not already_has_currency:
-            eff_provider = updates.get("provider", project.get("provider", "custom"))
-            eff_model = updates.get("model", project.get("model", ""))
+            eff_card = updates.get("card_id", project.get("card_id"))
+            eff_provider, eff_model = _card_provider_model(eff_card)
             updates["budget_currency"] = _provider_currency(eff_provider, eff_model)
 
     # Handle workspace file content fields separately
@@ -825,12 +900,6 @@ async def update_project(project_id: str, body: ProjectUpdate):
     )
     if rules_content is not None:
         _write_workspace_file(workspace, "user_directives.md", rules_content)
-    # If api_key matches the current global key, store empty string so the
-    # project inherits at runtime rather than snapshotting a stale copy.
-    if "api_key" in updates and _credential_store is not None:
-        global_key = _credential_store.get_api_key()
-        if global_key and updates["api_key"] == global_key:
-            updates["api_key"] = ""
     if updates:
         try:
             _project_store.update_project(project_id, updates)
@@ -2957,38 +3026,106 @@ async def list_providers():
     return {}
 
 
+class TokenDanceSigninRequest(BaseModel):
+    # Spec 082 §3.6: refresh an existing TokenDance card's key instead of
+    # minting a new card. Omitted ⇒ a new card.
+    card_id: str | None = None
+
+
 @router.post("/providers/tokendance/signin")
-async def tokendance_signin():
+async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     """One-click TokenDance key provisioning (Spec 47 Tier 2).
 
     Blocking: runs the PKCE loopback flow (system browser consent, up to
     ~300s), validates the minted key against their balance endpoint, and
-    persists it to the credential store. The raw key never leaves the daemon —
-    the response carries only the set-flag and a display mask (same format as
-    ``settings_store.get_masked``).
+    stores it on a credential card. The raw key never leaves the daemon — the
+    response carries the masked card and the test result.
+
+    Spec 082 §3.6: this used to overwrite the ONE global key slot, evicting
+    whichever provider's key was in it. It now writes exactly one card and
+    never touches another card's key, and it takes the default only when
+    there is no default yet.
     """
-    if _credential_store is None:
-        raise HTTPException(status_code=501, detail="Credential store not available")
+    if _settings_store is None:
+        raise HTTPException(status_code=501, detail="Settings store not available")
     from agent_os.providers_auth.tokendance import (
         TokenDanceProvisioningError,
         provision_api_key,
     )
+    from agent_os.daemon_v2.settings_store import mask_key
+
+    card_id = req.card_id if req is not None else None
+    existing = _settings_store.resolve_card(card_id) if card_id else None
+    if card_id and existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "card_not_found",
+                    "message": "That credential card no longer exists."},
+        )
     try:
         key = await provision_api_key()
     except TokenDanceProvisioningError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+    default_model = (
+        (_provider_registry.get_provider_data("tokendance") or {}).get("default_model")
+        if _provider_registry else None
+    ) or ""
     try:
-        _credential_store.set_api_key(key)
+        if existing is not None:
+            card = _settings_store.update_card(existing.id, api_key=key)
+        else:
+            had_default = _settings_store.stored_default_card() is not None
+            card = _settings_store.create_card(
+                provider="tokendance", model=default_model, api_key=key,
+                make_default=not had_default,
+            )
     except RuntimeError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"key was created but could not be stored: {exc}",
         )
+
     from agent_os import telemetry
     telemetry.emit("key_set", {"provider": "tokendance"})
     telemetry.latch("key_set")
-    masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "****"
-    return {"api_key_set": True, "api_key_masked": masked}
+
+    test = await _test_and_record(card.id)
+    return {
+        "card": _settings_store.masked_card(_settings_store.get_card(card.id)),
+        "test": test,
+        "default_card_id": _settings_store.effective_default_card_id(),
+        # Legacy fields for an older SPA reading the pre-cards response shape.
+        "api_key_set": True,
+        "api_key_masked": mask_key(key),
+    }
+
+
+async def _test_and_record(card_id: str) -> dict:
+    """Run the connection test for a saved card and write its health.
+
+    The shared tail of every card write: save first, then test, then record —
+    so a provider outage produces a red card, never a lost one (D9).
+    """
+    from agent_os.daemon_v2.settings_store import resolve_card_endpoint
+
+    card = _settings_store.resolve_card(card_id)
+    if card is None:
+        return {"ok": False, "status": None, "code": "card_not_found",
+                "message": "That credential card no longer exists."}
+    base_url, sdk = resolve_card_endpoint(card)
+    result = await run_connection_test(
+        card.provider, card.model, _settings_store.key_for(card.id), base_url, sdk,
+    )
+    if result["ok"]:
+        _settings_store.record_card_health(card.id, verified=True)
+    else:
+        _settings_store.record_card_health(card.id, error={
+            "status": result["status"], "code": result["code"],
+            "message": result["message"],
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return result
 
 
 class FetchModelsRequest(BaseModel):
@@ -3003,6 +3140,9 @@ class FetchModelsRequest(BaseModel):
     # protocol, or an Anthropic-format endpoint gets listed at the OpenAI path
     # with the OpenAI auth header. None = fall back to the registry entry.
     sdk: str | None = None
+    # Spec 082: an alternative to provider/api_key/base_url/sdk — list the
+    # models reachable with a saved card's credentials.
+    card_id: str | None = None
 
 
 _CHAT_PROTOCOL_PREFIXES = ("openai:chat-completions", "anthropic:messages")
@@ -3036,9 +3176,21 @@ def _chat_model_ids(data: dict) -> list[str]:
 async def fetch_models(req: FetchModelsRequest):
     """Proxy request to provider's /v1/models endpoint."""
     import httpx
-    # Use injected registry
-    provider_info = _provider_registry.get_provider_data(req.provider) if _provider_registry else None
-    base_url = req.base_url or (provider_info["base_url"] if provider_info else None)
+
+    # Spec 082: with a card_id the provider/key/endpoint/sdk all come from
+    # that card. Without one the raw form is unchanged, and an empty key still
+    # falls back to the DEFAULT card's — the frontend clears the API-key field
+    # once a key is persisted, so the post-save steady state sends no key at
+    # all, and every key-gated provider (11 of 14 answer /models with 401/403
+    # unauthenticated) would otherwise drop back to the static suggested list
+    # right after the user saves.
+    provider, _model, api_key, base_url, sdk = _card_test_inputs(
+        req.card_id, provider=req.provider, model="",
+        api_key=req.api_key or "", base_url=req.base_url, sdk=req.sdk or "",
+    )
+    provider_info = _provider_registry.get_provider_data(provider) if _provider_registry else None
+    if not base_url:
+        base_url = provider_info["base_url"] if provider_info else None
     if not base_url:
         raise HTTPException(status_code=400, detail="No base_url for provider")
 
@@ -3046,17 +3198,8 @@ async def fetch_models(req: FetchModelsRequest):
     # entirely when there is no key — a keyless local server needs none, and an
     # empty `Bearer ` (trailing space) is an illegal HTTP header value that
     # httpx rejects.
-    sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
-
-    # The frontend clears the API-key field once a key is persisted, and its
-    # body omits `api_key` when the field is empty — so the post-save steady
-    # state sends no key at all. Fall back to the stored global key exactly as
-    # /providers/test does; otherwise every key-gated provider (11 of 14 answer
-    # /models with 401/403 unauthenticated) silently drops back to the static
-    # suggested list right after the user saves.
-    api_key = req.api_key
-    if not (api_key or "").strip() and _credential_store is not None:
-        api_key = _credential_store.get_api_key() or ""
+    if not sdk:
+        sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
 
     if sdk == "anthropic":
         models_url = base_url.rstrip("/") + "/v1/models"
@@ -3146,19 +3289,40 @@ class TestConnectionRequest(BaseModel):
     # default — otherwise FastAPI 422s with `type: missing` before the handler
     # (which already tolerates a custom provider + empty key) ever runs.
     provider: str = "custom"
-    model: str
+    # Spec 082: with a ``card_id`` the model comes from the card, so the
+    # Add-card form's raw shape is no longer the only way in.
+    model: str = ""
     api_key: str = ""
     base_url: str | None = None
     sdk: str = "openai"
+    card_id: str | None = None
 
 
-@router.post("/providers/test")
-async def test_connection(req: TestConnectionRequest):
-    """Test connection by sending a minimal completion request."""
-    # Use injected registry
-    provider_info = _provider_registry.get_provider_data(req.provider) if _provider_registry else None
-    base_url = req.base_url or (provider_info["base_url"] if provider_info else None)
-    sdk = req.sdk or (provider_info.get("sdk", "openai") if provider_info else "openai")
+async def run_connection_test(provider: str, model: str, api_key: str,
+                              base_url: str | None, sdk: str) -> dict:
+    """Send one minimal completion and classify the outcome.
+
+    THE connection test (spec 082 §3.2): the Add-card save, ``PUT
+    /settings/cards/{id}``, ``POST /settings/cards/{id}/test``,
+    ``/providers/test`` and TokenDance provisioning all run this, so a card's
+    ``last_error`` and the Test Connection button can never disagree about
+    what a provider said.
+
+    Returns ``{ok, status, code, message}`` — never raises for a provider
+    refusal. ``code`` is one of the stable card-health codes; ``message`` is
+    the provider's own sentence (or ours for the auth case, where the
+    providers' phrasings are an unusable mess).
+    """
+    from agent_os.agent.providers.openai_compat import LLMProvider
+    from agent_os.agent.providers.types import LLMError, ContextOverflowError
+
+    provider_info = (
+        _provider_registry.get_provider_data(provider) if _provider_registry else None
+    )
+    if not base_url:
+        base_url = provider_info["base_url"] if provider_info else None
+    if not sdk:
+        sdk = provider_info.get("sdk", "openai") if provider_info else "openai"
 
     # Per-model endpoint override wins over both: the frontend can only send
     # the PROVIDER-level sdk, so on a mixed-protocol aggregator (OpenCode
@@ -3166,48 +3330,88 @@ async def test_connection(req: TestConnectionRequest):
     # real turn. Models without an override leave the user's choice intact —
     # that is every Custom / self-hosted endpoint.
     if _provider_registry is not None:
-        _mi = _provider_registry.get_model_info(req.provider, req.model)
+        _mi = _provider_registry.get_model_info(provider, model)
         sdk = _mi.sdk or sdk
         base_url = _mi.base_url or base_url
 
-    from agent_os.agent.providers.openai_compat import LLMProvider
-    from agent_os.agent.providers.types import LLMError, ContextOverflowError
-
-    # An empty api_key with a saved global key means "test the stored key":
-    # the frontend clears the field once a key is persisted (paste-and-save,
-    # or the TokenDance one-click flow), so fall back to the credential store
-    # rather than constructing a keyless client — the raw SDK otherwise
-    # surfaces "Missing credentials … set OPENAI_API_KEY". Custom/local
-    # servers that genuinely need no key are unaffected: with no stored
-    # global key the fallback resolves to "" exactly as before.
-    api_key = req.api_key
-    if not api_key.strip() and _credential_store is not None:
-        api_key = _credential_store.get_api_key() or ""
+    if not model:
+        return {"ok": False, "status": None, "code": "missing_model",
+                "message": "This card needs a model before it can be tested."}
 
     try:
-        provider = LLMProvider(
-            req.model, api_key, base_url, sdk=sdk,
+        client = LLMProvider(
+            model, api_key, base_url, sdk=sdk,
             extra_headers=provider_info.get("extra_headers") if provider_info else None,
         )
-        result = await provider.complete(
-            messages=[{"role": "user", "content": "hi"}],
-        )
-        return {"status": "ok", "message": f"Connected to {req.provider} using {req.model}"}
+        await client.complete(messages=[{"role": "user", "content": "hi"}])
+        return {"ok": True, "status": 200, "code": None,
+                "message": f"Connected to {provider} using {model}"}
     except ContextOverflowError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": False, "status": 400, "code": "provider_error",
+                "message": str(e)}
     except LLMError as e:
-        status = e.status_code or 500
+        status = e.status_code
         if status in (401, 403):
-            detail = _describe_auth_failure(e.message)
-        elif status == 404:
-            detail = f"Model '{req.model}' not found on this provider"
-        elif status == 429:
-            detail = "Rate limited — key works but slow down"
-        else:
-            detail = e.message
-        raise HTTPException(status_code=status, detail=detail)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            return {"ok": False, "status": status, "code": "invalid_api_key",
+                    "message": _describe_auth_failure(e.message)}
+        if status == 402:
+            return {"ok": False, "status": status, "code": "insufficient_credits",
+                    "message": _unwrap_provider_message(e.message)}
+        if status == 404:
+            return {"ok": False, "status": status, "code": "model_not_found",
+                    "message": f"Model '{model}' not found on this provider"}
+        if status == 429:
+            return {"ok": False, "status": status, "code": "rate_limited",
+                    "message": "Rate limited — key works but slow down"}
+        if status is None:
+            return {"ok": False, "status": None, "code": "provider_unreachable",
+                    "message": e.message}
+        return {"ok": False, "status": status, "code": "provider_error",
+                "message": e.message}
+    except Exception as e:  # noqa: BLE001 — an SDK constructor can raise anything
+        return {"ok": False, "status": 500, "code": "provider_error",
+                "message": str(e) or type(e).__name__}
+
+
+def _card_test_inputs(card_id: str | None, *, provider: str, model: str,
+                      api_key: str, base_url: str | None, sdk: str) -> tuple:
+    """Resolve a ``(provider, model, api_key, base_url, sdk)`` tuple.
+
+    With a ``card_id`` every field but ``model`` comes from the card (an
+    explicit model still wins, so the Add-card form can probe another model on
+    a card's credentials). Without one, the raw form is used exactly as
+    before, with an empty key falling back to the DEFAULT card's.
+    """
+    from agent_os.daemon_v2.settings_store import resolve_card_endpoint
+
+    if card_id and _settings_store is not None:
+        card = _settings_store.resolve_card(card_id)
+        if card is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "card_not_found",
+                        "message": "That credential card no longer exists."},
+            )
+        card_base, card_sdk = resolve_card_endpoint(card)
+        return (card.provider, model or card.model,
+                _settings_store.key_for(card.id), card_base, card_sdk)
+    if not (api_key or "").strip() and _credential_store is not None:
+        api_key = _credential_store.get_api_key() or ""
+    return provider, model, api_key, base_url, sdk
+
+
+@router.post("/providers/test")
+async def test_connection(req: TestConnectionRequest):
+    """Test connection by sending a minimal completion request."""
+    provider, model, api_key, base_url, sdk = _card_test_inputs(
+        req.card_id, provider=req.provider, model=req.model,
+        api_key=req.api_key, base_url=req.base_url, sdk=req.sdk,
+    )
+    result = await run_connection_test(provider, model, api_key, base_url, sdk)
+    if result["ok"]:
+        return {"status": "ok", "message": result["message"]}
+    raise HTTPException(status_code=result["status"] or 500,
+                        detail=result["message"])
 
 
 # ---- Trigger Endpoints ----

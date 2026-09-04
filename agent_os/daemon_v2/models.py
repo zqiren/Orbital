@@ -100,12 +100,22 @@ class DaemonConfig:
 
 @dataclass
 class FallbackModelEntry:
-    """Single fallback model configuration for provider rotation."""
+    """One rung of the provider rotation, RESOLVED from a credential card.
+
+    Spec 082: what is stored (settings.json, projects.json, the API) is only
+    ``{card_id}``; the config builder looks the card up and fills the rest in
+    here. Keeping the resolved fields on the dataclass is what lets
+    ``_build_llm_providers`` and the loop stay byte-identical — they still
+    receive a fully-specified rung and never learn what a card is.
+    """
     provider: str = "custom"
     model: str = ""
     base_url: str | None = None
     api_key: str = ""
     sdk: str = "openai"
+    # The card this rung was resolved from ("" for a rung with no card, e.g.
+    # a legacy entry or a test-constructed one).
+    card_id: str = ""
 
 
 @dataclass
@@ -145,6 +155,12 @@ class AgentConfig:
     budget_spent_usd: float = 0.0
     sdk: str = "openai"        # "openai" or "anthropic"
     provider: str = "custom"   # provider key from providers.json
+    # Spec 082 — the credential card this config resolved from. Everything
+    # above it (model/api_key/base_url/sdk/provider) is that card's content,
+    # looked up once by _build_agent_config_from_project. "" means no card
+    # resolved (a project on a fresh install with nothing configured).
+    card_id: str = ""
+    card_name: str = ""
     # Spec 072 — auth-fallback rung: a wholesale snapshot of the GLOBAL default
     # (provider/model/key/base_url/sdk), attached by the config builder only
     # when it is materially usable AND its key differs from the resolved
@@ -168,11 +184,6 @@ class AgentConfig:
     budget_anchor_ts: str | None = None  # ISO8601; lower bound for the "total" window
     budget_currency: str | None = None  # ISO 4217; the LIMIT owns its currency
 
-
-def resolve_api_key(project_config: dict) -> str:
-    """Centralize API key resolution from project config.
-
-    Single point for future BYOK/bundled/platform key sources.
-    Currently returns the project's api_key field directly.
-    """
-    return project_config.get("api_key", "")
+# ``resolve_api_key`` is GONE (spec 082 §3.4). There is no longer a per-project
+# key to resolve: a project references a credential card, and the card's key is
+# read once by the config builder through ``SettingsStore.key_for``.

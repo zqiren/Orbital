@@ -3,8 +3,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
-import type { ProviderRegistry, ProviderInfo } from '../types';
+import { Check, X, Loader2 } from 'lucide-react';
+import type {
+  CardMutationResponse,
+  CardTestResult,
+  CredentialCard,
+  ProviderRegistry,
+  ProviderInfo,
+  TokendanceSigninResponse,
+} from '../types';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
@@ -23,26 +30,20 @@ interface LLMSettingsResponse {
   };
 }
 
-export interface LLMValues {
-  provider?: string;
-  model: string;
-  api_key?: string;
-  base_url?: string;
-  sdk: 'openai' | 'anthropic';
-}
-
 interface LLMProviderSettingsProps {
-  mode: 'global' | 'project' | 'wizard';
-  /** For project mode: existing project LLM values */
-  projectValues?: {
-    provider?: string;
-    model: string;
-    api_key?: string;
-    base_url?: string | null;
-    sdk?: string;
-  };
-  /** Called whenever values change (project/global modes) */
-  onChange?: (values: LLMValues) => void;
+  /**
+   * 'global' is the credential-card form (spec 082 §3.2) — the same fields it
+   * always had, saving through the card routes instead of the single global
+   * key slot. 'wizard' is the create-project heads-up card. The old 'project'
+   * mode is gone: a project picks a card (CardPicker), it no longer carries a
+   * provider/model/endpoint/key of its own.
+   */
+  mode: 'global' | 'wizard';
+  /** Editing this existing card; absent ⇒ the form creates a new one. */
+  card?: CredentialCard | null;
+  /** Called after a successful POST/PUT (and after TokenDance provisioning)
+   *  with the saved card and its connection-test result. */
+  onCardSaved?: (result: CardMutationResponse) => void;
   /** Hide the Save button (caller handles save via saveRef) */
   hideSaveButton?: boolean;
   /** Ref to expose save function to parent */
@@ -118,16 +119,14 @@ function HintDetails({ className = '', children }: { className?: string; childre
 
 export default function LLMProviderSettings({
   mode,
-  projectValues,
-  onChange,
+  card,
+  onCardSaved,
   hideSaveButton,
   saveRef,
   providerPicker = 'dropdown',
 }: LLMProviderSettingsProps) {
   const t = useT();
   const { locale } = useLocale();
-  // Collapsed state for project mode
-  const [expanded, setExpanded] = useState(mode !== 'project');
 
   // Provider registry
   const [providers, setProviders] = useState<ProviderRegistry>({});
@@ -146,10 +145,13 @@ export default function LLMProviderSettings({
   const [region, setRegion] = useState<'global' | 'china'>('global');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Global mode save state
+  // Card save state. `saveTest` is the connection test the save ran (spec 082
+  // D9): a failed test still saves the card, so the result is shown here
+  // rather than turned into a save failure.
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [saveTest, setSaveTest] = useState<CardTestResult | null>(null);
 
   // Model list state
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -222,7 +224,27 @@ export default function LLMProviderSettings({
     // Track the provider we resolve to so we can seed the model picker below.
     let resolvedProvider = '';
 
-    if (mode === 'global') {
+    if (mode === 'global' && card) {
+      // Editing an existing card: the card IS the configuration — never fall
+      // back to the global settings block here, or an edit would silently
+      // adopt the default card's provider.
+      const cp = card.provider;
+      if (cp && cp !== 'custom' && providers[cp]) {
+        setProvider(cp);
+        resolvedProvider = cp;
+        setSdk(providers[cp].sdk);
+        setRegion(card.region === 'china' ? 'china' : 'global');
+        setBaseUrl(card.base_url || resolveBaseUrl(providers[cp], card.region));
+      } else {
+        setProvider(CUSTOM_PROVIDER_KEY);
+        resolvedProvider = CUSTOM_PROVIDER_KEY;
+        setShowAdvanced(true);
+        setBaseUrl(card.base_url || '');
+      }
+      if (card.sdk) setSdk(card.sdk);
+      setModel(card.model || '');
+      setModelInputValue(card.model || '');
+    } else if (mode === 'global') {
       // Populate from global settings
       if (globalSettings) {
         const gp = globalSettings.provider || '';
@@ -262,43 +284,6 @@ export default function LLMProviderSettings({
         setSdk(providers[defaultProviderKey].sdk);
         setBaseUrl(resolveBaseUrl(providers[defaultProviderKey], 'global'));
       }
-    } else if (mode === 'project') {
-      // Populate from project values, fallback to global
-      const pv = projectValues;
-      let projectBaseUrlSeed = '';
-      if (pv?.provider && pv.provider !== 'custom' && providers[pv.provider]) {
-        setProvider(pv.provider);
-        resolvedProvider = pv.provider;
-        setSdk(providers[pv.provider].sdk);
-        const info = providers[pv.provider];
-        if (info.china_base_url && pv.base_url === info.china_base_url) {
-          setRegion('china');
-        } else if (!pv.base_url) {
-          // Saved provider with no saved endpoint: seed the provider's
-          // region-default URL instead of leaving it empty — an empty
-          // base_url falls back cross-provider on the backend, pairing
-          // this project's key with another provider's endpoint (the
-          // wrong-region 401 trap).
-          const defaultRegion = regionDefaultForProvider(info);
-          setRegion(defaultRegion);
-          projectBaseUrlSeed = resolveBaseUrl(info, defaultRegion);
-        }
-      } else if (pv?.provider) {
-        // Unknown provider, or the registry's literal 'custom' entry — both
-        // resolve to the CUSTOM_PROVIDER_KEY sentinel, the single Custom
-        // affordance in the picker.
-        setProvider(CUSTOM_PROVIDER_KEY);
-        resolvedProvider = CUSTOM_PROVIDER_KEY;
-        setShowAdvanced(true);
-      } else if (defaultProviderKey) {
-        setProvider(defaultProviderKey);
-        resolvedProvider = defaultProviderKey;
-        setSdk(providers[defaultProviderKey].sdk);
-      }
-      setModel(pv?.model || '');
-      setModelInputValue(pv?.model || '');
-      setBaseUrl(pv?.base_url || projectBaseUrlSeed);
-      if (pv?.sdk) setSdk(pv.sdk as 'openai' | 'anthropic');
     }
     // wizard mode: no fields to initialize
 
@@ -308,19 +293,6 @@ export default function LLMProviderSettings({
     setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providersLoading, globalLoaded, initialized, mode]);
-
-  // Notify parent of changes (project mode)
-  useEffect(() => {
-    if (mode !== 'project' || !initialized) return;
-    onChange?.({
-      provider: provider === CUSTOM_PROVIDER_KEY ? undefined : provider || undefined,
-      model: model.trim() || modelInputValue.trim(),
-      api_key: apiKey.trim() || undefined,
-      base_url: baseUrl.trim() || undefined,
-      sdk,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, model, modelInputValue, apiKey, baseUrl, sdk, initialized]);
 
   // ---- Helper functions ----
 
@@ -357,8 +329,9 @@ export default function LLMProviderSettings({
   // behaves like every other provider; top-up happens on their site via the
   // regular console link. Browsing to the card while another provider's key
   // occupies the slot still offers the one-click signin.
-  const tokendanceKeyActive =
-    globalSettings?.provider === 'tokendance' && !!globalSettings?.api_key_set;
+  const tokendanceKeyActive = card
+    ? card.provider === 'tokendance' && card.key_set
+    : globalSettings?.provider === 'tokendance' && !!globalSettings?.api_key_set;
 
   // Fixed order, shared by the dropdown and the wizard's preset cards. The
   // registry's literal 'custom' entry is excluded — the CUSTOM_PROVIDER_KEY
@@ -416,10 +389,10 @@ export default function LLMProviderSettings({
     modelSourceRef.current = modelSource;
   }, [modelSource]);
 
-  // A project can carry its own key; a saved GLOBAL key is never round-tripped
-  // through the browser — the backend resolves that one from the credential
-  // store (the request body simply omits it).
-  const projectApiKey = mode === 'project' ? projectValues?.api_key : undefined;
+  // A stored key is never round-tripped through the browser. When one exists
+  // the request names the card (`card_id`) and the daemon resolves the key
+  // from the Keychain; a freshly typed key goes in the body instead.
+  const storedKeyCardId = card?.key_set ? card.id : undefined;
 
   // Fetch models when provider + endpoint (+ key, where one is needed)
   useEffect(() => {
@@ -441,7 +414,7 @@ export default function LLMProviderSettings({
 
     // Need a key typed in, or one already stored (global or project). Local
     // servers reached through Custom (LM Studio / Ollama) need none.
-    const hasKey = apiKey.trim() || globalSettings?.api_key_set || projectApiKey;
+    const hasKey = apiKey.trim() || storedKeyCardId || globalSettings?.api_key_set;
     if (!hasKey && !isCustom) return;
 
     // Do NOT clear the catalog-seeded options here — keep the suggested dropdown
@@ -462,8 +435,10 @@ export default function LLMProviderSettings({
         };
         if (apiKey.trim()) {
           body.api_key = apiKey.trim();
-        } else if (projectApiKey) {
-          body.api_key = projectApiKey;
+        } else if (storedKeyCardId) {
+          // Spec 082 §3.8: card_id is the alternative to a raw key — the
+          // daemon reads provider/endpoint/sdk/key off the card.
+          body.card_id = storedKeyCardId;
         }
         // Backend returns { models: string[] }.
         const result = await api<{ models?: string[] }>('/api/v2/providers/models', {
@@ -498,7 +473,7 @@ export default function LLMProviderSettings({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, provider, providers, initialized, baseUrl, sdk, freetextPinned, projectApiKey]);
+  }, [apiKey, provider, providers, initialized, baseUrl, sdk, freetextPinned, storedKeyCardId]);
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -560,6 +535,10 @@ export default function LLMProviderSettings({
       };
       if (apiKey.trim()) {
         body.api_key = apiKey.trim();
+      } else if (storedKeyCardId) {
+        // Test the card being edited against the fields on screen: card_id
+        // supplies the key, the body supplies the model the user just picked.
+        body.card_id = storedKeyCardId;
       }
       const result = await api<{ status: string; message?: string; error?: string }>(
         '/api/v2/providers/test',
@@ -598,6 +577,10 @@ export default function LLMProviderSettings({
     return () => { cancelled = true; };
   }, [mode]);
 
+  // Legacy global-slot key removal — reachable only from the wizard mount,
+  // where there is no card to delete instead. Inside the card modal the
+  // affordance is Delete card (the shim would hit the DEFAULT card, which is
+  // not necessarily the one on screen).
   async function handleDeleteApiKey() {
     if (!confirm(t('llm.apiKey.deleteConfirm'))) return;
     try {
@@ -624,48 +607,43 @@ export default function LLMProviderSettings({
     setTokendanceSigninBusy(true);
     setTokendanceSigninMsg(null);
     try {
-      const res = await api<{ api_key_set: boolean; api_key_masked: string }>(
+      // Spec 082 §3.6: signin now provisions a CARD. It sets the default only
+      // when there isn't one, and it never touches another card's key — so
+      // the follow-up `PUT /settings` this used to do (which wrote the global
+      // slot, and would now write whichever card happens to be default) is
+      // gone. Re-connecting an existing TokenDance card names it by id so the
+      // fresh key lands on that card and every project pointing at it follows.
+      const res = await api<TokendanceSigninResponse>(
         '/api/v2/providers/tokendance/signin',
-        { method: 'POST' },
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            card?.provider === 'tokendance' ? { card_id: card.id } : {},
+          ),
+        },
       );
       setApiKeyStatus({ configured: true, source: 'keyring' });
       setApiKey('');
-      // The key slot now holds a TokenDance key, so persist the provider and
-      // the registry's default model (unless the user already picked one) —
-      // one tap must land in a fully usable configuration (Spec 47 §3d).
-      // Values are computed from click-time state, never read back from
-      // state set inside this handler (React 19 batching).
+      // Values come from the response, never read back from state set inside
+      // this handler (React 19 batching).
       const info = providers['tokendance'];
       const chosenModel =
-        model.trim() || modelInputValue.trim() || info?.default_model || '';
-      try {
-        const data = await api<LLMSettingsResponse>('/api/v2/settings', {
-          method: 'PUT',
-          body: JSON.stringify({
-            llm_provider: 'tokendance',
-            llm_base_url: baseUrl.trim() || info?.base_url || '',
-            llm_sdk: info?.sdk ?? 'openai',
-            llm_model: chosenModel,
-          }),
-        });
-        setGlobalSettings({
-          ...data.llm,
-          api_key_set: true,
-          api_key_masked: res.api_key_masked,
-        });
-        if (chosenModel) {
-          setModel(chosenModel);
-          setModelInputValue(chosenModel);
-        }
-        if (providerPicker === 'cards') setPostSigninCollapsed(true);
-      } catch {
-        // Key is stored even if the settings write failed — keep the success
-        // state and let the user persist provider/model via Save.
-        setGlobalSettings(prev =>
-          prev
-            ? { ...prev, api_key_set: true, api_key_masked: res.api_key_masked }
-            : prev,
-        );
+        res.card?.model || model.trim() || modelInputValue.trim() || info?.default_model || '';
+      setGlobalSettings(prev => ({
+        api_key_set: true,
+        api_key_masked: res.api_key_masked,
+        base_url: res.card?.base_url ?? prev?.base_url ?? info?.base_url ?? null,
+        model: chosenModel,
+        sdk: res.card?.sdk ?? prev?.sdk ?? info?.sdk ?? 'openai',
+        provider: 'tokendance',
+      }));
+      if (chosenModel) {
+        setModel(chosenModel);
+        setModelInputValue(chosenModel);
+      }
+      if (providerPicker === 'cards') setPostSigninCollapsed(true);
+      if (res.card) {
+        onCardSaved?.({ card: res.card, test: res.test ?? null });
       }
       setTokendanceSigninMsg({ kind: 'ok', text: t('llm.tokendance.signin.success') });
     } catch (err: unknown) {
@@ -680,36 +658,52 @@ export default function LLMProviderSettings({
     }
   }
 
-  // Core save logic (shared between form submit and external saveRef)
+  /**
+   * Save = create or update a credential card, and the daemon runs the
+   * connection test as part of it (spec 082 D9). A failed test is NOT a save
+   * failure: the card is stored either way and the result is surfaced here in
+   * green or red, so a provider outage can never block saving.
+   */
   async function doSave(): Promise<boolean> {
     setSaving(true);
     setSaved(false);
     setSaveError('');
+    setSaveTest(null);
     try {
-      // Save API key via dedicated secure endpoint if provided
-      if (apiKey.trim()) {
-        await api('/api/v2/settings/api-key', {
-          method: 'PUT',
-          body: JSON.stringify({ api_key: apiKey.trim() }),
-        });
-        setApiKeyStatus({ configured: true, source: 'keyring' });
+      const isCustom = provider === CUSTOM_PROVIDER_KEY;
+      const info = isCustom ? undefined : providers[provider];
+      const typedBaseUrl = baseUrl.trim();
+      const body: Record<string, unknown> = {
+        provider: isCustom ? 'custom' : provider,
+        region,
+        model: model.trim() || modelInputValue.trim(),
+        sdk,
+      };
+      // A registry provider's endpoint comes from provider + region; only a
+      // deliberate deviation (a proxy typed under Advanced) is worth storing
+      // on the card, and Custom always carries its own.
+      if (isCustom) {
+        body.base_url = typedBaseUrl;
+      } else if (typedBaseUrl && info && typedBaseUrl !== resolveBaseUrl(info, region)) {
+        body.base_url = typedBaseUrl;
       }
+      if (apiKey.trim()) body.api_key = apiKey.trim();
 
-      // Save other settings via generic endpoint (without the API key)
-      const body: Record<string, string | undefined> = {};
-      body.llm_base_url = baseUrl.trim();
-      body.llm_model = (model.trim() || modelInputValue.trim());
-      body.llm_sdk = sdk;
-      body.llm_provider = provider === CUSTOM_PROVIDER_KEY ? 'custom' : provider;
+      const res = card
+        ? await api<CardMutationResponse>(
+            `/api/v2/settings/cards/${encodeURIComponent(card.id)}`,
+            { method: 'PUT', body: JSON.stringify(body) },
+          )
+        : await api<CardMutationResponse>('/api/v2/settings/cards', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
 
-      const data = await api<LLMSettingsResponse>('/api/v2/settings', {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      });
-      setGlobalSettings(data.llm);
+      setSaveTest(res.test ?? null);
+      if (apiKey.trim()) setApiKeyStatus({ configured: true, source: 'keyring' });
       setApiKey('');
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      onCardSaved?.(res);
       return true;
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : t('llm.saveError'));
@@ -730,6 +724,14 @@ export default function LLMProviderSettings({
     ev.preventDefault();
     await doSave();
   }
+
+  // What the "current key" line shows: the edited card's own mask, or — on
+  // the card-less (wizard) mount — the default card's, via the derived `llm`
+  // block. Never a raw key: the daemon only ever serves the mask.
+  const storedKeyMasked = card
+    ? (card.key_set ? card.key_masked : '')
+    : (globalSettings?.api_key_set ? globalSettings.api_key_masked : '');
+  const storedKeySource = card ? card.key_source : apiKeyStatus?.source;
 
   const canTestConnection = !!model.trim();
 
@@ -761,34 +763,10 @@ export default function LLMProviderSettings({
     );
   }
 
-  // ---- Project mode: collapsible header ----
-  const projectHeader = mode === 'project' ? (
-    <button
-      type="button"
-      onClick={() => setExpanded(!expanded)}
-      // Reads as a SettingsSection heading (15px semibold) with a disclosure
-      // chevron, so a collapsed section is still a landmark on the page rather
-      // than a stray link between two headed sections.
-      className="flex items-center gap-2 text-[15px] font-semibold leading-6 text-primary hover:text-accent transition-all duration-150 w-full text-left mb-3"
-    >
-      {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
-      <span>{t('llm.provider.heading')}</span>
-      {!expanded && (
-        <span className="text-[13px] text-secondary font-normal ml-1">
-          {t('llm.project.usingDefault', {
-            provider: projectValues?.provider && providers[projectValues.provider]
-              ? providers[projectValues.provider].display_name
-              : globalSettings?.provider && providers[globalSettings.provider]
-                ? providers[globalSettings.provider].display_name
-                : t('llm.project.globalFallback'),
-          })}
-        </span>
-      )}
-    </button>
-  ) : null;
-
-  // ---- Global mode header ----
-  const globalHeader = mode === 'global' ? (
+  // ---- Card form header ----
+  // Inside the Add/Edit modal the dialog title already names the surface, so
+  // the section heading is only drawn for a standalone mount (the wizard).
+  const globalHeader = !card ? (
     <div className="mb-4">
       <h2 className="text-sm font-semibold text-primary mb-1">{t('llm.global.heading')}</h2>
       <HintDetails>
@@ -802,14 +780,6 @@ export default function LLMProviderSettings({
   // ---- Shared fields JSX ----
   const fieldsJSX = (
     <div className="space-y-5">
-      {mode === 'project' && (
-        <HintDetails className="-mt-2">
-          <p className="text-xs text-secondary">
-            {t('llm.project.overrideHint')}
-          </p>
-        </HintDetails>
-      )}
-
       {/* Provider */}
       <div>
         <label className="block text-sm font-medium text-primary mb-1.5">{t('llm.field.provider')}</label>
@@ -976,33 +946,39 @@ export default function LLMProviderSettings({
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
+          disabled={card?.read_only}
           placeholder={
-            globalSettings?.api_key_set
+            storedKeyMasked
               ? t('llm.apiKey.replacePlaceholder')
               : t('llm.apiKey.placeholder')
           }
-          className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
+          className="w-full text-sm font-mono bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 disabled:opacity-50"
         />
-        {mode === 'project' && (
-          <p className="text-xs text-secondary/70 mt-1">
-            {t('llm.apiKey.authFallbackHint')}
+        {card?.read_only && (
+          <p className="text-xs text-secondary/70 mt-1" data-testid="card-readonly-note">
+            {t('cards.env.readOnly')}
           </p>
         )}
-        {mode === 'global' && globalSettings?.api_key_set && !apiKey && (
+        {storedKeyMasked && !apiKey && (
           <div className="flex items-center gap-3 mt-1">
             <p className="text-xs text-secondary">
-              {t('llm.apiKey.current', { masked: globalSettings.api_key_masked })}
-              {apiKeyStatus?.source && apiKeyStatus.source !== 'none' && (
-                <span className="ml-1 text-secondary/60">({apiKeyStatus.source})</span>
+              {t('llm.apiKey.current', { masked: storedKeyMasked })}
+              {storedKeySource && storedKeySource !== 'none' && (
+                <span className="ml-1 text-secondary/60">({storedKeySource})</span>
               )}
             </p>
-            <button
-              type="button"
-              onClick={handleDeleteApiKey}
-              className="text-xs text-error hover:text-error/80 transition-colors"
-            >
-              {t('llm.apiKey.remove')}
-            </button>
+            {/* Only the legacy (card-less) mount offers key removal: inside
+                the card modal the affordance is Delete card, and the shim
+                would hit the DEFAULT card rather than the one on screen. */}
+            {!card && (
+              <button
+                type="button"
+                onClick={handleDeleteApiKey}
+                className="text-xs text-error hover:text-error/80 transition-colors"
+              >
+                {t('llm.apiKey.remove')}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1156,31 +1132,60 @@ export default function LLMProviderSettings({
         </div>
       )}
 
-      {/* Global mode: save button */}
-      {mode === 'global' && !hideSaveButton && (
-        <div className="flex items-center gap-3 pt-2">
-          <button
-            type="submit"
-            disabled={saving}
-            className="inline-flex items-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {t('llm.saving')}
-              </>
-            ) : (
-              t('settings.save')
+      {/* Save = create/update the card, with the connection test (spec 082 §3.2) */}
+      {!hideSaveButton && (
+        <div className="pt-2">
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={saving || card?.read_only}
+              data-testid="card-save"
+              className="inline-flex items-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {t('cards.form.saving')}
+                </>
+              ) : (
+                t('settings.save')
+              )}
+            </button>
+            {saved && !saveTest && (
+              <span className="flex items-center gap-1 text-sm text-success">
+                <Check className="w-4 h-4" />
+                {t('settings.saved')}
+              </span>
             )}
-          </button>
-          {saved && (
-            <span className="flex items-center gap-1 text-sm text-success">
-              <Check className="w-4 h-4" />
-              {t('settings.saved')}
-            </span>
-          )}
-          {saveError && (
-            <span className="text-sm text-error">{saveError}</span>
+            {saveError && (
+              <span className="text-sm text-error" data-testid="card-save-error">
+                {saveError}
+              </span>
+            )}
+          </div>
+          {/* The save-test verdict, shown inline BEFORE the modal closes. A
+              failed test is red but the card is saved either way (D9), so the
+              line says both things rather than reading as a lost edit. */}
+          {saveTest && (
+            <p
+              data-testid="card-save-test"
+              className={`flex items-start gap-1.5 text-sm mt-2 ${
+                saveTest.ok ? 'text-success' : 'text-error'
+              }`}
+            >
+              {saveTest.ok ? (
+                <Check className="w-4 h-4 shrink-0 mt-0.5" />
+              ) : (
+                <X className="w-4 h-4 shrink-0 mt-0.5" />
+              )}
+              <span>
+                {saveTest.ok
+                  ? saveTest.message || t('cards.save.verified')
+                  : t('cards.save.savedWithError', {
+                      message: saveTest.message || t('cards.health.genericError'),
+                    })}
+              </span>
+            </p>
           )}
         </div>
       )}
@@ -1233,20 +1238,10 @@ export default function LLMProviderSettings({
   );
 
   // ---- Render ----
-  if (mode === 'global') {
-    return (
-      <form onSubmit={handleGlobalSave}>
-        {globalHeader}
-        {postSigninCollapsed ? signinSummaryJSX : fieldsJSX}
-      </form>
-    );
-  }
-
-  // project mode
   return (
-    <div>
-      {projectHeader}
-      {expanded && fieldsJSX}
-    </div>
+    <form onSubmit={handleGlobalSave}>
+      {globalHeader}
+      {postSigninCollapsed ? signinSummaryJSX : fieldsJSX}
+    </form>
   );
 }

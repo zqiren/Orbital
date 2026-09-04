@@ -26,6 +26,7 @@ import pytest
 from agent_os.daemon_v2.agent_manager import AgentManager
 from agent_os.daemon_v2.models import SessionKey, make_session_key
 from agent_os.daemon_v2.native_worker import WorkerDeps
+from tests.card_doubles import FakeCardStore
 
 
 def _make_manager(project=None, projects=None, browser_manager=None):
@@ -56,6 +57,9 @@ def _make_manager(project=None, projects=None, browser_manager=None):
     # Cross-provider base_url fallback reads the raw registry dict; a bare
     # MagicMock here would leak into httpx as a URL.
     provider_registry.get_provider_data.return_value = {}
+    # Spec 082: the LLM half of a config is a credential-card lookup, so the
+    # worker-deps fallback needs a card to resolve — the model and key that
+    # used to sit on the project row live here now.
     mgr = AgentManager(
         project_store=project_store,
         ws_manager=ws,
@@ -64,15 +68,16 @@ def _make_manager(project=None, projects=None, browser_manager=None):
         process_manager=process_manager,
         provider_registry=provider_registry,
         browser_manager=browser_manager,
+        settings_store=FakeCardStore.with_default(
+            provider="openai", model="gpt-4o", key="k",
+        ),
     )
     return mgr
 
 
 class TestNoLiveHandleFallback:
     def test_returns_worker_deps_with_fallback_provider(self):
-        mgr = _make_manager(project={
-            "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
-        })
+        mgr = _make_manager(project={"workspace": "/tmp/ws-x"})
         deps = mgr.build_worker_deps("proj-1", "sess-1")
 
         assert isinstance(deps, WorkerDeps)
@@ -93,8 +98,7 @@ class TestNoLiveHandleFallback:
         the path production actually takes. Flagged to the team lead as a
         pre-existing gap in the shared helper, not introduced here."""
         mgr = _make_manager(project={
-            "workspace": "/tmp/ws-x", "model": "gpt-4o",
-            "utility_model": "gpt-4o-mini", "api_key": "k",
+            "workspace": "/tmp/ws-x", "utility_model": "gpt-4o-mini",
         })
         deps = mgr.build_worker_deps("proj-1", "sess-1")
 
@@ -120,9 +124,7 @@ class TestLiveHandleReusesUtilityProvider:
 
 class TestRestrictedToolRegistry:
     def test_registry_has_expected_tools_and_excludes_dangerous_ones(self):
-        mgr = _make_manager(project={
-            "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
-        })
+        mgr = _make_manager(project={"workspace": "/tmp/ws-x"})
         deps = mgr.build_worker_deps("proj-1", "sess-1")
         registry = deps.make_tool_registry(None, None, "worker:test-0")
 
@@ -134,9 +136,7 @@ class TestRestrictedToolRegistry:
         assert "fanout" not in names
 
     def test_no_scope_returns_unwrapped_registry(self):
-        mgr = _make_manager(project={
-            "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
-        })
+        mgr = _make_manager(project={"workspace": "/tmp/ws-x"})
         deps = mgr.build_worker_deps("proj-1", "sess-1")
         registry = deps.make_tool_registry(None, None, "worker:test-0")
 
@@ -173,9 +173,7 @@ class TestWorkerRegistryBrowserTool:
         assert "browser" in list(registry.tool_names())
 
     def test_worker_registry_without_browser_manager_has_no_browser(self):
-        mgr = _make_manager(project={
-            "workspace": "/tmp/ws-x", "model": "gpt-4o", "api_key": "k",
-        })
+        mgr = _make_manager(project={"workspace": "/tmp/ws-x"})
         deps = mgr.build_worker_deps("proj-1", "sess-1")
         registry = deps.make_tool_registry(None, None, "worker:f1-0")
         assert "browser" not in list(registry.tool_names())
