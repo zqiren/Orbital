@@ -174,7 +174,7 @@ describe('CredentialCards — the flat list', () => {
     mockCards([]);
     renderList();
     expect((await screen.findByTestId('cards-list-empty')).textContent).toContain(
-      'No credential cards yet',
+      'No providers yet',
     );
   });
 });

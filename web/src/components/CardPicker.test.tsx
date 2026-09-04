@@ -146,7 +146,7 @@ describe('CardPicker', () => {
     render(
       <CardPicker cards={CARDS} defaultCardId="card_default" value="card_gone" onChange={vi.fn()} data-testid="picker" />,
     );
-    expect(optionLabels()).toContain('That card no longer exists');
+    expect(optionLabels()).toContain('That provider no longer exists');
     expect((screen.getByTestId('picker') as HTMLSelectElement).value).toBe('');
   });
 
@@ -175,13 +175,13 @@ describe('CardPicker', () => {
       />,
     );
     expect(optionLabels().some((l) => l.startsWith('Global default'))).toBe(false);
-    expect(optionLabels()).toContain('Choose a card…');
+    expect(optionLabels()).toContain('Choose a provider…');
   });
 
   it('points at Global Settings when there are no cards at all', () => {
     render(
       <CardPicker cards={[]} defaultCardId={null} value={null} onChange={vi.fn()} data-testid="picker" />,
     );
-    expect(screen.getByText(/add one in Global Settings/)).toBeTruthy();
+    expect(screen.getByText(/add one below/)).toBeTruthy();
   });
 });

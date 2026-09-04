@@ -38,6 +38,7 @@ import {
   CircleCheck,
   CircleDashed,
   Loader2,
+  Plus,
   SquarePen,
   Trash,
   X,
@@ -110,6 +111,9 @@ export interface CardListProps {
   onCardUpdated: (card: CredentialCard) => void;
   providers?: ProviderRegistry;
   loading?: boolean;
+  /** Render the "Add provider" button under the list. Global Settings draws
+   *  its own above the list alongside one-click sign-in. */
+  showAdd?: boolean;
   'data-testid'?: string;
 }
 
@@ -123,6 +127,7 @@ export default function CardList({
   onCardUpdated,
   providers,
   loading,
+  showAdd,
   'data-testid': testId = 'card-list',
 }: CardListProps) {
   const t = useT();
@@ -138,6 +143,7 @@ export default function CardList({
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
   const [rowNote, setRowNote] = useState<{ id: string; message: string } | null>(null);
   const [editing, setEditing] = useState<CredentialCard | null>(null);
+  const [adding, setAdding] = useState(false);
 
   function errorText(err: unknown): string {
     return err instanceof Error && err.message ? err.message : t('cards.action.failed');
@@ -246,9 +252,22 @@ export default function CardList({
 
   if (cards.length === 0) {
     return (
-      <p className="text-sm text-secondary/70 italic py-2" data-testid={`${testId}-empty`}>
-        {mode === 'global' ? t('cards.empty') : t('cards.picker.empty')}
-      </p>
+      <div data-testid={testId}>
+        <p className="text-sm text-secondary/70 italic py-2" data-testid={`${testId}-empty`}>
+          {mode === 'global' ? t('cards.empty') : t('cards.picker.empty')}
+        </p>
+        {showAdd && <AddButton onClick={() => setAdding(true)} label={t('cards.add')} />}
+        {adding && (
+          <CardFormModal
+            card={null}
+            onClose={() => setAdding(false)}
+            onSaved={(res) => {
+              onCardUpdated(res.card);
+              void onRefresh();
+            }}
+          />
+        )}
+      </div>
     );
   }
 
@@ -426,12 +445,25 @@ export default function CardList({
         })}
       </ul>
 
-      {editing && (
+      {showAdd && (
+        <div className="mt-2">
+          <AddButton onClick={() => setAdding(true)} label={t('cards.add')} />
+        </div>
+      )}
+
+      {(editing || adding) && (
         <CardFormModal
           card={editing}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            setAdding(false);
+          }}
           onSaved={(res) => {
             onCardUpdated(res.card);
+            // A provider added from a project is a global provider — that is
+            // what makes it reusable — and the project that just created it
+            // is obviously the one that wants it, so select it here too.
+            if (adding && mode === 'project') onChange?.(res.card.id);
             void onRefresh();
           }}
         />
@@ -489,6 +521,20 @@ function namesItsSetup(card: CredentialCard, providerName: string): boolean {
   return name.includes(card.model.toLowerCase()) && name.includes(providerName.toLowerCase());
 }
 
+function AddButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      data-testid="card-list-add"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 text-sm font-medium text-accent border border-dashed border-border rounded-lg px-3 py-2 hover:border-accent hover:bg-accent/5 transition-all duration-150 w-full justify-center max-md:min-h-[44px]"
+    >
+      <Plus className="w-4 h-4" strokeWidth={1.5} />
+      {label}
+    </button>
+  );
+}
+
 /** The selected/unselected mark. A ring rather than a checkbox: the whole tile
  *  is the control, and a checkbox would invite a second click target. */
 function SelectionDot({ selected }: { selected: boolean }) {
@@ -522,22 +568,33 @@ function IconAction({
   danger?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      data-testid={testId}
-      title={label}
-      aria-label={label}
-      disabled={disabled || busy}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={`p-1.5 rounded transition-colors text-secondary disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
-        danger ? 'hover:text-error' : 'hover:text-accent'
-      }`}
-    >
-      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : children}
-    </button>
+    <span className="relative inline-flex group/action">
+      <button
+        type="button"
+        data-testid={testId}
+        aria-label={label}
+        disabled={disabled || busy}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+        className={`p-1.5 rounded transition-colors text-secondary disabled:opacity-40 disabled:cursor-not-allowed max-md:min-h-[44px] max-md:min-w-[44px] max-md:flex max-md:items-center max-md:justify-center ${
+          danger ? 'hover:text-error' : 'hover:text-accent'
+        }`}
+      >
+        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : children}
+      </button>
+      {/* Our own label rather than the native `title`: three icon-only
+          controls need to name themselves on hover, and the browser's
+          ~1s delay is long enough that a user reads the icon, gives up,
+          and asks what it does. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium text-primary shadow-lg group-hover/action:block"
+      >
+        {label}
+      </span>
+    </span>
   );
 }
 

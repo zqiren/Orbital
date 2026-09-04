@@ -663,6 +663,7 @@ export default function SettingsView({
             loading={cardsLoading}
             onRefresh={refreshCards}
             onCardUpdated={applyCard}
+            showAdd
             data-testid="project-card-picker"
           />
         </SettingsSection>
