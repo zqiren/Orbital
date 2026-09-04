@@ -1786,9 +1786,15 @@ async def list_project_sessions(project_id: str):
       - ``session_id``: the chat-session identifier (defaults to
         ``"default"`` under the single-loop back-compat path).
       - ``status``: one of ``running`` | ``pending_approval`` | ``waiting``
-        | ``idle`` | ``stopped``.
+        | ``queued`` | ``idle`` | ``stopped``.
       - ``session_uuid``: the per-loop ``Session.session_id`` used as the
         session JSONL filename stem (useful for transcript correlation).
+
+    ``queued`` (spec 081) is a session that exists only as a queued first
+    message: another session holds the project's single slot, so nothing has
+    been written to disk yet (persist-at-dispatch, spec 006). It carries no
+    holder name or queue position — the chat pane's waiting line explains the
+    wait — and it disappears if the queued message is cancelled.
 
     A project with no active sessions returns ``{"sessions": []}``.
     The response shape is intentionally a wrapped list — leaves room for

@@ -94,3 +94,76 @@ def test_in_memory_session_overlays_disk_and_not_duplicated(tmp_path):
     entries = [s for s in out if s["session_uuid"] == "proj_live1234"]
     assert len(entries) == 1, f"must not duplicate in-memory + disk: {out}"
     assert entries[0]["status"] == "running", "in-memory live status overlays disk"
+
+
+# ---------------------------------------------------------------------------
+# Spec 081 — pending-only entries vs the disk scan
+# ---------------------------------------------------------------------------
+
+
+def test_pending_entry_is_deduped_once_the_file_exists(tmp_path):
+    # A queued message for a session that already has a log on disk (an idle
+    # session the user wrote to while another held the slot) must not add a
+    # second row: the disk entry — with its stored name and history — is the
+    # row, exactly as it will be after dispatch.
+    ws, sessions, ps = _setup(tmp_path)
+    _write_session(sessions, "proj_ondisk01", "proj_ondisk01")
+    mgr = _make_manager(tmp_path, ps)
+    mgr.enqueue_pending_inject("proj", "proj_ondisk01", "another message", nonce="n1")
+
+    out = mgr.list_sessions("proj")
+    entries = [s for s in out if s["session_id"] == "proj_ondisk01"]
+    assert len(entries) == 1, f"pending entry must dedupe against the file: {out}"
+    assert entries[0]["status"] == "idle"
+    assert entries[0]["name"] == "hi", "the stored/derived disk name wins"
+
+
+def test_file_appearing_after_the_pending_snapshot_is_deduped_by_seen_uuids(tmp_path):
+    # The race: the pending helper saw no file, then dispatch wrote the row
+    # before the disk scan ran. The disk scan must skip the id the pending
+    # helper already emitted (the existing seen_uuids step), not list it twice.
+    ws, sessions, ps = _setup(tmp_path)
+    _write_session(sessions, "proj_raced0001", "proj_raced0001")
+    mgr = _make_manager(tmp_path, ps)
+
+    queued_entry = {
+        "session_id": "proj_raced0001",
+        "status": "queued",
+        "session_uuid": "proj_raced0001",
+        "origin": "chat",
+        "name": "raced",
+        "pinned": False,
+        "pinned_target": None,
+        "last_terminal_event": None,
+        "last_activity_at": "2026-05-25T08:30:00+00:00",
+        "scope": {"mode": "off", "selected_project_ids": []},
+    }
+    mgr._pending_session_entries = lambda project_id, seen_ids: [dict(queued_entry)]
+
+    out = mgr.list_sessions("proj")
+    entries = [s for s in out if s["session_id"] == "proj_raced0001"]
+    assert len(entries) == 1, f"seen_uuids must dedupe the raced file: {out}"
+    assert entries[0]["status"] == "queued"
+
+
+def test_meta_only_log_and_disk_cache_unchanged_with_pending_merge(tmp_path):
+    # The meta-only skip rule and the mtime cache are untouched by the merge.
+    ws, sessions, ps = _setup(tmp_path)
+    (sessions / "proj_metaonly01.jsonl").write_text(
+        json.dumps({"role": "meta", "event": "session_start", "name": "x"}) + "\n",
+        encoding="utf-8",
+    )
+    _write_session(sessions, "proj_cached0001", "proj_cached0001")
+    mgr = _make_manager(tmp_path, ps)
+    mgr.enqueue_pending_inject("proj", "proj_queued0001", "queued one", nonce="n1")
+
+    first = mgr.list_sessions("proj")
+    ids = [s["session_id"] for s in first]
+    assert "proj_metaonly01" not in ids
+    assert ids.count("proj_cached0001") == 1
+    assert ids.count("proj_queued0001") == 1
+    # Second call: the cached disk verdicts are reused and the result is stable.
+    cache_key = (str(sessions.resolve()), "proj_cached0001.jsonl")
+    assert cache_key in mgr._disk_entry_cache
+    second = mgr.list_sessions("proj")
+    assert [s["session_id"] for s in second] == ids

@@ -299,6 +299,43 @@ describe('ChatTab — route.sessionId undefined: resolution + setRoute reflectio
     const updated = updater(route);
     expect(updated).toMatchObject({ sessionId: 'sess-newest' });
   });
+
+  // Spec 081 §3.4 — a reload while the first message is queued used to land
+  // on the running session, because the queued session was not listed and the
+  // persisted id was therefore discarded. Now the queued row is a list entry
+  // like any other, so the persisted selection survives the reload.
+  it('honors a persisted queued session id and does not fall back to the holder', async () => {
+    mockSessions = [
+      makeSession({
+        session_id: 'sess-holder', status: 'running',
+        last_activity_at: '2026-06-01T00:00:00Z',
+      }),
+      makeSession({
+        session_id: 'sess-queued', status: 'queued',
+        last_activity_at: '2026-06-01T00:05:00Z',
+      }),
+    ];
+    mockActiveSessionId = 'sess-queued';
+
+    const setRoute = vi.fn();
+    const route = makeRoute();
+
+    await act(async () => {
+      render(
+        <ChatTab
+          project={PROJECT}
+          agentStatus="idle"
+          mentionAgents={[]}
+          route={route}
+          setRoute={setRoute}
+        />,
+      );
+    });
+
+    expect(setRoute).toHaveBeenCalled();
+    const updater = setRoute.mock.calls[0][0] as (prev: Route) => Route;
+    expect(updater(route)).toMatchObject({ sessionId: 'sess-queued' });
+  });
 });
 
 describe('ChatTab — route.sessionId already set: no override', () => {

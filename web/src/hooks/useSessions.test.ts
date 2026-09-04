@@ -216,6 +216,71 @@ describe('useSessions', () => {
     expect(apiFn.mock.calls.length).toBe(callCountBeforeEvent);
   });
 
+  // Spec 081 — the three pending events are the only signal that a queued
+  // session's row appeared, flipped or vanished; none of them emits an
+  // agent.status.
+  const PENDING_EVENTS = [
+    'chat.pending_enqueued',
+    'chat.pending_dispatched',
+    'chat.pending_cancelled',
+  ] as const;
+
+  for (const type of PENDING_EVENTS) {
+    it(`subscribes to ${type} and refreshes on it for the same project`, async () => {
+      const initial: SessionListEntry[] = [makeSession({ session_id: 's1' })];
+      const updated: SessionListEntry[] = [
+        makeSession({ session_id: 's1' }),
+        makeSession({ session_id: 's2', status: 'queued' }),
+      ];
+      apiFn.mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
+
+      const { result } = renderHook(() => useSessions('proj-pending'));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.sessions).toEqual(initial);
+
+      const handlerCall = onMock.mock.calls.find((c) => c[0] === type);
+      expect(handlerCall).toBeDefined();
+      const handler = handlerCall![1] as (e: unknown) => void;
+
+      await act(async () => {
+        handler({ type, project_id: 'proj-pending', session_id: 's2', nonce: 'n1' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.sessions).toEqual(updated);
+      });
+      expect(result.current.sessions[1].status).toBe('queued');
+    });
+
+    it(`ignores ${type} for a different project`, async () => {
+      apiFn.mockResolvedValueOnce([makeSession({ session_id: 's1' })]);
+
+      const { result } = renderHook(() => useSessions('proj-mine'));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      const before = apiFn.mock.calls.length;
+
+      const handler = onMock.mock.calls.find((c) => c[0] === type)![1] as (e: unknown) => void;
+      await act(async () => {
+        handler({ type, project_id: 'proj-OTHER', session_id: 's2', nonce: 'n1' });
+      });
+
+      expect(apiFn.mock.calls.length).toBe(before);
+    });
+
+    it(`calls off() for ${type} on unmount`, async () => {
+      apiFn.mockResolvedValue([]);
+
+      const { unmount } = renderHook(() => useSessions('proj-pending-cleanup'));
+      await waitFor(() => {
+        expect(onMock.mock.calls.map((c) => c[0])).toContain(type);
+      });
+
+      unmount();
+
+      expect(offMock.mock.calls.map((c) => c[0])).toContain(type);
+    });
+  }
+
   it('surfaces the name field on returned session entries', async () => {
     const sessions: SessionListEntry[] = [
       makeSession({ session_id: 's1', name: 'My Login Flow' }),
