@@ -77,9 +77,11 @@ function makeFileWatchTrigger(overrides: Partial<Trigger> = {}): Trigger {
   };
 }
 
-async function renderPane() {
+async function renderPane(
+  agents: Array<{ slug: string; name: string }> = [],
+) {
   await act(async () => {
-    render(<AutomationsList projectId="proj-1" />);
+    render(<AutomationsList projectId="proj-1" agents={agents} />);
   });
 }
 
@@ -274,6 +276,9 @@ describe('AutomationsList — edit', () => {
         human: 'Every day at 23:30',
         timezone: 'UTC',
       },
+      // Spec 079: always sent, null included — an omitted key would leave a
+      // previously chosen worker in place, so "back to Orbital" needs the null.
+      agent: null,
     });
     expect(patch).not.toHaveProperty('type');
     expect(patch).not.toHaveProperty('enabled');
@@ -372,6 +377,7 @@ describe('AutomationsList — create', () => {
         human: 'Every Friday at 17:00',
         timezone: 'UTC',
       },
+      agent: null,
     });
   });
 
@@ -431,6 +437,7 @@ describe('AutomationsList — create', () => {
       patterns: ['*.jpg', '*.png'],
       recursive: false,
       debounce_seconds: 5,
+      agent: null,
     });
   });
 
@@ -464,5 +471,88 @@ describe('AutomationsList — create', () => {
     expect(mockCreateTrigger).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Post the standup summary' }),
     );
+  });
+});
+
+// Spec 079 — choosing which agent runs an automation.
+describe('AutomationsList — agent picker', () => {
+  const AGENTS = [
+    { slug: 'codex', name: 'Codex' },
+    { slug: 'claude-code', name: 'Claude Code' },
+  ];
+
+  function openMenu() {
+    fireEvent.click(
+      screen.getByTestId('automation-form-agent').querySelector('button')!,
+    );
+  }
+
+  it('is absent from the create form when no sub-agents are installed', async () => {
+    await renderPane();
+    fireEvent.click(screen.getByTestId('automations-new'));
+    expect(screen.queryByTestId('automation-form-agent-field')).toBeNull();
+  });
+
+  it('creates an automation assigned to the chosen worker', async () => {
+    await renderPane(AGENTS);
+    fireEvent.click(screen.getByTestId('automations-new'));
+
+    fireEvent.change(screen.getByTestId('automation-form-prompt'), {
+      target: { value: 'Write the weekly report' },
+    });
+    fireEvent.change(screen.getByTestId('schedule-preset'), {
+      target: { value: 'daily' },
+    });
+    fireEvent.change(screen.getByTestId('schedule-time'), {
+      target: { value: '17:00' },
+    });
+    openMenu();
+    fireEvent.click(screen.getByRole('option', { name: /Codex/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('automation-form-save'));
+    });
+
+    expect(mockCreateTrigger).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'codex' }),
+    );
+  });
+
+  it('seeds the edit form from the saved automation and can unassign it', async () => {
+    const trigger = makeScheduleTrigger({ agent: 'codex' });
+    mockTriggers = [trigger];
+    await renderPane(AGENTS);
+
+    fireEvent.click(screen.getByTestId(`automation-edit-${trigger.id}`));
+    // The saved worker is what the picker shows, by name.
+    expect(screen.getByTestId('automation-form-agent-field').textContent)
+      .toContain('Codex');
+
+    openMenu();
+    fireEvent.click(screen.getByRole('option', { name: /Orbital/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('automation-form-save'));
+    });
+
+    const [, patch] = mockUpdateTrigger.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    // Explicitly null, not omitted: the PATCH route reads presence, so an
+    // absent key would leave Codex assigned.
+    expect(patch).toHaveProperty('agent', null);
+  });
+
+  it('shows the assigned worker on the row, and nothing on an unassigned one', async () => {
+    mockTriggers = [
+      makeScheduleTrigger({ id: 'trig-assigned', agent: 'codex' }),
+      makeFileWatchTrigger({ id: 'trig-plain' }),
+    ];
+    await renderPane(AGENTS);
+
+    expect(
+      screen.getByTestId('automation-agent-trig-assigned').getAttribute('title'),
+    ).toContain('Codex');
+    expect(screen.queryByTestId('automation-agent-trig-plain')).toBeNull();
   });
 });

@@ -56,6 +56,7 @@ describe('QueueComposer', () => {
       priority: 0,
       review: false,
       fileRefs: [],
+      agent: null,
     });
   });
 
@@ -72,6 +73,7 @@ describe('QueueComposer', () => {
       priority: 1,
       review: false,
       fileRefs: [],
+      agent: null,
     });
   });
 
@@ -87,6 +89,7 @@ describe('QueueComposer', () => {
       priority: 0,
       review: true,
       fileRefs: [],
+      agent: null,
     });
   });
 
@@ -101,6 +104,7 @@ describe('QueueComposer', () => {
       priority: 0,
       review: false,
       fileRefs: [],
+      agent: null,
     });
   });
 
@@ -180,6 +184,7 @@ describe('QueueComposer — attachments', () => {
       priority: 0,
       review: false,
       fileRefs: ['uploads/2026-08-11T101010-shot.png'],
+      agent: null,
     });
     // The dispatcher builds the <attached_files> block server-side; a
     // client-built one here would be delivered twice.
@@ -214,6 +219,7 @@ describe('QueueComposer — attachments', () => {
       priority: 0,
       review: false,
       fileRefs: ['uploads/pasted.png'],
+      agent: null,
     });
   });
 
@@ -268,6 +274,7 @@ describe('QueueComposer — attachments', () => {
       priority: 0,
       review: false,
       fileRefs: [],
+      agent: null,
     });
   });
 
@@ -286,5 +293,68 @@ describe('QueueComposer — attachments', () => {
 
     await screen.findByTestId('chip-check');
     expect(uploadMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Spec 079 — choosing which agent runs the item.
+describe('QueueComposer — agent picker', () => {
+  const AGENTS = [
+    { slug: 'codex', name: 'Codex' },
+    { slug: 'claude-code', name: 'Claude Code' },
+  ];
+
+  /** Typed so the assertions below can index into the recorded opts object;
+   *  a bare `vi.fn()` infers a zero-length argument tuple. */
+  type SubmitOpts = Parameters<
+    React.ComponentProps<typeof QueueComposer>['onSubmit']
+  >[1];
+  const submitSpy = () => vi.fn<(content: string, opts: SubmitOpts) => Promise<void>>(
+    () => Promise.resolve(),
+  );
+
+  it('is absent when no sub-agents are installed', () => {
+    render(<QueueComposer projectId="p1" onSubmit={() => {}} />);
+    expect(screen.queryByTestId('queue-composer-agent')).toBeNull();
+  });
+
+  it('defaults to Orbital, so an untouched composer queues an unassigned item', async () => {
+    const onSubmit = submitSpy();
+    render(<QueueComposer projectId="p1" onSubmit={onSubmit} agents={AGENTS} />);
+
+    expect(screen.getByTestId('queue-composer-agent')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('queue-composer-input'), {
+      target: { value: 'task one' },
+    });
+    fireEvent.click(screen.getByTestId('queue-composer-submit'));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][1]).toMatchObject({ agent: null });
+  });
+
+  it('submits the chosen worker and resets to Orbital afterwards', async () => {
+    const user = userEvent.setup();
+    const onSubmit = submitSpy();
+    render(<QueueComposer projectId="p1" onSubmit={onSubmit} agents={AGENTS} />);
+
+    await user.click(
+      screen.getByTestId('queue-composer-agent').querySelector('button')!,
+    );
+    await user.click(screen.getByRole('option', { name: /Codex/ }));
+
+    fireEvent.change(screen.getByTestId('queue-composer-input'), {
+      target: { value: 'task one' },
+    });
+    fireEvent.click(screen.getByTestId('queue-composer-submit'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][1]).toMatchObject({ agent: 'codex' });
+
+    // Per item, never sticky — the next item starts back at Orbital, the same
+    // way Pin-to-top and Review reset.
+    fireEvent.change(screen.getByTestId('queue-composer-input'), {
+      target: { value: 'task two' },
+    });
+    fireEvent.click(screen.getByTestId('queue-composer-submit'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1][1]).toMatchObject({ agent: null });
   });
 });

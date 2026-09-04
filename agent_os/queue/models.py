@@ -76,6 +76,14 @@ class ItemRecord(BaseModel):
     idempotency_key: Optional[str] = None
     interrupted_count: int = 0
     created_at: str = Field(default_factory=_now_iso)
+    # Spec 079 — the sub-agent handle the user chose to RUN this item, e.g.
+    # "codex". None (the default, and every pre-079 queue.json row) means the
+    # management agent runs it directly, exactly as before. A set slug routes
+    # the dispatch straight to that worker down the chat @mention path
+    # (SubAgentManager.send, initiator="user_mention"), with the management
+    # agent woken on the worker's terminal outcome to declare the verdict.
+    # Tail-appended per this module's stated convention.
+    agent: Optional[str] = None
 
 
 class QueueState(BaseModel):

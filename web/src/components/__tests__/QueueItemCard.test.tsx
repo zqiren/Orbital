@@ -136,3 +136,29 @@ describe('QueueItemCard — attached files', () => {
     expect(screen.getByTestId('queue-item-file-refs').textContent).toContain('a.png');
   });
 });
+
+// Spec 079 — the chip naming the worker the user assigned to this item.
+describe('QueueItemCard — agent chip', () => {
+  it('is absent on an unassigned item (Orbital runs it, which is the norm)', () => {
+    render(<QueueItemCard item={makeItem()} />);
+    expect(screen.queryByTestId('queue-item-agent-item_test')).toBeNull();
+  });
+
+  it.each(['queued', 'running', 'blocked', 'done'] as const)(
+    'renders on a %s item so the runner is visible in every state',
+    (state) => {
+      render(<QueueItemCard item={makeItem({ state, agent: 'codex' })} />);
+      const chip = screen.getByTestId('queue-item-agent-item_test');
+      expect(chip.getAttribute('title')).toContain('codex');
+    },
+  );
+
+  it('renders for a slug whose agent is no longer installed', () => {
+    // A stale choice must stay visible rather than silently reading as
+    // "Orbital runs it" — the avatar falls back to a monogram badge.
+    render(<QueueItemCard item={makeItem({ agent: 'uninstalled-worker' })} />);
+    expect(
+      screen.getByTestId('queue-item-agent-item_test').getAttribute('title'),
+    ).toContain('uninstalled-worker');
+  });
+});

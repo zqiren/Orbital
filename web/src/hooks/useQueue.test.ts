@@ -66,6 +66,9 @@ describe('useQueue.addItem', () => {
       file_refs: ['uploads/2026-08-11T101010-shot.png'],
       priority: 1,
       review_before_advance: true,
+      // Spec 079: an unassigned item posts an explicit null — the route reads
+      // presence, so omitting the key would mean "leave it alone" instead.
+      agent: null,
     });
   });
 
@@ -82,6 +85,68 @@ describe('useQueue.addItem', () => {
       file_refs: [],
       priority: 0,
       review_before_advance: false,
+      agent: null,
     });
+  });
+});
+
+// Spec 079 — reassigning who runs an already-queued item.
+describe('useQueue.editItem — agent', () => {
+  beforeEach(() => {
+    apiFn = vi.fn().mockResolvedValue({
+      version: 1,
+      state: 'idle',
+      items: [],
+      chat_session_id: null,
+    });
+  });
+
+  /** The PATCH body of the last /queue/items/{id} call, parsed. */
+  function lastEditBody(): Record<string, unknown> {
+    const call = apiFn.mock.calls.find(
+      ([path, init]) =>
+        typeof path === 'string' &&
+        path.includes('/queue/items/') &&
+        (init as RequestInit | undefined)?.method === 'PATCH',
+    );
+    if (!call) throw new Error('no PATCH /queue/items/{id} call recorded');
+    return JSON.parse((call[1] as RequestInit).body as string);
+  }
+
+  it('sends the new slug when reassigning', async () => {
+    const { result } = renderHook(() => useQueue('p1'));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    await act(async () => {
+      await result.current.editItem('item_1', { agent: 'codex' });
+    });
+
+    expect(lastEditBody()).toEqual({ agent: 'codex' });
+  });
+
+  it('sends an explicit null to hand the item back to Orbital', async () => {
+    const { result } = renderHook(() => useQueue('p1'));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    await act(async () => {
+      await result.current.editItem('item_1', { agent: null });
+    });
+
+    // Presence is what the route reads, so the null has to survive
+    // serialization — an omitted key means "leave the agent alone".
+    const body = lastEditBody();
+    expect('agent' in body).toBe(true);
+    expect(body.agent).toBeNull();
+  });
+
+  it('omits the field entirely when only the text changes', async () => {
+    const { result } = renderHook(() => useQueue('p1'));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    await act(async () => {
+      await result.current.editItem('item_1', { content: 'new text' });
+    });
+
+    expect('agent' in lastEditBody()).toBe(false);
   });
 });

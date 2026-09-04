@@ -162,6 +162,22 @@ class LifecycleObserver:
         "management_agent"-initiated dispatch gets, via the same
         ``_meta.display_content`` split ``on_completed`` uses (backlog #24
         D2) — the guidance is agent-facing only and must never render.
+
+        ``initiator == "queue_item"`` (spec 079) is a queue item or an
+        automation the USER assigned to this sub-agent. It is a mention in
+        every respect but one: the marker must not wake the management agent
+        *here*. The session it lands in already carries the item's
+        ``[QUEUE ITEM | …]`` row and HEADER_CONTRACT, so a manager woken at
+        dispatch time reads a live instruction to do the task and calls
+        ``mark_task_complete`` on work its own worker is still doing — the
+        manager races the worker it just dispatched, and the dispatcher
+        classifies that stray turn as the item's verdict. Stamping
+        ``suppress_wake`` leaves exactly one management turn, the one that
+        matters: the worker's TERMINAL event, which is never suppressed for
+        this initiator (``set_dispatch_initiator`` marks only ``user_pinned``
+        keys pinned, and the terminal hooks stamp ``suppress_wake`` only for
+        those). The guidance line is written for that later turn, which reads
+        this row as history.
         """
         preview = message_preview[:100]
         display_content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
@@ -170,6 +186,18 @@ class LifecycleObserver:
                 " The user addressed this sub-agent directly — do not "
                 "answer on its behalf; supervise or relay the sub-agent's "
                 "response instead."
+            )
+        elif initiator == "queue_item":
+            # Read on the WAKE turn, not now (suppress_wake below). Explicit
+            # and imperative on purpose: a weaker manager model otherwise
+            # re-does the task itself instead of verifying it (the M3
+            # dispatch lesson — an explicit instruction with a reason is
+            # obeyed where implicit routing is not).
+            content = display_content + (
+                " The user assigned this queue item to this sub-agent, which"
+                " is running it now — do NOT do the task yourself. When the"
+                " sub-agent reports back, verify its result and declare the"
+                " outcome with mark_task_complete or mark_task_blocked."
             )
         else:
             content = display_content
@@ -180,12 +208,17 @@ class LifecycleObserver:
             meta["transcript_path"] = transcript_path
         if content != display_content:
             meta["display_content"] = display_content
-        if initiator == "user_pinned":
-            # Spec 074: while pinned the management LLM takes ZERO turns —
-            # not on dispatch either. The marker row still lands in the
-            # session JSONL (the timeline and a later management turn read
-            # it); suppress_wake only stops it from starting a loop. No
-            # supervision guidance: nobody is supervising by design.
+        if initiator in ("user_pinned", "queue_item"):
+            # user_pinned (spec 074): while pinned the management LLM takes
+            # ZERO turns — not on dispatch either. No supervision guidance:
+            # nobody is supervising by design.
+            # queue_item (spec 079): the manager DOES supervise, but only
+            # once, on the worker's terminal event. Waking it here would set
+            # it racing the worker against the queue contract already in this
+            # session's history (see the docstring).
+            # Either way the marker row still lands in the session JSONL
+            # (durable, read by the next management turn); suppress_wake only
+            # stops it from starting a loop.
             meta["suppress_wake"] = True
         await self._inject(project_id, content, session_id=session_id,
                            meta=meta or None)

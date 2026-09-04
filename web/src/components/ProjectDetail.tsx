@@ -40,6 +40,13 @@ interface ProjectDetailProps {
    * substitute for `agent_name` — a model id, not an identity.
    */
   globalDefaultModel?: string;
+  /**
+   * Spec 079 — installed sub-agents, forwarded to the Automations pane so an
+   * automation can name the worker that runs it. Pass-through only; App owns
+   * the single /agents/available fetch (hoisted there so a tab switch never
+   * re-hits the daemon's cache).
+   */
+  agentsAvailable?: Array<{ slug: string; name: string }>;
   children?: React.ReactNode;
 }
 
@@ -71,6 +78,7 @@ export default function ProjectDetail({
   setRoute,
   triggers = [],
   globalDefaultModel,
+  agentsAvailable = [],
   children,
 }: ProjectDetailProps) {
   const t = useT();
@@ -329,7 +337,10 @@ export default function ProjectDetail({
               <div className="flex-1 min-h-0 overflow-hidden">
                 {queuePane === 'automations' ? (
                   <div className="h-full overflow-y-auto px-6 py-4 max-md:px-4">
-                    <AutomationsList projectId={project.project_id} />
+                    <AutomationsList
+                      projectId={project.project_id}
+                      agents={agentsAvailable}
+                    />
                   </div>
                 ) : (
                   children

@@ -344,6 +344,9 @@ class TriggerCreateRequest(BaseModel):
     patterns: list[str] | None = None
     recursive: bool = False
     debounce_seconds: int = 5
+    # Spec 079: the sub-agent handle chosen to run this automation. Omitted or
+    # null = the management agent runs it (today's behaviour and the default).
+    agent: str | None = None
 
 
 class TriggerUpdateRequest(BaseModel):
@@ -359,6 +362,10 @@ class TriggerUpdateRequest(BaseModel):
     patterns: list[str] | None = None
     recursive: bool | None = None
     debounce_seconds: int | None = None
+    # Spec 079. Applied explicitly rather than through the shared
+    # drop-the-nulls merge below, because an explicit null is how the picker
+    # hands an automation back to Orbital.
+    agent: str | None = None
 
 
 class BulkDeleteRequest(BaseModel):
@@ -2032,6 +2039,10 @@ class QueueAddItemRequest(BaseModel):
     review_before_advance: bool | None = False
     source: str | None = "user"
     idempotency_key: str | None = None
+    # Spec 079: the sub-agent handle chosen to run this item. Omitted or null =
+    # the management agent runs it, which is the default and every pre-079
+    # client's behaviour.
+    agent: str | None = None
 
 
 class QueueEditItemRequest(BaseModel):
@@ -2039,6 +2050,11 @@ class QueueEditItemRequest(BaseModel):
     file_refs: list[str] | None = None
     priority: int | None = None
     review_before_advance: bool | None = None
+    # Spec 079. Unlike its siblings this field is read through
+    # ``model_fields_set``, not by testing for None: an explicit null is how the
+    # picker says "hand this back to Orbital", and collapsing that onto "field
+    # omitted" would make a chosen agent impossible to clear.
+    agent: str | None = None
 
 
 class QueueReorderRequest(BaseModel):
@@ -2108,6 +2124,7 @@ async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
         review_before_advance=bool(req.review_before_advance),
         source=(req.source or "user"),
         idempotency_key=req.idempotency_key,
+        agent=req.agent,
     )
 
     # If a dispatcher already exists (queue is RUNNING or PAUSED with the
@@ -2129,12 +2146,19 @@ async def add_queue_item(project_id: str, req: QueueAddItemRequest) -> dict:
 @router.patch("/projects/{project_id}/queue/items/{item_id}")
 async def edit_queue_item(project_id: str, item_id: str, req: QueueEditItemRequest) -> dict:
     store = _resolve_queue_store(project_id)
+    # Spec 079: only forward ``agent`` when the client actually sent it, so a
+    # PATCH that edits the text alone leaves the chosen agent untouched while a
+    # PATCH carrying ``"agent": null`` clears it.
+    agent_kwargs = (
+        {"agent": req.agent} if "agent" in req.model_fields_set else {}
+    )
     item = store.edit_item(
         item_id,
         content=req.content,
         file_refs=req.file_refs,
         priority=req.priority,
         review_before_advance=req.review_before_advance,
+        **agent_kwargs,
     )
     if item is None:
         raise HTTPException(
@@ -3230,6 +3254,10 @@ async def create_trigger(project_id: str, body: TriggerCreateRequest):
         "last_triggered": None,
         "trigger_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # Spec 079 — tail-additive; None keeps the management agent as runner.
+        # Blank spellings collapse onto None so a stray "" can never be read
+        # as a handle by the fire path.
+        "agent": (body.agent or "").strip() or None,
     }
     if body.type == "schedule":
         if body.schedule is None:
@@ -3311,6 +3339,12 @@ async def update_trigger(project_id: str, trigger_id: str, body: TriggerUpdateRe
     # A partial update must not be able to null out a required field.
     candidate = dict(trigger)
     candidate.update({k: v for k, v in updates.items() if v is not None})
+
+    # Spec 079: ``agent`` is the one field whose null is meaningful — it means
+    # "Orbital runs this again" — so it is applied after (and outside) the
+    # drop-the-nulls merge that protects the required fields.
+    if "agent" in updates:
+        candidate["agent"] = (updates["agent"] or "").strip() or None
 
     workspace = project.get("workspace", "")
     error = validate_trigger(candidate, workspace=workspace)

@@ -646,12 +646,14 @@ export default function App() {
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
                 globalDefaultModel={defaultModel}
+                agentsAvailable={agentsAvailable ?? []}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
                     key={`queue-${selectedProject.project_id}`}
                     projectId={selectedProject.project_id}
                     project={selectedProject}
+                    agents={agentsAvailable ?? []}
                   />
                 )}
                 {route.tab === 'chat' && (

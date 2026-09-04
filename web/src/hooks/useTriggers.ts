@@ -18,6 +18,8 @@ export interface TriggerDraft {
   patterns?: string[];
   recursive?: boolean;
   debounce_seconds?: number;
+  /** Spec 079 — worker slug that runs this automation; null = Orbital. */
+  agent?: string | null;
 }
 
 /**
