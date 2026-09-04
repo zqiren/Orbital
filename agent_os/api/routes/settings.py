@@ -356,7 +356,23 @@ def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
     if req.llm_sdk is not None and provider == "custom":
         fields["sdk"] = req.llm_sdk
     if req.llm_api_key is not None:
-        fields["api_key"] = req.llm_api_key
+        # Pre-cards parity: ``ApiKeyStore.set_api_key`` returned
+        # ``{"source": "environment"}`` WITHOUT writing whenever
+        # AGENT_OS_API_KEY was set — the variable is the key the daemon will
+        # actually use, so persisting another one is unobservable, and on a
+        # machine with no usable keyring (CI, a headless box, the null
+        # backend) the attempt raises and turns this whole PUT into a 500.
+        # The card routes stay strict; this is the legacy endpoint keeping
+        # its legacy contract.
+        from agent_os.daemon_v2.credential_store import _ENV_VAR
+
+        if os.environ.get(_ENV_VAR):
+            logger.info(
+                "PUT /settings: %s is set, so the submitted key is not "
+                "persisted; the environment key remains in effect", _ENV_VAR,
+            )
+        else:
+            fields["api_key"] = req.llm_api_key
     # Keep the auto-generated name tracking provider/model; a user-chosen name
     # is never overwritten.
     if ("provider" in fields or "model" in fields) and (

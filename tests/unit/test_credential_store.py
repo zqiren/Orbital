@@ -156,8 +156,39 @@ class TestKeyringErrors:
 # SettingsStore integration
 # ---------------------------------------------------------------------------
 
+def _fake_keyring(monkeypatch):
+    """Swap the keyring module for a dict, so a card key can be stored here.
+
+    Storing a key is a real Keychain write with a read-back verification. CI
+    runs with ``keyring.backends.null.Keyring``, which accepts writes and
+    returns nothing, so the verification correctly fails — a test that needs a
+    stored key must bring its own backing store rather than depend on whatever
+    the host happens to have configured.
+    """
+    from agent_os.daemon_v2 import credential_store as cs
+
+    store: dict[tuple[str, str], str] = {}
+
+    class _Keyring:
+        @staticmethod
+        def set_password(service, user, value):
+            store[(service, user)] = value
+
+        @staticmethod
+        def get_password(service, user):
+            return store.get((service, user))
+
+        @staticmethod
+        def delete_password(service, user):
+            store.pop((service, user), None)
+
+    monkeypatch.setattr(cs, "keyring", _Keyring)
+    monkeypatch.setattr(cs, "_KEYRING_AVAILABLE", True)
+    return store
+
+
 class TestSettingsStoreIntegration:
-    def test_get_masked_derives_the_llm_block_from_the_default_card(self, tmp_path):
+    def test_get_masked_derives_the_llm_block_from_the_default_card(self, tmp_path, monkeypatch):
         """Spec 082 §3.8: the ``llm`` block survives, DERIVED from the default card.
 
         It used to read the one global key slot. Cards replaced that slot, but
@@ -168,6 +199,7 @@ class TestSettingsStoreIntegration:
         """
         from agent_os.daemon_v2.settings_store import SettingsStore
 
+        _fake_keyring(monkeypatch)
         ss = SettingsStore(data_dir=str(tmp_path), credential_store=MagicMock())
         card = ss.create_card(
             provider="anthropic", model="claude-x", api_key="sk-test1234567890",
