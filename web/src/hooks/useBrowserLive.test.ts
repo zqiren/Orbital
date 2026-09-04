@@ -294,3 +294,48 @@ describe('useBrowserLive relay token', () => {
     vi.doUnmock('../config');
   });
 });
+
+describe('useBrowserLive — navigation state, cursor, nav()', () => {
+  it('parses loading and history flags from a state message', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.simulateOpen());
+    expect(result.current.loading).toBe(false);
+    expect(result.current.canGoBack).toBe(false);
+    act(() =>
+      ws.simulateMessage({
+        type: 'state', status: 'open', title: 'T', url: 'https://a.example/',
+        loading: true, canGoBack: true, canGoForward: false,
+      }),
+    );
+    expect(result.current.loading).toBe(true);
+    expect(result.current.canGoBack).toBe(true);
+    expect(result.current.canGoForward).toBe(false);
+    expect(result.current.url).toBe('https://a.example/');
+  });
+
+  it('mirrors the cursor message and resets it when the page goes away', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.simulateOpen());
+    expect(result.current.cursor).toBe('default');
+    act(() => ws.simulateMessage({ type: 'cursor', cursor: 'pointer' }));
+    expect(result.current.cursor).toBe('pointer');
+    act(() => ws.simulateMessage({ type: 'state', status: 'closed' }));
+    expect(result.current.cursor).toBe('default');
+  });
+
+  it('nav() sends a nav message, with the url only for goto', () => {
+    const { result } = renderHook(() => useBrowserLive('p1', true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.simulateOpen());
+    act(() => {
+      result.current.nav('back');
+      result.current.nav('goto', 'https://b.example/');
+    });
+    expect(ws.sent.map((s) => JSON.parse(s))).toEqual([
+      { type: 'nav', action: 'back' },
+      { type: 'nav', action: 'goto', url: 'https://b.example/' },
+    ]);
+  });
+});

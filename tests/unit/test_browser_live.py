@@ -60,6 +60,10 @@ class FakeCDPSession:
     def calls(self, method: str) -> list[dict]:
         return [params for name, params in self.sent if name == method]
 
+    def emit(self, event: str, params: dict):
+        for handler in self.listeners.get(event, []):
+            handler(params)
+
     def emit_frame(self, data: str, *, session_id: int = 1,
                    width: int = 1280, height: int = 800):
         payload = {
@@ -241,6 +245,7 @@ async def test_subscribe_starts_screencast_with_the_agreed_params():
         assert h.ws.of_type("state")[0] == {
             "type": "state", "status": "open", "title": "Example Domain",
             "url": "https://example.com/",
+            "loading": False, "canGoBack": False, "canGoForward": False,
         }
     finally:
         await h.finish()
@@ -406,6 +411,7 @@ async def test_page_closing_mid_stream_reports_closed_then_reattaches():
         assert h.ws.of_type("state")[-1] == {
             "type": "state", "status": "open", "title": "Second Page",
             "url": "https://example.com/",
+            "loading": False, "canGoBack": False, "canGoForward": False,
         }
     finally:
         await h.finish()
@@ -656,7 +662,8 @@ def test_protocol_contract_matches_the_frontend_hook():
         pytest.skip("useBrowserLive.ts not present")
     text = hook.read_text(encoding="utf-8")
     assert "/api/v2/agents/{project_id}/browser/live" in text
-    for token in ('"frame"', '"state"', '"error"', '"mouse"', '"key"', '"text"'):
+    for token in ('"frame"', '"state"', '"error"', '"mouse"', '"key"', '"text"',
+                  '"nav"', '"cursor"', "canGoBack", "loading"):
         assert token.strip('"') in text
 
 
@@ -707,5 +714,282 @@ async def test_state_and_frames_carry_the_page_url():
         assert [m for m in ws.sent if m.get("type") == "state"][0]["url"] == "https://example.com/"
         await h.wait(lambda: any(m.get("type") == "frame" for m in ws.sent))
         assert [m for m in ws.sent if m.get("type") == "frame"][0]["url"] == "https://example.com/"
+    finally:
+        await h.finish()
+
+
+# ---------------------------------------------------------------------------
+# Input never queues up (2026-09-04): merging moves / wheels, ordered clicks
+# ---------------------------------------------------------------------------
+
+
+class GatedCDPSession(FakeCDPSession):
+    """``Input.dispatchMouseEvent`` blocks until the test releases it — the
+    stand-in for Chrome taking ~20 ms to confirm a wheel."""
+
+    def __init__(self):
+        super().__init__()
+        self.releases = asyncio.Queue()
+
+    async def send(self, method, params=None):
+        if method == "Input.dispatchMouseEvent":
+            await self.releases.get()
+        return await super().send(method, params)
+
+    def release(self, n=1):
+        for _ in range(n):
+            self.releases.put_nowait(None)
+
+
+def wheel(dy, x=40, y=50):
+    return {"type": "mouse", "action": "wheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy}
+
+
+def move(x, y):
+    return {"type": "mouse", "action": "move", "x": x, "y": y}
+
+
+async def _gated_harness():
+    cdp = GatedCDPSession()
+    page = FakePage(cdp)
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    await h.wait(lambda: cdp.calls("Page.startScreencast"))
+    return h, cdp, ws
+
+
+@pytest.mark.asyncio
+async def test_a_wheel_burst_collapses_into_one_dispatch_per_round_trip():
+    """120 Hz trackpad wheels while Chrome is busy confirming the previous one:
+    the waiting deltas add up into ONE event, never a backlog."""
+    h, cdp, ws = await _gated_harness()
+    try:
+        for _ in range(30):
+            ws.push(wheel(8))
+        # First wheel goes out at once and sits in flight (gated) …
+        await h.wait(lambda: cdp.releases.qsize() == 0 and len(h.ws.sent) >= 0)
+        await asyncio.sleep(0.02)
+        cdp.release()
+        await h.wait(lambda: len(cdp.calls("Input.dispatchMouseEvent")) == 1)
+        # … the other 29 merged into a single second dispatch.
+        cdp.release()
+        await h.wait(lambda: len(cdp.calls("Input.dispatchMouseEvent")) == 2)
+        await asyncio.sleep(0.02)
+        assert len(cdp.calls("Input.dispatchMouseEvent")) == 2
+        first, second = cdp.calls("Input.dispatchMouseEvent")
+        assert first["deltaY"] == 8.0
+        assert second["deltaY"] == 8.0 * 29
+    finally:
+        cdp.release(10)
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_moves_waiting_behind_a_dispatch_keep_only_the_newest():
+    h, cdp, ws = await _gated_harness()
+    try:
+        ws.push(move(1, 1))
+        await asyncio.sleep(0.02)
+        for i in range(2, 12):
+            ws.push(move(i, i))
+        await asyncio.sleep(0.02)          # let the receive loop ingest them
+        cdp.release(2)
+        await h.wait(lambda: len(cdp.calls("Input.dispatchMouseEvent")) == 2)
+        await asyncio.sleep(0.02)
+        moves = cdp.calls("Input.dispatchMouseEvent")
+        assert len(moves) == 2
+        assert (moves[1]["x"], moves[1]["y"]) == (11.0, 11.0)
+    finally:
+        cdp.release(10)
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_clicks_keep_their_place_between_merged_wheels():
+    h, cdp, ws = await _gated_harness()
+    try:
+        ws.push(wheel(10))
+        await asyncio.sleep(0.02)          # in flight
+        ws.push(wheel(20))
+        ws.push({"type": "mouse", "action": "down", "x": 5, "y": 5})
+        ws.push(wheel(5))
+        ws.push(wheel(5))                  # merges with the previous 5
+        await asyncio.sleep(0.02)          # let the receive loop ingest them
+        cdp.release(4)
+        await h.wait(lambda: len(cdp.calls("Input.dispatchMouseEvent")) == 4)
+        await asyncio.sleep(0.02)
+        calls = cdp.calls("Input.dispatchMouseEvent")
+        assert [c["type"] for c in calls] == ["mouseWheel", "mouseWheel", "mousePressed", "mouseWheel"]
+        assert [c.get("deltaY") for c in calls] == [10.0, 20.0, None, 10.0]
+    finally:
+        cdp.release(10)
+        await h.finish()
+
+
+# ---------------------------------------------------------------------------
+# Navigation
+# ---------------------------------------------------------------------------
+
+
+HISTORY = {
+    "currentIndex": 1,
+    "entries": [
+        {"id": 11, "url": "https://a.example/"},
+        {"id": 12, "url": "https://b.example/"},
+        {"id": 13, "url": "https://c.example/"},
+    ],
+}
+
+
+async def _nav_harness(history=HISTORY):
+    cdp = FakeCDPSession(replies={"Page.getNavigationHistory": history})
+    page = FakePage(cdp)
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    await h.wait(lambda: cdp.calls("Page.startScreencast"))
+    return h, cdp, ws
+
+
+@pytest.mark.asyncio
+async def test_back_and_forward_walk_chromes_navigation_history():
+    h, cdp, ws = await _nav_harness()
+    try:
+        ws.push({"type": "nav", "action": "back"})
+        await h.wait(lambda: cdp.calls("Page.navigateToHistoryEntry"))
+        assert cdp.calls("Page.navigateToHistoryEntry")[-1] == {"entryId": 11}
+        ws.push({"type": "nav", "action": "forward"})
+        await h.wait(lambda: len(cdp.calls("Page.navigateToHistoryEntry")) == 2)
+        assert cdp.calls("Page.navigateToHistoryEntry")[-1] == {"entryId": 13}
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_state_reports_history_availability_and_back_at_the_start_is_a_no_op():
+    h, cdp, ws = await _nav_harness({"currentIndex": 0, "entries": [{"id": 1, "url": "https://a.example/"}]})
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        assert ws.of_type("state")[0]["canGoBack"] is False
+        assert ws.of_type("state")[0]["canGoForward"] is False
+        ws.push({"type": "nav", "action": "back"})
+        ws.push({"type": "nav", "action": "reload"})
+        await h.wait(lambda: cdp.calls("Page.reload"))
+        assert cdp.calls("Page.navigateToHistoryEntry") == []
+        assert ws.of_type("error") == []
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_goto_navigates_to_web_urls_only():
+    h, cdp, ws = await _nav_harness()
+    try:
+        ws.push({"type": "nav", "action": "goto", "url": "https://example.org/x"})
+        await h.wait(lambda: cdp.calls("Page.navigate"))
+        assert cdp.calls("Page.navigate")[-1] == {"url": "https://example.org/x"}
+        for bad in ("file:///etc/passwd", "javascript:alert(1)", "example.org", "", 7):
+            ws.push({"type": "nav", "action": "goto", "url": bad})
+        await h.wait(lambda: len(ws.of_type("error")) == 5)
+        assert len(cdp.calls("Page.navigate")) == 1
+        ws.push({"type": "nav", "action": "stop"})
+        await h.wait(lambda: cdp.calls("Page.stopLoading"))
+        ws.push({"type": "nav", "action": "sideways"})
+        await h.wait(lambda: len(ws.of_type("error")) == 6)
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_a_navigation_action_is_counted_in_the_forensic_log():
+    cdp = FakeCDPSession(replies={"Page.getNavigationHistory": HISTORY})
+    page = FakePage(cdp)
+    session = FakeSession()
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp, session_id="sess_1",
+              agent_manager=FakeAgentManager(session))
+    try:
+        await h.wait(lambda: cdp.calls("Page.startScreencast"))
+        ws.push({"type": "nav", "action": "reload"})
+        await h.wait(lambda: cdp.calls("Page.reload"))
+        await h.wait(lambda: session.meta)
+    finally:
+        await h.finish()
+    counts = {}
+    for _e, fields in session.meta:
+        for k, v in fields["counts"].items():
+            counts[k] = counts.get(k, 0) + v
+    assert counts == {"nav.reload": 1}
+
+
+# ---------------------------------------------------------------------------
+# Chrome's Page events push state without waiting for the poll
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_page_events_push_url_loading_and_history_immediately(monkeypatch):
+    monkeypatch.setattr(browser_live, "POLL_INTERVAL_S", 5.0)  # the poll must not be what delivers these
+    cdp = FakeCDPSession(replies={
+        "Page.getFrameTree": {"frameTree": {"frame": {"id": "MAIN"}}},
+        "Page.getNavigationHistory": {"currentIndex": 0, "entries": [{"id": 1}]},
+    })
+    page = FakePage(cdp)
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: ws.of_type("state"))
+        assert cdp.calls("Page.enable") == [{}]
+        cdp.emit("Page.frameStartedLoading", {"frameId": "MAIN"})
+        await h.wait(lambda: ws.of_type("state")[-1]["loading"] is True)
+        # A sub-frame navigating is not the address bar's business.
+        cdp.emit("Page.frameNavigated", {"frame": {"id": "SUB", "parentId": "MAIN", "url": "https://ad.example/"}})
+        await asyncio.sleep(0.02)
+        assert ws.of_type("state")[-1]["url"] == "https://example.com/"
+        cdp._replies["Page.getNavigationHistory"] = {"currentIndex": 1, "entries": [{"id": 1}, {"id": 2}]}
+        page.url = "https://example.com/next"
+        page._title = "Next"
+        cdp.emit("Page.frameNavigated", {"frame": {"id": "MAIN", "url": "https://example.com/next"}})
+        await h.wait(lambda: ws.of_type("state")[-1]["url"] == "https://example.com/next")
+        assert ws.of_type("state")[-1]["title"] == "Next"
+        assert ws.of_type("state")[-1]["canGoBack"] is True
+        cdp.emit("Page.frameStoppedLoading", {"frameId": "MAIN"})
+        await h.wait(lambda: ws.of_type("state")[-1]["loading"] is False)
+        cdp.emit("Page.navigatedWithinDocument", {"frameId": "MAIN", "url": "https://example.com/next#a"})
+        page.url = "https://example.com/next#a"
+        await h.wait(lambda: ws.of_type("state")[-1]["url"] == "https://example.com/next#a")
+    finally:
+        await h.finish()
+
+
+# ---------------------------------------------------------------------------
+# Cursor mirroring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_pages_cursor_under_a_resting_pointer_is_sent_when_it_changes(monkeypatch):
+    monkeypatch.setattr(browser_live, "CURSOR_PROBE_MIN_INTERVAL_S", 0.0)
+    cdp = FakeCDPSession(replies={"Runtime.evaluate": {"result": {"type": "string", "value": "pointer"}}})
+    page = FakePage(cdp)
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: cdp.calls("Page.startScreencast"))
+        ws.push(move(10, 20))
+        await h.wait(lambda: ws.of_type("cursor"))
+        assert ws.of_type("cursor") == [{"type": "cursor", "cursor": "pointer"}]
+        probe = cdp.calls("Runtime.evaluate")[-1]
+        assert "elementFromPoint(x, y)" in probe["expression"]
+        assert probe["expression"].rstrip().endswith("(10.0, 20.0)")
+        assert probe["returnByValue"] is True
+        # Same answer again: nothing new to say.
+        ws.push(move(11, 21))
+        await h.wait(lambda: len(cdp.calls("Runtime.evaluate")) == 2)
+        await asyncio.sleep(0.02)
+        assert len(ws.of_type("cursor")) == 1
+        cdp._replies["Runtime.evaluate"] = {"result": {"type": "string", "value": "text"}}
+        ws.push(move(12, 22))
+        await h.wait(lambda: len(ws.of_type("cursor")) == 2)
+        assert ws.of_type("cursor")[-1]["cursor"] == "text"
     finally:
         await h.finish()

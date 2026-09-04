@@ -7,11 +7,14 @@
  * CONTRACT FILE (protocol below is shared with the backend route):
  *   WS  /api/v2/agents/{project_id}/browser/live[?token=<relay jwt>]
  *   server → client: {type:"frame", jpeg:<base64>, width, height, title, url}
- *                    {type:"state", status:"no_browser"|"open"|"closed", title?, url?}
+ *                    {type:"state", status:"no_browser"|"open"|"closed", title?, url?,
+ *                                   loading?, canGoBack?, canGoForward?}
+ *                    {type:"cursor", cursor:<css cursor keyword under the pointer>}
  *                    {type:"error", message}
  *   client → server: {type:"mouse", action:"move"|"down"|"up"|"wheel", x, y, button?, clickCount?, deltaX?, deltaY?, modifiers?}
  *                    {type:"key", action:"down"|"up", key, code, text?, modifiers?}
  *                    {type:"text", text}
+ *                    {type:"nav", action:"back"|"forward"|"reload"|"stop"|"goto", url?}
  *                    {type:"viewport", width, height, dpr}  — size the page to the panel (CSS px)
  *   x/y are CSS pixels of the page viewport (same space as the frame width/height).
  * Workstream D implements.
@@ -20,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BASE_URL, isRelayMode } from '../config';
 
 export type LiveStatus = 'idle' | 'connecting' | 'open' | 'no_browser' | 'closed' | 'error';
+export type NavAction = 'back' | 'forward' | 'reload' | 'stop' | 'goto';
 export interface LiveFrame { jpegDataUrl: string; width: number; height: number }
 export interface BrowserLive {
   status: LiveStatus;
@@ -27,7 +31,15 @@ export interface BrowserLive {
   title: string;
   /** The page's URL; 'about:blank' (or '') means the agent has nothing open yet. */
   url?: string;
+  /** Main frame is loading (reload shows as stop while true). */
+  loading?: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  /** The page's CSS cursor under the pointer, mirrored onto the canvas. */
+  cursor?: string;
   send: (msg: Record<string, unknown>) => void;
+  /** Plain browser navigation on the agent's page. */
+  nav: (action: NavAction, url?: string) => void;
 }
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -56,6 +68,10 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
   const [frame, setFrame] = useState<LiveFrame | null>(null);
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [canGoForward, setCanGoForward] = useState(false);
+  const [cursor, setCursor] = useState('default');
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,6 +140,12 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
         if (typeof msg.status === 'string') setStatus(msg.status as LiveStatus);
         if (typeof msg.title === 'string') setTitle(msg.title);
         if (typeof msg.url === 'string') setUrl(msg.url);
+        if (typeof msg.loading === 'boolean') setLoading(msg.loading);
+        if (typeof msg.canGoBack === 'boolean') setCanGoBack(msg.canGoBack);
+        if (typeof msg.canGoForward === 'boolean') setCanGoForward(msg.canGoForward);
+        if (msg.status !== 'open') setCursor('default');
+      } else if (msg.type === 'cursor') {
+        if (typeof msg.cursor === 'string') setCursor(msg.cursor);
       } else if (msg.type === 'error') {
         setStatus('error');
       }
@@ -179,5 +201,12 @@ export function useBrowserLive(projectId: string, active: boolean): BrowserLive 
     // Deliberately no queue: stale input is worse than lost input.
   }, []);
 
-  return { status, frame, title, url, send };
+  const nav = useCallback(
+    (action: NavAction, target?: string) => {
+      send(action === 'goto' ? { type: 'nav', action, url: target } : { type: 'nav', action });
+    },
+    [send],
+  );
+
+  return { status, frame, title, url, loading, canGoBack, canGoForward, cursor, send, nav };
 }

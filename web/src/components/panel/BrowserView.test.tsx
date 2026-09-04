@@ -48,6 +48,22 @@ vi.mock('./AnnotateOverlay', () => ({
 
 import BrowserView from './BrowserView';
 
+/** A BrowserLive value with every field the view reads, overridable. */
+function live(partial: Partial<BrowserLive>): BrowserLive {
+  return {
+    status: 'idle',
+    frame: null,
+    title: '',
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    cursor: 'default',
+    send: vi.fn(),
+    nav: vi.fn(),
+    ...partial,
+  };
+}
+
 function renderView(overrides: Partial<BrowserViewProps> = {}) {
   const onAddAnnotation = vi.fn();
   const props: BrowserViewProps = {
@@ -95,7 +111,7 @@ beforeAll(() => {
 beforeEach(() => {
   liveMock.mockReset();
   getFileContentMock.mockReset();
-  liveMock.mockReturnValue({ status: 'idle', frame: null, title: '', send: vi.fn() });
+  liveMock.mockReturnValue(live({ status: 'idle', frame: null, title: '', send: vi.fn() }));
   getFileContentMock.mockResolvedValue(null);
 });
 
@@ -110,13 +126,13 @@ describe('BrowserView — empty / connecting / fallback states', () => {
   });
 
   it('shows the connecting message while connecting with no frame yet', () => {
-    liveMock.mockReturnValue({ status: 'connecting', frame: null, title: '', send: vi.fn() });
+    liveMock.mockReturnValue(live({ status: 'connecting', frame: null, title: '', send: vi.fn() }));
     renderView({ fallback: { path: 'orbital/output/screenshots/x.png', title: 'Last page' } });
     expect(screen.getByText('Connecting to the browser…')).toBeInTheDocument();
   });
 
   it('renders the fallback screenshot via the files content route when no live frame exists', async () => {
-    liveMock.mockReturnValue({ status: 'closed', frame: null, title: '', send: vi.fn() });
+    liveMock.mockReturnValue(live({ status: 'closed', frame: null, title: '', send: vi.fn() }));
     getFileContentMock.mockResolvedValue({
       path: 'orbital/output/screenshots/x.png',
       content: 'ZmFrZQ==',
@@ -134,7 +150,7 @@ describe('BrowserView — empty / connecting / fallback states', () => {
   });
 
   it('falls back to the empty message when no live frame and no fallback prop', () => {
-    liveMock.mockReturnValue({ status: 'no_browser', frame: null, title: '', send: vi.fn() });
+    liveMock.mockReturnValue(live({ status: 'no_browser', frame: null, title: '', send: vi.fn() }));
     renderView({ fallback: null });
     expect(screen.getByText('No page open yet.')).toBeInTheDocument();
   });
@@ -142,12 +158,12 @@ describe('BrowserView — empty / connecting / fallback states', () => {
 
 describe('BrowserView — live canvas', () => {
   it('renders a canvas with the page title as caption and aria-label', () => {
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'data:image/jpeg;base64,xx', width: 1000, height: 500 },
       title: 'Example Domain',
       send: vi.fn(),
-    });
+    }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas');
     expect(canvas).not.toBeNull();
@@ -162,12 +178,12 @@ describe('BrowserView — live canvas', () => {
 
   it('scales a click at canvas (10,10) with canvas width 500 to page x=20 for a 1000px-wide frame', () => {
     const sendMock = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
       title: 'T',
       send: sendMock,
-    });
+    }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
     mockRect(canvas, 500, 250);
@@ -185,12 +201,12 @@ describe('BrowserView — live canvas', () => {
 
   it('forwards pointer move', () => {
     const sendMock = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
       title: 'T',
       send: sendMock,
-    });
+    }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
     mockRect(canvas, 500, 250);
@@ -204,12 +220,12 @@ describe('BrowserView — live canvas', () => {
 
   it('sends key messages on keydown, with text only for printable single characters', () => {
     const sendMock = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 100, height: 100 },
       title: 'T',
       send: sendMock,
-    });
+    }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
 
@@ -228,12 +244,12 @@ describe('BrowserView — live canvas', () => {
 
   it('forwards wheel deltas', () => {
     const sendMock = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
       title: 'T',
       send: sendMock,
-    });
+    }));
     const { container } = renderView();
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
     mockRect(canvas, 500, 250);
@@ -249,12 +265,12 @@ describe('BrowserView — live canvas', () => {
 describe('BrowserView — annotating', () => {
   it('does not forward pointer input while annotating, and mounts the overlay', () => {
     const sendMock = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
       title: 'T',
       send: sendMock,
-    });
+    }));
     const { container } = renderView({ annotating: true });
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
     mockRect(canvas, 500, 250);
@@ -270,23 +286,23 @@ describe('BrowserView — annotating', () => {
   });
 
   it('does not mount the overlay when not annotating', () => {
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 100, height: 100 },
       title: 'T',
       send: vi.fn(),
-    });
+    }));
     renderView({ annotating: false });
     expect(screen.queryByTestId('annotate-overlay')).not.toBeInTheDocument();
   });
 
   it('onAddAnnotation receives a browser-kind draft with pageTitle and an image data URL', () => {
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
       title: 'Example Domain',
       send: vi.fn(),
-    });
+    }));
     const { onAddAnnotation } = renderView({ annotating: true });
 
     fireEvent.click(screen.getByText('add-annotation'));
@@ -307,12 +323,12 @@ describe('BrowserView — annotating', () => {
 describe('BrowserView — after the page closes', () => {
   it('keeps the last frame on screen labelled "Last screenshot" and forwards no input', () => {
     const send = vi.fn();
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'closed',
       frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 1000, height: 500 },
       title: 'Example Domain',
       send,
-    });
+    }));
     renderView();
     expect(screen.getByText('Last screenshot')).toBeInTheDocument();
     expect(screen.queryByText('Live')).toBeNull();
@@ -328,15 +344,201 @@ describe('BrowserView — after the page closes', () => {
 
 describe('BrowserView — a blank page is not a page', () => {
   it('shows the empty line instead of a white live canvas when the page is about:blank', () => {
-    liveMock.mockReturnValue({
+    liveMock.mockReturnValue(live({
       status: 'open',
       frame: { jpegDataUrl: 'data:image/jpeg;base64,AAAA', width: 800, height: 600 },
       title: '',
       url: 'about:blank',
       send: vi.fn(),
-    });
+    }));
     renderView();
     expect(screen.getByText('No page open yet.')).toBeInTheDocument();
     expect(screen.queryByRole('img')).toBeNull();
+  });
+});
+
+
+describe('BrowserView — toolbar', () => {
+  function openWith(partial: Partial<BrowserLive> = {}) {
+    const nav = vi.fn();
+    liveMock.mockReturnValue(
+      live({
+        status: 'open',
+        frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
+        title: 'T',
+        url: 'https://example.com/path',
+        nav,
+        ...partial,
+      }),
+    );
+    const utils = renderView();
+    return { ...utils, nav };
+  }
+
+  it('shows back, forward, reload and the page address', () => {
+    openWith({ canGoBack: true, canGoForward: false });
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Forward' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeEnabled();
+    expect(screen.getByLabelText('Address')).toHaveValue('https://example.com/path');
+  });
+
+  it('back / forward / reload send nav actions', () => {
+    const { nav } = openWith({ canGoBack: true, canGoForward: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(nav.mock.calls.map((c) => c[0])).toEqual(['back', 'forward', 'reload']);
+  });
+
+  it('reload becomes stop while the page is loading', () => {
+    const { nav } = openWith({ loading: true });
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop loading' }));
+    expect(nav).toHaveBeenCalledWith('stop');
+  });
+
+  it('Enter in the address field navigates to the resolved address; Escape restores the page URL', () => {
+    const { nav } = openWith();
+    const field = screen.getByLabelText('Address') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'news.ycombinator.com' } });
+    expect(field).toHaveValue('news.ycombinator.com');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(nav).toHaveBeenCalledWith('goto', 'https://news.ycombinator.com');
+    expect(field).toHaveValue('https://example.com/path');
+
+    fireEvent.change(field, { target: { value: 'typo' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field).toHaveValue('https://example.com/path');
+    expect(nav).toHaveBeenCalledTimes(1);
+  });
+
+  it('a search is sent as a search URL and a non-web scheme is refused', () => {
+    const { nav } = openWith();
+    const field = screen.getByLabelText('Address');
+    fireEvent.change(field, { target: { value: 'orbital agents' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(nav).toHaveBeenLastCalledWith('goto', 'https://www.google.com/search?q=orbital%20agents');
+    fireEvent.change(field, { target: { value: 'file:///etc/passwd' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(nav).toHaveBeenCalledTimes(1);
+  });
+
+  it('a blank page keeps the toolbar so the user can open something', () => {
+    openWith({ url: 'about:blank', frame: { jpegDataUrl: 'd', width: 8, height: 8 } });
+    expect(screen.getByText('No page open yet.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address')).toHaveValue('');
+  });
+
+  it('no toolbar without a page', () => {
+    liveMock.mockReturnValue(live({ status: 'closed', frame: { jpegDataUrl: 'd', width: 8, height: 8 }, title: 'T' }));
+    renderView();
+    expect(screen.queryByLabelText('Address')).toBeNull();
+  });
+});
+
+describe('BrowserView — cursor, capture, click count, coalescing', () => {
+  function openCanvas(partial: Partial<BrowserLive> = {}) {
+    const send = vi.fn();
+    liveMock.mockReturnValue(
+      live({
+        status: 'open',
+        frame: { jpegDataUrl: 'd', width: 1000, height: 500 },
+        title: 'T',
+        send,
+        ...partial,
+      }),
+    );
+    const { container } = renderView();
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+    mockRect(canvas, 500, 250);
+    return { canvas, send };
+  }
+
+  it('paints the page cursor onto the canvas, keywords only', () => {
+    const { canvas } = openCanvas({ cursor: 'pointer' });
+    expect(canvas.style.cursor).toBe('pointer');
+    cleanup();
+    const { canvas: c2 } = openCanvas({ cursor: 'url(evil.png), auto' });
+    expect(c2.style.cursor).toBe('default');
+    cleanup();
+    const { canvas: c3 } = openCanvas({ status: 'closed', cursor: 'pointer' });
+    expect(c3.style.cursor).toBe('not-allowed');
+  });
+
+  it('captures the pointer on press and releases it on release', () => {
+    const { canvas } = openCanvas();
+    const setCapture = vi.fn();
+    const releaseCapture = vi.fn();
+    canvas.setPointerCapture = setCapture;
+    canvas.releasePointerCapture = releaseCapture;
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, button: 0, pointerId: 7 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, button: 0, pointerId: 7 });
+    expect(setCapture).toHaveBeenCalledWith(7);
+    expect(releaseCapture).toHaveBeenCalledWith(7);
+  });
+
+  it('counts a quick second press at the same spot as a double-click when detail is 0', () => {
+    const { canvas, send } = openCanvas();
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, button: 0, detail: 0 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, button: 0, detail: 0 });
+    fireEvent.pointerDown(canvas, { clientX: 11, clientY: 10, button: 0, detail: 0 });
+    fireEvent.pointerUp(canvas, { clientX: 11, clientY: 10, button: 0, detail: 0 });
+    const counts = send.mock.calls.filter((c) => c[0].type === 'mouse').map((c) => c[0].clickCount);
+    expect(counts).toEqual([1, 1, 2, 2]);
+  });
+
+  it('a burst of wheel events within one frame sends only the first at once', () => {
+    const { canvas, send } = openCanvas();
+    for (let i = 0; i < 10; i++) fireEvent.wheel(canvas, { clientX: 10, clientY: 10, deltaX: 0, deltaY: 8 });
+    expect(send.mock.calls.filter((c) => c[0].action === 'wheel')).toHaveLength(1);
+  });
+
+  it('a press flushes pending pointer traffic before the click', () => {
+    const { canvas, send } = openCanvas();
+    fireEvent.wheel(canvas, { clientX: 10, clientY: 10, deltaY: 8 });
+    fireEvent.wheel(canvas, { clientX: 10, clientY: 10, deltaY: 8 });
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, button: 0, detail: 1 });
+    const actions = send.mock.calls.map((c) => c[0].action);
+    expect(actions).toEqual(['wheel', 'wheel', 'down']);
+  });
+});
+
+describe('BrowserView — keyboard through the text host (IME)', () => {
+  function openCanvas() {
+    const send = vi.fn();
+    liveMock.mockReturnValue(
+      live({ status: 'open', frame: { jpegDataUrl: 'd', width: 100, height: 100 }, title: 'T', send }),
+    );
+    const { container } = renderView();
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+    const host = screen.getByTestId('browser-text-host') as HTMLTextAreaElement;
+    return { canvas, host, send };
+  }
+
+  it('a press focuses the hidden text host', () => {
+    const { canvas, host } = openCanvas();
+    mockRect(canvas, 100, 100);
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, button: 0, detail: 1 });
+    expect(document.activeElement).toBe(host);
+  });
+
+  it('composed text arrives as one text message; keystrokes during composition are not forwarded', () => {
+    const { host, send } = openCanvas();
+    fireEvent.compositionStart(host);
+    fireEvent.keyDown(host, { key: 'Process', code: 'KeyN' });
+    fireEvent.keyDown(host, { key: 'n', code: 'KeyN', isComposing: true });
+    fireEvent.compositionEnd(host, { data: '你好' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith({ type: 'text', text: '你好' });
+  });
+
+  it('a keyup whose keydown was never sent is dropped', () => {
+    const { host, send } = openCanvas();
+    fireEvent.keyUp(host, { key: 'Enter', code: 'Enter' });
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.keyDown(host, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyUp(host, { key: 'Enter', code: 'Enter' });
+    expect(send.mock.calls.map((c) => c[0].action)).toEqual(['down', 'up']);
   });
 });

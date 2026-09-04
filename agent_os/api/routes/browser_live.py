@@ -5,8 +5,9 @@
 """Live view of the agent's browser (spec 078 §5.6, D9).
 
 One WebSocket route attaches a CDP session to the project's *current* page,
-streams ``Page.startScreencast`` JPEG frames to the client, and forwards the
-client's mouse/keyboard events back into the page via ``Input.*``.
+streams ``Page.startScreencast`` JPEG frames to the client, forwards the
+client's mouse/keyboard events back into the page via ``Input.*``, and drives
+plain browser navigation (back / forward / reload / stop / go to URL).
 
 Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
 
@@ -14,14 +15,17 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
 
     server → client
       {"type":"frame","jpeg":"<base64>","width":<css px>,"height":<css px>,"title":"…","url":"…"}
-      {"type":"state","status":"no_browser"|"open"|"closed","title":"…","url":"…"}
+      {"type":"state","status":"no_browser"|"open"|"closed","title":"…","url":"…",
+       "loading":bool,"canGoBack":bool,"canGoForward":bool}
+      {"type":"cursor","cursor":"pointer"}   — the page's CSS cursor under the pointer
       {"type":"error","message":"…"}
 
     client → server
       {"type":"mouse","action":"move"|"down"|"up"|"wheel","x":n,"y":n,
        "button":"left"|"right"|"middle","clickCount":1,"deltaX":n,"deltaY":n,"modifiers":n}
       {"type":"key","action":"down"|"up","key":"Enter","code":"Enter","text":"a","modifiers":n}
-      {"type":"text","text":"pasted text"}
+      {"type":"text","text":"pasted or IME-composed text"}
+      {"type":"nav","action":"back"|"forward"|"reload"|"stop"|"goto","url":"https://…"}
       {"type":"viewport","width":n,"height":n,"dpr":n}
           — size the page to the panel (CSS px) so the live view fills it; the
             screencast is restarted at width*dpr so frames are sharp on Retina.
@@ -31,6 +35,15 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
 ``deviceWidth``/``deviceHeight``). The JPEG itself may be downscaled by
 Chrome; the client scales its canvas coordinates into this space.
 
+**Input never queues up** (2026-09-04, "scrolling feels very laggy"): a
+wheel event takes ~20 ms for Chrome to confirm because it scrolls and renders
+before answering, while a trackpad emits 120 of them a second — handling them
+one at a time turned a two-second swipe into five seconds of scrolling. So
+input goes through a queue that merges: consecutive moves keep only the
+newest, consecutive wheels sum their deltas, and clicks / keys / text / nav
+keep their order relative to everything else. At most one event is ever in
+flight, and the backlog can never exceed one merged event of each kind.
+
 **No coordination layer** (D9): there is no take-over button and no pause
 flag. The user's input and the agent's tool calls simply interleave — the
 browser tool snapshots the page before each action, so it sees what the user
@@ -38,7 +51,10 @@ did. The only thing guarded here is the page/CDP session going away.
 """
 
 import asyncio
+import collections
 import logging
+import time
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -66,7 +82,9 @@ def configure(browser_manager, agent_manager=None):
 # ---- Tunables (module level so tests can shrink them) ----
 
 #: How often we look for the project's current page. Also the cadence at
-#: which the page title is refreshed and the input log is flushed.
+#: which the page title is refreshed and the input log is flushed. Navigation
+#: within the attached page is NOT on this clock — Chrome's Page events push
+#: url/title/loading/history the moment they change.
 POLL_INTERVAL_S = 2.0
 
 #: Screencast parameters. ~10 fps in practice; quality/size chosen so a frame
@@ -79,6 +97,10 @@ SCREENCAST_PARAMS = {
     "everyNthFrame": 1,
 }
 
+#: The page's cursor under the pointer is looked up (one ``Runtime.evaluate``)
+#: after a dispatched move when no newer move is waiting, at most this often.
+CURSOR_PROBE_MIN_INTERVAL_S = 0.05
+
 # ---- Input mapping ----
 
 _MOUSE_TYPES = {
@@ -89,6 +111,13 @@ _MOUSE_TYPES = {
 }
 
 _BUTTONS = {"none", "left", "middle", "right", "back", "forward"}
+
+_NAV_ACTIONS = {"back", "forward", "reload", "stop", "goto"}
+
+#: Only web URLs may be typed into the address field. ``file:`` would read
+#: the daemon host's disk through the agent's browser; ``javascript:`` is
+#: script injection; anything else has no business in a live page.
+_ALLOWED_NAV_SCHEMES = {"http", "https"}
 
 #: Virtual key codes Chrome needs for the non-printable keys that matter for
 #: "log me in here" — everything else falls back to the single-character
@@ -113,6 +142,22 @@ _VIRTUAL_KEY_CODES = {
     "Meta": 91,
 }
 
+#: Evaluated in the page to mirror its cursor onto the client's canvas. A
+#: computed ``auto`` is what most elements report, so it is resolved the way
+#: a browser would show it: hand over links/buttons, I-beam over editable
+#: text, arrow elsewhere.
+_CURSOR_JS = """(function (x, y) {
+  try {
+    var el = document.elementFromPoint(x, y);
+    if (!el) return 'default';
+    var c = getComputedStyle(el).cursor || 'auto';
+    if (c !== 'auto') return c;
+    if (el.closest('a[href],button,[role=button],[role=link],select,summary,label,[onclick]')) return 'pointer';
+    if (el.closest('input,textarea,[contenteditable=""],[contenteditable=true],[contenteditable=plaintext-only]')) return 'text';
+    return 'default';
+  } catch (e) { return 'default'; }
+})(%r, %r)"""
+
 
 def _number(value):
     """Coerce a JSON number to float, or None when it is not a number."""
@@ -130,12 +175,29 @@ def _virtual_key_code(key: str):
     return None
 
 
+def _nav_url(value) -> str | None:
+    """A web URL fit for ``Page.navigate``, or None."""
+    if not isinstance(value, str):
+        return None
+    url = value.strip()
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _ALLOWED_NAV_SCHEMES or not parts.netloc:
+        return None
+    return url
+
+
 class _LiveStream:
     """One connected client, watching one project's browser.
 
-    Three concurrent pieces: the caller's receive loop (input in), a sender
-    task (frames out, coalesced), and a watcher task that attaches/detaches
-    as the project's page appears and disappears.
+    Four concurrent pieces: the caller's receive loop (validates input and
+    queues it), an input pump (dispatches the queue, merging as it goes), a
+    sender task (frames out, coalesced), and a watcher task that
+    attaches/detaches as the project's page appears and disappears.
     """
 
     def __init__(self, websocket, project_id, session_id,
@@ -153,6 +215,13 @@ class _LiveStream:
         self._title = ""
         self._url = ""
         self._status = None  # None | "no_browser" | "open" | "closed"
+        self._loading = False
+        self._can_go_back = False
+        self._can_go_forward = False
+        self._main_frame_id = None
+        self._last_state: dict | None = None
+        self._cursor = "default"
+        self._last_cursor_probe = 0.0
 
         # Exactly one frame may be pending. A frame that arrives while the
         # socket is still writing the previous one replaces it, so a slow
@@ -160,9 +229,15 @@ class _LiveStream:
         self._pending_frame = None
         self._frame_ready = asyncio.Event()
 
+        # Input queue — see the module docstring. Items are dicts: CDP
+        # dispatches carry ``method``/``params``/``merge`` ("move" | "wheel"
+        # | None); navigation carries ``nav``/``url``.
+        self._input_queue: collections.deque = collections.deque()
+        self._input_ready = asyncio.Event()
+
         self._closed = False
         self._send_lock = asyncio.Lock()
-        self._acks: set = set()
+        self._bg: set = set()
         self._input_counts: dict[str, int] = {}
 
     # -- socket writes -------------------------------------------------
@@ -178,15 +253,43 @@ class _LiveStream:
             # will unwind and run teardown.
             self._closed = True
             self._frame_ready.set()
+            self._input_ready.set()
 
     async def _send_error(self, message: str) -> None:
         await self._send({"type": "error", "message": message})
+
+    def _state_payload(self) -> dict:
+        return {
+            "type": "state",
+            "status": self._status,
+            "title": self._title,
+            "url": self._url,
+            "loading": self._loading,
+            "canGoBack": self._can_go_back,
+            "canGoForward": self._can_go_forward,
+        }
+
+    async def _send_state(self) -> None:
+        """Push the state row when anything in it changed since the last push."""
+        if self._status is None:
+            return
+        payload = self._state_payload()
+        if payload == self._last_state:
+            return
+        self._last_state = payload
+        await self._send(payload)
 
     async def _set_status(self, status: str) -> None:
         if status == self._status:
             return
         self._status = status
-        await self._send({"type": "state", "status": status, "title": self._title, "url": self._url})
+        await self._send_state()
+
+    def _spawn(self, coro) -> None:
+        """Run ``coro`` in the background; awaited at teardown."""
+        task = asyncio.ensure_future(coro)
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
 
     # -- CDP attach / detach -------------------------------------------
 
@@ -211,15 +314,74 @@ class _LiveStream:
         session_id = params.get("sessionId")
         cdp = self._cdp
         if session_id is not None and cdp is not None:
-            task = asyncio.ensure_future(self._ack(cdp, session_id))
-            self._acks.add(task)
-            task.add_done_callback(self._acks.discard)
+            self._spawn(self._ack(cdp, session_id))
 
     async def _ack(self, cdp, session_id) -> None:
         try:
             await cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
         except Exception:
             logger.debug("browser_live: screencastFrameAck failed", exc_info=True)
+
+    # Chrome's Page events, so url / title / loading / history reach the
+    # client when they change instead of on the 2 s poll. Sub-frames are
+    # ignored: the address bar is about the main frame.
+
+    def _is_main_frame(self, frame_id) -> bool:
+        return self._main_frame_id is None or frame_id == self._main_frame_id
+
+    def _on_frame_navigated(self, params) -> None:
+        frame = (params or {}).get("frame") if isinstance(params, dict) else None
+        if not isinstance(frame, dict) or frame.get("parentId"):
+            return
+        if frame.get("id"):
+            self._main_frame_id = frame["id"]
+        url = frame.get("url")
+        if isinstance(url, str):
+            self._url = url
+        self._spawn(self._refresh_nav_state())
+
+    def _on_navigated_within_document(self, params) -> None:
+        if not isinstance(params, dict) or not self._is_main_frame(params.get("frameId")):
+            return
+        url = params.get("url")
+        if isinstance(url, str):
+            self._url = url
+        self._spawn(self._refresh_nav_state())
+
+    def _on_frame_started_loading(self, params) -> None:
+        if not isinstance(params, dict) or not self._is_main_frame(params.get("frameId")):
+            return
+        self._loading = True
+        self._spawn(self._send_state())
+
+    def _on_frame_stopped_loading(self, params) -> None:
+        if not isinstance(params, dict) or not self._is_main_frame(params.get("frameId")):
+            return
+        self._loading = False
+        self._spawn(self._refresh_nav_state())
+
+    async def _load_history(self, cdp) -> None:
+        """Back/forward availability from Chrome's navigation history."""
+        try:
+            history = await cdp.send("Page.getNavigationHistory") or {}
+        except Exception:
+            logger.debug("browser_live: getNavigationHistory failed", exc_info=True)
+            return
+        entries = history.get("entries") or []
+        index = history.get("currentIndex")
+        if not isinstance(index, int):
+            return
+        self._can_go_back = index > 0
+        self._can_go_forward = index < len(entries) - 1
+
+    async def _refresh_nav_state(self) -> None:
+        page, cdp = self._page, self._cdp
+        if page is None or cdp is None:
+            return
+        self._title = await self._safe_title(page)
+        self._url = self._page_url(page) or self._url
+        await self._load_history(cdp)
+        await self._send_state()
 
     def _screencast_params(self) -> dict:
         """SCREENCAST_PARAMS, sized to the client's viewport request when there
@@ -248,11 +410,31 @@ class _LiveStream:
         cdp = await page.context.new_cdp_session(page)
         self._cdp = cdp
         self._page = page
+        self._loading = False
+        self._can_go_back = False
+        self._can_go_forward = False
+        self._main_frame_id = None
+        self._cursor = "default"
         # A page that (re)appears gets the panel's size before the first frame,
         # so the client never sees a frame in the wrong aspect.
         await self._apply_viewport(page)
         cdp.on("Page.screencastFrame", self._on_screencast_frame)
+        cdp.on("Page.frameNavigated", self._on_frame_navigated)
+        cdp.on("Page.navigatedWithinDocument", self._on_navigated_within_document)
+        cdp.on("Page.frameStartedLoading", self._on_frame_started_loading)
+        cdp.on("Page.frameStoppedLoading", self._on_frame_stopped_loading)
+        # Page events need the domain enabled on *this* session (the
+        # screencast does not). Best effort: without it the poll still works.
+        try:
+            await cdp.send("Page.enable")
+            tree = await cdp.send("Page.getFrameTree") or {}
+            frame = (tree.get("frameTree") or {}).get("frame") or {}
+            if frame.get("id"):
+                self._main_frame_id = frame["id"]
+        except Exception:
+            logger.debug("browser_live: Page.enable/getFrameTree failed", exc_info=True)
         await cdp.send("Page.startScreencast", self._screencast_params())
+        await self._load_history(cdp)
 
     async def _viewport_size(self, cdp) -> tuple[int, int]:
         """The page viewport in CSS pixels — the frame coordinate space.
@@ -321,6 +503,10 @@ class _LiveStream:
         cdp, self._cdp = self._cdp, None
         self._page = None
         self._pending_frame = None
+        self._loading = False
+        self._can_go_back = False
+        self._can_go_forward = False
+        self._main_frame_id = None
         if cdp is None:
             return
         try:
@@ -400,6 +586,7 @@ class _LiveStream:
                 else:
                     self._title = await self._safe_title(page)
                     self._url = self._page_url(page)
+                    await self._send_state()
             else:
                 if self._page is not None:
                     await self._detach()
@@ -446,16 +633,112 @@ class _LiveStream:
     # -- input in --------------------------------------------------------
 
     async def _cdp_send(self, method: str, params: dict) -> bool:
+        ok, _result = await self._cdp_call(method, params)
+        return ok
+
+    async def _cdp_call(self, method: str, params: dict):
         cdp = self._cdp
         if cdp is None:
             await self._send_error("no browser page is attached")
-            return False
+            return False, None
         try:
-            await cdp.send(method, params)
-            return True
+            return True, await cdp.send(method, params)
         except Exception as exc:
             await self._send_error(f"input was not delivered: {exc}")
-            return False
+            return False, None
+
+    def _enqueue(self, item: dict, count_key: str) -> None:
+        """Queue one input item, merging into the newest queued item when
+        both are moves (newest wins) or both are wheels (deltas add up)."""
+        self._count_input(count_key)
+        merge = item.get("merge")
+        queue = self._input_queue
+        if merge and queue and queue[-1].get("merge") == merge:
+            last = queue[-1]
+            if merge == "wheel":
+                item["params"]["deltaX"] += last["params"]["deltaX"]
+                item["params"]["deltaY"] += last["params"]["deltaY"]
+            queue[-1] = item
+        else:
+            queue.append(item)
+        self._input_ready.set()
+
+    async def _input_pump(self) -> None:
+        while not self._closed:
+            await self._input_ready.wait()
+            self._input_ready.clear()
+            while self._input_queue and not self._closed:
+                item = self._input_queue.popleft()
+                try:
+                    await self._run_input(item)
+                except Exception:
+                    logger.debug("browser_live: input item failed", exc_info=True)
+
+    async def _run_input(self, item: dict) -> None:
+        if "nav" in item:
+            await self._run_nav(item["nav"], item.get("url"))
+            return
+        params = item["params"]
+        if not await self._cdp_send(item["method"], params):
+            return
+        if params.get("type") == "mouseMoved":
+            await self._maybe_probe_cursor(params["x"], params["y"])
+
+    def _move_pending(self) -> bool:
+        return any(i.get("merge") == "move" for i in self._input_queue)
+
+    async def _maybe_probe_cursor(self, x: float, y: float) -> None:
+        """Mirror the page's cursor for the point the pointer came to rest at."""
+        if self._move_pending():
+            return
+        now = time.monotonic()
+        if now - self._last_cursor_probe < CURSOR_PROBE_MIN_INTERVAL_S:
+            return
+        self._last_cursor_probe = now
+        cdp = self._cdp
+        if cdp is None:
+            return
+        try:
+            result = await cdp.send("Runtime.evaluate", {
+                "expression": _CURSOR_JS % (float(x), float(y)),
+                "returnByValue": True,
+            }) or {}
+        except Exception:
+            logger.debug("browser_live: cursor probe failed", exc_info=True)
+            return
+        cursor = ((result.get("result") or {}).get("value"))
+        if not isinstance(cursor, str) or not cursor:
+            return
+        if cursor != self._cursor:
+            self._cursor = cursor
+            await self._send({"type": "cursor", "cursor": cursor})
+
+    async def _run_nav(self, action: str, url) -> None:
+        if action in ("back", "forward"):
+            ok, history = await self._cdp_call("Page.getNavigationHistory", {})
+            if not ok:
+                return
+            history = history or {}
+            entries = history.get("entries") or []
+            index = history.get("currentIndex")
+            if not isinstance(index, int):
+                return
+            target = index - 1 if action == "back" else index + 1
+            if not (0 <= target < len(entries)):
+                return  # nothing there; the client's button was stale
+            entry_id = (entries[target] or {}).get("id")
+            if entry_id is None:
+                return
+            await self._cdp_send("Page.navigateToHistoryEntry", {"entryId": entry_id})
+        elif action == "reload":
+            await self._cdp_send("Page.reload", {})
+        elif action == "stop":
+            await self._cdp_send("Page.stopLoading", {})
+        elif action == "goto":
+            await self._cdp_send("Page.navigate", {"url": url})
+        # Chrome's Page events carry the rest (url, loading, history); this
+        # covers a session where they are unavailable.
+        await self._refresh_nav_state()
 
     async def _handle_mouse(self, msg: dict) -> None:
         action = msg.get("action")
@@ -485,8 +768,11 @@ class _LiveStream:
         if action == "wheel":
             params["deltaX"] = _number(msg.get("deltaX")) or 0.0
             params["deltaY"] = _number(msg.get("deltaY")) or 0.0
-        if await self._cdp_send("Input.dispatchMouseEvent", params):
-            self._count_input(f"mouse.{action}")
+        merge = action if action in ("move", "wheel") else None
+        self._enqueue(
+            {"method": "Input.dispatchMouseEvent", "params": params, "merge": merge},
+            f"mouse.{action}",
+        )
 
     async def _handle_key(self, msg: dict) -> None:
         action = msg.get("action")
@@ -511,8 +797,10 @@ class _LiveStream:
         if virtual_key is not None:
             params["windowsVirtualKeyCode"] = virtual_key
             params["nativeVirtualKeyCode"] = virtual_key
-        if await self._cdp_send("Input.dispatchKeyEvent", params):
-            self._count_input(f"key.{action}")
+        self._enqueue(
+            {"method": "Input.dispatchKeyEvent", "params": params, "merge": None},
+            f"key.{action}",
+        )
 
     async def _handle_text(self, msg: dict) -> None:
         text = msg.get("text")
@@ -521,8 +809,23 @@ class _LiveStream:
             return
         if not text:
             return
-        if await self._cdp_send("Input.insertText", {"text": text}):
-            self._count_input("text")
+        self._enqueue(
+            {"method": "Input.insertText", "params": {"text": text}, "merge": None},
+            "text",
+        )
+
+    async def _handle_nav(self, msg: dict) -> None:
+        action = msg.get("action")
+        if action not in _NAV_ACTIONS:
+            await self._send_error(f"unknown nav action: {action!r}")
+            return
+        url = None
+        if action == "goto":
+            url = _nav_url(msg.get("url"))
+            if url is None:
+                await self._send_error("goto needs an http(s) URL")
+                return
+        self._enqueue({"nav": action, "url": url}, f"nav.{action}")
 
     async def _handle_viewport(self, msg: dict) -> None:
         """Fit the page to the panel: resize the viewport, restart the
@@ -564,6 +867,8 @@ class _LiveStream:
             await self._handle_key(msg)
         elif msg_type == "text":
             await self._handle_text(msg)
+        elif msg_type == "nav":
+            await self._handle_nav(msg)
         elif msg_type in ("ping", "pong"):
             pass
         else:
@@ -574,6 +879,7 @@ class _LiveStream:
     async def run(self) -> None:
         sender = asyncio.ensure_future(self._sender())
         watcher = asyncio.ensure_future(self._watcher())
+        pump = asyncio.ensure_future(self._input_pump())
         try:
             while not self._closed:
                 try:
@@ -591,11 +897,12 @@ class _LiveStream:
         finally:
             self._closed = True
             self._frame_ready.set()
-            for task in (sender, watcher):
+            self._input_ready.set()
+            for task in (sender, watcher, pump):
                 task.cancel()
-            await asyncio.gather(sender, watcher, return_exceptions=True)
-            if self._acks:
-                await asyncio.gather(*list(self._acks), return_exceptions=True)
+            await asyncio.gather(sender, watcher, pump, return_exceptions=True)
+            if self._bg:
+                await asyncio.gather(*list(self._bg), return_exceptions=True)
             await self._detach()
             await self._flush_input_log()
 
