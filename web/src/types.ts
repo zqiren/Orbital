@@ -932,6 +932,12 @@ export interface QueueItem {
   idempotency_key: string | null;
   interrupted_count: number;
   created_at: string;
+  /**
+   * Spec 079 — the sub-agent handle chosen to RUN this item, e.g. 'codex'.
+   * Absent or null means Orbital (the management agent) runs it, which is the
+   * default and what every item created before 079 carries.
+   */
+  agent?: string | null;
 }
 
 export interface QueueSnapshot {
@@ -1019,4 +1025,10 @@ export interface Trigger {
   last_triggered: string | null;
   trigger_count: number;
   created_at: string;
+  /**
+   * Spec 079 — the sub-agent handle chosen to RUN this automation. Absent or
+   * null means Orbital (the management agent) runs it, which is the default
+   * and what every automation created before 079 carries.
+   */
+  agent?: string | null;
 }

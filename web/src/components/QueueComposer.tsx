@@ -7,16 +7,29 @@ import { useRef, useState } from 'react';
 import { useT } from '../i18n/useT';
 import { useAttachments } from '../hooks/useAttachments';
 import AttachmentChip from './AttachmentChip';
+import PinTargetSelect from './PinTargetSelect';
 
 interface QueueComposerProps {
   /** Owning project — attachments upload into its workspace `uploads/`. */
   projectId: string;
   onSubmit: (
     content: string,
-    opts: { priority: number; review: boolean; fileRefs: string[] },
+    opts: {
+      priority: number;
+      review: boolean;
+      fileRefs: string[];
+      /** Spec 079 — chosen worker slug, or null for Orbital (the manager). */
+      agent: string | null;
+    },
   ) => Promise<void> | void;
   disabled?: boolean;
   hint?: string;
+  /**
+   * Spec 079 — installed sub-agents offered as runners for this item. The
+   * picker hides itself when the list is empty, so a user with no workers sees
+   * exactly the composer they see today.
+   */
+  agents?: Array<{ slug: string; name: string }>;
 }
 
 export default function QueueComposer({
@@ -24,11 +37,15 @@ export default function QueueComposer({
   onSubmit,
   disabled,
   hint,
+  agents = [],
 }: QueueComposerProps) {
   const t = useT();
   const [value, setValue] = useState('');
   const [pinned, setPinned] = useState(false);
   const [review, setReview] = useState(false);
+  // Per item, never sticky — reset alongside pinned/review after each add, the
+  // same way the two checkboxes are (spec 079 §6.3).
+  const [agent, setAgent] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -58,10 +75,16 @@ export default function QueueComposer({
       const fileRefs = attachments
         .filter((a) => a.status === 'done' && a.uploadedPath)
         .map((a) => a.uploadedPath!);
-      await onSubmit(value.trim(), { priority: pinned ? 1 : 0, review, fileRefs });
+      await onSubmit(value.trim(), {
+        priority: pinned ? 1 : 0,
+        review,
+        fileRefs,
+        agent,
+      });
       setValue('');
       setPinned(false);
       setReview(false);
+      setAgent(null);
       setAttachError(null);
       clearAttachments();
     } finally {
@@ -152,6 +175,17 @@ export default function QueueComposer({
           <span className="text-2xs text-muted max-md:w-full">{hint}</span>
         )}
         <div className="flex items-center gap-3 ml-auto max-md:ml-0">
+          {/* Who runs this item. Renders nothing when no workers are
+              installed, so the option row is unchanged for those users. */}
+          <PinTargetSelect
+            agents={agents}
+            value={agent}
+            onChange={setAgent}
+            disabled={disabled}
+            variant="standalone"
+            managerLabel={t('queue.composer.agent.aria')}
+            data-testid="queue-composer-agent"
+          />
           <label className="flex items-center gap-1 cursor-pointer select-none">
             <input
               type="checkbox"
