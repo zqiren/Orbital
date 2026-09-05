@@ -2893,6 +2893,64 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
   const isDragActive = dragCounter > 0;
 
+  // Spec 078 §5.4 — the annotation chip. Collapsed it is just the count;
+  // expanded it lists each quote with an editable note and a remove control,
+  // so a note typed in a hurry on the panel can be fixed before the message
+  // goes. Hoisted out of the composer card because it has to render in BOTH
+  // composer states: while the queue owns the chat the card is replaced by
+  // ComposerDisabledPrompt, and a strip that lived inside the card left
+  // annotations staged with nothing on screen to show for them (2026-09-05:
+  // "when i do the browser annotation, where did it go?").
+  const annotationStrip = annotations.length > 0 && (
+    <div className="flex flex-col gap-1" data-testid="annotation-strip">
+      <button
+        type="button"
+        onClick={() => setAnnotationsOpen((open) => !open)}
+        aria-expanded={annotationsOpen}
+        data-testid="annotation-chip"
+        className="self-start inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
+      >
+        {annotations.length === 1
+          ? t('composer.annotations.one')
+          : t('composer.annotations.other', { n: annotations.length })}
+        {annotationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      {annotationsOpen && (
+        <ul
+          className="flex flex-col gap-1 max-h-[140px] overflow-y-auto"
+          data-testid="annotation-list"
+        >
+          {annotations.map((a) => (
+            <li key={a.n} className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-secondary shrink-0">[{a.n}]</span>
+              <span
+                className="text-[11px] text-secondary truncate max-w-[40%]"
+                title={annotationSummary(a, chromeTr)}
+              >
+                {annotationSummary(a, chromeTr)}
+              </span>
+              <input
+                value={a.note}
+                onChange={(e) => updateAnnotationNote(a.n, e.target.value)}
+                placeholder={t('panel.annotation.note')}
+                aria-label={`${t('panel.annotation.note')} [${a.n}]`}
+                className="flex-1 min-w-0 text-[11px] bg-transparent border border-border rounded px-1.5 py-0.5 text-primary outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={() => removeAnnotation(a.n)}
+                aria-label={`${t('panel.annotation.remove')} [${a.n}]`}
+                className="shrink-0 text-secondary hover:text-primary text-xs leading-none px-1"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
   return (
     <div
       className="flex flex-col h-full relative"
@@ -3560,7 +3618,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-card max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
         {queueActive ? (
-          <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+          // The panel stays usable while the queue runs, so annotations can
+          // still be staged here. Show them above the notice — pausing the
+          // queue (the notice's own button) hands them back to the composer.
+          <div className="flex flex-col gap-2">
+            {annotationStrip}
+            <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+          </div>
         ) : (
         <>
         {/* Context meter. Sits above the composer rather than in the project
@@ -3612,59 +3676,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               )}
             </div>
           )}
-          {/* Spec 078 §5.4 — the annotation chip. Collapsed it is just the
-              count; expanded it lists each quote with an editable note and a
-              remove control, so a note typed in a hurry on the panel can be
-              fixed before the message goes. */}
-          {annotations.length > 0 && (
-            <div className="flex flex-col gap-1" data-testid="annotation-strip">
-              <button
-                type="button"
-                onClick={() => setAnnotationsOpen((open) => !open)}
-                aria-expanded={annotationsOpen}
-                data-testid="annotation-chip"
-                className="self-start inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
-              >
-                {annotations.length === 1
-                  ? t('composer.annotations.one')
-                  : t('composer.annotations.other', { n: annotations.length })}
-                {annotationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              </button>
-              {annotationsOpen && (
-                <ul
-                  className="flex flex-col gap-1 max-h-[140px] overflow-y-auto"
-                  data-testid="annotation-list"
-                >
-                  {annotations.map((a) => (
-                    <li key={a.n} className="flex items-center gap-2">
-                      <span className="font-mono text-[11px] text-secondary shrink-0">[{a.n}]</span>
-                      <span
-                        className="text-[11px] text-secondary truncate max-w-[40%]"
-                        title={annotationSummary(a, chromeTr)}
-                      >
-                        {annotationSummary(a, chromeTr)}
-                      </span>
-                      <input
-                        value={a.note}
-                        onChange={(e) => updateAnnotationNote(a.n, e.target.value)}
-                        placeholder={t('panel.annotation.note')}
-                        aria-label={`${t('panel.annotation.note')} [${a.n}]`}
-                        className="flex-1 min-w-0 text-[11px] bg-transparent border border-border rounded px-1.5 py-0.5 text-primary outline-none focus:border-accent"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeAnnotation(a.n)}
-                        aria-label={`${t('panel.annotation.remove')} [${a.n}]`}
-                        className="shrink-0 text-secondary hover:text-primary text-xs leading-none px-1"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
+          {annotationStrip}
           {attachments.length > 0 && (
             <div
               className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto"

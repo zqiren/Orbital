@@ -3216,6 +3216,25 @@ describe('Spec 078 ChatView: the annotation chip', () => {
     expect(chipButton()?.textContent).toContain('2 annotations');
   });
 
+  // 2026-09-05, from the installer: "when i do the browser annotation, where
+  // did it go?" — the panel stays usable while the queue runs, but the chip
+  // lived inside the composer card, which ComposerDisabledPrompt replaces.
+  // The annotation was staged with nothing on screen to show for it.
+  it('still shows the chip while the queue owns the composer', async () => {
+    queueState = 'running';
+    __seedAnnotations('s1', [browserAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeTruthy();
+    expect(chipButton()?.textContent).toContain('1 annotation');
+    // And it is still the working control, not a read-only echo.
+    await act(async () => {
+      chipButton()!.click();
+    });
+    expect(container.querySelector('[data-testid="annotation-list"]')).toBeTruthy();
+  });
+
   it(`shows only THIS session's annotations`, async () => {
     __seedAnnotations('other', [browserAnnotation]);
     await renderChat({ sessionId: 's1' });
