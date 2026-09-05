@@ -46,22 +46,40 @@ class LifecycleObserver:
         # coordinator. Fired on every SUPPRESSED (pinned) terminal event so
         # the 10-minute quiet-period timer starts/resets. None → no-op.
         self.pinned_terminal_hook = None
+        # Queue-dispatch registry, the same push model as the pinned set above:
+        # a queue item the user assigned to a worker is dispatched with
+        # ``initiator="queue_item"``. Its terminal event is the item's own
+        # outcome, so the dispatcher gets first refusal on it via
+        # ``queue_terminal_hook`` before the management agent is woken.
+        self._queue_dispatches: set[tuple[str, str | None, str]] = set()
+        # ``(project_id, session_id, handle, kind, summary, transcript_path)
+        # -> bool``, wired by agents_v2.configure to the queue dispatcher.
+        # True means the dispatcher settled its item from this event and no
+        # verdict turn is needed — the row still lands, the manager never
+        # wakes, exactly like a pinned dispatch. False falls through to
+        # today's wake (no matching item, or the item asked to be reviewed).
+        self.queue_terminal_hook = None
 
     def set_dispatch_initiator(self, project_id: str, handle: str,
                                initiator: str, *,
                                session_id: str | None = None) -> None:
         """Record who initiated the CURRENT dispatch for this handle.
 
-        ``initiator == "user_pinned"`` marks the key pinned; anything else
-        clears it. Called by ``SubAgentManager._dispatch_prompt_locked`` for
-        every dispatch (immediate and queue-drained), so the registry always
-        reflects the latest turn's initiator when its terminal event fires.
+        ``initiator == "user_pinned"`` marks the key pinned, ``"queue_item"``
+        marks it a queue dispatch; anything else clears both. Called by
+        ``SubAgentManager._dispatch_prompt_locked`` for every dispatch
+        (immediate and queue-drained), so the registry always reflects the
+        latest turn's initiator when its terminal event fires.
         """
         key = (project_id, session_id, handle)
         if initiator == "user_pinned":
             self._pinned_dispatches.add(key)
         else:
             self._pinned_dispatches.discard(key)
+        if initiator == "queue_item":
+            self._queue_dispatches.add(key)
+        else:
+            self._queue_dispatches.discard(key)
 
     def _is_pinned_dispatch(self, project_id: str, handle: str,
                             session_id: str | None) -> bool:
@@ -78,6 +96,33 @@ class LifecycleObserver:
             logger.exception(
                 "pinned_terminal_hook raised for %s/%s", project_id, session_id,
             )
+
+    def _settle_queue_item(self, project_id: str, handle: str,
+                           session_id: str | None, *, kind: str,
+                           summary: str, transcript_path: str) -> bool:
+        """Offer a queue dispatch's terminal event to the queue dispatcher.
+
+        True when the dispatcher closed its item on this event — the caller
+        then suppresses the wake, because the verdict turn it would buy has
+        already happened: the worker the user picked finished, and what it
+        finished with IS the outcome. Never raises: a hook failure falls back
+        to waking the manager, which is what happened before this existed.
+        """
+        if self.queue_terminal_hook is None:
+            return False
+        if (project_id, session_id, handle) not in self._queue_dispatches:
+            return False
+        try:
+            return bool(self.queue_terminal_hook(
+                project_id, session_id, handle,
+                kind=kind, summary=summary, transcript_path=transcript_path,
+            ))
+        except Exception:
+            logger.exception(
+                "queue_terminal_hook raised for %s/%s (%s)",
+                project_id, session_id, handle,
+            )
+            return False
 
     def _absorb_terminal(self, project_id: str, handle: str,
                          session_id: str | None, *, kind: str,
@@ -316,6 +361,13 @@ class LifecycleObserver:
             )
         content = display_content + guidance
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        # An assigned queue item closes on its worker's finish, not on a
+        # manager verdict turn (2026-09-05). The row below still lands so the
+        # session reads honestly; only the wake is spared.
+        queue_settled = self._settle_queue_item(
+            project_id, handle, session_id, kind="completed",
+            summary=summary_text, transcript_path=transcript_path,
+        )
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="completed",
             summary=summary_text, transcript_path=transcript_path,
@@ -332,7 +384,8 @@ class LifecycleObserver:
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "completed",
                       "display_content": display_content,
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True}
+                         if (pinned or queue_settled) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
@@ -350,6 +403,13 @@ class LifecycleObserver:
         """Sub-agent encountered an error."""
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        # A worker that errored out IS the assigned item's outcome: the
+        # dispatcher blocks the item with this reason rather than spending a
+        # manager turn to reach the same conclusion.
+        queue_settled = self._settle_queue_item(
+            project_id, handle, session_id, kind="error",
+            summary=error, transcript_path=transcript_path,
+        )
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="error",
             summary=error, transcript_path=transcript_path,
@@ -361,7 +421,8 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "error",
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True}
+                         if (pinned or queue_settled) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)
@@ -392,6 +453,10 @@ class LifecycleObserver:
         # (FanoutRegistry.absorb_terminal keeps the existing value when
         # passed a falsy transcript_path).
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
+        queue_settled = self._settle_queue_item(
+            project_id, handle, session_id, kind="failed",
+            summary=reason, transcript_path="",
+        )
         absorbed = self._absorb_terminal(
             project_id, handle, session_id, kind="failed",
             summary=reason, transcript_path="",
@@ -401,7 +466,8 @@ class LifecycleObserver:
             await self._inject(
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "failed",
-                      **({"suppress_wake": True} if pinned else {})},
+                      **({"suppress_wake": True}
+                         if (pinned or queue_settled) else {})},
             )
         if pinned:
             self._fire_pinned_terminal_hook(project_id, session_id)

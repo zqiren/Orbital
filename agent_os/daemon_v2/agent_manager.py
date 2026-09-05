@@ -1925,12 +1925,13 @@ class AgentManager:
                     session_id=loaded.session_uuid, session=loaded,
                 )
                 return "delivered"
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "inject_system_message(%s/%s): wake failed; event is "
                     "persisted on disk", project_id, session_id,
                     exc_info=True,
                 )
+                self._note_wake_failed(project_id, session_id, exc)
                 return "persisted"
 
         # If loop is idle, append directly (safe — no pending tool calls) and wake
@@ -1946,7 +1947,19 @@ class AgentManager:
                 # Pinned dispatch (spec 074): append only, never start a
                 # management turn.
                 return "suppressed"
-            await self._start_loop(project_id, session_id=session_id)
+            try:
+                await self._start_loop(project_id, session_id=session_id)
+            except Exception as exc:
+                # Same disposition as the hydrated path above: the row is
+                # already durable, so the event is not lost — but whatever is
+                # waiting on this turn has to be told, not left hanging.
+                logger.warning(
+                    "inject_system_message(%s/%s): wake failed on a live "
+                    "handle; event is persisted",
+                    project_id, session_id, exc_info=True,
+                )
+                self._note_wake_failed(project_id, session_id, exc)
+                return "persisted"
             return "delivered"
 
         # Loop is running — defer for safe insertion after tool batch
@@ -4428,6 +4441,48 @@ class AgentManager:
 
     def get_dispatcher(self, project_id: str) -> "QueueDispatcher | None":
         return self._dispatchers.get(project_id)
+
+    def _note_wake_failed(self, project_id: str, session_id: str,
+                          exc: BaseException) -> None:
+        """Tell the queue dispatcher that a wake for ``session_id`` could not
+        start, with the real reason.
+
+        Without this a queue item whose verdict turn cannot run (no API key,
+        a rejected key, an unreachable provider) sat RUNNING until the
+        30-minute backstop and was then blocked as a timeout — the one thing
+        that was NOT wrong with it. Never raises: reporting must not break the
+        injection path it rides on.
+        """
+        try:
+            from agent_os.daemon_v2.provider_errors import classify_llm_error
+
+            code, message = classify_llm_error(exc)
+            dispatcher = self._dispatchers.get(project_id)
+            if dispatcher is None:
+                return
+            dispatcher.on_wake_failed(session_id, reason=message, code=code)
+        except Exception:
+            logger.exception(
+                "_note_wake_failed(%s/%s) raised", project_id, session_id,
+            )
+
+    def on_queue_worker_terminal(
+        self, project_id: str, session_id: str | None, handle: str, *,
+        kind: str, summary: str = "", transcript_path: str = "",
+    ) -> bool:
+        """Route a queue dispatch's terminal event to that project's dispatcher.
+
+        Wired to ``LifecycleObserver.queue_terminal_hook``. True means the
+        dispatcher closed its item from this event, so the terminal row lands
+        without waking the management agent for a verdict it already has.
+        """
+        dispatcher = self._dispatchers.get(project_id)
+        if dispatcher is None or session_id is None:
+            return False
+        return dispatcher.on_worker_terminal(
+            session_id, handle,
+            kind=kind, summary=summary, transcript_path=transcript_path,
+        )
 
     def build_budget_config(self, project_id: str) -> dict:
         """Resolve the LIVE budget config for ``project_id`` (Budget Piece 2).

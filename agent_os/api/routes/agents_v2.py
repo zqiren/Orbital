@@ -416,6 +416,12 @@ def configure(project_store, agent_manager, ws_manager, sub_agent_manager=None,
             lifecycle_observer.pinned_terminal_hook = (
                 _pinned_consolidation.note_pinned_terminal
             )
+            # An assigned queue item is closed by its worker's terminal event
+            # (2026-09-05). The dispatcher gets the event first and reports
+            # whether it settled the item; only then is the wake suppressed.
+            lifecycle_observer.queue_terminal_hook = (
+                agent_manager.on_queue_worker_terminal
+            )
     else:
         _pinned_consolidation = None
 

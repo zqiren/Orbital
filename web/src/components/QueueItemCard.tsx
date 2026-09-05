@@ -7,6 +7,7 @@ import type { QueueAttempt, QueueItem } from '../types';
 import { useT } from '../i18n/useT';
 import MessageAvatar from './MessageAvatar';
 import type { StringKey } from '../i18n/strings';
+import { providerErrorKey } from '../utils/providerError';
 
 // Localizable block-reason codes (queue/dispatcher.py). `agent_declared` is
 // deliberately absent — that prose is agent content and renders verbatim. So is
@@ -24,10 +25,19 @@ const BLOCK_REASON_KEYS: Record<string, StringKey> = {
   contract_violation: 'queue.blockReason.contract_violation',
 };
 
+// Provider/credential codes reach the queue too: an item whose management
+// turn could not START is blocked with the classifier's own code
+// (agent_manager._note_wake_failed). Route them through the same strings chat
+// uses for the identical failure rather than showing a raw SDK message.
+const PROVIDER_CODES = new Set([
+  'missing_api_key', 'missing_card', 'invalid_api_key',
+  'model_not_found', 'provider_unreachable', 'provider_error',
+]);
+
 function blockReasonText(latest: QueueAttempt, t: ReturnType<typeof useT>): string {
-  const key = latest.block_reason_code
-    ? BLOCK_REASON_KEYS[latest.block_reason_code]
-    : undefined;
+  const code = latest.block_reason_code;
+  if (code && PROVIDER_CODES.has(code)) return t(providerErrorKey(code));
+  const key = code ? BLOCK_REASON_KEYS[code] : undefined;
   return key ? t(key) : (latest.block_reason ?? '');
 }
 

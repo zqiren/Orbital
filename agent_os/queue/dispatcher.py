@@ -985,6 +985,165 @@ class QueueDispatcher:
             item, session_id, agent, worker_content,
         )
 
+    # Terminal kinds that mean the worker got there. Everything else the
+    # lifecycle observer can report (error, failed, …) is a stop, not a finish.
+    _WORKER_DONE_KINDS = {"completed"}
+
+    def on_worker_terminal(
+        self, session_id: str, handle: str, *, kind: str,
+        summary: str = "", transcript_path: str = "",
+    ) -> bool:
+        """Close the item this worker was running. True when it did.
+
+        The user picked the runner, so the worker's terminal event IS the
+        item's outcome: finished → DONE with the worker's own final message as
+        the summary, anything else → BLOCKED with the worker's own reason. No
+        management turn is spent reaching the same conclusion, which also
+        removes the whole class of hangs where the wake could not start (a
+        missing or rejected API key used to leave the item RUNNING until the
+        30-minute backstop).
+
+        Returns False — leaving today's wake-for-verdict path in place — when
+        the item asked to be reviewed (``review_before_advance``), or when no
+        RUNNING item of ours matches this session and handle.
+
+        Called from the lifecycle observer's terminal path, i.e. on the event
+        loop and NOT inside ``_run``; it only touches the store and the ws,
+        both of which are sync. The hold in ``_await_and_handle`` notices the
+        item left RUNNING and returns without settling it a second time.
+        """
+        item = self._running_item_for(session_id, handle)
+        if item is None:
+            return False
+        if item.review_before_advance:
+            logger.info(
+                "dispatcher(%s): item %s is review-before-advance; leaving the "
+                "verdict to the manager's wake turn",
+                self._project_id, item.id,
+            )
+            return False
+
+        if kind in self._WORKER_DONE_KINDS:
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.COMPLETED,
+                summary=summary or "",
+            )
+            self._log_attempt_close(
+                item.id, "completed",
+                first_turn_signaled=True,
+                corrective_used=False,
+                reason=f"worker '{handle}' completed",
+            )
+            self._store.set_item_state(item.id, ItemState.DONE)
+            self._broadcast_advance(item.id, "completed")
+        else:
+            reason = summary or f"the assigned agent '{handle}' did not finish"
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.BLOCKED,
+                block_reason=reason,
+                block_reason_code="worker_terminal",
+            )
+            self._log_attempt_close(
+                item.id, "blocked",
+                first_turn_signaled=True,
+                corrective_used=False,
+                reason=reason,
+            )
+            self._store.set_item_state(item.id, ItemState.BLOCKED)
+            self._broadcast_advance(item.id, "blocked")
+
+        logger.info(
+            "dispatcher(%s): item %s settled from worker '%s' terminal "
+            "(kind=%s); no verdict turn",
+            self._project_id, item.id, handle, kind,
+        )
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+        return True
+
+    def on_wake_failed(self, session_id: str, *, reason: str,
+                       code: str = "wake_failed") -> bool:
+        """Block the item running in ``session_id`` when its wake cannot start.
+
+        A held item is waiting for a management turn (the verdict on a
+        reviewed worker item, or a continuation). If starting that turn fails
+        outright — no API key, a key the provider rejects, an unreachable
+        base URL — no turn will ever arrive, and the hold would sit out the
+        full runtime backstop before blocking the item as a *timeout*, which
+        says nothing about what actually went wrong.
+
+        Called from the injection path (same event loop, not inside ``_run``).
+        The hold notices the item left RUNNING and returns "settled".
+        """
+        item = self._running_item_by_session(session_id)
+        if item is None:
+            return False
+        self._store.close_latest_attempt(
+            item.id,
+            outcome=AttemptOutcome.BLOCKED,
+            block_reason=reason,
+            block_reason_code=code,
+        )
+        self._log_attempt_close(
+            item.id, "blocked",
+            first_turn_signaled=False,
+            corrective_used=False,
+            reason=f"wake failed: {reason}",
+        )
+        self._store.set_item_state(item.id, ItemState.BLOCKED)
+        self._broadcast_advance(item.id, "blocked")
+        logger.warning(
+            "dispatcher(%s): item %s blocked — its wake could not start (%s: %s)",
+            self._project_id, item.id, code, reason,
+        )
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+        return True
+
+    def _running_item_by_session(self, session_id: str):
+        """The RUNNING item whose latest attempt runs in ``session_id``, or
+        None. Unlike ``_running_item_for`` this does not care which agent is
+        assigned: a wake that cannot start fails the item either way."""
+        try:
+            qstate = self._store.load()
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): queue read during wake failure failed",
+                self._project_id,
+            )
+            return None
+        for item in qstate.items:
+            if item.state != ItemState.RUNNING:
+                continue
+            if item.attempts and item.attempts[-1].session_id == session_id:
+                return item
+        return None
+
+    def _running_item_for(self, session_id: str, handle: str):
+        """The RUNNING item assigned to ``handle`` whose latest attempt runs in
+        ``session_id``, or None. Both halves are checked: a session identifies
+        the item, and the handle guards against a stray worker in it."""
+        try:
+            qstate = self._store.load()
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): queue read during worker terminal failed",
+                self._project_id,
+            )
+            return None
+        for item in qstate.items:
+            if item.state != ItemState.RUNNING:
+                continue
+            if _clean_agent(getattr(item, "agent", None)) != handle:
+                continue
+            if item.attempts and item.attempts[-1].session_id == session_id:
+                return item
+        return None
+
     async def _send_to_worker_and_hold(
         self, item: ItemRecord, session_id: str, agent: str,
         worker_content: str,
@@ -1613,6 +1772,15 @@ class QueueDispatcher:
         spec 079's direct worker dispatch — so the two cannot drift on what a
         pause or an expired backstop means for the item.
         """
+        if hold == "settled":
+            # Already closed by on_worker_terminal — the attempt is shut, the
+            # state is final, the advance was broadcast. Nothing left to do.
+            logger.info(
+                "dispatcher(%s): item %s slot-hold released (settled by the "
+                "worker's terminal event)",
+                self._project_id, item.id,
+            )
+            return
         if hold in ("paused", "shutdown"):
             # Preserve the attempt exactly (mirror the pause guard in
             # _await_and_handle): no close, no advance, no rotation. resume() /
@@ -1707,6 +1875,8 @@ class QueueDispatcher:
           * ``"cancelled"`` — the loop/session was cancelled out-of-band.
           * ``"timeout"``   — the backstop deadline elapsed (continuation never
                               arrived).
+          * ``"settled"``   — the item was closed from its worker's terminal
+                              event (spec 079 amendment); nothing to dispose.
         """
         parked_task = self._agent_manager.get_loop_task(
             self._project_id, session_id=session_id,
@@ -1727,8 +1897,17 @@ class QueueDispatcher:
             if self._stop_generation != gen_at_start:
                 return "paused"
             try:
-                if self._store.load().state == QueueRunState.PAUSED:
+                qstate = self._store.load()
+                if qstate.state == QueueRunState.PAUSED:
                     return "paused"
+                # Settled out from under the hold: ``on_worker_terminal``
+                # closed this item from the worker's own terminal event, so
+                # there is no verdict turn left to wait for.
+                current = next(
+                    (i for i in qstate.items if i.id == item.id), None,
+                )
+                if current is not None and current.state != ItemState.RUNNING:
+                    return "settled"
             except Exception:
                 logger.exception(
                     "dispatcher(%s): queue-state read during slot-hold failed; "
