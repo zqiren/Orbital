@@ -158,25 +158,6 @@ export default function BrowserView({
     // exists once a frame has arrived, and it is that element we must watch.
   }, [hasFrame, status]);
 
-  // Fit the page to the panel (spec 078 D9 amendment): tell the route the
-  // canvas's CSS size whenever the stream is open and the size is known, and
-  // again when a frame arrives in a different size (a fresh page opened at the
-  // browser's default viewport). Debounced; never resent for the same size.
-  const lastViewportRef = useRef<string>('');
-  useEffect(() => {
-    if (status !== 'open' || canvasWidth < 200 || canvasHeight < 200) return;
-    const w = Math.round(canvasWidth);
-    const h = Math.round(canvasHeight);
-    const key = `${w}x${h}@${dpr}`;
-    const frameMatches = frame && Math.abs(frame.width - w) <= 2 && Math.abs(frame.height - h) <= 2;
-    if (lastViewportRef.current === key && (frameMatches || !frame)) return;
-    const t = setTimeout(() => {
-      lastViewportRef.current = key;
-      send({ type: 'viewport', width: w, height: h, dpr });
-    }, 150);
-    return () => clearTimeout(t);
-  }, [status, canvasWidth, canvasHeight, dpr, frame, send]);
-
   // Paint each incoming frame onto the canvas, coalesced with rAF so a burst
   // of screencast frames doesn't queue up multiple paints.
   // The last decoded frame, kept so a resize (which resets the canvas bitmap)
@@ -188,9 +169,10 @@ export default function BrowserView({
     const ctx = canvas?.getContext('2d');
     if (!img || !frame || !canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Contain-fit: once the page has taken the panel's size the frame fills
-    // the canvas exactly; in the moment before, it is letterboxed rather
-    // than stretched.
+    // Contain-fit: the panel mirrors the agent's page at the page's own
+    // size, so the frame is letterboxed, never stretched — and the page is
+    // never resized to the panel (that made the agent browse a phone-width
+    // layout whenever someone watched; 2026-09-05).
     const fit = fitRect(frame.width, frame.height, canvas.width, canvas.height);
     ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
   }, [frame]);
