@@ -461,7 +461,15 @@ export default function BrowserView({
     [go],
   );
 
-  const toolbar = status === 'open' && (
+  // The header is part of what the Browser view IS, so it is there in every
+  // state — not only while a page happens to be live (2026-09-05, from the
+  // installer: "the browser doesnt have header"). Every project on a fresh
+  // daemon reports no_browser until the agent browses something, which is
+  // exactly when a user opens the panel wanting to look something up. Back /
+  // forward / reload need a page and disable themselves without one; the
+  // address field always works, because typing an address is how the user
+  // opens the first page (the route creates it — see browser_live.py).
+  const toolbar = (
     <div
       role="toolbar"
       aria-label={t('panel.browser.label')}
@@ -471,7 +479,7 @@ export default function BrowserView({
         type="button"
         aria-label={t('panel.browser.back')}
         title={t('panel.browser.back')}
-        disabled={!canGoBack}
+        disabled={!live || !canGoBack}
         onClick={() => go('back')}
         className="rounded p-1 text-secondary hover:bg-nav-hover hover:text-primary disabled:opacity-40 disabled:hover:bg-transparent"
       >
@@ -481,7 +489,7 @@ export default function BrowserView({
         type="button"
         aria-label={t('panel.browser.forward')}
         title={t('panel.browser.forward')}
-        disabled={!canGoForward}
+        disabled={!live || !canGoForward}
         onClick={() => go('forward')}
         className="rounded p-1 text-secondary hover:bg-nav-hover hover:text-primary disabled:opacity-40 disabled:hover:bg-transparent"
       >
@@ -492,8 +500,9 @@ export default function BrowserView({
         aria-label={loading ? t('panel.browser.stop') : t('panel.browser.reload')}
         title={loading ? t('panel.browser.stop') : t('panel.browser.reload')}
         aria-busy={loading || undefined}
+        disabled={!live}
         onClick={() => go(loading ? 'stop' : 'reload')}
-        className="rounded p-1 text-secondary hover:bg-nav-hover hover:text-primary"
+        className="rounded p-1 text-secondary hover:bg-nav-hover hover:text-primary disabled:opacity-40 disabled:hover:bg-transparent"
       >
         {loading ? <X size={14} aria-hidden="true" /> : <RotateCw size={14} aria-hidden="true" />}
       </button>
@@ -640,8 +649,9 @@ export default function BrowserView({
 
   if (status === 'connecting') {
     return (
-      <div ref={wrapperRef} className="p-3 text-xs text-secondary">
-        {t('panel.browser.connecting')}
+      <div ref={wrapperRef} className="flex h-full w-full flex-col">
+        {toolbar}
+        <div className="p-3 text-xs text-secondary">{t('panel.browser.connecting')}</div>
       </div>
     );
   }
@@ -649,6 +659,7 @@ export default function BrowserView({
   if (fallbackDataUrl) {
     return (
       <div ref={wrapperRef} className="flex h-full w-full flex-col">
+        {toolbar}
         <div className="flex flex-1 items-center justify-center overflow-auto bg-sidebar p-2">
           <img
             src={fallbackDataUrl}
@@ -665,8 +676,9 @@ export default function BrowserView({
   }
 
   return (
-    <div ref={wrapperRef} className="p-3 text-xs text-secondary">
-      {t('panel.browser.empty')}
+    <div ref={wrapperRef} className="flex h-full w-full flex-col">
+      {toolbar}
+      <div className="p-3 text-xs text-secondary">{t('panel.browser.empty')}</div>
     </div>
   );
 }

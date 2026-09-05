@@ -430,10 +430,54 @@ describe('BrowserView — toolbar', () => {
     expect(screen.getByLabelText('Address')).toHaveValue('');
   });
 
-  it('no toolbar without a page', () => {
-    liveMock.mockReturnValue(live({ status: 'closed', frame: { jpegDataUrl: 'd', width: 8, height: 8 }, title: 'T' }));
+  // 2026-09-05, from the installer: "the browser doesnt have header". Every
+  // project reports no_browser until the agent browses something, and that is
+  // exactly when a user opens the panel wanting to look something up — so the
+  // header is there in every state, and the address field is the way in.
+  it('keeps the header with no page open, and the address field opens one', () => {
+    const nav = vi.fn();
+    liveMock.mockReturnValue(live({ status: 'no_browser', nav }));
     renderView();
-    expect(screen.queryByLabelText('Address')).toBeNull();
+
+    expect(screen.getByText('No page open yet.')).toBeInTheDocument();
+    const field = screen.getByLabelText('Address') as HTMLInputElement;
+    expect(field).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Forward' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeDisabled();
+
+    fireEvent.change(field, { target: { value: 'example.com' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(nav).toHaveBeenCalledWith('goto', 'https://example.com');
+  });
+
+  it('keeps the header over a page that has gone away, with navigation disabled', () => {
+    liveMock.mockReturnValue(
+      live({
+        status: 'closed',
+        frame: { jpegDataUrl: 'd', width: 8, height: 8 },
+        title: 'T',
+        url: 'https://example.com/path',
+        canGoBack: true,
+      }),
+    );
+    renderView();
+    expect(screen.getByLabelText('Address')).toHaveValue('https://example.com/path');
+    // canGoBack is stale history from a page that is no longer there.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeDisabled();
+  });
+
+  it('keeps the header over the last screenshot', async () => {
+    getFileContentMock.mockResolvedValue({
+      type: 'image',
+      mime: 'image/png',
+      content: 'AAAA',
+    });
+    liveMock.mockReturnValue(live({ status: 'no_browser' }));
+    renderView({ fallback: { path: 'orbital/shot.png', title: 'Shot' } });
+    expect(await screen.findByRole('img')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address')).toBeInTheDocument();
   });
 });
 

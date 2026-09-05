@@ -35,6 +35,12 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
 ``deviceWidth``/``deviceHeight``). The JPEG itself may be downscaled by
 Chrome; the client scales its canvas coordinates into this space.
 
+A ``goto`` is the one client message that may CREATE a page (2026-09-05):
+the panel's header is there in every state, so typing an address has to work
+before the agent has browsed anything. The page is made through the browser
+manager's per-project pool, so it is the same page the agent's browser tool
+picks up. Nothing else here ever starts a browser.
+
 **Input never queues up** (2026-09-04, "scrolling feels very laggy"): a
 wheel event takes ~20 ms for Chrome to confirm because it scrolls and renders
 before answering, while a trackpad emits 120 of them a second — handling them
@@ -237,6 +243,10 @@ class _LiveStream:
 
         self._closed = False
         self._send_lock = asyncio.Lock()
+        # Serializes every attach/detach transition. The watcher polls for the
+        # agent's page while a user `goto` can open one of its own; without
+        # this the watcher could tear down the page the user just opened.
+        self._attach_lock = asyncio.Lock()
         self._bg: set = set()
         self._input_counts: dict[str, int] = {}
 
@@ -521,7 +531,10 @@ class _LiveStream:
     # -- page discovery -------------------------------------------------
 
     async def _current_page(self):
-        """The project's last open page, or None. Never creates one."""
+        """The project's last open page, or None. Never creates one — the
+        panel watches the agent's browser, it does not start one. The single
+        exception is an explicit user gesture: typing an address (see
+        ``_open_page``)."""
         if self._bm is None:
             return None
         try:
@@ -563,38 +576,53 @@ class _LiveStream:
                 continue
             await self._send(frame)
 
+    async def _attach_to(self, page) -> bool:
+        """Attach to ``page``, detaching from any previous one. False on failure."""
+        async with self._attach_lock:
+            if page is self._page:
+                return True
+            await self._detach()
+            self._title = await self._safe_title(page)
+            self._url = self._page_url(page)
+            try:
+                await self._attach(page)
+            except Exception as exc:
+                await self._send_error(
+                    f"could not attach to the browser page: {exc}"
+                )
+                return False
+            await self._set_status("open")
+            # Every attach — the first one and every re-attach after
+            # no_browser/closed — primes the client with one frame.
+            await self._prime_frame()
+            return True
+
     async def _watcher(self) -> None:
         while not self._closed:
             page = await self._current_page()
             if page is not None:
                 if page is not self._page:
-                    await self._detach()
-                    self._title = await self._safe_title(page)
-                    self._url = self._page_url(page)
-                    try:
-                        await self._attach(page)
-                    except Exception as exc:
-                        await self._send_error(
-                            f"could not attach to the browser page: {exc}"
-                        )
+                    if not await self._attach_to(page):
                         await asyncio.sleep(POLL_INTERVAL_S)
                         continue
-                    await self._set_status("open")
-                    # Every attach — the first one and every re-attach after
-                    # no_browser/closed — primes the client with one frame.
-                    await self._prime_frame()
                 else:
                     self._title = await self._safe_title(page)
                     self._url = self._page_url(page)
                     await self._send_state()
             else:
-                if self._page is not None:
-                    await self._detach()
-                # "closed" only once we have actually shown a page; before
-                # that the honest answer is that there is no browser.
-                await self._set_status(
-                    "closed" if self._status == "open" else "no_browser"
-                )
+                async with self._attach_lock:
+                    # Re-read under the lock: a user `goto` may have opened and
+                    # attached a page while this tick was looking at a pool
+                    # that was still empty, and dropping it here would close
+                    # the live view the user just asked for.
+                    if await self._current_page() is None:
+                        if self._page is not None:
+                            await self._detach()
+                        # "closed" only once we have actually shown a page;
+                        # before that the honest answer is no browser.
+                        await self._set_status(
+                            "closed" if self._status == "open" else "no_browser"
+                        )
             await self._flush_input_log()
             await asyncio.sleep(POLL_INTERVAL_S)
 
@@ -735,10 +763,37 @@ class _LiveStream:
         elif action == "stop":
             await self._cdp_send("Page.stopLoading", {})
         elif action == "goto":
+            if self._cdp is None:
+                # Nothing is open yet. The address field is live in that state
+                # (the panel's header is always there), and typing an address
+                # is an explicit request for a page — so make one, through the
+                # browser manager's own per-project pool, which is where the
+                # agent's browser tool will find it on its next call.
+                if not await self._open_page():
+                    return
             await self._cdp_send("Page.navigate", {"url": url})
         # Chrome's Page events carry the rest (url, loading, history); this
         # covers a session where they are unavailable.
         await self._refresh_nav_state()
+
+    async def _open_page(self) -> bool:
+        """Open (and attach to) a page for this project. False on failure.
+
+        Only ever called for a typed address: the watcher still never creates
+        a browser on its own, so simply having the panel open costs nothing.
+        """
+        if self._bm is None:
+            await self._send_error("no browser is available")
+            return False
+        try:
+            page = await self._bm.get_page(self._project_id)
+        except Exception as exc:
+            await self._send_error(f"could not open a browser page: {exc}")
+            return False
+        if page is None:
+            await self._send_error("could not open a browser page")
+            return False
+        return await self._attach_to(page)
 
     async def _handle_mouse(self, msg: dict) -> None:
         action = msg.get("action")

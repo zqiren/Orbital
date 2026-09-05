@@ -106,18 +106,30 @@ class FakePage:
 
 
 class FakeBrowserManager:
-    """``get_all_pages`` is the only surface the route is allowed to use."""
+    """``get_all_pages`` is what the route watches with.
 
-    def __init__(self, pages=None):
+    ``get_page`` (get-or-create — the same call the agent's browser tool
+    makes) is reached only by a typed address; ``opens`` is the page it hands
+    back, and leaving it None is a manager that cannot open one.
+    """
+
+    def __init__(self, pages=None, opens=None):
         self.pages = list(pages or [])
         self.get_page_calls = 0
+        self._opens = opens
 
     async def get_all_pages(self, project_id):
         return [p for p in self.pages if not p.is_closed()]
 
-    async def get_page(self, project_id):  # pragma: no cover - must never run
+    async def get_page(self, project_id):
         self.get_page_calls += 1
-        raise AssertionError("browser_live must never create a page")
+        alive = [p for p in self.pages if not p.is_closed()]
+        if alive:
+            return alive[-1]
+        if self._opens is None:
+            raise RuntimeError("no browser could be launched")
+        self.pages.append(self._opens)
+        return self._opens
 
 
 class FakeWebSocket:
@@ -171,6 +183,10 @@ _MALFORMED = object()
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
+
+
+#: Long enough for several watcher ticks at the test poll interval.
+POLL_TICKS = 0.05
 
 
 @pytest.fixture(autouse=True)
@@ -387,6 +403,49 @@ async def test_no_pages_reports_no_browser_and_keeps_polling():
         assert cdp.calls("Page.startScreencast")
         # ...and never by creating one.
         assert bm.get_page_calls == 0
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_typed_address_with_nothing_open_opens_a_page_and_navigates():
+    """The panel's header is always there, so the address field has to work in
+    the state every fresh project is in: no browser yet (2026-09-05)."""
+    page, cdp = make_page("Blank")
+    page.url = "about:blank"
+    bm = FakeBrowserManager([], opens=page)
+    ws = FakeWebSocket([
+        {"type": "nav", "action": "goto", "url": "https://example.com/"},
+    ])
+    h = start(ws, bm, cdp)
+    try:
+        await h.wait(lambda: cdp.calls("Page.navigate"))
+        assert bm.get_page_calls == 1
+        assert cdp.calls("Page.navigate")[0] == {"url": "https://example.com/"}
+        # Opened means attached and streaming, not just created.
+        assert cdp.calls("Page.startScreencast")
+        await h.wait(
+            lambda: any(m["status"] == "open" for m in ws.of_type("state"))
+        )
+        # The watcher keeps polling on top of this; the page the user opened
+        # must survive its ticks rather than being torn down as a stray.
+        await asyncio.sleep(POLL_TICKS)
+        assert not cdp.detached
+        assert ws.of_type("state")[-1]["status"] == "open"
+    finally:
+        await h.finish()
+
+
+@pytest.mark.asyncio
+async def test_typed_address_says_so_when_no_browser_can_be_opened():
+    bm = FakeBrowserManager([])  # cannot open one
+    ws = FakeWebSocket([
+        {"type": "nav", "action": "goto", "url": "https://example.com/"},
+    ])
+    h = start(ws, bm)
+    try:
+        await h.wait(lambda: ws.of_type("error"))
+        assert "could not open a browser page" in ws.of_type("error")[0]["message"]
     finally:
         await h.finish()
 
