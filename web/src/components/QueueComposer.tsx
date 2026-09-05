@@ -125,6 +125,20 @@ export default function QueueComposer({
         </div>
       )}
       <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 focus-within:border-accent transition-colors max-md:gap-1.5">
+        {/* Who runs this item — the chat composer's pin mark, in the chat
+            composer's place (2026-09-05: in the option row its menu opened
+            downward off the bottom of the window, where it could not be seen
+            or clicked). Fused to the input row's left edge, it opens upward
+            over the queue, and reads the same way it does in chat. Renders
+            nothing when no workers are installed. */}
+        <PinTargetSelect
+          agents={agents}
+          value={agent}
+          onChange={setAgent}
+          disabled={disabled}
+          managerLabel={t('queue.composer.agent.aria')}
+          data-testid="queue-composer-agent"
+        />
         <input
           type="file"
           multiple
@@ -175,17 +189,6 @@ export default function QueueComposer({
           <span className="text-2xs text-muted max-md:w-full">{hint}</span>
         )}
         <div className="flex items-center gap-3 ml-auto max-md:ml-0">
-          {/* Who runs this item. Renders nothing when no workers are
-              installed, so the option row is unchanged for those users. */}
-          <PinTargetSelect
-            agents={agents}
-            value={agent}
-            onChange={setAgent}
-            disabled={disabled}
-            variant="standalone"
-            managerLabel={t('queue.composer.agent.aria')}
-            data-testid="queue-composer-agent"
-          />
           <label className="flex items-center gap-1 cursor-pointer select-none">
             <input
               type="checkbox"

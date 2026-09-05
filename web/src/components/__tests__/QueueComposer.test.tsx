@@ -331,6 +331,25 @@ describe('QueueComposer — agent picker', () => {
     expect(onSubmit.mock.calls[0][1]).toMatchObject({ agent: null });
   });
 
+  // 2026-09-05, from the installer: in the option row under the input the
+  // menu opened downward, off the bottom of the app window — invisible and
+  // unclickable. It lives where chat's does now: fused to the input row,
+  // opening upward over the queue.
+  it('sits in the input row and opens its menu upward', async () => {
+    const user = userEvent.setup();
+    render(<QueueComposer projectId="p1" onSubmit={() => {}} agents={AGENTS} />);
+
+    const picker = screen.getByTestId('queue-composer-agent');
+    expect(picker.parentElement).toContainElement(
+      screen.getByTestId('queue-composer-input'),
+    );
+
+    await user.click(picker.querySelector('button')!);
+    const menu = screen.getByRole('listbox');
+    expect(menu.className).toContain('bottom-full');
+    expect(menu.className).not.toContain('top-full');
+  });
+
   it('submits the chosen worker and resets to Orbital afterwards', async () => {
     const user = userEvent.setup();
     const onSubmit = submitSpy();
