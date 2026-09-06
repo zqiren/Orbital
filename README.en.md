@@ -2,8 +2,6 @@
   <strong>English</strong> · <a href="README.md">简体中文</a>
 </p>
 
-> 🚀 **Sep X, 2026** — Orbital × TokenDance (词元跳动) joint launch. New users in mainland China sign in to TokenDance with one tap during onboarding, claim free tokens, and start without an API key. <!-- TODO: launch date, credit / 兑换码 wording, link --> [Details →](https://tokendance.space)
-
 <p align="center"><strong>Claude Code got cut off mid-task. Orbital handed the same task to Codex. Nothing was re-explained.</strong></p>
 
 <!-- The clip is the Chinese-UI capture; an English re-shoot of the same scenario is pending -->
