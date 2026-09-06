@@ -25,6 +25,7 @@ import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
+import { projectDisplayName } from '../utils/projectDisplayName';
 import BetaBadge from './BetaBadge';
 import { getProjectDotColor } from '../utils/projectStatus';
 
@@ -246,7 +247,7 @@ export default function Sidebar({
         </span>
         <div className="min-w-0 flex-1">
           <span className="text-xs font-medium text-primary block truncate">
-            {truncate(project.name, 20)}
+            {truncate(projectDisplayName(project, t), 20)}
           </span>
           {summary && (
             <span className="text-2xs text-secondary block truncate mt-0.5">

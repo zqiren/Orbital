@@ -201,6 +201,21 @@ are in `docs/i18n/MAINTAINABILITY.md`.
 - When touching layout-sensitive UI, verify Chinese fits via a Playwright
   EN-baseline + ZH-overflow screenshot pass (long zh strings can overflow
   fixed-width controls).
+- **Translation editors (dev only):** `bash scripts/i18n-editor.sh` (add
+  `--fresh` to start at onboarding, `--stop` to tear down) boots an isolated
+  dev daemon (`scripts/dev_daemon_isolated.py`: own PID file, scratch data dir
+  under `~/.orbital-i18n-editor`, in-memory keyring so headless starts never
+  hang on the Keychain and the packaged app can keep running) plus Vite
+  proxied to it, then prints the URLs: `http://127.0.0.1:5173/?i18n=edit` is a
+  click-to-translate overlay on the real UI (`?i18n=off` disables it; picking
+  intercepts clicks, Esc turns it off; the panel docks left/right, pushes the
+  app aside, and collapses to a pill), `http://127.0.0.1:5173/__i18n/readme`
+  is the README proposal editor. Both are served by
+  `web/dev/i18nEditorPlugin.ts` (`apply: 'serve'`, never built). Edits land as
+  plain files under `docs/i18n/pending/` (`ui-overrides.json` = catalog changes
+  keyed by string key; `README.md` / `README.en.md` = draft READMEs) and are
+  **not** applied to `strings.ts` or the real READMEs until someone folds them
+  in. API keys pasted into that daemon last only for its lifetime.
 
 ## Release Process
 
@@ -355,6 +370,10 @@ If a universal binary is needed later, that is a spec change (`target_arch='univ
 2. **Create GitHub Release** tied to the tag:
    - Title: `v{X.Y.Z}`
    - Upload both `Orbital-Setup-{X.Y.Z}.exe` and `Orbital-{X.Y.Z}-macOS.dmg` as release assets
+   - Then run `bash scripts/release-aliases.sh v{X.Y.Z}`. It re-uploads the two installers
+     under the stable names `Orbital-Setup.exe` / `Orbital-macOS.dmg`; the README's
+     download buttons link to `releases/latest/download/<stable name>`, so a release
+     without the aliases makes those buttons 404 until this runs.
    - Write release notes covering: user-visible changes, known issues (including the unsigned-installer warnings on both platforms), and install instructions
 
 3. **Update the README install links** if they reference a specific version rather than `/releases/latest`.

@@ -18,6 +18,7 @@ import { useFiles } from '../hooks/useFiles';
 import { usePanelDockable } from '../hooks/usePanelState';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
+import { projectDisplayName } from '../utils/projectDisplayName';
 import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
 import type { StringKey } from '../i18n/strings';
 
@@ -218,7 +219,7 @@ export default function ProjectDetail({
         {/* Left cluster keeps a readable minimum so a long budget pill on the
             right can never crush the title to 0 width (P3-J header collision). */}
         <div className="flex items-center gap-3 min-w-[40%] flex-1">
-          <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{project.name}</h1>
+          <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{projectDisplayName(project, t)}</h1>
           <StatusBadge status={agentStatus} />
         </div>
         <div className="flex items-center gap-3 min-w-0 shrink">
