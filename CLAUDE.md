@@ -244,13 +244,17 @@ Cutting an Orbital release means producing platform-specific installers (`.exe` 
    git rev-parse HEAD
    ```
 
-2. **Bump version strings.** Seven locations carry a version, and they are currently out of sync (`0.0.0` / `0.1.0` / `1.0.0`) — they have never been kept aligned. Update every one to the new `{X.Y.Z}`:
-   - `pyproject.toml` — `version` field (line 7, currently `0.1.0`)
-   - `web/package.json` — `version` field (line 4, currently `0.0.0`)
-   - `agent_os/desktop/agentos-macos.spec` — `CFBundleShortVersionString` and `CFBundleVersion` (lines 95–96, currently `1.0.0`)
-   - `installer/agentos-setup.iss` — `AppVersion` (line 6) AND `OutputBaseFilename` (line 11), both currently `1.0.0`
-   - `scripts/build-desktop.sh` — the version inside the echoed installer-path string (line 28)
-   - `scripts/build-macos.sh` — `DMG_NAME` (line 69, currently `Orbital-1.0.0-macOS.dmg`)
+2. **Bump version strings.** Eight locations carry a version and have been kept
+   aligned since v0.12.0. Update every one to the new `{X.Y.Z}` (match the exact
+   old string; the repo also contains unrelated `0.11.0`-style pins such as
+   `agent-client-protocol==0.11.0` and `SUPPORTED_ACP_SDK_VERSION` — leave those):
+   - `pyproject.toml` — `version` field
+   - `web/package.json` — `version` field
+   - `web/package-lock.json` — the two ROOT `version` fields (top-level and `packages[""]`), not dependency entries
+   - `agent_os/desktop/agentos-macos.spec` — `CFBundleShortVersionString` and `CFBundleVersion`
+   - `installer/agentos-setup.iss` — `AppVersion` AND `OutputBaseFilename`
+   - `scripts/build-desktop.sh` — the version inside the echoed installer-path string
+   - `scripts/build-macos.sh` — `DMG_NAME`
    - `agent_os/desktop/agentos.spec` — no version to bump (Windows spec carries none)
 
    Commit with message `chore: bump version to v{X.Y.Z}`.
