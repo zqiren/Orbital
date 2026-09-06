@@ -3050,7 +3050,16 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
     Spec 082 §3.6: this used to overwrite the ONE global key slot, evicting
     whichever provider's key was in it. It now writes exactly one card and
     never touches another card's key, and it takes the default only when
-    there is no default yet.
+    there is no default yet — or when the stored default has no key.
+
+    That second case is the setup wizard's: it is on screen precisely because
+    ``llm.api_key_set`` is false, and that flag is derived from the default
+    card's key. A default whose key is gone (deleted from the Keychain, or a
+    card whose credential never landed) is not "a default worth keeping": the
+    minted key used to land on a card nobody used, the card verified green,
+    ``api_key_set`` stayed false, and Next reported "that key was not saved"
+    (observed 2026-09-06 after the user cleared their credentials to test
+    the sign-in flow).
     """
     if _settings_store is None:
         raise HTTPException(status_code=501, detail="Settings store not available")
@@ -3077,14 +3086,22 @@ async def tokendance_signin(req: TokenDanceSigninRequest | None = None):
         (_provider_registry.get_provider_data("tokendance") or {}).get("default_model")
         if _provider_registry else None
     ) or ""
+    stored_default = _settings_store.stored_default_card()
+    default_usable = (
+        stored_default is not None
+        and bool(_settings_store.key_for(stored_default.id))
+    )
     try:
         if existing is not None:
             card = _settings_store.update_card(existing.id, api_key=key)
+            if not default_usable and (
+                stored_default is None or stored_default.id != card.id
+            ):
+                _settings_store.set_default_card(card.id)
         else:
-            had_default = _settings_store.stored_default_card() is not None
             card = _settings_store.create_card(
                 provider="tokendance", model=default_model, api_key=key,
-                make_default=not had_default,
+                make_default=not default_usable,
             )
     except RuntimeError as exc:
         raise HTTPException(

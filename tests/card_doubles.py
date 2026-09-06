@@ -97,6 +97,11 @@ class FakeCardStore:
     def effective_default_card_id(self):
         return self.default_card_id
 
+    def set_default_card(self, card_id) -> None:
+        if self.resolve_card(card_id) is None:
+            raise KeyError(card_id)
+        self.default_card_id = card_id
+
     def touch_card_used(self, card_id) -> None:
         self.touched.append(card_id)
 
