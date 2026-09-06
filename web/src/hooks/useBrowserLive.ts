@@ -15,8 +15,8 @@
  *                    {type:"key", action:"down"|"up", key, code, text?, modifiers?}
  *                    {type:"text", text}
  *                    {type:"nav", action:"back"|"forward"|"reload"|"stop"|"goto", url?}
- *                    {type:"viewport", width, height, dpr}  — size the page to the panel (CSS px)
  *   x/y are CSS pixels of the page viewport (same space as the frame width/height).
+ *   The panel is a mirror: it never asks the page to change size (2026-09-05).
  * Workstream D implements.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';

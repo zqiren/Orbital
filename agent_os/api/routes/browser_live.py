@@ -26,9 +26,6 @@ Protocol (shared contract — mirrored in ``web/src/hooks/useBrowserLive.ts``)::
       {"type":"key","action":"down"|"up","key":"Enter","code":"Enter","text":"a","modifiers":n}
       {"type":"text","text":"pasted or IME-composed text"}
       {"type":"nav","action":"back"|"forward"|"reload"|"stop"|"goto","url":"https://…"}
-      {"type":"viewport","width":n,"height":n,"dpr":n}
-          — size the page to the panel (CSS px) so the live view fills it; the
-            screencast is restarted at width*dpr so frames are sharp on Retina.
 
 ``x``/``y`` are CSS pixels of the page viewport — the same space as a frame's
 ``width``/``height`` (taken from the screencast metadata's
@@ -49,6 +46,29 @@ input goes through a queue that merges: consecutive moves keep only the
 newest, consecutive wheels sum their deltas, and clicks / keys / text / nav
 keep their order relative to everything else. At most one event is ever in
 flight, and the backlog can never exceed one merged event of each kind.
+
+**The panel is a mirror** (2026-09-05, "the browser is blinking"): this route
+never sizes the page. An earlier amendment had it resize the agent's page to
+the panel so the live view would fill it; that made the agent browse a
+phone-width layout (and take phone-sized screenshots) whenever someone was
+watching, and it was the root of a size fight — Chrome performs a clipped
+``Page.captureScreenshot`` by rewriting the calling session's emulation and
+restoring that session's baseline, the side tab the browser tool's ``fetch``
+opens and closes re-synced the page to it, and Playwright ignores a same-size
+re-apply — that strobed the panel between a clipped capture and the page's
+real frames. The agent's page keeps its own size (the context default);
+frames arrive at that size and the client fits them into the panel. What the
+user does in the panel still lands in the page: input is forwarded, only the
+page's size is off limits.
+
+**The capture area is repaired, never the page:** the screencast captures the
+page's visible area, and the side tab the browser tool's ``fetch`` opens and
+closes leaves that area at the window's content size — 87 px shorter than
+the page — while the page's layout, its visual viewport and the tool's own
+screenshots are untouched (probed 2026-09-05; restarting the screencast does
+not help). A frame that disagrees with the page's layout size triggers
+``Emulation.setVisibleSize`` back to that size, which touches no device
+metrics and nothing the agent sees.
 
 **No coordination layer** (D9): there is no take-over button and no pause
 flag. The user's input and the agent's tool calls simply interleave — the
@@ -216,8 +236,6 @@ class _LiveStream:
 
         self._page = None
         self._cdp = None
-        #: Last viewport the client asked for (width, height, dpr); re-applied on re-attach.
-        self._viewport: tuple[int, int, float] | None = None
         self._title = ""
         self._url = ""
         self._status = None  # None | "no_browser" | "open" | "closed"
@@ -228,6 +246,12 @@ class _LiveStream:
         self._last_state: dict | None = None
         self._cursor = "default"
         self._last_cursor_probe = 0.0
+        #: The page's layout viewport (CSS px) as of the last look, and the
+        #: size the last screencast frame claimed. When they disagree the
+        #: screencast's capture area has shrunk — not the page.
+        self._layout_size: tuple[int, int] | None = None
+        self._last_frame_size: tuple[int, int] | None = None
+        self._repairing = False
 
         # Exactly one frame may be pending. A frame that arrives while the
         # socket is still writing the previous one replaces it, so a slow
@@ -310,15 +334,20 @@ class _LiveStream:
         data = params.get("data")
         if data:
             metadata = params.get("metadata") or {}
+            width = int(metadata.get("deviceWidth") or 0)
+            height = int(metadata.get("deviceHeight") or 0)
             self._pending_frame = {
                 "type": "frame",
                 "jpeg": data,
-                "width": int(metadata.get("deviceWidth") or 0),
-                "height": int(metadata.get("deviceHeight") or 0),
+                "width": width,
+                "height": height,
                 "title": self._title,
                 "url": self._url,
             }
             self._frame_ready.set()
+            self._last_frame_size = (width, height)
+            if self._layout_size and (width, height) != self._layout_size:
+                self._spawn(self._repair_visible_size())
         # Ack every frame, including ones we drop — withholding the ack
         # stalls the stream rather than throttling it.
         session_id = params.get("sessionId")
@@ -393,28 +422,63 @@ class _LiveStream:
         await self._load_history(cdp)
         await self._send_state()
 
-    def _screencast_params(self) -> dict:
-        """SCREENCAST_PARAMS, sized to the client's viewport request when there
-        is one: maxWidth/maxHeight = CSS size × dpr (capped) so a Retina panel
-        gets a frame it can paint 1:1 instead of an upscaled 1280-wide one."""
-        params = dict(SCREENCAST_PARAMS)
-        if self._viewport:
-            w, h, dpr = self._viewport
-            params["maxWidth"] = min(int(w * dpr), 2560)
-            params["maxHeight"] = min(int(h * dpr), 2560)
-        return params
-
-    async def _apply_viewport(self, page) -> bool:
-        """Size the page to the client's requested viewport. False on failure."""
-        if not self._viewport:
-            return True
-        w, h, _ = self._viewport
+    async def _read_layout_size(self) -> tuple[int, int] | None:
+        """The page's layout viewport in CSS px, or None when unreadable."""
+        cdp = self._cdp
+        if cdp is None:
+            return None
         try:
-            await page.set_viewport_size({"width": w, "height": h})
-            return True
+            metrics = await cdp.send("Page.getLayoutMetrics") or {}
         except Exception:
-            logger.debug("browser_live: set_viewport_size failed", exc_info=True)
-            return False
+            return None
+        viewport = metrics.get("cssLayoutViewport") or {}
+        width = int(viewport.get("clientWidth") or viewport.get("width") or 0)
+        height = int(viewport.get("clientHeight") or viewport.get("height") or 0)
+        return (width, height) if width and height else None
+
+    async def _repair_visible_size(self) -> None:
+        """Put the screencast's capture area back to the page's own size.
+
+        The browser tool's ``fetch`` side tab leaves it at the window's
+        content size (87 px short) while the page is untouched — see the
+        module docstring. ``Emulation.setVisibleSize`` resizes only the
+        captured frame, not the page's metrics; nothing here sizes the page.
+        """
+        if self._repairing:
+            return
+        self._repairing = True
+        try:
+            cdp = self._cdp
+            if cdp is None:
+                return
+            layout = await self._read_layout_size()
+            if layout is None:
+                return
+            self._layout_size = layout
+            if self._last_frame_size == layout:
+                return
+            try:
+                await cdp.send("Emulation.setVisibleSize",
+                               {"width": layout[0], "height": layout[1]})
+            except Exception:
+                logger.debug("browser_live: setVisibleSize failed", exc_info=True)
+                return
+            logger.info("browser_live: screencast capture area repaired to %dx%d",
+                        layout[0], layout[1])
+            self._last_frame_size = layout
+            await self._prime_frame()
+        finally:
+            self._repairing = False
+
+    async def _check_capture_area(self) -> None:
+        """Tick-time fallback for a cropped frame that landed before the
+        layout size was known."""
+        layout = await self._read_layout_size()
+        if layout is None:
+            return
+        self._layout_size = layout
+        if self._last_frame_size and self._last_frame_size != layout:
+            await self._repair_visible_size()
 
     async def _attach(self, page) -> None:
         cdp = await page.context.new_cdp_session(page)
@@ -425,9 +489,8 @@ class _LiveStream:
         self._can_go_forward = False
         self._main_frame_id = None
         self._cursor = "default"
-        # A page that (re)appears gets the panel's size before the first frame,
-        # so the client never sees a frame in the wrong aspect.
-        await self._apply_viewport(page)
+        self._layout_size = None
+        self._last_frame_size = None
         cdp.on("Page.screencastFrame", self._on_screencast_frame)
         cdp.on("Page.frameNavigated", self._on_frame_navigated)
         cdp.on("Page.navigatedWithinDocument", self._on_navigated_within_document)
@@ -443,7 +506,8 @@ class _LiveStream:
                 self._main_frame_id = frame["id"]
         except Exception:
             logger.debug("browser_live: Page.enable/getFrameTree failed", exc_info=True)
-        await cdp.send("Page.startScreencast", self._screencast_params())
+        self._layout_size = await self._read_layout_size()
+        await cdp.send("Page.startScreencast", dict(SCREENCAST_PARAMS))
         await self._load_history(cdp)
 
     async def _viewport_size(self, cdp) -> tuple[int, int]:
@@ -480,10 +544,11 @@ class _LiveStream:
         cdp = self._cdp
         if cdp is None:
             return
+        # Captured the way the screencast captures — whole viewport, device
+        # pixels, no ``clip``: a clipped capture makes Chrome rewrite this
+        # session's emulation for the shot, which is how the 2026-09-05 size
+        # fight was armed.
         params: dict = {"format": "jpeg", "quality": 60}
-        if self._viewport and self._viewport[2] > 1:
-            w, h, dpr = self._viewport
-            params["clip"] = {"x": 0, "y": 0, "width": w, "height": h, "scale": dpr}
         try:
             shot = await cdp.send("Page.captureScreenshot", params) or {}
         except Exception:
@@ -493,12 +558,7 @@ class _LiveStream:
         data = shot.get("data")
         if not data:
             return
-        if self._viewport:
-            # The size we asked the page to be is the frame's coordinate space;
-            # layout metrics can report device pixels for a moment mid-resize.
-            width, height = self._viewport[0], self._viewport[1]
-        else:
-            width, height = await self._viewport_size(cdp)
+        width, height = await self._viewport_size(cdp)
         self._pending_frame = {
             "type": "frame",
             "jpeg": data,
@@ -609,6 +669,7 @@ class _LiveStream:
                     self._title = await self._safe_title(page)
                     self._url = self._page_url(page)
                     await self._send_state()
+                    await self._check_capture_area()
             else:
                 async with self._attach_lock:
                     # Re-read under the lock: a user `goto` may have opened and
@@ -882,41 +943,12 @@ class _LiveStream:
                 return
         self._enqueue({"nav": action, "url": url}, f"nav.{action}")
 
-    async def _handle_viewport(self, msg: dict) -> None:
-        """Fit the page to the panel: resize the viewport, restart the
-        screencast at the new size, and re-prime so the client repaints at
-        once. Spec 078 D9 amendment (2026-09-03): the live view should fill
-        the panel like a browser window, not sit in it as a letterboxed frame."""
-        width = _number(msg.get("width"))
-        height = _number(msg.get("height"))
-        dpr = _number(msg.get("dpr")) or 1.0
-        if (width is None or height is None
-                or not (200 <= width <= 4096) or not (200 <= height <= 4096)
-                or not (1.0 <= dpr <= 4.0)):
-            await self._send_error("viewport needs width/height in 200..4096 and dpr in 1..4")
-            return
-        self._viewport = (int(width), int(height), float(dpr))
-        page, cdp = self._page, self._cdp
-        if page is None or cdp is None:
-            return  # applied on the next attach
-        if not await self._apply_viewport(page):
-            await self._send_error("could not resize the page")
-            return
-        try:
-            await cdp.send("Page.stopScreencast", {})
-        except Exception:
-            pass
-        if await self._cdp_send("Page.startScreencast", self._screencast_params()):
-            await self._prime_frame()
-
     async def _handle(self, msg) -> None:
         if not isinstance(msg, dict):
             await self._send_error("expected a JSON object")
             return
         msg_type = msg.get("type")
-        if msg_type == "viewport":
-            await self._handle_viewport(msg)
-        elif msg_type == "mouse":
+        if msg_type == "mouse":
             await self._handle_mouse(msg)
         elif msg_type == "key":
             await self._handle_key(msg)

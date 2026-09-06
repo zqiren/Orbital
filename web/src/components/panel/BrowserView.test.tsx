@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { LocaleProvider } from '../../i18n/LocaleContext';
 import type { BrowserLive } from '../../hooks/useBrowserLive';
 import type { BrowserViewProps } from './BrowserView';
@@ -584,5 +584,63 @@ describe('BrowserView — keyboard through the text host (IME)', () => {
     fireEvent.keyDown(host, { key: 'Enter', code: 'Enter' });
     fireEvent.keyUp(host, { key: 'Enter', code: 'Enter' });
     expect(send.mock.calls.map((c) => c[0].action)).toEqual(['down', 'up']);
+  });
+});
+
+describe('BrowserView — a mirror of the agent\'s page', () => {
+  // jsdom lays nothing out: give the frame area a size, as a real panel has.
+  const proto = HTMLElement.prototype;
+  const original = {
+    width: Object.getOwnPropertyDescriptor(proto, 'clientWidth'),
+    height: Object.getOwnPropertyDescriptor(proto, 'clientHeight'),
+  };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(proto, 'clientWidth', { configurable: true, get: () => 690 });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 820 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    if (original.width) Object.defineProperty(proto, 'clientWidth', original.width);
+    if (original.height) Object.defineProperty(proto, 'clientHeight', original.height);
+  });
+
+  it('never asks the page to take the panel\'s size (2026-09-05: resizing it changed what the agent browsed)', () => {
+    const sendMock = vi.fn();
+    liveMock.mockReturnValue(live({
+      status: 'open',
+      frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
+      title: 'T',
+      send: sendMock,
+    }));
+    renderView();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(sendMock.mock.calls.filter(([m]) => (m as { type: string }).type === 'viewport')).toHaveLength(0);
+  });
+
+  it('maps input through the letterbox: a 1280×720 page in a 690×820 panel', () => {
+    const sendMock = vi.fn();
+    liveMock.mockReturnValue(live({
+      status: 'open',
+      frame: { jpegDataUrl: 'd', width: 1280, height: 720 },
+      title: 'T',
+      send: sendMock,
+    }));
+    const { container } = renderView();
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+    mockRect(canvas, 690, 820);
+    // The page fits the width (690 wide, 388 tall) centred: the panel's
+    // centre is the page's centre, and the top band is off the page.
+    fireEvent.pointerDown(canvas, { clientX: 345, clientY: 410, button: 0, detail: 1 });
+    fireEvent.pointerDown(canvas, { clientX: 345, clientY: 10, button: 0, detail: 1 });
+    const downs = sendMock.mock.calls
+      .map(([m]) => m as { type: string; action: string; x: number; y: number })
+      .filter((m) => m.type === 'mouse' && m.action === 'down');
+    expect(downs).toHaveLength(2);
+    expect(downs[0].x).toBeCloseTo(640, 5);
+    expect(downs[0].y).toBeCloseTo(360, 5);
+    expect(downs[1].y).toBe(0);
   });
 });

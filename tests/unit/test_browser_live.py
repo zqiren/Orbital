@@ -50,6 +50,13 @@ class FakeCDPSession:
         self.sent.append((method, params or {}))
         return self._replies.get(method, {})
 
+    def set_layout_size(self, width: int, height: int) -> None:
+        """What ``Page.getLayoutMetrics`` reports from now on (CSS px)."""
+        self._replies["Page.getLayoutMetrics"] = {
+            "cssVisualViewport": {"clientWidth": width, "clientHeight": height},
+            "cssLayoutViewport": {"clientWidth": width, "clientHeight": height},
+        }
+
     def on(self, event: str, handler):
         self.listeners.setdefault(event, []).append(handler)
 
@@ -65,7 +72,7 @@ class FakeCDPSession:
             handler(params)
 
     def emit_frame(self, data: str, *, session_id: int = 1,
-                   width: int = 1280, height: int = 800):
+                   width: int = 1280, height: int = 720):
         payload = {
             "data": data,
             "sessionId": session_id,
@@ -342,15 +349,17 @@ async def test_screencast_frame_becomes_a_frame_message_and_is_acked():
     h = start(FakeWebSocket(), FakeBrowserManager([page]), cdp)
     try:
         await h.wait(lambda: cdp.calls("Page.startScreencast"))
-        cdp.emit_frame("QUJD", session_id=7, width=1024, height=768)
+        # At the page's size: a frame of another size is a shrunken capture
+        # area and gets repaired (its own test below).
+        cdp.emit_frame("QUJD", session_id=7, width=1280, height=720)
         await h.wait(
             lambda: any(f["jpeg"] == "QUJD" for f in h.ws.of_type("frame"))
         )
         assert h.ws.of_type("frame")[-1] == {
             "type": "frame",
             "jpeg": "QUJD",
-            "width": 1024,
-            "height": 768,
+            "width": 1280,
+            "height": 720,
             "title": "Example Domain",
             "url": "https://example.com/",
         }
@@ -727,37 +736,60 @@ def test_protocol_contract_matches_the_frontend_hook():
 
 
 @pytest.mark.asyncio
-async def test_viewport_message_resizes_the_page_and_restarts_the_screencast_sharper():
-    """Spec 078 D9 amendment: the page takes the panel's size and the
-    screencast is restarted at width*dpr, then re-primed."""
-    h = await _input_harness([{"type": "viewport", "width": 640, "height": 900, "dpr": 2}])
-    try:
-        await h.wait(lambda: h.cdp.calls("Page.stopScreencast"))
-        await h.wait(lambda: len(h.cdp.calls("Page.startScreencast")) == 2)
-        page = h.browser_manager.pages[0] if hasattr(h, "browser_manager") else None
-        starts = h.cdp.calls("Page.startScreencast")
-        assert starts[0]["maxWidth"] == 1280
-        assert starts[1]["maxWidth"] == 1280 and starts[1]["maxHeight"] == 1800
-        await h.wait(lambda: len(h.cdp.calls("Page.captureScreenshot")) >= 2)
-        second = h.cdp.calls("Page.captureScreenshot")[-1]
-        assert second["clip"] == {"x": 0, "y": 0, "width": 640, "height": 900, "scale": 2.0}
-        await h.wait(lambda: any(m.get("type") == "frame" and m.get("width") == 640 for m in h.ws.sent))
-        primed = [m for m in h.ws.sent if m.get("type") == "frame" and m.get("width") == 640][-1]
-        assert (primed["width"], primed["height"]) == (640, 900)
-    finally:
-        await h.finish()
-
-
-@pytest.mark.asyncio
-async def test_viewport_is_applied_to_the_page_and_reapplied_on_reattach():
+async def test_the_route_never_sizes_the_page_it_mirrors():
+    """2026-09-05 — the panel is a mirror of the agent's page. An earlier
+    amendment resized the page to the panel, which made the agent browse a
+    phone-width layout whenever someone was watching and was the root of a
+    size fight that strobed the panel between a clipped capture and the
+    page's real frames. Nothing the client sends may change the page's size;
+    a stale client's ``viewport`` message is refused like any unknown one."""
     page, cdp = make_page()
     ws = FakeWebSocket()
     h = start(ws, FakeBrowserManager([page]), cdp)
     try:
-        await h.wait(lambda: cdp.calls("Page.startScreencast"))
-        ws.push({"type": "viewport", "width": 700, "height": 500})
-        await h.wait(lambda: getattr(page, "viewport_calls", None) == [{"width": 700, "height": 500}])
-        assert h.cdp.calls("Page.startScreencast")[-1]["maxWidth"] == 700
+        await h.wait(lambda: ws.of_type("frame"))
+        ws.push({"type": "viewport", "width": 640, "height": 900, "dpr": 2})
+        await h.wait(lambda: ws.of_type("error"))
+        assert "viewport" in ws.of_type("error")[0]["message"]
+        assert not getattr(page, "viewport_calls", [])
+        assert not cdp.calls("Emulation.setDeviceMetricsOverride")
+        # One screencast at the fixed ceiling; every prime is a whole capture.
+        assert len(cdp.calls("Page.startScreencast")) == 1
+        assert cdp.calls("Page.startScreencast")[0]["maxWidth"] == 1280
+        assert all(call == {"format": "jpeg", "quality": 60}
+                   for call in cdp.calls("Page.captureScreenshot"))
+    finally:
+        await h.finish()
+    assert not getattr(page, "viewport_calls", [])
+
+
+@pytest.mark.asyncio
+async def test_a_frame_shorter_than_the_page_repairs_the_capture_area_not_the_page():
+    """After the browser tool's ``fetch`` side tab, Chrome's screencast
+    captures 87 px less than the page while the page itself is untouched.
+    A frame that disagrees with the layout size gets the capture area put
+    back with ``Emulation.setVisibleSize`` and a fresh prime — and no
+    device-metrics call, ever."""
+    page, cdp = make_page()   # layout metrics: 1280x720
+    ws = FakeWebSocket()
+    h = start(ws, FakeBrowserManager([page]), cdp)
+    try:
+        await h.wait(lambda: ws.of_type("frame"))
+        primes = len(cdp.calls("Page.captureScreenshot"))
+        cdp.emit_frame("RlVMTA==", width=1280, height=720)
+        await h.wait(lambda: len(ws.of_type("frame")) >= 2)
+        await asyncio.sleep(0.02)
+        assert not cdp.calls("Emulation.setVisibleSize")   # a frame at the page's size is fine
+        cdp.emit_frame("Q1JPUA==", width=1280, height=633)
+        await h.wait(lambda: cdp.calls("Emulation.setVisibleSize"))
+        assert cdp.calls("Emulation.setVisibleSize") == [{"width": 1280, "height": 720}]
+        await h.wait(lambda: len(cdp.calls("Page.captureScreenshot")) > primes)
+        assert not cdp.calls("Emulation.setDeviceMetricsOverride")
+        assert not getattr(page, "viewport_calls", [])
+        # Repaired once, not on every cropped frame in flight.
+        cdp.emit_frame("Q1JPUA==", width=1280, height=633)
+        await asyncio.sleep(0.03)
+        assert len(cdp.calls("Emulation.setVisibleSize")) <= 2
     finally:
         await h.finish()
 
