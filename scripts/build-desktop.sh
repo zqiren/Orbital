@@ -43,7 +43,7 @@ if command -v iscc &>/dev/null; then
         curl -fSL -o "$WV2" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
     fi
     iscc installer/agentos-setup.iss
-    echo "Installer: installer/Output/Orbital-Setup-0.11.0.exe"
+    echo "Installer: installer/Output/Orbital-Setup-0.12.0.exe"
 else
     echo "[4/4] Skipping installer (iscc not found on PATH)"
 fi
