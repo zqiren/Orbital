@@ -6,9 +6,10 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import i18nEditor from './dev/i18nEditorPlugin'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), i18nEditor()],
   build: {
     outDir: 'dist',
   },

@@ -201,6 +201,21 @@ are in `docs/i18n/MAINTAINABILITY.md`.
 - When touching layout-sensitive UI, verify Chinese fits via a Playwright
   EN-baseline + ZH-overflow screenshot pass (long zh strings can overflow
   fixed-width controls).
+- **Translation editors (dev only):** `bash scripts/i18n-editor.sh` (add
+  `--fresh` to start at onboarding, `--stop` to tear down) boots an isolated
+  dev daemon (`scripts/dev_daemon_isolated.py`: own PID file, scratch data dir
+  under `~/.orbital-i18n-editor`, in-memory keyring so headless starts never
+  hang on the Keychain and the packaged app can keep running) plus Vite
+  proxied to it, then prints the URLs: `http://127.0.0.1:5173/?i18n=edit` is a
+  click-to-translate overlay on the real UI (`?i18n=off` disables it; picking
+  intercepts clicks, Esc turns it off; the panel docks left/right, pushes the
+  app aside, and collapses to a pill), `http://127.0.0.1:5173/__i18n/readme`
+  is the README proposal editor. Both are served by
+  `web/dev/i18nEditorPlugin.ts` (`apply: 'serve'`, never built). Edits land as
+  plain files under `docs/i18n/pending/` (`ui-overrides.json` = catalog changes
+  keyed by string key; `README.md` / `README.en.md` = draft READMEs) and are
+  **not** applied to `strings.ts` or the real READMEs until someone folds them
+  in. API keys pasted into that daemon last only for its lifetime.
 
 ## Release Process
 

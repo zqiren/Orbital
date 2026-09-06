@@ -11,6 +11,12 @@ import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, type Locale } from './locales';
 interface LocaleContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
+  /**
+   * Re-render every `useT()` consumer without changing the locale. Only the
+   * dev translation editor needs this (it edits the catalog in place); the
+   * app itself never calls it.
+   */
+  refresh: () => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
@@ -37,6 +43,8 @@ export function readInitialLocale(): Locale {
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readInitialLocale);
+  const [, setVersion] = useState(0);
+  const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -52,7 +60,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <LocaleContext.Provider value={{ locale, setLocale }}>
+    <LocaleContext.Provider value={{ locale, setLocale, refresh }}>
       {children}
     </LocaleContext.Provider>
   );
@@ -64,6 +72,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 const FALLBACK_CONTEXT: LocaleContextValue = {
   locale: DEFAULT_LOCALE,
   setLocale: () => {},
+  refresh: () => {},
 };
 
 export function useLocale(): LocaleContextValue {
