@@ -1,563 +1,157 @@
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.en.md">English</a> · <strong>简体中文</strong>
 </p>
 
-> 🔥 **Aug 13, 2026** — DeepSeek's official harness (**dsh**) launched today; Orbital dispatched it as a sub-agent **within 3 hours** — same project memory, same queue, same files. Full integration (one-click install, key management, tool capsules) built in **5 hours** that night. <!-- TODO: retarget to the demo video when recorded --> [Watch the demo →](https://github.com/zqiren/Orbital/releases/tag/v0.9.0)
 
-<p align="center"><img src="docs/screenshots/hero-competitor-investigation.gif" alt="Orbital running a competitor investigation inside a marketing project — researching the brief itself, dispatching the deep-dive to Claude Code, then reading the findings against the project's own decisions and lessons" width="100%"></p>
 
-<p align="center"><em>What you're seeing: a marketing project asks Orbital to size up a competitor. It researches the target itself so the task brief is accurate, hands the token-heavy deep-dive to Claude&nbsp;Code per a standing project directive, then reads the findings back against the project's own decisions and lessons — ending on the calls only you can make.</em></p>
+<p align="center"><strong>任务进行到一半，Claude Code余额用完了。Orbital直接转发Codex继续——完全无需重新解释。</strong></p>
+
+<p align="center"><img src="docs/screenshots/hero-worker-blocked.gif" alt="Orbital 派给 Claude Code 的任务中途被订阅限制挡住；Orbital 读到报错，判断是账号层面的问题，从项目文件重新给 Codex 写了同一份简报，Codex 接着做" width="100%"></p>
+
+<p align="center"><em>Orbital 之前把一个spec派给了 Claude Code。Claude Code跑到一半余额用完了，Orbital读到报错，判断这是账号问题、自己解不开，于是直接收集相关上下文，转交Codex接着做。会话，数据和上下文都是项目里的文件，不在绑定Claude的会话，所以任何agent都能接手。agent可以换，项目一直不断。</em></p>
 
 <p align="center">
   <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
 </p>
 
 <h1 align="center">Orbital</h1>
-<p align="center"><strong>The project agent</strong></p>
-<h3 align="center">Every agent owns a session. Orbital owns the project.</h3>
+<p align="center"><strong>project agent（项目 agent）</strong></p>
+<h3 align="center">Agent只负责一次会话，Orbital负责整个项目。</h3>
 
-Orbital works like Claude Code or Codex: ask it to research, plan, write, run commands, browse the web, or operate your tools.
+**你的上下文，是你的吗？**
 
-The difference is that Orbital treats a local folder as a long-running project. It maintains the project's context on its own — where it left off, what's next, and how to do it — as files inside that folder. Every new task starts from everything learned before it, so work compounds instead of resetting to zero.
+Claude Code 里聊了三轮才定下的方案、Codex 改到一半的文件、Cursor 里拍板的取舍——各自锁在各自的会话里。
 
-Orbital can also dispatch Claude Code, Codex, Gemini CLI, Cursor, and other CLI agents. Every dispatch briefs the worker on the project and the task and points it at the relevant files — you never re-explain the project. Orbital watches the run, reads the result against the project's context, and writes the outcome back in. The more you delegate, the more it knows.
+会话一关、额度一到、换个工具，上下文就无法使用。下一个任务，你就得重新讲一遍。
 
-<p align="center"><strong>One accountable manager · Interchangeable workers · Local-first</strong></p>
+**你才是 agent 的实习生：复制粘贴、搬运上下文、记住杂七杂八的文件放在哪，让agent来做脑力活。**
+
+Orbital 把上下文从会话里拿出来，放回你的本地文件夹。任何 agent 随时接手，所有上下文全部保留。Claude Code、Codex、Cursor 都可以使用。
+
+**上下文资产是你的，智能是可替换的。**
+
+<p align="center"><strong>你的上下文资产，任何 agent 都能用</strong></p>
 
 <p align="center">
-  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>Windows Installer (.exe)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://github.com/zqiren/Orbital/releases/latest"><strong>macOS Installer (.dmg)</strong></a> &nbsp;&middot;&nbsp;
-  <a href="https://www.youtube.com/watch?v=U2I0DUUUIzo"><strong>Watch the demo</strong></a>
+  <a href="https://github.com/zqiren/Orbital/releases/latest/download/Orbital-Setup.exe"><img src="https://img.shields.io/badge/Windows-%E4%B8%8B%E8%BD%BD%E5%AE%89%E8%A3%85%E5%8C%85_.exe-0078D6?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTMgNC42bDcuNi0xLjA1djcuMzVIM3ptOC41LTEuMkwyMSAyLjF2OC44aC05LjV6TTMgMTIuMWg3LjZ2Ny4zNUwzIDE4LjR6bTguNSAwSDIxdjguOGwtOS41LTEuM3oiLz48L3N2Zz4=" alt="下载 Windows 安装包 (.exe)"></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/zqiren/Orbital/releases/latest/download/Orbital-macOS.dmg"><img src="https://img.shields.io/badge/macOS-%E4%B8%8B%E8%BD%BD%E5%AE%89%E8%A3%85%E5%8C%85_.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="下载 macOS 安装包 (.dmg)"></a>
 </p>
-<p align="center">Set up in under 5 minutes. No Python or Node required. Bring your own API key.</p>
+<p align="center"><a href="https://www.bilibili.com/video/BV1yN3B6CEKW/"><strong>30 秒演示视频</strong></a></p>
+<p align="center">5 分钟就能装好。需要自备 API key。</p>
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple)
 
 ---
 
-## Why a project agent?
+## 为什么你需要一个“project” agent
 
-People already use several capable agents at work — for the newest model, the leftover quota, or because a particular tool is better at the job.
+你正在和 Claude Code 讨论一个方案，聊到第三轮，它弹出「You're out of usage credits」。Codex 的额度还在，但 Codex 对这个项目一无所知——目标、前两轮拍板的结论、改到一半的文件，都得你重讲一遍。
 
-But each agent works inside its own session, with its own context and history. When you move between sessions or tools, you become responsible for carrying the project between them: restating goals, explaining previous decisions, locating artifacts, and checking what was left unfinished. You end up working as their intern, ferrying context between them to keep your own project moving.
+<p align="center"><img src="docs/screenshots/handoff-codex-continue.gif" alt="同一个对话里 Claude Code 额度用完了，用户 @codex 说「你继续吧」，Codex 读取同一份项目上下文接着做" width="100%"></p>
+<p align="center"><em>同一个对话里：Claude Code用完了，你 @codex 说一句“你继续吧”，Codex 延续项目上下文继续任务。</em></p>
 
-Orbital changes the unit of work from the session to the project.
+在工作中，大家都已经在同时用好几个 agent —— 可能是因为新出的模型、剩余的额度，也可能是因为某个工具更擅长这类活。
 
-A project agent stays responsible for the project across tasks, sessions, and worker agents. It maintains the shared context, decides what needs to happen next, delegates when useful, and records every outcome back into the project.
+但每个 agent 都活在自己的会话里，各有各的上下文和历史。当你在会话和工具之间来回切换时，把项目「搬运」过去的活就落到了你身上：重述目标、解释此前的决策、翻找产出的文件、确认还有什么没做完。你需要做它们的实习生，帮它们串联上下文，来保证你自己的项目正常运转。
 
-Individual agents complete tasks. Orbital keeps the project moving.
+Orbital 把工作的单位从「会话」换成「项目」。
 
----
+project agent 跨任务、跨会话、跨执行 agent 持续对项目负责：维护共享的上下文，判断下一步该做什么，需要时把活派出去，并把每一次的结果记录回项目。
 
-## What it means to own the project
-
-Orbital maintains five things that normally disappear or fragment between agent sessions — all of them as plain files in your project folder:
-
-- **State** — what is true about the project now (`PROJECT_STATE.md`)
-- **Decisions** — what was decided and why (`DECISIONS.md`)
-- **Lessons** — what the project has learned (`LESSONS.md`)
-- **Work** — what is running, completed, or blocked (`queue.json`). Every queued task ends **Completed** or **Blocked** — an agent that stops without a verdict gets re-prompted, then force-blocked with a reason. Nothing drifts away silently.
-- **Artifacts** — what the agents researched, wrote, or built (the workspace itself, plus `orbital/output/`)
-
-These stay in the local project and become context for future work. On a cold start, Orbital assembles them into its own system prompt before it acts.
-
-When Orbital delegates, the worker is pointed at those same files and told they are authoritative — that briefing is rendered fresh on every dispatch, not something you paste in. Each worker also keeps its own memory file inside the project, so it accumulates its own experience across dispatches. When the task finishes, Orbital reads the result and records what matters back into the project.
-
-The worker can change. The project continues.
+单个 agent 完成任务。Orbital 让项目往前走。
 
 ---
 
-## How it works
+## 什么叫“对你的项目负责”
 
-1. **Set up once** — pick an LLM provider and paste your API key; optionally connect accounts your agents will need.
+Orbital将把重要的项目上下文组织起来，以普通文件的形式维护在你的本地文件夹里：
 
-2. **Create a project** — name it, choose the local folder that holds your work, set an autonomy level.
+- **状态** —— 项目现在是什么情况（`PROJECT_STATE.md`）
+- **决策** —— 决定了什么、为什么这么定（`DECISIONS.md`）
+- **经验教训** —— 项目一路上学到了什么（`LESSONS.md`）
+- **产出成果** —— agent 调研、撰写、构建出来的东西（工作空间本身，以及 `orbital/output/`）
 
-3. **Give Orbital a task** — ask it to research, plan, write, code, browse, or work with files.
+这些都留会成为后续工作的上下文。每次任务开始前，Orbital 会先把它们组装进自己的系统提示词中，保证没有遗漏。
 
-4. **Orbital maintains the context** — it keeps the project's state, decisions, lessons, queue, and artifacts current as the work progresses.
+子agent也会读取同一批文件，不需要你记住项目的信息和文件架构。Agent会自己做笔记，保证下一次会话能无缝衔接。
 
-5. **Orbital delegates when useful** — it dispatches work to Claude Code, Codex, Gemini CLI, Cursor, or another CLI agent against the same accumulated context.
-
-6. **Every result becomes part of the project** — future tasks begin on top of the work that came before them.
-
-```mermaid
-flowchart LR
-    You["You"] --> Orbital["Orbital<br/>Project agent"]
-    Orbital <--> Project["Local project folder<br/>State · Decisions · Lessons · Queue · Artifacts"]
-    Orbital -->|briefs + dispatches| Workers["Worker agents<br/>Claude Code · Codex · Gemini CLI · Cursor"]
-    Workers -->|results| Orbital
-    Orbital -->|every task ends<br/>Completed or Blocked| Project
-    Phone["Your phone"] -.->|approvals · check-ins| Orbital
-```
+Agent可以换。你的上下文资产一直在。
 
 ---
 
-## A concrete example
+## 快速开始
 
-Suppose you ask Orbital to research a competitor.
+1. **启动 Orbital** —— 设置向导引导你完成两步：
 
-Orbital gathers the initial information and records the findings inside the project. It then dispatches the token-heavy technical investigation to Claude Code, which starts by reading the project's goals, constraints, and previous decisions from the project folder.
+   **Step 1 — LLM Provider:** 中国大陆用户点「一键登录词元跳动」，授权后免费领取 Token，直接开始。也可以从预设卡片里选择服务商，点「获取 API 密钥」直达密钥控制台，粘贴即可——支持 DeepSeek、Moonshot (Kimi)、智谱、MiniMax、Anthropic、OpenAI 等十余家服务商。
 
-When Claude Code finishes, Orbital reads its findings and records the useful results back into the project.
+   <!-- TODO: 重新截图——当前截图（7 月 27 日）早于一键登录按钮（9 月 3 日），画面里还没有这个按钮 -->
 
-A week later, you ask Orbital to draft a launch plan. It begins with that earlier research, the decisions made since, and the artifacts already produced.
+   <p align="center">
+     <img src="docs/screenshots/zh/apikey-setup.png" alt="设置向导第一步——从预设卡片选择 LLM provider 并配置 API key" width="700">
+   </p>
 
-You do not begin again with an empty chat. You continue the project.
+   **Step 2 — 关联账户：** 连接 API 连接器（Google Calendar、Drive），并提前登录 agent 需要访问的站点（Google、GitHub 等），防止它在浏览时被验证码挡住。这一步可跳过，之后随时可在设置中完成。
 
----
+   <p align="center">
+     <img src="docs/screenshots/zh/connect-accounts.png" alt="设置向导第二步——关联账户：API 连接器与 Agent 浏览器登录" width="700">
+   </p>
 
-## Quick Start
+2. **创建项目** —— 起个名字，选择本地的一个文件夹，设定 autonomy 等级
 
-1. **Launch Orbital** — the setup wizard guides you through two steps:
-
-   **Step 1 — LLM Provider:** Pick a provider from the preset cards, follow the key-console link to grab an API key, and paste it in. Supports DeepSeek, Anthropic, OpenAI, Moonshot, and a dozen other providers.
-
-   <p align="center"><img src="docs/screenshots/apikey-setup.png" alt="Setup wizard step 1: pick an LLM provider from preset cards and enter your API key" width="100%"></p>
-
-
-   **Step 2 — Connect Your Accounts:** Link API connectors (Google Calendar, Drive) and sign in to sites your agents will need (Google, GitHub, etc.) so they can browse without getting blocked by CAPTCHAs. Everything here is optional and can be done later in Settings.
-
-   <p align="center"><img src="docs/screenshots/connect-accounts.png" alt="Setup wizard step 2: connect accounts — API connectors and agent browser sign-in" width="100%"></p>
-
-
-2. **Create a project** — give it a name, pick a workspace directory, set an autonomy level
-
-<p align="center"><img src="docs/screenshots/new-project-setting.png" alt="New project creation dialog with workspace directory and autonomy level settings" width="100%"></p>
-
-3. **Chat** — type a task in the chat bar and the project agent handles it
-4. **Walk away** — queue the next tasks; each finished one becomes context the next builds on
+   <p align="center">
+     <img src="docs/screenshots/zh/new-project-setting.png" alt="新建项目页面——选择工作空间目录和 autonomy 等级" width="700">
+   </p>
+3. **开始对话** —— 在聊天框输入任务，管理 agent 自己处理
+4. **走开** —— 把后续任务排进队列；每个完成项都会成为下一项的上下文
 
 ---
 
-## See the project stay under one manager
+## 项目始终由同一个管理 agent 负责
 
-<p align="center"><img src="docs/screenshots/memory-context.png" alt="The orbital/ memory files — CONTEXT.md, DECISIONS.md, LESSONS.md, PROJECT_STATE.md, SESSION_LOG.md — maintained by the agent and read back every session" width="100%"></p>
-<p align="center"><em>The project agent keeps the project's state, decisions, and lessons current across sessions.</em></p>
+<p align="center"><img src="docs/screenshots/zh/memory-context.png" alt="orbital/ 记忆文件——CONTEXT.md、DECISIONS.md、LESSONS.md、PROJECT_STATE.md 由 agent 维护，每个会话读回" width="800"></p>
+<p align="center"><em>管理 agent 跨会话维护项目的状态、决策与经验</em></p>
 
-<p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="Your agent dispatches a task to the Claude Code sub-agent, which reads the project context, completes the work, and reports the deliverable back into the workspace" width="100%"></p>
-<p align="center"><em>It delegates to Claude Code, Codex, or Gemini CLI against the same project context, then records the result.</em></p>
+<p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="把任务派给 Claude Code sub-agent，它读取项目上下文、完成工作并把成果写回工作空间" width="800"></p>
+<p align="center"><em>管理 agent 基于同一份项目上下文把任务派给 Claude Code、Codex 或 Gemini，再记录执行结果</em></p>
 
----
+<p align="center"><img src="docs/screenshots/zh/files.png" alt="工作空间文件树——agent 不断积累的产出与 orbital/ 记忆文件" width="800"></p>
+<p align="center"><em>在每个项目的工作空间里浏览、预览、上传文件——看着 agent 的产出不断积累</em></p>
 
-## At a Glance
+<p align="center"><img src="docs/screenshots/zh/queue-paused.png" alt="暂停中的任务队列——正在运行为空、需要关注里有一条受阻任务并附上 agent 给出的原因、两条排队中任务、以及已完成任务及其总结" width="800"></p>
+<p align="center"><em>把任务排进队列然后走开——agent 逐项处理，每个完成项都会成为下一项的上下文；随时可暂停介入引导，再继续</em></p>
 
-**Why the project never loses its memory**
+<p align="center"><img src="docs/screenshots/zh/workbench.png" alt="工作台——跨所有项目汇总的待你决策事项，每条都标注来源项目、已等待时长，以及「已完成 / 删除」出口" width="800"></p>
+<p align="center"><em>工作台（beta）——只有你能拍板的事（花钱决策、必须用你账号发出的消息）由 agent 标记后跨项目汇总到一处，展开还能看到它这么判断的依据</em></p>
 
-- **Accountable management loop** — one agent plans, delegates, supervises, and records outcomes for the project
-- **Persistent project context** — PROJECT_STATE.md, DECISIONS.md, LESSONS.md, and artifacts remain available across sessions
-- **Self-improving skills** — the agent creates reusable skills from multi-step workflows and consults them before repeating similar tasks
+<p align="center"><img src="docs/screenshots/zh/calendar.png" alt="日历周视图——项目的循环自动任务：每天的仓库巡检，加上每周一的增长复盘" width="800"></p>
+<p align="center"><em>日历（beta）——把已启用的定时 trigger 和带截止日期的承诺投影到周视图上，自动任务不再悄无声息地跑；管理 agent 自己也能读取它来安排工作</em></p>
 
-**Why you can swap agents mid-project**
+<p align="center"><img src="docs/screenshots/zh/skills.png" alt="Skills 设置——agent 遵循的可复用操作模式" width="800"></p>
+<p align="center"><em>Skills——agent 从多步流程中沉淀出可复用的操作模式，下次遇到类似任务先查阅</em></p>
 
-- **Interchangeable workers** — dispatch Claude Code, Codex, Gemini CLI, Cursor, or any CLI agent against the same project context
-- **Task queue** — queue work per project and walk away; the agent drains items one at a time, marking each completed (with a summary) or blocked (with a reason); pause mid-queue to chat and steer, then resume
+<p align="center"><img src="docs/screenshots/zh/scheduled-trigger.png" alt="定时 trigger 详情——每周一上午 9 点的增长实验复盘任务，含完整任务描述、执行周期、上次触发与运行次数" width="800"></p>
+<p align="center"><em>定时与文件监听 trigger——让管理 agent 定期检查并自动派发 sub-agent，无需你动手</em></p>
 
-**Why you can delegate without watching**
+<p align="center"><img src="docs/screenshots/zh/settings-budget.png" alt="预算设置——花费上限、重置周期、按模型的实时成本明细、可编辑的价格表" width="800"></p>
+<p align="center"><em>为每个项目设定预算上限和重置周期，实时查看按模型的花费与成本明细</em></p>
 
-- **Workbench** (beta) — the decisions and actions only you can take, flagged by the agent as it works and collected across every project into one list, each with the evidence behind it
-- **Project-based governance** — each project is a folder with its own workspace, instructions, queue, budget, approval policy, and audit trail
-- **Sandboxed execution** — agents only access folders you specify (Windows sandbox user, macOS Seatbelt)
-- **Approval workflows** — agents pause before risky actions; approve from desktop or phone
-- **Budget controls** — per-project spending limits with configurable actions
-- **Credential store** — API keys and website passwords in OS keychain, never exposed to chat
-
-**Why the project moves while you're away**
-
-- **Triggers** — set up a cron job or file watcher so the project agent checks in regularly and kicks off workers without you
-- **Calendar** (beta) — every enabled automation projected onto a week view, so scheduled work stays visible instead of firing invisibly
-- **Mobile supervision** — manage agents from your phone via QR code pairing
-
-**Under the hood**
-
-- **14 built-in LLM providers** — Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动), plus custom endpoints
-- **Browser automation** — 26 browser actions via Patchright with anti-detection
-
----
-
-## How Orbital compares
-
-Memory, scheduling, and sub-agents are table stakes now — every tool below has them. These are the three questions where the answers still differ.
-
-| July 2026 | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
-| --- | --- | --- | --- | --- | --- |
-| Can a different agent pick up the next task? | ✅ Claude Code, Codex, Gemini CLI, Cursor, any CLI | ❌ Claude workers | ❌ Codex workers | ❌ Hermes workers | Partial (external harnesses via ACP) |
-| What stops a queued task from drifting? | ✅ Enforced Completed/Blocked closure | ❌ | ❌ | ❌ | ❌ |
-| Who owns the budget, approvals, and audit trail? | ✅ The project | Partial (permissions + run history) | Partial (approvals + enterprise audit) | Partial (command approvals) | Partial (approvals + logs) |
-
-**The short version:** the difference isn't any one capability — it's that the project, not the session, is the unit that owns state, workers, and governance.
-
----
-
-## Feature Deep Dives
-
-<details>
-<summary><strong>Orbital Is / Is Not</strong></summary>
-
-| Orbital **IS** | Orbital **IS NOT** |
-| --- | --- |
-| A project workspace where you and your agents share the same files, history, and context | A cloud service — everything runs on your machine |
-| A sub-agent coordinator: Claude Code via SDK, Codex via app-server, and Gemini CLI, Cursor, or other workers via PTY/[ACP](https://agentcommunicationprotocol.dev/) | An OpenClaw fork — custom agent loop, built from scratch |
-| Remote supervision: approve actions, browse workspace files, upload from phone | A chat wrapper — agents run continuously via cron and file watchers |
-| Budget controls, autonomy presets, credential management (OS keychain) | Fully autonomous God Mode (yet) — scheduler-driven today, full autonomy on the roadmap |
-
-</details>
-
-### How the project stays under one manager
-
-<details>
-<summary><strong>Project & Workspace Model</strong></summary>
-
-Each project maps to a workspace directory and maintains its own sessions, queue, triggers, and configuration.
-
-<p align="center"><img src="docs/screenshots/files.png" alt="The workspace file tree with the agent's accumulating output and the orbital/ memory files" width="100%"></p>
-<p align="center"><em>Browse, preview, and upload files in each project's workspace — and watch the agent's output accumulate</em></p>
-
-```
-{workspace}/
-+-- AGENTS.md                           # Onboarding signpost for external agents (seeded at creation, user-owned)
-+-- orbital/                            # Operational metadata
-    +-- sessions/
-    |   +-- {session_id}.jsonl          # Append-only session log
-    +-- instructions/
-    |   +-- project_goals.md
-    |   +-- user_directives.md
-    +-- skills/                         # Project skills
-    +-- sub_agents/                     # Sub-agent transcripts + per-worker MEMORY.md
-    +-- tool-results/                   # Tool output artifacts
-    +-- output/                         # Agent work artifacts
-    |   +-- screenshots/                # Browser screenshots
-    |   +-- pdfs/                       # Saved PDFs
-    |   +-- shell-output/               # Shell command output
-    +-- queue.json                      # Task queue (queued / running / completed / blocked)
-    +-- PROJECT_STATE.md                # Current-state scratchpad (overwrite)
-    +-- DECISIONS.md                    # Durable decisions + reasoning
-    +-- LESSONS.md                      # Durable heuristics / playbooks
-    +-- INDEX.md                        # Navigation map: file tree + one line per file
-    +-- DECISIONS_ARCHIVE.md            # Demoted decisions (read-on-demand)
-    +-- LESSONS_ARCHIVE.md              # Demoted lessons (read-on-demand)
-
-~/orbital/                              # Home global (daemon infrastructure)
-+-- daemon.pid                          # Singleton enforcement
-+-- device.json                         # Device identity
-+-- browser-profile/                    # Shared browser profile
-+-- credential-meta.json                # Credential metadata
-```
-
-**Session format**: One JSON line per message (role, source, content, timestamp, tool_calls). Append-only with file locks. Never modified except during compaction.
-
-</details>
-
-<details>
-<summary><strong>Context Management & Compaction</strong></summary>
-
-This is how the project agent keeps context available across sessions. The agent-maintained Layer-1 files are injected every turn (bounded per file) and consolidated at session boundaries:
-
-| File | Purpose | Bound |
-|------|---------|-------|
-| `PROJECT_STATE.md` | Current-state scratchpad — what's true now (overwrite, not a changelog) | token cap → trim oldest |
-| `DECISIONS.md` | Durable decisions + reasoning (merge-and-supersede, never contradict) | token cap → demote oldest-cold to archive |
-| `LESSONS.md` | Durable heuristics / technical playbooks (kept intact, never word-trimmed) | token cap → demote oldest-cold to archive |
-| `INDEX.md` | Navigation map only: file tree + one sentence per file | one-sentence format + token cap |
-| `DECISIONS_ARCHIVE.md`, `LESSONS_ARCHIVE.md` | Demoted durable entries, read-on-demand (pointed to by INDEX) | unbounded |
-
-Each entry carries system-managed metadata (`id` / `created` / `touched` / `tag`) so dedup runs on recency. Per-turn injection bounds each file to a budget derived from the active model's context window. Session-end runs a deterministic size backstop (demote/trim, never an LLM call) plus a best-effort LLM dedup/merge that fixes contradictions. (`SESSION_LOG.md` was retired; the Layer-1 files are injected every turn, so a separate session history is redundant.)
-
-**Cold resume**: On session start, these files are assembled into the system prompt so the agent can reorient before it acts.
-
-<p align="center"><img src="docs/screenshots/memory-decisions.png" alt="DECISIONS.md — the agent's decision log with rationale, maintained across sessions" width="100%"></p>
-<p align="center"><img src="docs/screenshots/memory-lessons.png" alt="LESSONS.md — patterns and pitfalls the agent learned, read back before each task" width="100%"></p>
-<p align="center"><em>DECISIONS.md and LESSONS.md — written by the agent as it works, and carried into every future session</em></p>
-
-**Compaction** (when context usage exceeds 80%): memory flush, LLM-driven summarization of older messages, recent messages kept intact, post-compaction reorientation with project goals and current state.
-
-**Prefix caching** (v0.4.2): the system prompt is split into static, semi-stable, and truly-dynamic sections so up to ~95% of input tokens hit the provider's prefix cache on follow-up turns. See the [v0.4.2 release notes](https://github.com/zqiren/Orbital/releases/tag/v0.4.2) for benchmark numbers.
-
-</details>
-
-<details>
-<summary><strong>Sub-Agent Delegation</strong></summary>
-
-Orbital is not tied to a single AI tool. The project agent plans and delegates, while specialized workers execute — each reading the same accumulated project context. Any CLI-based agent can be registered via a manifest file; Claude Code, Codex, Cursor, Gemini CLI, Aider, Cline, Goose, Copilot CLI, and Continue ship with one.
-
-Each dispatch renders a fresh inheritance prompt that points the worker at `PROJECT_STATE.md`, `DECISIONS.md`, `LESSONS.md`, `INDEX.md`, the project's instructions, and its skills — declaring them authoritative and off-limits for writes. Workers read them on demand rather than receiving a pasted copy, so the brief never goes stale.
-
-<p align="center"><img src="docs/screenshots/subagent-memories.png" alt="Sub-Agent Memories panel — each sub-agent keeps its own long-term memory, curated per project, that it reads on every dispatch" width="100%"></p>
-<p align="center"><em>Each sub-agent keeps its own long-term memory across dispatches — curate what it remembers...</em></p>
-
-<p align="center"><img src="docs/screenshots/delegation-claudecode.png" alt="The management agent dispatches a GitHub scan to the Claude Code sub-agent, which runs 21 tool calls and reports the deliverable back into the workspace" width="100%"></p>
-<p align="center"><em>...then delegates a task to @claudecode, reviews the result, and writes it back into the project</em></p>
-
-**Transport types:**
-
-| Transport | Use Case |
-|-----------|----------|
-| **Codex app-server** | Native Codex JSON-RPC over stdio, with structured lifecycle and approvals |
-| **Pipe** | stdin/stdout subprocess, JSON streaming |
-| **PTY** | Pseudo-terminal for interactive agents — Gemini CLI, Aider, Cline, Goose, Copilot CLI, Continue |
-| **SDK** | Direct Claude SDK integration |
-| **ACP** | [Agent Communication Protocol](https://agentcommunicationprotocol.dev/) — Cursor, via its official ACP server |
-
-> **Note:** Codex uses its native app-server path, not PTY or ACP. Orbital launches `codex app-server` and speaks JSON-RPC directly. ACP is available for any ACP-compliant worker; PTY is the default for other interactive CLI agents.
-
-</details>
-
-<details>
-<summary><strong>Task Queue</strong></summary>
-
-Each project has a queue, stored with the project at `orbital/queue.json`. Add tasks — pin urgent ones to the front — and your agent works through them one at a time, in order, without you watching.
-
-The agent must declare an outcome on every item; it can't silently drift to the next one:
-
-| Outcome | What happens |
-|---------|--------------|
-| **Completed** | The agent reports a short summary; the item moves to **Completed** and the queue advances. |
-| **Blocked** | The agent states the reason (missing credentials, ambiguous requirements, …); the item moves to **Needs Attention** and the queue moves on. You unblock it when ready. |
-
-**Pause to steer.** Pause the queue mid-item to chat freely — your clarifications land in the same session, so the agent sees them when you resume.
-
-**Continuity by design.** Each completed item's artifacts are already in the project when the next item starts, so the agent can use them when supervising later tasks. The project's triggers (schedules and file watchers) are listed in the queue's **Automations** section alongside your tasks.
-
-<p align="center"><img src="docs/screenshots/queue-paused.png" alt="A paused queue: Now Running empty, one blocked item under Needs Attention with the agent's reason, two queued tasks, and completed items with their summaries" width="100%"></p>
-<p align="center"><em>Queue tasks and walk away — each finished one becomes context the next builds on</em></p>
-
-</details>
-
-<details>
-<summary><strong>Workbench — what only you can decide</strong> (beta)</summary>
-
-Some things an agent genuinely cannot finish for you: a spend decision, a message that has to come from your account, a judgment call between three options it already researched. As the agent works, it flags those in the project's state file — and the **Workbench** collects them from every project into one list.
-
-Each card carries its provenance, so you are never asked to act on a bare instruction. Expand **Why I believe this** and you see the evidence the agent recorded and the session it came from. Cards sort overdue-first, then oldest, and each one exits in a single tap — **Done** once you've handled it, **Delete** when it stopped mattering. Tapping the card itself opens that project's chat with the decision pre-filled, so answering is one message instead of a hunt for context.
-
-The **Today** strip along the top lists the day's automation slots, including the ones that already fired — so a single glance covers both what needs you and what ran without you.
-
-<p align="center"><img src="docs/screenshots/workbench.png" alt="Workbench: decisions and actions flagged across every project, each with its source project, how long it has been waiting, and Done / Delete exits" width="100%"></p>
-<p align="center"><em>Every project's open decisions in one list — with the evidence behind each one a click away</em></p>
-
-</details>
-
-<details>
-<summary><strong>Calendar</strong> (beta)</summary>
-
-Automations you set up months ago shouldn't fire invisibly. Every enabled schedule trigger projects its upcoming runs onto a week grid, so the rhythm of the project is something you can see rather than remember. Dated commitments the agent recorded in the project state land on the same grid and drop off once they're resolved, and connecting Google Calendar brings those events into the same view.
-
-The project agent can read this calendar too, so "what's already on the schedule" is context it plans around instead of something you have to restate.
-
-<p align="center"><img src="docs/screenshots/calendar.png" alt="Calendar week view showing a project's recurring automations — a daily repo scan across the week plus a Monday growth ritual" width="100%"></p>
-<p align="center"><em>The week ahead, as your automations will actually run it</em></p>
-
-</details>
-
-<details>
-<summary><strong>Quick Tasks</strong></summary>
-
-The sidebar includes a **Quick Task** section for fire-and-forget interactions. Scratch projects skip the full project creation flow — useful for one-off tasks that don't need a dedicated workspace.
-
-<p align="center"><img src="docs/screenshots/quick-task.png" alt="A fire-and-forget Quick Task (browsing Hacker News) returning structured results" width="100%"></p>
-
-</details>
-
-<details>
-<summary><strong>Self-Improving Skills</strong></summary>
-
-Agents create reusable skills from multi-step workflows and consult matching skills before starting similar tasks. Skills are stored as SKILL.md files in the workspace and managed through the Settings UI — another way the project gets more capable the longer it runs.
-
-<p align="center"><img src="docs/screenshots/skills.png" alt="Skills section in project settings: reusable operational patterns the agent follows" width="100%"></p>
-<p align="center"><em>Skills like Efficient Execution, Learning Capture, and Task Planning shape how your agent works — and the agent adds its own</em></p>
-
-</details>
-
-### Tools & execution
-
-<details>
-<summary><strong>Built-in Tool Suite</strong></summary>
-
-The project agent has access to these tool categories:
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Shell** | `shell` | Command execution with network-aware detection |
-| **File** | `read`, `write`, `edit`, `glob`, `grep` | File operations and search within workspace |
-| **Browser** | 26 actions via Patchright | Navigate, click, type, extract, screenshot, multi-tab, PDF, web search, URL fetch |
-| **Triggers** | `create_trigger`, `list_triggers`, `update_trigger`, `delete_trigger` | Schedule and file-watch triggers via natural language |
-| **Credentials** | `request_credential` | Agent-initiated credential request — opens secure modal |
-| **Delegation** | `agent_message` | Route tasks to sub-agents |
-| **Access** | `request_access` | Request sandbox portal to a path outside the workspace |
-
-</details>
-
-<details>
-<summary><strong>Browser Automation</strong></summary>
-
-Built on **Patchright** (a Playwright fork with anti-bot-detection):
-
-- **Stealth mode**: Anti-automation detection scripts injected into every browser context
-- **Shared profile**: One browser profile across all projects — log into services once, all agents share cookies
-- **Accessibility-first**: `snapshot` returns an accessibility tree with `[ref=eN]` element references for reliable interaction
-- **26 browser actions**: navigate, click, type, fill, press, hover, select, drag, upload, snapshot, screenshot, extract, search (page), evaluate, tab management, go back/forward, reload, wait, PDF export, web search, URL fetch, batch
-
-<p align="center"><img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="Mobile view of the agent browsing arxiv.org, scanning research papers on a daily schedule" width="300"></p>
-<p align="center"><em>Your agent browsing arxiv.org — scanning for AI reasoning papers on a daily schedule</em></p>
-
-</details>
-
-<details>
-<summary><strong>Continuous Operation & Triggers</strong></summary>
-
-Agents run continuously via triggers — no manual intervention needed. Create triggers through **natural language** in the chat:
-
-> *"Watch the uploads/ folder for new .jpg files and analyze them"*
-> *"Run a research scan every morning at 6 AM"*
-
-The project agent translates this into a `create_trigger` tool call with the appropriate type and parameters.
-
-**Trigger types:**
-
-| Type | Configuration | Example |
-|------|--------------|---------|
-| **Schedule** | Cron expression + timezone | `0 6 * * *` (daily at 6 AM) |
-| **File Watch** | Path + glob patterns + debounce | `uploads/*.jpg`, 5s debounce |
-
-<p align="center"><img src="docs/screenshots/file-watch-trigger.png" alt="File watch trigger detail: watching uploads/ for new images and triaging each one on arrival, with its watched path, patterns, last fired time, and run count" width="100%"></p>
-<p align="center"><em>File watch trigger: watches uploads/ for new photos and analyzes each one on arrival</em></p>
-
-<p align="center"><img src="docs/screenshots/scheduled-trigger.png" alt="Schedule trigger detail: a weekly growth-experiment ritual every Monday at 9 AM, with its full task, cadence, last fired time, and run count" width="100%"></p>
-<p align="center"><em>Schedule trigger: a daily competitor watch dispatched every day at 2 PM — 19 runs so far</em></p>
-
-**Real-world example — Health Tracker with file watch:**
+<p align="center"><img src="docs/screenshots/zh/credential-store.png" alt="凭据管理——网站密码存放在系统钥匙串中" width="800"></p>
+<p align="center"><em>网站凭据存放在系统钥匙串里，绝不暴露给聊天</em></p>
 
 <p align="center">
-  <img src="docs/screenshots/4B-mobile-meal-chat1.jpg" alt="Mobile chat: setting up a meal photo file watcher from the phone" width="280">
-  &nbsp;
-  <img src="docs/screenshots/4B-mobile-meal-chat2.jpg" alt="Mobile chat: the agent automatically analyzing a dropped meal photo" width="280">
+  <img src="docs/screenshots/5A-mobile-browsing-activity.png" alt="手机端——agent 在浏览 arxiv，按日程扫描论文" width="280">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/5B2-mobile-approval-card.png" alt="移动端审批卡片——在手机上批准 agent 动作" width="280">
 </p>
-<p align="center"><em>Left: "Watch uploads/ for meal photos and track calories." Right: Drop a photo, get instant nutritional analysis.</em></p>
-
-</details>
-
-<details>
-<summary><strong>LLM Provider Routing & BYOK</strong></summary>
-
-**14 providers** supported out of the box:
-
-Anthropic, OpenAI, DeepSeek, Moonshot (Kimi), Groq, Google Gemini, xAI, Mistral, Together, OpenRouter, Zhipu, Qwen, TokenDance (词元跳动 — China-mainland model router), plus a `custom` entry for any OpenAI-compatible endpoint (e.g., Ollama, Azure OpenAI, self-hosted models).
-
-- **SDK routing**: Anthropic SDK for Anthropic, OpenAI SDK for OpenAI-compatible providers
-- **Per-model metadata**: Display name, tier, context window, max output, capabilities (vision, tool use, streaming), pricing
-- **Fallback rotation**: When the primary provider fails, the loop rotates to fallback providers with error classification (transient, rate limit, abort)
-
-</details>
-
-### Control & safety
-
-<details>
-<summary><strong>Autonomy & Approval System</strong></summary>
-
-Three autonomy presets control how much supervision agents receive:
-
-| Preset | Shell | File Write | Browser | Description |
-|--------|-------|-----------|---------|-------------|
-| **Hands-off** | Auto | Auto | Auto | Maximum autonomy. Only `request_access` requires approval. |
-| **Check-in** | Approval | Approval | Write only | Balanced. Default for external agents. |
-| **Supervised** | Approval | Approval | All except read | Maximum oversight. |
-
-<p align="center"><img src="docs/screenshots/settings-autonomy-budget.png" alt="Project settings: autonomy presets (Hands-off / Check-in / Supervised) and per-project budget controls" width="100%"></p>
-<p align="center"><em>Pick an autonomy level and set budget limits per project</em></p>
-
-**Approval flow:**
-1. Interceptor catches tool call based on autonomy rules
-2. Frontend shows an **Approval Card** with tool name, arguments, and context
-3. User can **Approve**, **Deny**, or **Auto-approve for 10 minutes**
-4. Per-action bypass: same tool+args auto-approved for 60 seconds
-
-<p align="center"><img src="docs/screenshots/5B2-mobile-approval-card.png" alt="Mobile approval card: approving an agent action from the phone with full context" width="300"></p>
-<p align="center"><em>Approve agent actions from your phone — with full context and optional guidance</em></p>
-
-</details>
-
-<details>
-<summary><strong>Cost Controls & Budget Limits</strong></summary>
-
-Per-project budget limits prevent runaway spending:
-
-| Setting | Description |
-|---------|-------------|
-| `Budget Limit (USD)` | Maximum spend for the project |
-| `Budget Action` | `ask` (pause and prompt user) or `stop` (halt the agent) |
-| `Spent` | Running total with reset option |
-
-The agent loop tracks cumulative token usage and computes cost using per-model pricing from the provider registry. When the budget threshold is reached, the configured action fires (`ask` pauses the session; `stop` halts the agent). Budget events do not currently trigger push notifications.
-
-<p align="center"><img src="docs/screenshots/settings-budget.png" alt="Budget settings: spend limit, reset period, pause-or-stop action, a live per-model cost breakdown, and an editable pricing table" width="100%"></p>
-<p align="center"><em>Set a limit and a reset period; watch the live per-model spend and cost breakdown</em></p>
-
-</details>
-
-<details>
-<summary><strong>Mobile Remote Control</strong></summary>
-
-Control agents from your phone on the local network or via a cloud relay.
-
-<p align="center">
-  <img src="docs/screenshots/4A-mobile-dashboard.png" alt="Mobile dashboard: all projects at a glance" width="280">
-  &nbsp;
-  <img src="docs/screenshots/5C-mobile-approved.png" alt="The agent completing its work after a mobile approval" width="280">
-</p>
-<p align="center"><em>Left: Project dashboard on phone. Right: Your agent completes its research after you approve from anywhere.</em></p>
-
-**Local network**: Scan the QR code in Settings to open Orbital on your phone via LAN.
-
-<p align="center"><img src="docs/screenshots/qr-code-lan-pairng.png" alt="QR code in Settings for mobile access on the local network" width="100%"></p>
-<p align="center"><em>Scan to open Orbital on your phone — same Wi-Fi network required</em></p>
-
-**Cloud relay** (optional): Deploy a relay server for access outside your home network. Push notifications for approval requests and agent status changes.
-
-</details>
-
-<details>
-<summary><strong>Credential Management</strong></summary>
-
-<p align="center"><img src="docs/screenshots/credential-store.png" alt="Credential store: website passwords stored in the system keychain, with browser sign-in and connectors" width="100%"></p>
-<p align="center"><em>Website credentials stored in your system keychain. Your agent always asks permission before using them.</em></p>
-
-- **API keys**: Stored in OS keychain (`keyring`), masked in API responses, per-project BYOK override
-- **Website credentials**: Metadata in `credential-meta.json`, values in OS keychain. The `request_credential` tool lets agents request credentials mid-session via a secure modal — credentials never appear in chat history.
-
-</details>
-
-<details>
-<summary><strong>Loop Safety Guards</strong></summary>
-
-The agent loop includes multiple safety mechanisms to prevent runaway execution:
-
-| Guard | Threshold | Behavior |
-|-------|-----------|----------|
-| **Token budget** | 100M tokens (configurable) | Hard stop on cumulative usage |
-| **Repetition detection** | 5 identical action hashes | Forces different approach |
-| **Ping-pong detection** | 3 identical consecutive pairs | Breaks alternating cycles |
-| **Circuit breaker** | 2 consecutive identical errors | Blocks tool until new user message |
-| **Context overflow** | 3 consecutive overflows | Hard stop after progressive reduction |
-
-</details>
-
-<details>
-<summary><strong>Desktop App & System Tray</strong></summary>
-
-Orbital ships as a desktop application bundled with PyInstaller:
-
-- **System tray**: Agent activity status, quick access menu, running port in tooltip
-- **Native window**: Embeds the React frontend via `pywebview` — no browser needed
-- **Daemon lifecycle**: Desktop app spawns the daemon on launch, manages port allocation, cleans up on exit
-- **Sleep prevention**: Blocks system sleep while agents are active (Windows `SetThreadExecutionState`), re-allows when idle
-
-</details>
+<p align="center"><em>手机上监督：实时查看 agent 活动，带完整上下文批准关键动作（可附加指引）</em></p>
 
 ---
 
-## Architecture
+## 架构
 
-Orbital is one persistent agent bound to a **project** — not a chat session. It acts as a local control plane for the project's workspace, instructions, state, queue, budget, and approval rules. It plans, delegates, supervises, and records outcomes; worker agents execute against the same project context. You supervise from anywhere.
+Orbital 是绑定在一个**项目**上的持久管理 agent——而不是一个聊天会话。它是项目的本地 control plane，统一管理工作空间、instructions、状态、队列、预算和审批规则。管理 agent 负责规划、委派、监督并记录结果；worker agent 基于同一份项目上下文执行。你可以从任何地方监督。
 
 ```mermaid
 flowchart TB
@@ -593,193 +187,134 @@ flowchart TB
     Relay -.WebSocket.-> Phone
 ```
 
-**Key design decisions:**
-- **The agent owns the project**: it maintains structured state, decisions, lessons, and session history so planning and accountability remain in one place
-- **Isolation**: OS-level sandboxing (Windows sandbox user, macOS Seatbelt, Linux bubblewrap planned)
-- **Fail-closed interceptor**: Any approval system error results in DENY, never ALLOW
-- **Single daemon**: PID file enforcement prevents multiple instances
-- **Local-first**: Your files and project state live on your disk. The cloud relay, when enabled, proxies approvals and events — not your files.
+**设计决策：**
+- **管理 agent 对项目负责**: agent 维护结构化的状态、决策、经验和会话历史，让规划与责任始终归于一处
+- **Isolation**: OS 级别 sandbox（Windows sandbox user / macOS Seatbelt / Linux bubblewrap 在规划中）
+- **Fail-closed interceptor**: 审批系统出错后默认 DENY，绝不 ALLOW
+- **单 daemon**: PID 文件强制只能存在一个实例
+- **Local-first**: 你的所有文件和项目状态都在你自己的硬盘上。Cloud relay 启用时只转发审批和事件，不转发你的文件。
 
 ---
 
-## Installation
+## 与同类产品对比
+
+持久记忆、定时任务和 sub-agent 现在已经是标配 —— 下面每个工具都有。真正还有分歧的是这三个问题。
+
+| 2026 年 7 月 | Orbital | [Claude Code](https://code.claude.com/docs/en/desktop) | [Codex](https://developers.openai.com/codex/) | [Hermes](https://github.com/NousResearch/hermes-agent) | [OpenClaw](https://docs.openclaw.ai/) |
+| --- | --- | --- | --- | --- | --- |
+| 下一个任务能换一个 agent 接手吗？ | ✅ Claude Code、Codex、Gemini CLI、Cursor、任意 CLI | ❌ 只有 Claude worker | ❌ 只有 Codex worker | ❌ 只有 Hermes worker | 部分（通过 ACP 调用外部 agent） |
+| 靠什么防止队列任务悄悄漂走？ | ✅ 强制以完成/受阻闭环 | ❌ | ❌ | ❌ | ❌ |
+| 预算、审批和审计属于谁？ | ✅ 属于项目 | 部分（权限 + 运行历史） | 部分（审批 + 企业审计） | 部分（命令审批） | 部分（审批 + 日志） |
+
+**一句话总结：** 差异不在某一项能力，而在于承载状态、worker 和治理的单位是「项目」，不是「会话」。
+
+---
+
+## 功能详解
+
+完整的功能详解——项目与工作空间模型、管理 agent 的上下文维护与压缩、sub-agent 委派与传输层（Codex 原生 app-server JSON-RPC、Claude Code SDK、其他 worker PTY/ACP）、任务队列、Quick Tasks、自我改进的 skills、内置工具、浏览器自动化、triggers、LLM 路由与 BYOK、autonomy 与审批、预算控制、手机远程、凭据管理、agent loop 安全保护、桌面应用——以英文为准，见 [English README → Feature Deep Dives](README.en.md#feature-deep-dives)，避免中英两份各自维护导致内容不同步。
+
+---
+
+## 安装
 
 ### Windows
 
-1. Download the `Orbital-Setup-*.exe` from [Releases](https://github.com/zqiren/Orbital/releases/latest) (latest Windows build)
-2. Run the installer and follow the prompts
-3. Launch Orbital from the Start Menu or desktop shortcut
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/latest) 下载最新的 `Orbital-Setup-*.exe`（Windows 版本）
+2. 运行安装程序，按提示完成
+3. 从开始菜单或桌面快捷方式启动 Orbital
 
 <details>
-<summary>Windows SmartScreen Warning</summary>
+<summary>Windows SmartScreen 警告</summary>
 
-Orbital is not yet code-signed, so Windows will show a security warning:
+Orbital 的 Windows 安装包暂未做代码签名，Windows 会提示安全警告：
 
-> **Windows protected your PC** — Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+> **Windows 已保护你的电脑** —— Microsoft Defender SmartScreen 阻止了一个无法识别的应用启动。
 
-Click **"More info"** then **"Run anyway"**. Code signing will be added in a future release.
+点击 **「更多信息」**，然后点 **「仍要运行」**。代码签名会在后续版本加上。
 </details>
 
 ### macOS
 
-1. Download the `Orbital-*-macOS.dmg` from [Releases](https://github.com/zqiren/Orbital/releases/latest)
-2. Open the DMG and drag Orbital to your Applications folder
-3. Launch Orbital from Applications or Spotlight
+1. 从 [Releases](https://github.com/zqiren/Orbital/releases/latest) 下载最新的 `Orbital-*-macOS.dmg`
+2. 打开 DMG，把 Orbital 拖到 Applications 文件夹
+3. 从启动台或 Spotlight 启动 Orbital
 
-Requires macOS 13 (Ventura) or later, **Apple Silicon (M1 or newer)**. Intel Macs are **not** supported by this build (the bundle is arm64-only).
+需要 macOS 13 (Ventura) 及以上，**仅支持 Apple Silicon（M1 及更新机型）**。本版本为 arm64 构建，**不支持 Intel Mac**。
 
-Release builds are Developer-ID signed and notarized by Apple, so the app opens normally on first launch — no Gatekeeper warning or "Open Anyway" workaround needed. (If you built Orbital from source or grabbed a CI branch artifact, that build is ad-hoc signed and macOS will still ask you to approve it once via right-click → Open.)
+正式发布版已完成 Developer-ID 签名和 Apple 公证（notarization），首次启动直接打开——没有 Gatekeeper 拦截，不需要任何「仍要打开」操作。（从源码自行构建或下载 CI 分支产物的版本仍是 ad-hoc 签名，macOS 会要求你右键 → 打开确认一次。）
 
-### From Source
+### 从源码运行
 
 ```bash
-# Clone the repository
 git clone https://github.com/zqiren/Orbital.git && cd Orbital
 
-# Install Python dependencies (Python 3.11+)
+# 安装 Python 依赖(Python 3.11+)
 pip install -e ".[desktop]"
 
-# Install frontend dependencies (Node.js 18+)
+# 安装前端依赖(Node.js 18+)
 cd web && npm install && cd ..
 
-# Start the daemon
+# 启动 daemon
 python -m uvicorn agent_os.api.app:create_app --factory --port 8000
 
-# Start the frontend dev server (separate terminal)
+# 另开终端启动前端
 cd web && npx vite --host 127.0.0.1 --port 5173
 ```
 
-Open `http://localhost:5173` in your browser. The setup wizard runs on first launch.
+浏览器打开 `http://localhost:5173`，首次启动会进入设置向导。
 
-### Note on Sleep/Shutdown
+### 关于休眠
 
-Orbital prevents system sleep while agents are actively working (via OS-level sleep inhibition on Windows and macOS). When all agents are idle, sleep is re-allowed. The system tray icon shows current agent activity status.
-
----
-
-## Development
-
-### Backend
-
-```bash
-# Start daemon
-python -m uvicorn agent_os.api.app:create_app --factory --port 8000
-
-# Restart with fresh code
-bash scripts/restart-daemon.sh
-```
-
-### Frontend
-
-```bash
-cd web
-npm install
-npx vite --host 127.0.0.1 --port 5173
-```
-
-### Key Paths
-
-| Component | Path |
-|-----------|------|
-| FastAPI app factory | `agent_os/api/app.py` |
-| Agent loop | `agent_os/agent/loop.py` |
-| Tool implementations | `agent_os/agent/tools/` |
-| Autonomy interceptor | `agent_os/daemon_v2/autonomy.py` |
-| LLM providers | `agent_os/agent/providers/` |
-| Trigger manager | `agent_os/daemon_v2/trigger_manager.py` |
-| Browser manager | `agent_os/daemon_v2/browser_manager.py` |
-| Sub-agent manifests | `agent_os/agents/manifests/` |
-| Desktop entry point | `agent_os/desktop/main.py` |
-| System tray | `agent_os/desktop/tray.py` |
-| Frontend components | `web/src/components/` |
+Agent 运行期间，Orbital 会通过系统级别的接口阻止机器进入休眠（Windows 和 macOS 都支持）。所有 agent 闲下来之后，会重新允许系统休眠。系统托盘图标会显示当前 agent 活动状态。
 
 ---
 
-## Testing
+## 开发与测试
 
-```bash
-# Unit + platform tests
-python -m pytest tests/unit/ tests/platform/ -q
-
-# TypeScript check (zero errors expected)
-cd web && npx tsc -b
-
-# Daemon integration test
-bash scripts/restart-daemon.sh
-curl http://localhost:8000/api/v2/projects
-```
-
-**Known pre-existing test notes:**
-- `test_e2e.py`, `test_user_stories.py` — require a real LLM API key set via `AGENT_OS_TEST_API_KEY`
+后端、前端、测试相关命令、关键文件路径请参见 [English README](README.en.md#development) 中 **Development** 与 **Testing** 章节。这部分文档以英文为准，避免中英两份各自维护导致内容不同步。
 
 ---
 
 ## Roadmap
 
-### Shipped
+**已完成：** 多 LLM 路由 + 失败轮换、三档 autonomy preset（并向 sub-agent 级联）、流式 chat + WebSocket 实时事件、带反检测的浏览器自动化（Patchright）、定时 / 文件监听 trigger、自然语言创建 trigger、cloud relay + 推送通知 + 设备配对、上下文压缩 + 压缩前记忆 flush、前缀缓存优化的 prompt 组装（v0.4.2）、按项目的预算上限和成本统计、凭据管理（API key + 网站登录）、桌面应用 + 系统托盘 + 原生窗口、agent loop 安全保护（迭代上限、重复检测、ping-pong、断路器）、agent 活动期间的系统休眠抑制、`@mention` 路由的 sub-agent 派发。
 
-- Multi-provider LLM routing with fallback rotation
-- Three autonomy presets with cascade to sub-agents
-- Streaming chat with real-time WebSocket events
-- Browser automation with anti-detection (Patchright)
-- Continuous operation via schedule and file-watch triggers
-- Natural language trigger creation
-- Cloud relay with push notifications and device pairing
-- Context compaction with pre-compaction memory flush
-- Prefix-cache-optimized prompt assembly (v0.4.2)
-- Per-project budget limits and cost tracking
-- Credential management (API keys + website credentials)
-- Desktop app with system tray and native window
-- Agent loop safety guards (iteration cap, repetition, ping-pong, circuit breaker)
-- OS-level sleep prevention during agent activity
-- Sub-agent delegation with @mention routing
-
-### Next
-
-- **Webhook triggers** — HTTP endpoint that fires agent tasks on incoming webhooks
-- **Pipeline triggers** — Chain project outputs as inputs to other projects
-- **Network isolation** — Per-project domain allowlists enforced at OS level
-- **Linux sandboxing** — bubblewrap enforcement
-- **Code signing** — Eliminate SmartScreen warnings on Windows
-- **Auto-resume on daemon restart** — Restore in-progress sessions
+**接下来：** Webhook trigger、pipeline trigger（把一个项目的输出作为另一个的输入）、按项目的网络隔离（OS 级 domain allowlist）、Linux 上的 bubblewrap 沙箱、Windows 代码签名（消除 SmartScreen 警告）、daemon 重启后自动恢复进行中的会话。
 
 ---
 
-## Why I built this
+## 我为什么做 Orbital
 
-I loved Claude Projects. I hated that I couldn't let an agent update the project, and that it didn't live on my machine.
+我喜欢 Claude Projects，但受不了 agent 不能自己更新项目，也受不了它不在我自己的机器上。
 
-I loved OpenClaw. I hated the lack of control — no budget, no sandbox, no way to supervise from my phone when I stepped away.
+我喜欢 OpenClaw，但受不了那种失控感——没有预算，没有 sandbox，人离开电脑就没法从手机上监督。
 
-Orbital is the thing I wanted. One agent accountable for the whole project: the plan, the decisions, the queue, the budget, and the approvals. The phone to check in when I'm not at my desk. Claude Code, Codex, and Gemini CLI as workers it can choose for the job without handing away the project's context.
+Orbital 就是我自己想要的那个东西：一个对整个项目负责的 agent——计划、决策、队列、预算和审批都归它管理。不在电脑前时用手机看一眼。Claude Code、Codex、Gemini CLI 是它可以按任务选择的 worker，但项目的上下文始终留在管理 agent 手里。
 
-Built nights and weekends while working full-time. Still very early. Feedback and issues welcome.
+全职工作之余的晚上和周末做出来的，还很早期。欢迎反馈和 issue。
 
 ---
 
-## Sponsors
+## 赞助致谢
 
 <p align="center">
-  <a href="https://watcha.cn"><img src="docs/screenshots/watcha-logo.png" alt="Watcha (观猹)" width="96"></a>
+  <a href="https://watcha.cn"><img src="docs/screenshots/watcha-logo.png" alt="观猹 (Watcha)" width="96"></a>
 </p>
 
-Orbital is proudly sponsored by **[Watcha (观猹)](https://watcha.cn)** — the team behind **[TokenDance (词元跳动)](https://tokendance.space)**, the China-mainland LLM router built into Orbital. Thanks to this sponsorship, new users in mainland China can sign in to TokenDance with one tap during onboarding, claim free tokens, and start working immediately — no manual API-key setup.
+Orbital 由 **[观猹 (Watcha)](https://watcha.cn)** 赞助支持。观猹是 Orbital 内置的中国大陆模型路由 **[词元跳动 (TokenDance)](https://tokendance.space)** 背后的团队。得益于这次赞助，中国大陆的新用户在引导页即可一键登录词元跳动、免费领取 Token、立即开始使用——无需手动配置 API Key。
 
 ---
 
-## Telemetry
+## 遥测（Telemetry）
 
-Orbital sends **one anonymous aggregate per day** — counters, enums, and
-booleans only. Never prompts, files, paths, model output, or any
-project/session identifier. The exact outbound JSON is inspectable verbatim in
-**Settings → Data & privacy**, where a single toggle turns it off. The full
-published schema is in [docs/TELEMETRY.md](docs/TELEMETRY.md).
+Orbital 每天发送**一份匿名汇总**——仅包含计数、枚举和布尔值。绝不包含提示词、文件、路径、模型输出或任何项目/会话标识。在 **设置 → 数据与隐私** 中可逐字查看即将发送的完整 JSON，并可一键关闭。完整的公开 schema 见 [docs/TELEMETRY.md](docs/TELEMETRY.md)。
 
 ---
 
 ## License
 
-Orbital is licensed under the [GNU General Public License v3.0](LICENSE).
+Orbital 采用 [GNU General Public License v3.0](LICENSE) 协议开源。
 
 ```
 Orbital — Every agent owns a session. Orbital owns the project.
