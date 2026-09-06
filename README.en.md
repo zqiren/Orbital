@@ -36,8 +36,11 @@ Orbital takes the context out of the session and puts it back in your local fold
   &nbsp;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/latest/download/Orbital-macOS.dmg"><img src="https://img.shields.io/badge/macOS-Download_.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download the macOS installer (.dmg)"></a>
 </p>
-<p align="center"><a href="https://www.youtube.com/watch?v=U2I0DUUUIzo"><strong>Watch the demo</strong></a></p>
 <p align="center">Set up in under 5 minutes. No Python or Node required. Bring your own API key.</p>
+
+<p align="center"><em>One-minute demo: the worker changed three times, the project never stopped</em></p>
+
+https://github.com/user-attachments/assets/e6b00c11-9260-4adb-8fe5-c5cfb402dcab
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple)
 

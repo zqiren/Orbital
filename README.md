@@ -37,8 +37,11 @@ Orbital 把上下文从会话里拿出来，放回你的本地文件夹。任何
   &nbsp;&nbsp;
   <a href="https://github.com/zqiren/Orbital/releases/latest/download/Orbital-macOS.dmg"><img src="https://img.shields.io/badge/macOS-%E4%B8%8B%E8%BD%BD%E5%AE%89%E8%A3%85%E5%8C%85_.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="下载 macOS 安装包 (.dmg)"></a>
 </p>
-<p align="center"><a href="https://www.bilibili.com/video/BV1yN3B6CEKW/"><strong>30 秒演示视频</strong></a></p>
 <p align="center">5 分钟就能装好。需要自备 API key。</p>
+
+<p align="center"><em>1 分钟演示：执行 agent 换了三次，项目没停</em></p>
+
+https://github.com/user-attachments/assets/88cf118c-1dd9-4429-897d-f2003de3049d
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple)
 
