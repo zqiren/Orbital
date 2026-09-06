@@ -703,7 +703,15 @@ def test_route_is_mounted_on_the_app(tmp_path, monkeypatch):
     """The real app factory exposes the route at the contract path."""
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "in-memory")
     monkeypatch.setenv("AGENT_OS_API_KEY", "x")
+    import agent_os.api.app as app_module
     from agent_os.api.app import create_app
+
+    # The daemon is a singleton keyed on ~/orbital/daemon.pid. When an earlier
+    # test in the same process built an app, the factory sees its own live
+    # PID, takes the "already running" branch and returns the stub app with
+    # no API routes — which is what CI hit (only /docs, /ws, /openapi.json
+    # were mounted). Neutralise the singleton like the other app tests do.
+    monkeypatch.setattr(app_module, "acquire_pid_file", lambda *a, **k: None)
 
     app = create_app(data_dir=str(tmp_path))
     paths = {getattr(r, "path", None) for r in app.routes}
