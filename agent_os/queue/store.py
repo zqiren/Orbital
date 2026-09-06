@@ -37,6 +37,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Spec 079 — "the caller said nothing about ``agent``", distinct from "the
+# caller said None" (hand this item back to the management agent). ``edit_item``
+# needs the distinction; ``add_item`` does not (absent and None mean the same
+# thing there, so it keeps a plain ``None`` default).
+_UNSET = object()
+
+
+def _clean_agent(agent) -> Optional[str]:
+    """Normalize a chosen agent handle to a slug or None.
+
+    Spec 079 §3.1 validates loosely — "any non-empty slug string" — because the
+    installed-agent list is the setup engine's to know, not the queue's, and a
+    slug that goes stale between queueing and dispatch has to fail at ``send``
+    either way (the item blocks with that reason). All this does is collapse the
+    empty/whitespace spellings of "no choice" onto the single None the dispatcher
+    branches on, so a stray "" can never be mistaken for a handle.
+    """
+    if not isinstance(agent, str):
+        return None
+    slug = agent.strip()
+    return slug or None
+
+
 class QueueStore:
     """File-backed queue state with atomic writes."""
 
@@ -203,6 +226,7 @@ class QueueStore:
         review_before_advance: bool = False,
         source: str = "user",
         idempotency_key: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> ItemRecord:
         state = self.load()
         with self._lock:
@@ -221,6 +245,7 @@ class QueueStore:
                 review_before_advance=review_before_advance,
                 source=src_enum,
                 idempotency_key=idempotency_key,
+                agent=_clean_agent(agent),
             )
             if priority == 1:
                 insert_at = sum(
@@ -240,6 +265,7 @@ class QueueStore:
         file_refs: Optional[list[str]] = None,
         priority: Optional[int] = None,
         review_before_advance: Optional[bool] = None,
+        agent: Optional[str] | object = _UNSET,
     ) -> Optional[ItemRecord]:
         state = self.load()
         with self._lock:
@@ -255,6 +281,14 @@ class QueueStore:
                         item.priority = priority
                     if review_before_advance is not None:
                         item.review_before_advance = review_before_advance
+                    # Spec 079: ``agent`` is three-valued, so it needs the
+                    # sentinel the other kwargs don't. Omitted → leave as is;
+                    # a slug → reassign; an explicit None/"" → hand the item
+                    # back to the management agent. Collapsing the last two
+                    # into ``is not None`` would make "back to Orbital"
+                    # unexpressible.
+                    if agent is not _UNSET:
+                        item.agent = _clean_agent(agent)
                     self._save_locked()
                     return item
             return None

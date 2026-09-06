@@ -747,12 +747,23 @@ class TestAgentManager:
         process_manager = MagicMock()
         process_manager.set_session = MagicMock()
 
+        # Spec 082: the LLM half of a config resolves from ONE credential
+        # card, so a manager with no settings store cannot build a config at
+        # all — start_agent raises ProviderConfigError("No LLM API key…").
+        # FakeCardStore implements exactly the surface the daemon calls, so a
+        # method the production code starts using fails loudly here rather
+        # than flowing a MagicMock into AgentConfig.
+        from tests.card_doubles import FakeCardStore
+
         mgr = AgentManager(
             project_store=project_store,
             ws_manager=ws,
             sub_agent_manager=sub_agent_mgr,
             activity_translator=activity_translator,
             process_manager=process_manager,
+            settings_store=FakeCardStore.with_default(
+                provider="anthropic", model="claude-x", key="sk-test",
+            ),
         )
         return mgr, ws, sub_agent_mgr, activity_translator, process_manager
 

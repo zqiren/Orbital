@@ -184,18 +184,16 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     user_credential_store = UserCredentialStore(
         meta_path=os.path.join(store_dir, "credential-meta.json")
     )
-    settings_store = SettingsStore(data_dir=store_dir, credential_store=credential_store)
-
-    # One-time migration: move api_key from settings.json to keychain
-    _legacy = settings_store.get()
-    if _legacy.llm.api_key:
-        try:
-            credential_store.set_api_key(_legacy.llm.api_key)
-        except Exception as e:
-            logger.warning("Credential migration failed, keeping key in settings.json: %s", e)
-        else:
-            _legacy.llm.api_key = None
-            settings_store.update(_legacy)
+    # Spec 082: the store runs the one-shot credential-card migration in its
+    # constructor, before any route serves — which is why it needs the project
+    # store (project rows get a card_id) and the credential store (the legacy
+    # `llm-api-key` keychain item becomes card G's key). The old
+    # settings.json→keychain migration that stood here is subsumed by it: a
+    # plaintext `llm.api_key` is one of the sources card G is built from.
+    settings_store = SettingsStore(
+        data_dir=store_dir, credential_store=credential_store,
+        project_store=project_store,
+    )
 
     # Auto-create scratch project
     _ensure_scratch_project(project_store, settings_store, store_dir)
@@ -493,6 +491,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         setup_engine=setup_engine,
         sub_agent_config_store=sub_agent_config_store,
         ws_manager=ws_manager,
+        project_store=project_store,
     )
     app.include_router(settings_routes.router)
 
@@ -503,6 +502,12 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # 7c. Platform routes
     platform_routes.configure(platform_provider, agent_manager=agent_manager, browser_manager=browser_manager)
     app.include_router(platform_routes.router)
+
+    # 7c1. Live browser view (spec 078 §5.6): one WS route that screencasts
+    # the project's current page and forwards mouse/keyboard back into it.
+    from agent_os.api.routes import browser_live as browser_live_routes
+    browser_live_routes.configure(browser_manager, agent_manager=agent_manager)
+    app.include_router(browser_live_routes.router)
 
     # 7c2. Connector routes (spec 011)
     from agent_os.api.routes import connectors as connector_routes

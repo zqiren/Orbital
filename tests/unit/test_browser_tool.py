@@ -1177,3 +1177,24 @@ async def test_actions_refused_while_signin_browser_open():
     assert "sign-in" in result.content.lower()
     assert "install" not in result.content.lower()
     bm.get_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fetch_reads_in_place_when_the_current_page_is_blank():
+    """Spec 078: a fetch from a blank page renders in the agent's own page so
+    the live view shows it; no side tab, nothing closed."""
+    page = _make_mock_page(url="about:blank")
+    page.evaluate = AsyncMock(return_value="Hacker News front page text")
+    bm = _make_browser_manager(page)
+    page.context = MagicMock()
+    page.context.new_page = AsyncMock()
+
+    tool = _make_tool(bm=bm)
+    with patch("agent_os.agent.tools.browser.validate_url_pre_navigation", return_value=None):
+        result = await tool.execute_async(action="fetch", url="https://news.ycombinator.com/")
+
+    assert "Hacker News" in result.content
+    page.goto.assert_awaited_once()
+    assert page.goto.await_args.args[0] == "https://news.ycombinator.com/"
+    page.context.new_page.assert_not_awaited()
+    page.close.assert_not_awaited()

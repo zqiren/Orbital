@@ -11,11 +11,15 @@ import StatusBadge from './StatusBadge';
 import TriggerStrip from './TriggerStrip';
 import SettingsIcon from './SettingsIcon';
 import BudgetCorner from './BudgetCorner';
-import FilePreviewDrawer, { OpenPathContext } from './FilePreviewDrawer';
+import FilePreviewDrawer from './FilePreviewDrawer';
+import { OpenPathContext } from './filePreviewContext';
 import { useQueue } from '../hooks/useQueue';
 import { useFiles } from '../hooks/useFiles';
+import { usePanelDockable } from '../hooks/usePanelState';
 import { fetchPathWithFallback } from '../utils/openPathWithFallback';
 import { useT } from '../i18n/useT';
+import { projectDisplayName } from '../utils/projectDisplayName';
+import { useCredentialCards, resolveCard } from '../hooks/useCredentialCards';
 import type { StringKey } from '../i18n/strings';
 
 interface ProjectDetailProps {
@@ -38,6 +42,13 @@ interface ProjectDetailProps {
    * substitute for `agent_name` — a model id, not an identity.
    */
   globalDefaultModel?: string;
+  /**
+   * Spec 079 — installed sub-agents, forwarded to the Automations pane so an
+   * automation can name the worker that runs it. Pass-through only; App owns
+   * the single /agents/available fetch (hoisted there so a tab switch never
+   * re-hits the daemon's cache).
+   */
+  agentsAvailable?: Array<{ slug: string; name: string }>;
   children?: React.ReactNode;
 }
 
@@ -69,9 +80,13 @@ export default function ProjectDetail({
   setRoute,
   triggers = [],
   globalDefaultModel,
+  agentsAvailable = [],
   children,
 }: ProjectDetailProps) {
   const t = useT();
+  // Names the credential the header chip shows; the same flat list the
+  // settings picker offers.
+  const { cards, defaultCardId } = useCredentialCards();
 
   // The active tab indicator: when settings overlay is showing, no tab is highlighted
   const activeTab = route.settings ? null : route.tab;
@@ -98,6 +113,15 @@ export default function ProjectDetail({
   // resolving after a newer one (replace-on-click).
   const latestPreviewReqRef = useRef<string | null>(null);
   const previewPath = route.previewPath ?? null;
+
+  // Spec 078 §5.1/§9.10 — on the Chat tab, above the push threshold, the
+  // docked workspace panel in ChatTab shows the preview instead. Suppressing
+  // the overlay here is what keeps a chat path click from opening BOTH. The
+  // probe-first fetch above still runs: it is what resolves an abbreviated
+  // path to a real one (and toasts a miss) before the panel is told about it.
+  // Queue and Files tabs, mobile, and narrow windows keep today's overlay.
+  const dockable = usePanelDockable();
+  const chatPanelOwnsPreview = dockable && !route.settings && route.tab === 'chat';
 
   const handleOpenPath = useCallback(
     async (path: string) => {
@@ -195,7 +219,7 @@ export default function ProjectDetail({
         {/* Left cluster keeps a readable minimum so a long budget pill on the
             right can never crush the title to 0 width (P3-J header collision). */}
         <div className="flex items-center gap-3 min-w-[40%] flex-1">
-          <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{project.name}</h1>
+          <h1 className="text-lg font-semibold tracking-[-0.01em] text-primary truncate min-w-0">{projectDisplayName(project, t)}</h1>
           <StatusBadge status={agentStatus} />
         </div>
         <div className="flex items-center gap-3 min-w-0 shrink">
@@ -209,12 +233,25 @@ export default function ProjectDetail({
             onOpenBudgetSettings={handleOpenBudgetSettings}
           />
           {(() => {
-            // Model label: the project's pinned model, else the global default.
+            // Credential label (spec 082 D13): the card this project runs on —
+            // its own pinned card, else the global default. A card name
+            // already carries the model ("DeepSeek · deepseek-v4-flash"), so
+            // the default case reads as it always did. Falls back to the raw
+            // model id against a pre-082 daemon, which serves no cards.
             // NEVER agent_name (an identity, not a model).
-            const modelName = project.model || globalDefaultModel || '';
-            if (!modelName) return null;
+            const label =
+              resolveCard(cards, project.card_id, defaultCardId)?.name ||
+              project.model ||
+              globalDefaultModel ||
+              '';
+            if (!label) return null;
             return (
-              <span className="font-mono text-[11px] text-secondary">{modelName}</span>
+              <span
+                data-testid="project-credential-chip"
+                className="font-mono text-[11px] text-secondary truncate max-w-[220px]"
+              >
+                {label}
+              </span>
             );
           })()}
           <SettingsIcon onClick={handleSettingsClick} />
@@ -318,7 +355,10 @@ export default function ProjectDetail({
               <div className="flex-1 min-h-0 overflow-hidden">
                 {queuePane === 'automations' ? (
                   <div className="h-full overflow-y-auto px-6 py-4 max-md:px-4">
-                    <AutomationsList projectId={project.project_id} />
+                    <AutomationsList
+                      projectId={project.project_id}
+                      agents={agentsAvailable}
+                    />
                   </div>
                 ) : (
                   children
@@ -330,7 +370,7 @@ export default function ProjectDetail({
           )}
         </OpenPathContext.Provider>
         <FilePreviewDrawer
-          open={previewPath !== null}
+          open={previewPath !== null && !chatPanelOwnsPreview}
           // Content-driven (NOT previewPath): the drawer renders its content
           // while still off-screen so the slide-in reveals an already-painted
           // layer. Also keeps content during the close slide-out (no empty

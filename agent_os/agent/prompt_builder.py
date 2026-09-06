@@ -449,11 +449,20 @@ class PromptBuilder:
             "- If uncertain about a destructive action, use request_access to ask.\n"
             "\n"
             f"Your workspace is: {workspace}\n"
-            "You may ONLY access files and directories within your workspace and any "
-            "portals that have been granted to you. Do not attempt to access, list, or "
-            "reference any paths outside your workspace, including the user's home "
-            "directory, system directories, Downloads, Desktop, Documents, or any other "
-            "user folders — even to \"check\" or \"explore.\"\n"
+            # Spec 077 §4.7 — a focus rule with a reason and an escape hatch,
+            # not a capability claim. The sandbox opens reads to the whole disk,
+            # so "you may ONLY access…" is something the model can disprove in
+            # one shell command — and a model that catches the rules lying
+            # stops trusting the rest of them.
+            "FOCUS: Your project is this workspace plus any portals you have been "
+            "granted. Everything you need to understand and change lives there. The "
+            "rest of the machine is not project context: do not read, list, or "
+            "explore files outside the workspace and portals — not the user's home, "
+            "Desktop, Documents, Downloads, or other projects — even to \"check\". "
+            "Tools and interpreters reading their own installations (python, node, "
+            "git, brew) is normal and is not exploring. If you believe you need a "
+            "folder outside the workspace, use request_access so the user can grant "
+            "it as a portal; do not work around it.\n"
             "\n"
             "PATH CONVENTION FOR FILE TOOLS:\n"
             "- All file tools (read, write, edit, glob, grep) take paths relative to your workspace.\n"

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { usePlatform } from './hooks/usePlatform';
 import { useProjects } from './hooks/useProjects';
@@ -25,6 +25,7 @@ import type { Route } from './route';
 import SetupGate from './components/SetupGate';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
+import EdgeStrip from './components/EdgeStrip';
 import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import QueueTab from './components/QueueTab';
@@ -68,6 +69,24 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [needsWizard, setNeedsWizard] = useState<boolean | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'list' });
+  // Spec 078 amendment (2026-09-03): the edge strip's click pins the project
+  // list as a docked column instead of navigating "home" — home is an empty
+  // route now that the project is the work interface. In-memory only, never
+  // persisted: hiding the list on entering a project is route-driven (D1),
+  // so the pin resets whenever a project route is entered from any other
+  // route (home, Calendar, Workbench, Settings — where the full list is on
+  // screen anyway). It survives switching projects from inside the docked
+  // list: the user pinned it to use it as a switcher.
+  const [projectListPinned, setProjectListPinned] = useState(false);
+  const prevRouteNameRef = useRef<Route['name']>(route.name);
+  useLayoutEffect(() => {
+    const prev = prevRouteNameRef.current;
+    prevRouteNameRef.current = route.name;
+    if (route.name === 'project' && prev !== 'project') setProjectListPinned(false);
+  }, [route.name]);
+  function toggleProjectListPinned() {
+    setProjectListPinned((pinned) => !pinned);
+  }
 
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRunStatus>>({});
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
@@ -485,28 +504,50 @@ export default function App() {
   const sidebarHidden = isMobile && mobileView !== 'sidebar';
   const contentHidden = isMobile && mobileView !== 'content';
 
+  // Shared across both the home-route Sidebar and the EdgeStrip flyout's
+  // Sidebar (spec 078 D3 — the flyout renders the real Sidebar, not a copy).
+  const sidebarProps = {
+    projects,
+    agentStatuses,
+    statusSummaries,
+    pendingApprovals,
+    route,
+    connectionState: mapConnectionState(ws.connectionState, daemonOnline),
+    onSelectProject: handleSelectProject,
+    onSelectCalendar: handleSelectCalendar,
+    onSelectWorkbench: handleSelectWorkbench,
+    onNewProject: handleNewProject,
+    onReorderProjects: reorderProjects,
+    onSettings: () => {
+      setRoute({ name: 'settings' });
+      setMobileView('content');
+    },
+  };
+
   return (
     <div className="flex h-dvh overflow-hidden">
       <UpdatePill />
-      <div className={sidebarHidden ? 'hidden' : 'contents'}>
-        <Sidebar
+      {/* Desktop, a project open (any tab): the 260px Sidebar hides behind a
+          20px EdgeStrip that floats it over the session column on hover and
+          docks it on click (spec 078 D1-D3 + the pin amendment). Every other
+          route, and mobile always, render exactly what rendered before this
+          spec. */}
+      {route.name === 'project' && !isMobile ? (
+        <EdgeStrip
           projects={projects}
+          currentProjectId={route.projectId}
           agentStatuses={agentStatuses}
-          statusSummaries={statusSummaries}
           pendingApprovals={pendingApprovals}
-          route={route}
-          connectionState={mapConnectionState(ws.connectionState, daemonOnline)}
-          onSelectProject={handleSelectProject}
-          onSelectCalendar={handleSelectCalendar}
-          onSelectWorkbench={handleSelectWorkbench}
-          onNewProject={handleNewProject}
-          onReorderProjects={reorderProjects}
-          onSettings={() => {
-            setRoute({ name: 'settings' });
-            setMobileView('content');
-          }}
-        />
-      </div>
+          pinned={projectListPinned}
+          onTogglePin={toggleProjectListPinned}
+        >
+          <Sidebar {...sidebarProps} narrow />
+        </EdgeStrip>
+      ) : (
+        <div className={sidebarHidden ? 'hidden' : 'contents'}>
+          <Sidebar {...sidebarProps} />
+        </div>
+      )}
 
       {/* NOTE: keep a space before `${` — Tailwind's scanner will not extract a
           class that runs straight into a template-literal interpolation, so
@@ -605,12 +646,14 @@ export default function App() {
                 onTriggerToggle={toggleTrigger}
                 onTriggerDelete={deleteTrigger}
                 globalDefaultModel={defaultModel}
+                agentsAvailable={agentsAvailable ?? []}
               >
                 {route.tab === 'queue' && (
                   <QueueTab
                     key={`queue-${selectedProject.project_id}`}
                     projectId={selectedProject.project_id}
                     project={selectedProject}
+                    agents={agentsAvailable ?? []}
                   />
                 )}
                 {route.tab === 'chat' && (
@@ -627,7 +670,10 @@ export default function App() {
                   />
                 )}
                 {route.tab === 'files' && (
-                  <FileExplorer projectId={selectedProject.project_id} />
+                  <FileExplorer
+                    projectId={selectedProject.project_id}
+                    initialPath={route.name === 'project' ? route.filesPath : undefined}
+                  />
                 )}
               </ProjectDetail>
             )}

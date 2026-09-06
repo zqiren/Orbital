@@ -30,16 +30,57 @@
  *   ChatView reports the draft applied.
  */
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { AgentRunStatus, Project, SessionListEntry } from '../types';
+import type {
+  ActivityEvent,
+  AgentRunStatus,
+  Project,
+  SessionListEntry,
+  WebSocketEvent,
+} from '../types';
 import type { Route } from '../route';
 import { useSessions } from '../hooks/useSessions';
 import { useSession } from '../hooks/useSession';
 import { useAgent } from '../hooks/useAgent';
+import { useFiles } from '../hooks/useFiles';
+import { useChatHistory } from '../hooks/useChatHistory';
+import { useSessionMessages } from '../utils/sessionMessagesStore';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { useAnnotations } from '../hooks/useAnnotations';
+import { usePanelDockable, usePanelState } from '../hooks/usePanelState';
+import {
+  eventAsMessage,
+  latestScreenshot,
+  pathForEvent,
+  touchedFiles,
+  viewForEvent,
+} from '../utils/panelSelectors';
 import { SessionSidebar } from './SessionSidebar';
 import ChatView from './ChatView';
 import ScopeChip from './ScopeChip';
+import FilePreviewDrawer from './FilePreviewDrawer';
+import WorkspacePanel from './panel/WorkspacePanel';
+import FilesView from './panel/FilesView';
+import BrowserView from './panel/BrowserView';
+import PanelHandle from './panel/PanelHandle';
+
+/**
+ * Statuses that mean "a turn is in flight". `pending_approval` counts: the
+ * agent is mid-turn waiting on the user, which is exactly the moment the panel
+ * exists for (D6 — intercept or assist), so it must not collapse there.
+ */
+const IN_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
+  'running',
+  'waiting',
+  'pending_approval',
+]);
+
+/** Keep the live-event tail bounded; only the touched set is derived from it. */
+const MAX_LIVE_EVENTS = 200;
+
+/** Stable empty tail, so a session switch doesn't churn the touched memo. */
+const NO_EVENTS: ActivityEvent[] = [];
 
 interface ChatTabProps {
   project: Project;
@@ -102,6 +143,173 @@ export default function ChatTab({
   const { newSession } = useAgent();
 
   const routeSessionId = route.sessionId;
+
+  // ── Spec 078: the workspace panel (Files · Browser) ─────────────────────
+  // Docked only above the push threshold and never on mobile; below it the
+  // FilePreviewDrawer stays the overlay ProjectDetail owns.
+  const docked = usePanelDockable();
+  const {
+    expanded: panelExpanded,
+    view: panelView,
+    file: panelFile,
+    expand: expandPanel,
+    collapse: collapsePanel,
+    setView: setPanelView,
+    setFile: setPanelFile,
+    expandForEvent,
+    onRunStart,
+    onRunEnd,
+  } = usePanelState(projectId, routeSessionId);
+  const { annotating, setAnnotating, annotations, add: addAnnotation } =
+    useAnnotations(routeSessionId);
+  // Spec 078 §11.5: ChatView owns the session transcript and publishes it by
+  // reference; the panel reads that same array. useChatHistory remains only
+  // as a fallback for the window before ChatView has published anything.
+  const sharedMessages = useSessionMessages(`${projectId}:${routeSessionId ?? ''}`);
+  const { messages: fetchedMessages, loadHistory, clearMessages } = useChatHistory({
+    sessionId: routeSessionId ?? null,
+  });
+  const messages = sharedMessages ?? fetchedMessages;
+  const { saveFileContent } = useFiles();
+  const { on, off } = useWebSocket();
+
+  // Live activity for the viewed session. Kept separately from `messages` so
+  // the touched list stays current mid-run without refetching the transcript:
+  // each event is replayed through the same `touchedFiles` selector as a
+  // synthetic tool-call row. The session key is stored WITH the events so a
+  // session switch discards them by derivation, not by a reset effect.
+  const sessionKey = `${projectId}:${routeSessionId ?? ''}`;
+  const [liveBySession, setLiveBySession] = useState<{ key: string; events: ActivityEvent[] }>(
+    () => ({ key: sessionKey, events: [] }),
+  );
+  const liveEvents = liveBySession.key === sessionKey ? liveBySession.events : NO_EVENTS;
+
+  // History is loaded lazily — the first time the panel is actually opened for
+  // a session, and again after a turn ends (new tool calls, new screenshots).
+  const loadedKeyRef = useRef<string | null>(null);
+  const historyStaleRef = useRef(false);
+  const sessionKeyRef = useRef(sessionKey);
+
+  useEffect(() => {
+    if (sessionKeyRef.current === sessionKey) return;
+    sessionKeyRef.current = sessionKey;
+    loadedKeyRef.current = null;
+    historyStaleRef.current = false;
+    clearMessages(); // the previous session's transcript must not badge this one
+  }, [sessionKey, clearMessages]);
+
+  useEffect(() => {
+    if (!docked || !panelExpanded || !routeSessionId) return;
+    if (sharedMessages !== null) return; // ChatView already holds the transcript
+    if (loadedKeyRef.current === sessionKey && !historyStaleRef.current) return;
+    loadedKeyRef.current = sessionKey;
+    historyStaleRef.current = false;
+    void loadHistory(projectId);
+  }, [docked, panelExpanded, projectId, routeSessionId, sessionKey, loadHistory, sharedMessages]);
+
+  // Lifecycle (D8) driven by the live activity stream. Handled synchronously
+  // in the socket callback rather than from a rendered `lastEvent`, so a burst
+  // of events in one tick cannot swallow the file path of all but the last.
+  const handleActivityRef = useRef<(event: WebSocketEvent) => void>(() => {});
+  // Written in an effect, not during render: render must stay pure, and the
+  // socket can only reach the ref after the first commit anyway.
+  useEffect(() => {
+    handleActivityRef.current = (event: WebSocketEvent) => {
+      if (event.type !== 'agent.activity') return;
+      const activity = event as ActivityEvent;
+      if (activity.project_id !== projectId) return;
+      if (activity.session_id && routeSessionId && activity.session_id !== routeSessionId) return;
+
+      if (eventAsMessage(activity)) {
+        setLiveBySession((prev) => ({
+          key: sessionKey,
+          events: [...(prev.key === sessionKey ? prev.events : []), activity].slice(
+            -MAX_LIVE_EVENTS,
+          ),
+        }));
+      }
+      const view = viewForEvent(activity);
+      if (view === null) return; // command-only turns do not move the panel (§13.3)
+      expandForEvent(view);
+      if (view === 'files') {
+        const path = pathForEvent(activity);
+        if (path) setPanelFile(path);
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (!docked) return;
+    const listener = (event: WebSocketEvent) => handleActivityRef.current(event);
+    on('agent.activity', listener);
+    return () => off('agent.activity', listener);
+  }, [docked, on, off]);
+
+  // Run start / end. `agentStatus` is the same value the header badge reads,
+  // so the panel can never disagree with what the UI says the agent is doing.
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    const running = IN_RUN.has(agentStatus);
+    if (running && !wasRunningRef.current) onRunStart();
+    if (!running && wasRunningRef.current) {
+      historyStaleRef.current = true;
+      onRunEnd();
+    }
+    wasRunningRef.current = running;
+  }, [agentStatus, onRunStart, onRunEnd]);
+
+  // A chat path click (route.previewPath) opens the panel's Files preview
+  // instead of the overlay drawer while the panel is docked (§9.10).
+  const previewPath = route.previewPath;
+  useEffect(() => {
+    if (!docked || !previewPath) return;
+    setPanelView('files');
+    setPanelFile(previewPath);
+    expandPanel();
+  }, [docked, previewPath, setPanelView, setPanelFile, expandPanel]);
+
+  const clearPreviewPath = useCallback(() => {
+    setRoute((prev) =>
+      prev.name === 'project' && prev.projectId === projectId && prev.previewPath !== undefined
+        ? { ...prev, previewPath: undefined }
+        : prev,
+    );
+  }, [projectId, setRoute]);
+
+  const handlePanelSelectFile = useCallback(
+    (path: string | null) => {
+      setPanelFile(path);
+      // The panel owns the selection from here; a stale route.previewPath
+      // would otherwise re-open the file it pointed at.
+      clearPreviewPath();
+    },
+    [setPanelFile, clearPreviewPath],
+  );
+
+  const handleOpenInFiles = useCallback(
+    (path: string) => {
+      setRoute((prev) =>
+        prev.name === 'project' && prev.projectId === projectId
+          ? { ...prev, tab: 'files', settings: false, previewPath: undefined, filesPath: path }
+          : prev,
+      );
+    },
+    [projectId, setRoute],
+  );
+
+  const panelMessages = useMemo(() => {
+    const synthetic = liveEvents
+      .map(eventAsMessage)
+      .filter((m): m is NonNullable<ReturnType<typeof eventAsMessage>> => m !== null);
+    return synthetic.length === 0 ? messages : [...messages, ...synthetic];
+  }, [messages, liveEvents]);
+
+  const touched = useMemo(() => touchedFiles(panelMessages), [panelMessages]);
+  const screenshot = useMemo(() => latestScreenshot(messages), [messages]);
+  const handleSave = useCallback(
+    (path: string, content: string) => saveFileContent(projectId, path, content),
+    [saveFileContent, projectId],
+  );
 
   // Default-resolution: when the route hasn't named a session yet, resolve one
   // and reflect it into the route (and persist it). Runs whenever the session
@@ -206,7 +414,11 @@ export default function ChatTab({
           onSessionDeleted={handleSessionDeleted}
         />
       </div>
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-card">
+      <div
+        className={`flex-1 min-w-0 min-h-0 flex flex-col bg-card ${
+          docked ? 'md:min-w-[520px]' : ''
+        }`}
+      >
         {/* Quick Tasks scope chip (Spec 012 §2c) — chat-header area, scratch
             project only. ScopeChip also self-gates on is_scratch. */}
         {project.is_scratch && (
@@ -233,6 +445,51 @@ export default function ChatTab({
           />
         </div>
       </div>
+      {/* Spec 078 §5.1 — the third column: the panel when expanded, the 20px
+          edge handle when collapsed. Only above the push threshold. */}
+      {docked &&
+        (panelExpanded ? (
+          <FilePreviewDrawer
+            docked
+            open
+            selectedPath={null}
+            fileContent={null}
+            loading={false}
+            onClose={collapsePanel}
+          >
+            <WorkspacePanel
+              view={panelView}
+              onViewChange={setPanelView}
+              annotating={annotating}
+              onToggleAnnotate={() => setAnnotating(!annotating)}
+              browser={
+                <BrowserView
+                  projectId={projectId}
+                  active={panelExpanded && panelView === 'browser'}
+                  fallback={
+                    screenshot ? { path: screenshot.path, title: screenshot.title } : null
+                  }
+                  annotating={annotating}
+                  annotations={annotations}
+                  onAddAnnotation={addAnnotation}
+                />
+              }
+              files={
+                <FilesView
+                  projectId={projectId}
+                  touched={touched}
+                  file={panelFile}
+                  onSelectFile={handlePanelSelectFile}
+                  onOpenInFiles={handleOpenInFiles}
+                  onAddAnnotation={addAnnotation}
+                  onSave={handleSave}
+                />
+              }
+            />
+          </FilePreviewDrawer>
+        ) : (
+          <PanelHandle working={agentStatus === 'running'} onExpand={expandPanel} />
+        ))}
     </div>
   );
 }

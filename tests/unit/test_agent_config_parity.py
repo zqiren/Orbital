@@ -8,6 +8,13 @@ scratch scope plane (prompt section, multi-root tools, portals) for every
 chat session that auto-starts an agent. Both AgentConfig construction sites
 (``_build_agent_config_from_project`` here, and the ``/agents/start`` route
 in agents_v2.py) must agree on these fields.
+
+Spec 082 rewrote the LLM half of the builder as a single credential-card
+lookup, so the credential assertions below are expressed in cards. The
+invariants they pin are the SAME ones the merge rules used to state, and
+several of them are now true by construction rather than by branch: a card
+carries provider, endpoint, key and model together, so no path can pair one
+provider's key with another's endpoint.
 """
 
 from unittest.mock import MagicMock
@@ -15,14 +22,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from agent_os.daemon_v2.agent_manager import AgentManager
+from tests.card_doubles import FakeCardStore
 
 
-def _manager_with(projects: dict) -> AgentManager:
-    """Mirror the construction idiom in tests/unit/test_build_worker_deps.py
-    (``_make_manager``): a real AgentManager with a MagicMock project store
-    plus MagicMock settings/credential stores whose lookups return None so
-    the fallback chains in ``_build_agent_config_from_project`` don't blow up
-    on missing attributes.
+def _manager_with(projects: dict, settings_store=None) -> AgentManager:
+    """A real AgentManager with a MagicMock project store and a card-aware
+    settings store double.
+
+    The provider registry is the REAL one: since spec 082 the endpoint comes
+    from the card's provider + region through the registry, so a mock registry
+    would assert nothing about the pairing these tests exist to pin.
     """
     ws = MagicMock()
     project_store = MagicMock()
@@ -31,12 +40,6 @@ def _manager_with(projects: dict) -> AgentManager:
     sub_agent_manager = MagicMock()
     activity_translator = MagicMock()
     process_manager = MagicMock()
-    provider_registry = MagicMock()
-    provider_registry.get_model_info.return_value = MagicMock(
-        max_output=16384, capabilities=None, reasoning=None,
-    )
-    settings_store = MagicMock()
-    settings_store.get = MagicMock(return_value=None)
     credential_store = MagicMock()
     credential_store.get_api_key = MagicMock(return_value=None)
     mgr = AgentManager(
@@ -45,8 +48,7 @@ def _manager_with(projects: dict) -> AgentManager:
         sub_agent_manager=sub_agent_manager,
         activity_translator=activity_translator,
         process_manager=process_manager,
-        provider_registry=provider_registry,
-        settings_store=settings_store,
+        settings_store=settings_store if settings_store is not None else FakeCardStore(),
         credential_store=credential_store,
     )
     return mgr
@@ -75,66 +77,99 @@ def test_auto_start_config_non_scratch_stays_false():
     assert cfg.sub_agent_deployment_instructions == "Use Codex for implementation."
 
 
-# ---- Stale project base_url vs inherited global provider (Spec 47 fallout) ----
+# ---- The card is the whole setup (spec 082 §3.4) -----------------------------
 #
-# Project rows snapshot base_url verbatim at creation, so a project created
-# under an earlier global provider carries a stale endpoint. Observed on a real
-# install: a scratch project with an api.openai.com snapshot inherited the
-# freshly-provisioned global TokenDance key and sent it to OpenAI → 401.
-# Invariant (same as the crosses_provider comment in the source): base_url and
-# api_key must stay within the resolved provider.
+# Project rows used to snapshot base_url/provider/model/api_key independently,
+# so a project created under an earlier global provider carried a stale
+# endpoint. Observed on a real install: a scratch project with an
+# api.openai.com snapshot inherited the freshly-provisioned global TokenDance
+# key and sent it to OpenAI → 401; and on 2026-09-03 an OpenCode Go model was
+# paired with an OpenRouter endpoint and key. Neither shape is representable
+# now: a project stores a card id, and the card carries all four together.
 
 
 def _manager_with_global(projects: dict) -> AgentManager:
-    """_manager_with, plus real-looking global settings + a stored global key
-    (the state after the TokenDance one-click flow + wizard save)."""
-    mgr = _manager_with(projects)
-    gs = MagicMock()
-    gs.llm.provider = "tokendance"
-    gs.llm.base_url = "https://tokendance.space/gateway/v1"
-    gs.llm.model = "deepseek-v4-flash"
-    gs.llm.api_key = None
-    gs.llm.fallback_models = []
-    mgr._settings_store.get = MagicMock(return_value=gs)
-    mgr._credential_store.get_api_key = MagicMock(return_value="sk-td-global")
-    return mgr
+    """Global default card = TokenDance (the state after the one-click flow)."""
+    store = FakeCardStore.with_default(
+        card_id="card_global", provider="tokendance",
+        model="deepseek-v4-flash", key="sk-td-global",
+    )
+    return _manager_with(projects, settings_store=store)
 
 
-def test_stale_project_base_url_ignored_when_inheriting_global_key():
-    """No model pin + no own key = full inherit: the stale base_url snapshot
-    must not pair the global key with the old provider's endpoint."""
-    stale = {**SCRATCH, "model": "", "api_key": "",
-             "base_url": "https://api.openai.com/v1"}
-    mgr = _manager_with_global({"p_s": stale})
+def test_project_on_the_default_card_runs_that_card():
+    """No card of its own = follow the global default, wholesale. The stale
+    per-project endpoint that used to live on the row is simply gone."""
+    mgr = _manager_with_global({"p_s": SCRATCH})
     cfg = mgr._build_agent_config_from_project("p_s")
     assert cfg.api_key == "sk-td-global"
     assert cfg.base_url == "https://tokendance.space/gateway/v1"
     assert cfg.provider == "tokendance"
     assert cfg.model == "deepseek-v4-flash"
+    assert cfg.card_id == "card_global"
 
 
-def test_byok_project_keeps_its_own_base_url():
-    """A project with its OWN key keeps its own endpoint — that pairing is
-    deliberate (BYOK against a specific endpoint), not a stale snapshot."""
-    byok = {**NORMAL, "model": "", "api_key": "sk-own-key",
-            "base_url": "https://proxy.example/v1"}
-    mgr = _manager_with_global({"p_n": byok})
+def test_custom_card_keeps_its_own_base_url():
+    """A Custom card carries its endpoint and key together — the BYOK case,
+    now expressed as one object instead of four project fields."""
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_byok"}})
+    mgr._settings_store.add(
+        card_id="card_byok", provider="custom", model="local-model",
+        key="sk-own-key", base_url="https://proxy.example/v1", sdk="openai",
+    )
     cfg = mgr._build_agent_config_from_project("p_n")
     assert cfg.api_key == "sk-own-key"
     assert cfg.base_url == "https://proxy.example/v1"
+    assert cfg.provider == "custom"
+    assert cfg.card_id == "card_byok"
 
 
-def test_cross_provider_pinned_project_unchanged():
-    """A model-pinned project (crosses_provider branch) keeps its own trio —
-    guard that the inherit-branch fix didn't leak into it."""
-    pinned = {**NORMAL, "model": "deepseek-chat", "provider": "deepseek",
-              "api_key": "sk-ds-key", "base_url": "https://api.deepseek.com"}
-    mgr = _manager_with_global({"p_n": pinned})
+def test_registry_card_resolves_its_provider_endpoint():
+    """A registry provider's endpoint comes from the registry by region, so a
+    card can never carry a URL belonging to a different provider."""
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_ds"}})
+    mgr._settings_store.add(card_id="card_ds", provider="deepseek",
+                            model="deepseek-chat", key="sk-ds-key")
     cfg = mgr._build_agent_config_from_project("p_n")
     assert cfg.api_key == "sk-ds-key"
     assert cfg.base_url == "https://api.deepseek.com"
     assert cfg.provider == "deepseek"
     assert cfg.model == "deepseek-chat"
+
+
+def test_china_region_card_resolves_the_china_endpoint():
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_mm"}})
+    mgr._settings_store.add(card_id="card_mm", provider="minimax",
+                            model="MiniMax-M3", key="sk-mm", region="china")
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.base_url == "https://api.minimaxi.com/v1"
+
+
+def test_stale_card_id_without_a_default_raises_missing_card():
+    """Spec 082 §3.4: a project pointing at a deleted card with no default to
+    fall back on is a typed error, never a silently keyless run."""
+    from agent_os.daemon_v2.provider_errors import ProviderConfigError
+
+    mgr = _manager_with({"p_n": {**NORMAL, "card_id": "card_gone"}})
+    with pytest.raises(ProviderConfigError) as exc:
+        mgr._build_agent_config_from_project("p_n")
+    assert exc.value.code == "missing_card"
+
+
+def test_stale_card_id_falls_back_to_the_default_card():
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_gone"}})
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.card_id == "card_global"
+    assert cfg.api_key == "sk-td-global"
+
+
+def test_no_cards_at_all_leaves_the_key_empty():
+    """A fresh install with nothing configured still produces a config; the
+    empty key is what surfaces the typed missing_api_key on first start."""
+    mgr = _manager_with({"p_n": NORMAL})
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.api_key == ""
+    assert cfg.card_id == ""
 
 
 # ---- Three-way start-path parity (2026-08-19) --------------------------------
@@ -143,10 +178,7 @@ def test_cross_provider_pinned_project_unchanged():
 # fired into a 401 while typing in chat worked, minutes apart, same session.
 # Cause: three AgentConfig construction sites had drifted apart, and the
 # trigger one (``TriggerManager._fire_trigger``) had none of the
-# provider/endpoint invariants the canonical builder grew. It resolved each
-# field independently — project provider ``minimax`` + project base_url
-# ``api.minimaxi.com`` + global model ``deepseek-v4-flash`` + the global
-# OpenCode Go key — a combination no single provider can serve.
+# provider/endpoint invariants the canonical builder grew.
 #
 # The invariant these tests pin is not any one rule but the *absence of a
 # second implementation*: every path that starts an agent for a project
@@ -162,12 +194,11 @@ from unittest.mock import AsyncMock
 from agent_os.daemon_v2.trigger_manager import TriggerManager
 
 
-# The exact live shape that broke: project pins a provider + endpoint it no
-# longer has a key for, leaves model/key empty to inherit the global provider.
+# The live shape that broke, in card terms: the project follows the global
+# default card and has a trigger.
 STALE_PINNED = {
     "project_id": "p_m", "name": "Orbital-marketing", "workspace": "/tmp/m",
-    "provider": "minimax", "model": "", "api_key": "",
-    "base_url": "https://api.minimaxi.com/v1",
+    "card_id": None,
     "triggers": [{
         "id": "trg_test", "name": "Daily scan", "enabled": True,
         "type": "schedule", "task": "Scan the repo.",
@@ -177,18 +208,12 @@ STALE_PINNED = {
 
 
 def _manager_with_opencode_global(projects: dict) -> AgentManager:
-    """Global settings on OpenCode Go with the key in the credential store —
-    the state of the install where the trigger 401s were observed."""
-    mgr = _manager_with(projects)
-    gs = MagicMock()
-    gs.llm.provider = "opencode-go"
-    gs.llm.base_url = "https://opencode.ai/zen/go/v1"
-    gs.llm.model = "deepseek-v4-flash"
-    gs.llm.api_key = None
-    gs.llm.fallback_models = []
-    mgr._settings_store.get = MagicMock(return_value=gs)
-    mgr._credential_store.get_api_key = MagicMock(return_value="sk-opencode-global")
-    return mgr
+    """Default card on OpenCode Go — the install where the 401s were seen."""
+    store = FakeCardStore.with_default(
+        card_id="card_go", provider="opencode-go", model="deepseek-v4-flash",
+        key="sk-opencode-global",
+    )
+    return _manager_with(projects, settings_store=store)
 
 
 def _llm_fields(cfg) -> dict:
@@ -199,6 +224,7 @@ def _llm_fields(cfg) -> dict:
         "base_url": cfg.base_url,
         "api_key": cfg.api_key,
         "sdk": cfg.sdk,
+        "card_id": cfg.card_id,
         "fallbacks": [(fb.provider, fb.model, fb.base_url, fb.api_key)
                       for fb in cfg.llm_fallback_models],
         # Spec 072: every start path must derive the same auth-fallback rung.
@@ -232,8 +258,9 @@ def test_trigger_start_uses_canonical_config():
     assert _llm_fields(_config_passed_to_start_agent(mgr)) == expected
 
 
-def test_trigger_start_does_not_pair_global_key_with_stale_endpoint():
-    """The concrete failure: an OpenCode Go key sent to api.minimaxi.com."""
+def test_trigger_start_resolves_the_whole_card():
+    """The concrete failure: an OpenCode Go key sent to api.minimaxi.com. The
+    trigger path now gets provider, endpoint, key and model from one card."""
     mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
     mgr.start_agent = AsyncMock()
     mgr.is_running = MagicMock(return_value=False)
@@ -245,6 +272,7 @@ def test_trigger_start_does_not_pair_global_key_with_stale_endpoint():
     assert cfg.provider == "opencode-go"
     assert cfg.model == "deepseek-v4-flash"
     assert cfg.api_key == "sk-opencode-global"
+    assert cfg.card_id == "card_go"
 
 
 def test_start_route_uses_canonical_config():
@@ -269,29 +297,38 @@ def test_start_route_uses_canonical_config():
 
 def test_canonical_config_carries_project_fallback_models():
     """Fallback chains were resolved only in the /agents/start route, so a
-    trigger or queue auto-start ran with no fallback at all."""
-    with_fb = {**STALE_PINNED, "llm_fallback_models": [
-        {"provider": "deepseek", "model": "deepseek-chat",
-         "base_url": "https://api.deepseek.com", "api_key": "", "sdk": "openai"},
-    ]}
+    trigger or queue auto-start ran with no fallback at all. Entries are card
+    references now — the rung's key comes from ITS card, never from the
+    primary's, so a rung can no longer inherit a key from another provider."""
+    with_fb = {**STALE_PINNED,
+               "llm_fallback_models": [{"card_id": "card_ds"}]}
     mgr = _manager_with_opencode_global({"p_m": with_fb})
+    mgr._settings_store.add(card_id="card_ds", provider="deepseek",
+                            model="deepseek-chat", key="sk-ds")
     cfg = mgr._build_agent_config_from_project("p_m")
 
     assert [fb.model for fb in cfg.llm_fallback_models] == ["deepseek-chat"]
-    # An entry with no key of its own inherits the resolved primary key.
-    assert cfg.llm_fallback_models[0].api_key == "sk-opencode-global"
+    assert cfg.llm_fallback_models[0].api_key == "sk-ds"
+    assert cfg.llm_fallback_models[0].base_url == "https://api.deepseek.com"
+    assert cfg.llm_fallback_models[0].card_id == "card_ds"
+
+
+def test_fallback_entry_for_a_deleted_card_is_skipped():
+    """A dangling reference drops the rung rather than guessing a setup for
+    it — the rotation is short one entry, not pointed at a stranger."""
+    with_fb = {**STALE_PINNED,
+               "llm_fallback_models": [{"card_id": "card_gone"}]}
+    mgr = _manager_with_opencode_global({"p_m": with_fb})
+    cfg = mgr._build_agent_config_from_project("p_m")
+    assert cfg.llm_fallback_models == []
 
 
 def test_canonical_config_falls_back_to_global_fallback_models():
     """No project-level chain = inherit the global one."""
     mgr = _manager_with_opencode_global({"p_m": STALE_PINNED})
-    gs = mgr._settings_store.get()
-    fb = MagicMock()
-    fb.model_dump = MagicMock(return_value={
-        "provider": "deepseek", "model": "deepseek-reasoner",
-        "base_url": "https://api.deepseek.com", "api_key": "sk-fb", "sdk": "openai",
-    })
-    gs.llm.fallback_models = [fb]
+    mgr._settings_store.add(card_id="card_dsr", provider="deepseek",
+                            model="deepseek-reasoner", key="sk-fb")
+    mgr._settings_store.set_global_fallbacks(["card_dsr"])
 
     cfg = mgr._build_agent_config_from_project("p_m")
     assert [f.model for f in cfg.llm_fallback_models] == ["deepseek-reasoner"]
@@ -308,30 +345,28 @@ def test_canonical_config_carries_agent_slug_and_credentials():
     assert cfg.agent_credentials == {"claude-code": {"token": "t"}}
 
 
-# ---- Spec 072: auth-fallback rung derivation --------------------------------
+# ---- Spec 072 auth-fallback rung, re-keyed on card identity (082 D8) --------
 #
-# The canonical builder attaches a wholesale GLOBAL-default snapshot as
+# The canonical builder attaches a wholesale DEFAULT-CARD snapshot as
 # ``auth_fallback`` — the rung the loop rotates to after a 401/403 rejects the
-# project key. Because every start path goes through the canonical builder
-# (pinned above), deriving it here and only here IS the parity guarantee; the
-# ``auth_fallback`` entry in ``_llm_fields`` makes the existing three-way
-# parity tests cover it too.
+# project's card. The old test was key-string inequality, which reads two
+# cards that legitimately share one key (D2) as "nothing to fall back to";
+# it is card-id inequality now.
 
 
-def _manager_with_global_sdk(projects: dict) -> AgentManager:
-    """_manager_with_global plus an explicit global sdk (MagicMock would
-    otherwise leak a truthy mock into the sdk assertion)."""
-    mgr = _manager_with_global(projects)
-    mgr._settings_store.get().llm.sdk = "anthropic"
+def _manager_with_byok(project_extra=None) -> AgentManager:
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_byok",
+                                        **(project_extra or {})}})
+    mgr._settings_store.add(card_id="card_byok", provider="custom",
+                            model="local-model", key="sk-own-key",
+                            base_url="https://proxy.example/v1", sdk="openai")
     return mgr
 
 
-def test_auth_fallback_attached_when_project_key_differs():
-    """BYOK project + usable global default = a rung built wholesale from
-    global settings (provider/model/key/base_url/sdk all global)."""
-    byok = {**NORMAL, "model": "", "api_key": "sk-own-key",
-            "base_url": "https://proxy.example/v1"}
-    mgr = _manager_with_global_sdk({"p_n": byok})
+def test_auth_fallback_attached_when_the_project_is_on_another_card():
+    """A project on its own card + a usable default = a rung built wholesale
+    from the DEFAULT card (provider/model/key/endpoint/sdk all its own)."""
+    mgr = _manager_with_byok()
     cfg = mgr._build_agent_config_from_project("p_n")
 
     af = cfg.auth_fallback
@@ -340,29 +375,36 @@ def test_auth_fallback_attached_when_project_key_differs():
     assert af.model == "deepseek-v4-flash"
     assert af.base_url == "https://tokendance.space/gateway/v1"
     assert af.api_key == "sk-td-global"
-    assert af.sdk == "anthropic"
+    assert af.card_id == "card_global"
 
 
-def test_auth_fallback_absent_when_project_inherits_global_key():
-    """Nothing different to fall back to: the resolved primary key IS the
-    global key."""
-    inheriting = {**SCRATCH, "model": "", "api_key": "", "base_url": None}
-    mgr = _manager_with_global_sdk({"p_s": inheriting})
+def test_auth_fallback_absent_when_the_project_is_on_the_default_card():
+    """Nothing different to fall back to: the resolved card IS the default."""
+    mgr = _manager_with_global({"p_s": SCRATCH})
     cfg = mgr._build_agent_config_from_project("p_s")
     assert cfg.api_key == "sk-td-global"
     assert cfg.auth_fallback is None
 
 
-def test_auth_fallback_absent_when_global_lacks_model_or_key():
-    byok = {**NORMAL, "model": "", "api_key": "sk-own-key"}
+def test_auth_fallback_attached_even_when_the_two_cards_share_one_key():
+    """D2: the same key may back several cards (one per model). Card identity
+    is the test, so the rung is still offered — the OLD key-string comparison
+    would have called this "nothing to fall back to"."""
+    mgr = _manager_with_global({"p_n": {**NORMAL, "card_id": "card_twin"}})
+    mgr._settings_store.add(card_id="card_twin", provider="tokendance",
+                            model="deepseek-v4-pro", key="sk-td-global")
+    cfg = mgr._build_agent_config_from_project("p_n")
+    assert cfg.auth_fallback is not None
+    assert cfg.auth_fallback.model == "deepseek-v4-flash"
 
-    mgr = _manager_with_global_sdk({"p_n": byok})
-    mgr._settings_store.get().llm.model = ""
+
+def test_auth_fallback_absent_when_the_default_card_lacks_model_or_key():
+    mgr = _manager_with_byok()
+    mgr._settings_store.resolve_card("card_global").model = ""
     assert mgr._build_agent_config_from_project("p_n").auth_fallback is None
 
-    mgr = _manager_with_global_sdk({"p_n": byok})
-    mgr._settings_store.get().llm.api_key = None
-    mgr._credential_store.get_api_key = MagicMock(return_value=None)
+    mgr = _manager_with_byok()
+    mgr._settings_store.keys["card_global"] = ""
     assert mgr._build_agent_config_from_project("p_n").auth_fallback is None
 
 
@@ -370,18 +412,18 @@ def test_auth_fallback_provider_built_like_the_primary():
     """_build_auth_fallback_provider resolves registry model info (base_url /
     sdk overrides, max_output) and the provider's static headers — the same
     construction the primary gets in _build_llm_providers."""
-    byok = {**NORMAL, "model": "", "api_key": "sk-own-key"}
-    mgr = _manager_with_global_sdk({"p_n": byok})
-    model_info = MagicMock(base_url=None, sdk=None, max_output=16384,
-                           capabilities=None, reasoning=None)
-    mgr._provider_registry.get_model_info = MagicMock(return_value=model_info)
+    from agent_os.config.provider_registry import ModelInfo
+
+    mgr = _manager_with_byok()
+    mgr._provider_registry = MagicMock()
+    mgr._provider_registry.get_model_info = MagicMock(
+        return_value=ModelInfo(max_output=16384))
     mgr._provider_registry.get_provider_data = MagicMock(
-        return_value={"extra_headers": {"X-App-Name": "orbital"}})
+        return_value={"base_url": "https://tokendance.space/gateway/v1",
+                      "sdk": "openai",
+                      "extra_headers": {"X-App-Name": "orbital"}})
 
     cfg = mgr._build_agent_config_from_project("p_n")
-    # sdk="anthropic" would construct a real Anthropic client; the wire
-    # protocol is asserted via the provider attrs, so keep the client cheap.
-    cfg.auth_fallback.sdk = "openai"
     rung = mgr._build_auth_fallback_provider(cfg)
 
     assert rung is not None
@@ -390,14 +432,14 @@ def test_auth_fallback_provider_built_like_the_primary():
     assert rung.model == "deepseek-v4-flash"
     assert rung.provider == "tokendance"
     assert rung.api_key == "sk-td-global"
-    # No registry override → the rung's own (global) endpoint and sdk win.
+    # No registry override → the rung's own (card) endpoint and sdk win.
     assert rung.base_url == "https://tokendance.space/gateway/v1"
     assert rung.sdk == "openai"
     assert rung.extra_headers == {"X-App-Name": "orbital"}
 
 
 def test_auth_fallback_provider_none_when_config_has_no_rung():
-    mgr = _manager_with_global_sdk({"p_s": SCRATCH})
+    mgr = _manager_with_global({"p_s": SCRATCH})
     cfg = mgr._build_agent_config_from_project("p_s")
     assert cfg.auth_fallback is None
     assert mgr._build_auth_fallback_provider(cfg) is None

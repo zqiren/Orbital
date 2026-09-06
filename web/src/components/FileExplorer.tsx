@@ -21,6 +21,12 @@ const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
 
 interface FileExplorerProps {
   projectId: string;
+  /**
+   * Spec 078 D15: a workspace-relative file to reveal and select on open
+   * ("Open in Files" from the workspace panel). Ancestors are expanded,
+   * fetching their listings; then the file is selected. One-shot per value.
+   */
+  initialPath?: string;
 }
 
 interface TreeNode {
@@ -31,7 +37,7 @@ interface TreeNode {
   loading: boolean;
 }
 
-export default function FileExplorer({ projectId }: FileExplorerProps) {
+export default function FileExplorer({ projectId, initialPath }: FileExplorerProps) {
   const t = useT();
   const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
   const [rootLoading, setRootLoading] = useState(true);
@@ -171,6 +177,43 @@ export default function FileExplorer({ projectId }: FileExplorerProps) {
     },
     [fetchFileContent],
   );
+
+  // Spec 078 D15: reveal `initialPath` once the root has loaded. Each ancestor
+  // is fetched and expanded in order (cheap listings; no dependence on which
+  // nodes happen to be loaded already), then the file is selected. Runs once
+  // per path value; the component unmounts on a tab switch, so re-opening the
+  // same path from the panel later reveals it again.
+  const revealedPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialPath || rootLoading) return;
+    if (revealedPathRef.current === initialPath) return;
+    revealedPathRef.current = initialPath;
+    let cancelled = false;
+    (async () => {
+      const segments = initialPath.split('/').filter(Boolean);
+      let prefix = '';
+      for (const seg of segments.slice(0, -1)) {
+        prefix = prefix ? `${prefix}/${seg}` : seg;
+        const dir = prefix;
+        let children: TreeNode[] = [];
+        try {
+          const entries = await fetchDirectory(dir);
+          children = entries.map((entry) => toTreeNode(entry, dir));
+        } catch {
+          // Leave the directory empty; the selection below still proceeds.
+        }
+        if (cancelled) return;
+        setRootNodes((prev) =>
+          setNodeChildren(updateNode(prev, dir, { expanded: true, loading: false }), dir, children),
+        );
+      }
+      if (cancelled) return;
+      setSelectedPath(initialPath);
+      setMobileShowPreview(true);
+      fetchFileContent(initialPath);
+    })();
+    return () => { cancelled = true; };
+  }, [initialPath, rootLoading, fetchDirectory, fetchFileContent]);
 
   const handleBack = useCallback(() => {
     setMobileShowPreview(false);

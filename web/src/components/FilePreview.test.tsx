@@ -253,3 +253,314 @@ describe('FilePreview — markdown editing (spec: editable .md)', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 078 §5.4 — quoting. `quoting` is opt-in: the panel's Files view passes
+// it, the full-width Files tab does not, and with it off this pane must behave
+// exactly as the tests above already assert.
+// ---------------------------------------------------------------------------
+
+/** The first text node under `root` whose content includes `needle`. */
+function findTextNode(root: Node, needle: string): Text {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let cur: Node | null;
+  while ((cur = walker.nextNode()) !== null) {
+    if ((cur.textContent ?? '').includes(needle)) return cur as Text;
+  }
+  throw new Error(`no text node containing ${JSON.stringify(needle)}`);
+}
+
+/** Select `[start, end)` of a text node, the way a drag-select would. */
+function selectRange(node: Text, start: number, end: number) {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+const SOURCE = 'line one\nline two\nline three\nline four\n';
+
+function txtContent(overrides: Partial<FileContent> = {}): FileContent {
+  return {
+    path: 'notes.txt',
+    content: SOURCE,
+    size: SOURCE.length,
+    truncated: false,
+    type: 'text',
+    ...overrides,
+  };
+}
+
+describe('FilePreview — quoting off (spec 078 §5.4)', () => {
+  it('renders no quote affordances and no wrapper when `quoting` is absent', () => {
+    const { container } = render(
+      <FilePreview fileContent={txtContent()} loading={false} selectedPath="notes.txt" />,
+    );
+    expect(screen.queryByTestId('quote-region')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
+    expect(container.querySelector('pre')!.textContent).toBe(SOURCE);
+  });
+
+  it('shows no Quote pill on selection when `quoting` is false', () => {
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting={false}
+        onQuote={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('quote-region')).toBeNull();
+  });
+
+  it('offers no whole-file quote on a binary preview when quoting is off', () => {
+    render(
+      <FilePreview
+        fileContent={{
+          path: 'handbook.pdf',
+          content: '',
+          size: 4096,
+          truncated: false,
+          type: 'binary',
+          mime: 'application/pdf',
+        }}
+        loading={false}
+        selectedPath="handbook.pdf"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Quote this file' })).toBeNull();
+  });
+});
+
+describe('FilePreview — text-span quoting (source view)', () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it('shows a Quote pill on a selection and quotes the verbatim text with its line range', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
+
+    // "line two\nline three" — offsets 9..28 of the source.
+    selectRange(findTextNode(region, 'line one'), 9, 28);
+    fireEvent.mouseUp(region);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    expect(onQuote).toHaveBeenCalledWith({
+      path: 'notes.txt',
+      text: 'line two\nline three',
+      lines: [2, 3],
+    });
+  });
+
+  it('does not count the following line when the selection stops at a newline', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    // "line two\n" — the trailing newline must not claim line 3.
+    selectRange(findTextNode(region, 'line one'), 9, 18);
+    fireEvent.mouseUp(region);
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    expect(onQuote.mock.calls[0][0].lines).toEqual([2, 2]);
+  });
+
+  it('hides the pill again when the selection is emptied', () => {
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={vi.fn()}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    selectRange(findTextNode(region, 'line one'), 0, 8);
+    fireEvent.mouseUp(region);
+    expect(screen.getByRole('button', { name: 'Quote' })).toBeInTheDocument();
+
+    window.getSelection()!.removeAllRanges();
+    fireEvent.mouseUp(region);
+    expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
+  });
+
+  it('ignores a whitespace-only selection', () => {
+    render(
+      <FilePreview
+        fileContent={txtContent()}
+        loading={false}
+        selectedPath="notes.txt"
+        quoting
+        onQuote={vi.fn()}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    selectRange(findTextNode(region, 'line one'), 8, 9); // just the newline
+    fireEvent.mouseUp(region);
+    expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
+  });
+
+  it('quotes from the html Source view too', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={htmlContent()}
+        loading={false}
+        selectedPath="report.html"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }));
+    const region = screen.getByTestId('quote-region');
+    const idx = HTML_BODY.indexOf('<h1>Dashboard</h1>');
+    selectRange(findTextNode(region, '<h1>'), idx, idx + '<h1>Dashboard</h1>'.length);
+    fireEvent.mouseUp(region);
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    expect(onQuote).toHaveBeenCalledWith({
+      path: 'report.html',
+      text: '<h1>Dashboard</h1>',
+      lines: [1, 1],
+    });
+  });
+});
+
+const MD_QUOTE_SOURCE = '# Notes\n\nalpha unique line\n\nbeta and beta again\n';
+
+describe('FilePreview — text-span quoting (rendered markdown)', () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it('resolves the line range when the selected text occurs exactly once', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={mdContent({ content: MD_QUOTE_SOURCE })}
+        loading={false}
+        selectedPath="notes.md"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    const node = findTextNode(region, 'alpha unique line');
+    const at = node.textContent!.indexOf('unique line');
+    selectRange(node, at, at + 'unique line'.length);
+    fireEvent.mouseUp(region);
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    expect(onQuote).toHaveBeenCalledWith({
+      path: 'notes.md',
+      text: 'unique line',
+      lines: [3, 3],
+    });
+  });
+
+  it('omits the line range when the selected text is ambiguous in the source', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={mdContent({ content: MD_QUOTE_SOURCE })}
+        loading={false}
+        selectedPath="notes.md"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const region = screen.getByTestId('quote-region');
+    const node = findTextNode(region, 'beta and beta again');
+    selectRange(node, 0, 4); // "beta" — twice in the source
+    fireEvent.mouseUp(region);
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    // Verbatim text always; lines only when unique (spec §13 Q4).
+    expect(onQuote).toHaveBeenCalledWith({ path: 'notes.md', text: 'beta' });
+  });
+});
+
+describe('FilePreview — image and binary quoting', () => {
+  const image: FileContent = {
+    path: 'shots/queue.png',
+    content: 'AAAA',
+    size: 4,
+    truncated: false,
+    type: 'image',
+    mime: 'image/png',
+  };
+
+  it('mounts the annotate overlay over the image and quotes a dragged box', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={image}
+        loading={false}
+        selectedPath="shots/queue.png"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    const overlay = screen.getByTestId('annotate-overlay');
+    expect(overlay).toHaveAttribute('data-active', 'true');
+
+    fireEvent.pointerDown(overlay, { clientX: 10, clientY: 20, pointerId: 1 });
+    fireEvent.pointerMove(overlay, { clientX: 70, clientY: 80, pointerId: 1 });
+    fireEvent.pointerUp(overlay, { clientX: 70, clientY: 80, pointerId: 1 });
+    fireEvent.change(screen.getByTestId('annotate-note'), { target: { value: 'this button' } });
+    fireEvent.keyDown(screen.getByTestId('annotate-note'), { key: 'Enter' });
+
+    expect(onQuote).toHaveBeenCalledWith({
+      path: 'shots/queue.png',
+      box: { x: 10, y: 20, w: 60, h: 60 },
+      imageDataUrl: 'data:image/png;base64,AAAA',
+    });
+  });
+
+  it('mounts no overlay when quoting is off', () => {
+    render(
+      <FilePreview fileContent={image} loading={false} selectedPath="shots/queue.png" />,
+    );
+    expect(screen.queryByTestId('annotate-overlay')).toBeNull();
+  });
+
+  it('offers a whole-file quote for a preview with no renderer', () => {
+    const onQuote = vi.fn();
+    render(
+      <FilePreview
+        fileContent={{
+          path: 'docs/handbook.pdf',
+          content: '',
+          size: 4096,
+          truncated: false,
+          type: 'binary',
+          mime: 'application/pdf',
+        }}
+        loading={false}
+        selectedPath="docs/handbook.pdf"
+        quoting
+        onQuote={onQuote}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Quote this file' }));
+    expect(onQuote).toHaveBeenCalledWith({ path: 'docs/handbook.pdf' });
+  });
+});

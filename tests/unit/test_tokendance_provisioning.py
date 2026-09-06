@@ -212,6 +212,18 @@ class _FakeCredentialStore:
         return {"configured": True, "source": "keyring"}
 
 
+def _signin_store(**kw):
+    """Spec 082 §3.6: sign-in writes a CARD, not the one global key slot.
+
+    The route moved off ``_credential_store`` entirely — it creates or
+    refreshes exactly one card, never touches another card's key, and takes
+    the default only when there is no default yet.
+    """
+    from tests.card_doubles import FakeCardStore
+
+    return FakeCardStore(**kw)
+
+
 @pytest.fixture
 def _quiet_telemetry(monkeypatch):
     from agent_os import telemetry
@@ -220,21 +232,126 @@ def _quiet_telemetry(monkeypatch):
     monkeypatch.setattr(telemetry, "latch", lambda *a, **k: None)
 
 
-async def test_signin_route_persists_key_and_returns_mask(monkeypatch, _quiet_telemetry):
-    store = _FakeCredentialStore()
-    monkeypatch.setattr(agents_v2, "_credential_store", store)
+async def test_signin_route_persists_key_on_a_card_and_returns_masks(
+    monkeypatch, _quiet_telemetry
+):
+    store = _signin_store()
+    monkeypatch.setattr(agents_v2, "_settings_store", store)
+    monkeypatch.setattr(agents_v2, "_provider_registry", None)
 
     async def fake_provision(**kw):
         return FRESH_KEY
 
+    async def fake_test(card_id):
+        return {"ok": True, "status": 200, "code": None, "message": ""}
+
     monkeypatch.setattr(td, "provision_api_key", fake_provision)
+    monkeypatch.setattr(agents_v2, "_test_and_record", fake_test)
     result = await agents_v2.tokendance_signin()
-    assert result == {"api_key_set": True, "api_key_masked": "sk-t...9876"}
-    assert store.stored == [FRESH_KEY]
+
+    # The key landed on exactly one new card, and is never returned raw.
+    assert [c.provider for c in store.cards] == ["tokendance"]
+    card_id = store.cards[0].id
+    assert store.keys[card_id] == FRESH_KEY
+    assert FRESH_KEY not in json.dumps(result, default=str)
+    # Legacy fields kept for an older SPA reading the pre-cards shape.
+    assert result["api_key_set"] is True
+    assert result["api_key_masked"] == "sk-t...9876"
+    # First card ever becomes the default.
+    assert result["default_card_id"] == card_id
 
 
-async def test_signin_route_501_without_credential_store(monkeypatch):
-    monkeypatch.setattr(agents_v2, "_credential_store", None)
+async def test_signin_route_does_not_steal_an_existing_default(
+    monkeypatch, _quiet_telemetry
+):
+    """§3.6: it takes the default ONLY when there is no default yet.
+
+    The pre-cards route overwrote the single global slot, evicting whichever
+    provider's key was in it — the exact failure this spec exists to end.
+    """
+    store = _signin_store()
+    kept = store.add(card_id="card_kept", provider="anthropic", model="claude-x",
+                     key="sk-other", make_default=True)
+    monkeypatch.setattr(agents_v2, "_settings_store", store)
+    monkeypatch.setattr(agents_v2, "_provider_registry", None)
+
+    async def fake_provision(**kw):
+        return FRESH_KEY
+
+    async def fake_test(card_id):
+        return {"ok": True, "status": 200, "code": None, "message": ""}
+
+    monkeypatch.setattr(td, "provision_api_key", fake_provision)
+    monkeypatch.setattr(agents_v2, "_test_and_record", fake_test)
+    result = await agents_v2.tokendance_signin()
+
+    assert result["default_card_id"] == kept.id, "an existing default is kept"
+    assert store.keys["card_kept"] == "sk-other", "another card's key is untouched"
+    assert len(store.cards) == 2
+
+
+async def test_signin_route_takes_a_default_whose_key_is_gone(
+    monkeypatch, _quiet_telemetry
+):
+    """A stored default with no key is what puts the wizard on screen
+    (``api_key_set`` is derived from it), so the minted key must end up on
+    the default — otherwise the new card verifies green, ``api_key_set``
+    stays false, and Next reports "that key was not saved" (2026-09-06)."""
+    store = _signin_store()
+    dead = store.add(card_id="card_dead", provider="tokendance",
+                     model="deepseek-v4-flash", key="", make_default=True)
+    monkeypatch.setattr(agents_v2, "_settings_store", store)
+    monkeypatch.setattr(agents_v2, "_provider_registry", None)
+
+    async def fake_provision(**kw):
+        return FRESH_KEY
+
+    async def fake_test(card_id):
+        return {"ok": True, "status": 200, "code": None, "message": ""}
+
+    monkeypatch.setattr(td, "provision_api_key", fake_provision)
+    monkeypatch.setattr(agents_v2, "_test_and_record", fake_test)
+    result = await agents_v2.tokendance_signin()
+
+    new_id = next(c.id for c in store.cards if c.id != dead.id)
+    assert result["default_card_id"] == new_id, "the keyless default is replaced"
+    assert store.keys[new_id] == FRESH_KEY
+    assert store.keys["card_dead"] == "", "the dead card is left alone, not rewritten"
+
+
+async def test_signin_route_reconnect_promotes_when_default_is_keyless(
+    monkeypatch, _quiet_telemetry
+):
+    """Re-connecting a NON-default TokenDance card by id while the stored
+    default has no key: the refreshed card becomes the default, since the
+    key it just received is the only usable one."""
+    store = _signin_store()
+    store.add(card_id="card_dead", provider="openai", model="gpt-4o",
+              key="", make_default=True)
+    mine = store.add(card_id="card_td", provider="tokendance",
+                     model="deepseek-v4-flash", key="sk-old")
+    monkeypatch.setattr(agents_v2, "_settings_store", store)
+    monkeypatch.setattr(agents_v2, "_provider_registry", None)
+
+    async def fake_provision(**kw):
+        return FRESH_KEY
+
+    async def fake_test(card_id):
+        return {"ok": True, "status": 200, "code": None, "message": ""}
+
+    monkeypatch.setattr(td, "provision_api_key", fake_provision)
+    monkeypatch.setattr(agents_v2, "_test_and_record", fake_test)
+    result = await agents_v2.tokendance_signin(
+        agents_v2.TokenDanceSigninRequest(card_id=mine.id)
+    )
+
+    assert store.keys["card_td"] == FRESH_KEY
+    assert result["default_card_id"] == "card_td"
+    assert len(store.cards) == 2, "no third card was minted"
+
+
+async def test_signin_route_501_without_settings_store(monkeypatch):
+    monkeypatch.setattr(agents_v2, "_settings_store", None)
     with pytest.raises(HTTPException) as exc:
         await agents_v2.tokendance_signin()
     assert exc.value.status_code == 501
@@ -243,8 +360,8 @@ async def test_signin_route_501_without_credential_store(monkeypatch):
 async def test_signin_route_flow_failure_is_502_and_persists_nothing(
     monkeypatch, _quiet_telemetry
 ):
-    store = _FakeCredentialStore()
-    monkeypatch.setattr(agents_v2, "_credential_store", store)
+    store = _signin_store()
+    monkeypatch.setattr(agents_v2, "_settings_store", store)
 
     async def failing_provision(**kw):
         raise TokenDanceProvisioningError("sign-in timed out waiting for the browser redirect")
@@ -254,4 +371,5 @@ async def test_signin_route_flow_failure_is_502_and_persists_nothing(
         await agents_v2.tokendance_signin()
     assert exc.value.status_code == 502
     assert "timed out" in exc.value.detail
-    assert store.stored == []
+    assert store.cards == [], "a failed flow must not leave a card behind"
+    # (card assertion above replaces the old global-slot check)

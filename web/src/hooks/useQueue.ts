@@ -66,7 +66,13 @@ export function useQueue(projectId: string | null) {
   const addItem = useCallback(
     async (
       content: string,
-      opts?: { priority?: number; review?: boolean; fileRefs?: string[] },
+      opts?: {
+        priority?: number;
+        review?: boolean;
+        fileRefs?: string[];
+        /** Spec 079 — worker slug to run this item; null/omitted = Orbital. */
+        agent?: string | null;
+      },
     ) => {
       if (!projectId) return;
       await api(`/api/v2/projects/${projectId}/queue/items`, {
@@ -78,6 +84,7 @@ export function useQueue(projectId: string | null) {
           file_refs: opts?.fileRefs ?? [],
           priority: opts?.priority ?? 0,
           review_before_advance: opts?.review ?? false,
+          agent: opts?.agent ?? null,
         }),
       });
     },
@@ -107,7 +114,15 @@ export function useQueue(projectId: string | null) {
   const editItem = useCallback(
     async (
       itemId: string,
-      patch: { content?: string; priority?: number; review_before_advance?: boolean },
+      patch: {
+        content?: string;
+        priority?: number;
+        review_before_advance?: boolean;
+        /** Spec 079. Send it to reassign, send null to hand the item back to
+         *  Orbital, omit it to leave the current choice alone — the backend
+         *  reads presence, not nullness. */
+        agent?: string | null;
+      },
     ) => {
       if (!projectId) return;
       await api(`/api/v2/projects/${projectId}/queue/items/${itemId}`, {

@@ -9,10 +9,17 @@ import type { Trigger } from '../types';
 import { translate, useT } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import AutomationForm from './AutomationForm';
+import MessageAvatar from './MessageAvatar';
 import { describeCron, type Translate } from './scheduleFormat';
 
 interface AutomationsListProps {
   projectId: string;
+  /**
+   * Spec 079 — installed sub-agents, forwarded to the create/edit form as the
+   * runner choices and used to name a row's chosen worker. Empty (the default)
+   * keeps the pane exactly as it is for a user with no workers.
+   */
+  agents?: Array<{ slug: string; name: string }>;
 }
 
 function formatLastFired(last: string | null): string {
@@ -73,12 +80,14 @@ function AutomationRow({
   onDelete,
   onEdit,
   describe,
+  agents,
 }: {
   trigger: Trigger;
   onToggle: () => void;
   onDelete: () => Promise<void>;
   onEdit: () => void;
   describe: (cron: string) => string | null;
+  agents: Array<{ slug: string; name: string }>;
 }) {
   const t = useT();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -126,6 +135,21 @@ function AutomationRow({
         <span className="flex-1 truncate text-[13px] font-medium text-primary">
           {trigger.name}
         </span>
+        {/* Spec 079 — who runs it. Only drawn for an assigned automation: an
+            unassigned one is run by Orbital, which is the norm and needs no
+            mark. The avatar falls back to a monogram for a slug whose agent
+            has since been uninstalled, so a stale choice stays visible. */}
+        {trigger.agent && (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-secondary"
+            title={t('automation.agent.chip', {
+              name: agents.find((a) => a.slug === trigger.agent)?.name ?? trigger.agent,
+            })}
+            data-testid={`automation-agent-${trigger.id}`}
+          >
+            <MessageAvatar variant="agent" agentHandle={trigger.agent} />
+          </span>
+        )}
         {/* Dot + label, matching the queue's state markers, instead of a
             tinted pill. Enabled/disabled stays legible because a paused
             automation is a silent failure mode. */}
@@ -240,7 +264,7 @@ function AutomationRow({
  * `trigger.deleted` and the row disappeared until the next refetch, which is
  * why this surface shipped read-only.
  */
-export default function AutomationsList({ projectId }: AutomationsListProps) {
+export default function AutomationsList({ projectId, agents = [] }: AutomationsListProps) {
   const t = useT();
   const { locale } = useLocale();
   const {
@@ -347,7 +371,11 @@ export default function AutomationsList({ projectId }: AutomationsListProps) {
       )}
 
       {creating && (
-        <AutomationForm onSubmit={handleSubmit} onCancel={() => setCreating(false)} />
+        <AutomationForm
+          onSubmit={handleSubmit}
+          onCancel={() => setCreating(false)}
+          agents={agents}
+        />
       )}
 
       {loading && triggers.length === 0 && (
@@ -371,12 +399,14 @@ export default function AutomationsList({ projectId }: AutomationsListProps) {
                 trigger={editing}
                 onSubmit={handleSubmit}
                 onCancel={() => setEditingId(null)}
+                agents={agents}
               />
             ) : (
               <AutomationRow
                 key={trigger.id}
                 trigger={trigger}
                 describe={describe}
+                agents={agents}
                 onToggle={() => void handleToggle(trigger)}
                 onDelete={() => handleDelete(trigger.id)}
                 onEdit={() => {

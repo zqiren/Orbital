@@ -275,3 +275,89 @@ async def test_two_management_agent_dispatches_each_write_their_own_marker():
     assert len(agent_manager.injections) == 2
     for _, content, _kwargs in agent_manager.injections:
         assert "do not answer on its behalf" not in content
+
+
+# ---------------------------------------------------------------------------
+# Spec 079 — a queue dispatch's marker must not wake the manager
+# ---------------------------------------------------------------------------
+#
+# Found in the live daemon smoke, not by a unit test: an item assigned to a
+# worker dispatched correctly, and then the manager woke on THIS marker,
+# read the ``[QUEUE ITEM | …]`` row and HEADER_CONTRACT already sitting in
+# that session, and did the task itself — racing the worker it had just
+# dispatched, and handing the dispatcher a stray turn to classify as the
+# item's verdict. The initiator ``queue_item`` keeps the mention funnel but
+# stamps suppress_wake here, leaving exactly one management turn: the one
+# the worker's terminal event starts.
+
+
+@pytest.mark.asyncio
+async def test_queue_item_marker_is_wake_suppressed():
+    mgr = _AgentManager()
+    obs = LifecycleObserver(mgr, _WS())
+
+    await obs.on_message_routed(
+        "proj", "codex", initiator="queue_item",
+        message_preview="build the thing", transcript_path="/t/x.jsonl",
+        session_id="sess1", dispatch_id="sess1:abcd1234",
+    )
+
+    assert len(mgr.injections) == 1
+    _, content, kwargs = mgr.injections[0]
+    meta = kwargs["meta"]
+    assert meta["suppress_wake"] is True, (
+        "a queue dispatch must not start a management turn — the manager "
+        "would race its own worker against the queue contract in history"
+    )
+    # Still a normal marker in every other respect: joinable to the
+    # transcript, and rendered as the clean one-liner.
+    assert meta["dispatch_id"] == "sess1:abcd1234"
+    assert meta["handle"] == "codex"
+    assert meta["display_content"] == (
+        '[Sub-agent] Message sent to codex: "build the thing". '
+        'Transcript: /t/x.jsonl'
+    )
+    # The guidance is agent-facing only, and is written for the LATER wake
+    # turn, which reads this row as history.
+    assert "do NOT do the task yourself" in content
+    assert "mark_task_complete" in content
+    assert "do NOT do the task yourself" not in meta["display_content"]
+
+
+@pytest.mark.asyncio
+async def test_queue_item_dispatch_is_not_marked_pinned():
+    """The terminal event must still wake: only ``user_pinned`` is pinned.
+
+    This is the other half of the fix. Suppressing the dispatch marker is
+    only correct because the worker's terminal event is NOT suppressed —
+    that is the turn that verifies the result and declares the verdict. The
+    terminal hooks stamp suppress_wake from ``_is_pinned_dispatch``, so a
+    queue dispatch must leave the key unpinned.
+    """
+    obs = LifecycleObserver(_AgentManager(), _WS())
+
+    obs.set_dispatch_initiator("proj", "codex", "user_pinned", session_id="s1")
+    assert obs._is_pinned_dispatch("proj", "codex", "s1") is True
+
+    obs.set_dispatch_initiator("proj", "codex", "queue_item", session_id="s1")
+    assert obs._is_pinned_dispatch("proj", "codex", "s1") is False, (
+        "a queue dispatch is not pinned — its terminal event must wake the "
+        "manager for the verdict"
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_mention_marker_still_wakes():
+    """Regression guard on the chat path: unchanged by spec 079."""
+    mgr = _AgentManager()
+    obs = LifecycleObserver(mgr, _WS())
+
+    await obs.on_message_routed(
+        "proj", "codex", initiator="user_mention",
+        message_preview="hi", transcript_path="/t/x.jsonl",
+        session_id="sess1", dispatch_id="sess1:abcd1234",
+    )
+
+    _, content, kwargs = mgr.injections[0]
+    assert "suppress_wake" not in (kwargs["meta"] or {})
+    assert "do not answer on its behalf" in content

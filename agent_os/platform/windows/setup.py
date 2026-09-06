@@ -92,6 +92,49 @@ class SetupOrchestrator:
             logger.error("Setup step 3 (permissions) raised: %s", exc)
             return SetupResult(success=False, error=str(exc))
 
+        # Step 4: the worker's own home under ProgramData (spec 077 W2).
+        # Fatal on failure: _build_env_block points USERPROFILE/APPDATA/
+        # LOCALAPPDATA/TEMP at this tree, so a worker without it writes its
+        # caches nowhere and ordinary tooling (npm, pip, uv) fails on write.
+        try:
+            home_result = self.permission_manager.setup_worker_home(username)
+            if not home_result.success:
+                error = home_result.error or "Failed to create the worker home"
+                logger.error("Setup step 4 (worker home) failed: %s", error)
+                return SetupResult(success=False, error=error)
+            logger.info("Setup step 4 complete: worker home ready")
+        except Exception as exc:
+            logger.error("Setup step 4 (worker home) raised: %s", exc)
+            return SetupResult(success=False, error=str(exc))
+
+        # Step 5: read+execute on the per-user toolchain roots that exist
+        # (spec 077 W1). Best effort by design — a machine with no nvm and no
+        # cargo simply has fewer roots, and one unwritable root must not fail
+        # an otherwise good install. Anything missed here is one click in
+        # Settings > Folder access, which writes the same ACE.
+        try:
+            grants = self.permission_manager.grant_toolchain_roots(username)
+            failed = [g.path for g in grants if not g.success]
+            logger.info(
+                "Setup step 5 complete: %d toolchain root(s) granted%s",
+                sum(1 for g in grants if g.success),
+                f", {len(failed)} failed: {failed}" if failed else "",
+            )
+        except Exception as exc:
+            logger.warning("Setup step 5 (toolchain grants) raised: %s", exc)
+
+        # Step 6: deny-write ACEs on the workspace's own control files
+        # (spec 077 W3). Best effort: a fresh workspace holds no repository
+        # yet, so this usually applies nothing — the provider re-checks after
+        # commands that could have created one.
+        try:
+            denies = self.permission_manager.protect_control_files(username, workspace_path)
+            logger.info(
+                "Setup step 6 complete: %d control file(s) protected", len(denies),
+            )
+        except Exception as exc:
+            logger.warning("Setup step 6 (control-file denies) raised: %s", exc)
+
         logger.info("Setup completed successfully")
         return SetupResult(success=True)
 
@@ -102,8 +145,19 @@ class SetupOrchestrator:
             username = self.account_manager.get_username()
             workspace_path = self._get_default_workspace_path()
             if os.path.isdir(workspace_path):
+                # Spec 077 §8: a deny ACE outlives the account it names, so it
+                # must come off BEFORE the account is deleted — otherwise the
+                # user's own repository keeps an unresolvable deny entry after
+                # uninstall. Same for the toolchain grants on folders the user
+                # owns; revoke_access is what put them there.
+                self.permission_manager.unprotect_control_files(username, workspace_path)
                 self.permission_manager.revoke_access(username, workspace_path)
                 logger.info("Teardown step 1 complete: ACL entries revoked for %s", username)
+            try:
+                self.permission_manager.revoke_toolchain_roots(username)
+                logger.info("Teardown step 1b complete: toolchain grants revoked")
+            except Exception as exc:
+                logger.warning("Teardown step 1b (toolchain revoke) failed: %s", exc)
         except Exception as exc:
             # Non-fatal: log warning but continue with account deletion
             # If revoke fails, we still want to delete the account

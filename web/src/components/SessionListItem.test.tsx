@@ -8,7 +8,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionListItem } from './SessionListItem';
-import type { SessionListEntry } from '../types';
+import { getStatusDisplay } from './sessionStatus';
+import type { AgentRunStatus, SessionListEntry } from '../types';
 
 afterEach(() => cleanup());
 
@@ -69,6 +70,43 @@ describe('SessionListItem — status glyph rendering', () => {
     const glyph = screen.getByTestId('session-status-glyph');
     expect(glyph.textContent).toBe('⚠');
     expect(glyph).toHaveStyle({ color: '#F59E0B' });
+  });
+
+  // Spec 081 — a queued session has never run; it must light up, and it must
+  // read apart from `waiting` (which means "running, sub-agents pending").
+  it('queued → glyph ◔ in waiting blue, distinct from waiting', () => {
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-queued', status: 'queued' })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    const glyph = screen.getByTestId('session-status-glyph');
+    expect(glyph.textContent).toBe('◔');
+    expect(glyph).toHaveStyle({ color: '#539AF8' });
+  });
+
+  it('queued does NOT fall back to the resting idle display', () => {
+    const display = getStatusDisplay('queued');
+    expect(display.label).toBe('Queued');
+    expect(display.labelKey).toBe('session.status.queued');
+    expect(display.resting).toBeFalsy();
+    expect(display).not.toEqual(getStatusDisplay('nonsense' as AgentRunStatus));
+  });
+
+  it('a queued row still shows the pin position, not a pin glyph', () => {
+    // The pin glyph fills the slot only while resting; a queued row has
+    // something to say, so status keeps the slot (same rule as running).
+    render(
+      <SessionListItem
+        session={makeSession({ session_id: 'sess-queued-pin', status: 'queued', pinned: true })}
+        selected={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('session-status-glyph').textContent).toBe('◔');
+    expect(screen.queryByTestId('session-pin-glyph')).toBeNull();
   });
 
   it('idle → no glyph (the slot stays empty so rows read clean)', () => {

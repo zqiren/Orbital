@@ -252,52 +252,6 @@ describe('LLMProviderSettings — default provider resolution (Spec 17 §9)', ()
   });
 });
 
-// ---- Project mode: saved provider with no endpoint seeds region default ----
-
-describe('LLMProviderSettings — project mode seeds endpoint for saved provider (401 trap)', () => {
-  it('seeds the region-default base_url when a project saved a provider but no endpoint', async () => {
-    mockApi({});
-    const onChange = vi.fn();
-    render(
-      <LLMProviderSettings
-        mode="project"
-        projectValues={{ provider: 'moonshot', model: 'kimi-k2.5', sdk: 'openai' }}
-        onChange={onChange}
-      />,
-    );
-    // An empty base_url would fall back cross-provider on the backend —
-    // the seed must be the provider's region-default endpoint (China for
-    // dual-endpoint providers, per Spec 17 §9).
-    await waitFor(() => {
-      const calls = onChange.mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls[calls.length - 1][0].base_url).toBe('https://api.moonshot.cn/v1');
-    });
-  });
-
-  it('leaves a saved custom endpoint untouched', async () => {
-    mockApi({});
-    const onChange = vi.fn();
-    render(
-      <LLMProviderSettings
-        mode="project"
-        projectValues={{
-          provider: 'moonshot',
-          model: 'kimi-k2.5',
-          base_url: 'https://my-proxy.example/v1',
-          sdk: 'openai',
-        }}
-        onChange={onChange}
-      />,
-    );
-    await waitFor(() => {
-      const calls = onChange.mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls[calls.length - 1][0].base_url).toBe('https://my-proxy.example/v1');
-    });
-  });
-});
-
 // ---- Region defaults to China on new selection ----
 
 describe('LLMProviderSettings — region defaults to China on new selection (Spec 17 §9)', () => {
@@ -543,26 +497,6 @@ describe('LLMProviderSettings — hint paragraphs collapse by default (bug #49)'
     closedDetailsFor('Cheap and fast; reasoning model available.');
   });
 
-  it('collapses the project-mode override hint', async () => {
-    mockApi({});
-    render(
-      <LLMProviderSettings
-        mode="project"
-        projectValues={{ provider: 'deepseek', model: 'deepseek-chat', sdk: 'openai' }}
-        onChange={vi.fn()}
-      />,
-    );
-    fireEvent.click(await screen.findByText('LLM Provider'));
-    await waitFor(() =>
-      expect(
-        screen.getByText('Leave blank to use global defaults. Only fill in to override for this project.'),
-      ).toBeTruthy(),
-    );
-    closedDetailsFor(
-      'Leave blank to use global defaults. Only fill in to override for this project.',
-    );
-  });
-
   it('keeps the region-availability warnings outside the disclosure', async () => {
     mockApi({ settings: { provider: 'openai', base_url: 'https://api.openai.com/v1' } });
     render(<LLMProviderSettings mode="global" />);
@@ -591,6 +525,27 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     base_url: 'https://tokendance.space/gateway/v1',
   };
 
+  /** The TokenDance card the daemon provisions (spec 082 §3.6): model comes
+   *  from the registry's default_model, never from the form. */
+  const TD_CARD = {
+    id: 'card_td',
+    name: 'TokenDance (词元跳动) · deepseek-v4-flash',
+    provider: 'tokendance',
+    region: 'global' as const,
+    base_url: null,
+    sdk: null,
+    model: 'deepseek-v4-flash',
+    created_at: '2026-09-04T10:00:00+00:00',
+    verified_at: '2026-09-04T10:00:01+00:00',
+    last_used_at: null,
+    last_error: null,
+    key_set: true,
+    key_masked: 'sk-t...9876',
+    key_source: 'keychain' as const,
+    is_default: true,
+    read_only: false,
+  };
+
   function mockApiWithSignin(
     signinImpl: () => Promise<unknown>,
     { keySet = false }: { keySet?: boolean } = {},
@@ -598,20 +553,6 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
       if (path === '/api/v2/providers/tokendance/signin' && opts?.method === 'POST') {
         return signinImpl();
-      }
-      if (path === '/api/v2/settings' && opts?.method === 'PUT') {
-        // Echo the persisted values back like the real settings route.
-        const body = JSON.parse(String(opts.body));
-        return {
-          llm: {
-            api_key_set: true,
-            api_key_masked: 'sk-t...9876',
-            base_url: body.llm_base_url ?? null,
-            model: body.llm_model ?? null,
-            sdk: body.llm_sdk ?? 'openai',
-            provider: body.llm_provider ?? '',
-          },
-        };
       }
       if (path === '/api/v2/settings') {
         return {
@@ -634,6 +575,9 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     });
   }
 
+  /** Any legacy `PUT /settings` write. Spec 082 retired it from this flow:
+   *  it wrote the single global slot, and would now write whichever card
+   *  happens to be default — not necessarily the TokenDance one. */
   function settingsPutBody(): Record<string, unknown> | null {
     const call = apiMock.mock.calls.find(
       ([path, opts]) => path === '/api/v2/settings' && (opts as RequestInit)?.method === 'PUT',
@@ -657,24 +601,6 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
     expect(screen.queryByTestId('tokendance-signin')).toBeNull();
   });
 
-  it('does not render the button in project mode', async () => {
-    mockApi({});
-    render(
-      <LLMProviderSettings
-        mode="project"
-        projectValues={{ provider: 'tokendance', model: 'deepseek-v4-pro', sdk: 'openai' }}
-        onChange={vi.fn()}
-      />,
-    );
-    // Project mode renders collapsed — expand the section once it loads.
-    fireEvent.click(await screen.findByRole('button', { name: /LLM Provider/ }));
-    await waitFor(() => {
-      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
-      expect(select.value).toBe('tokendance');
-    });
-    expect(screen.queryByTestId('tokendance-signin')).toBeNull();
-  });
-
   it('click → POST, busy state disables the button, success persists defaults and retires the button', async () => {
     let release!: (v: unknown) => void;
     mockApiWithSignin(() => new Promise((res) => { release = res; }));
@@ -690,32 +616,65 @@ describe('LLMProviderSettings — TokenDance one-click signin (Spec 47 Tier 2)',
       expect.objectContaining({ method: 'POST' }),
     );
 
-    release({ api_key_set: true, api_key_masked: 'sk-t...9876' });
+    release({ api_key_set: true, api_key_masked: 'sk-t...9876', card: TD_CARD, test: { ok: true, status: null, code: null, message: 'ok' } });
     await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
-    // One tap lands in a usable configuration: provider + the registry's
-    // default model persisted in a single settings write.
-    expect(settingsPutBody()).toMatchObject({
-      llm_provider: 'tokendance',
-      llm_model: 'deepseek-v4-flash',
-      llm_base_url: 'https://tokendance.space/gateway/v1',
-    });
+    // One tap lands in a usable configuration — but as a CARD now. The
+    // provisioning route persists provider/model/endpoint itself, so the
+    // legacy global-slot write is gone: making it would overwrite whichever
+    // card is default.
+    expect(settingsPutBody()).toBeNull();
+    expect(
+      (screen.getByDisplayValue('deepseek-v4-flash') as HTMLInputElement).value,
+    ).toBe('deepseek-v4-flash');
     // The saved TokenDance key retires the one-click button; the stored-key
     // line reflects the mask without a page reload.
     expect(screen.queryByTestId('tokendance-signin')).toBeNull();
     expect(screen.getByText(/sk-t\.\.\.9876/)).toBeTruthy();
   });
 
-  it('an explicit model choice survives signin — no default clobber', async () => {
-    mockApiWithSignin(async () => ({ api_key_set: true, api_key_masked: 'sk-t...9876' }));
+  it("the provisioned card's model wins over whatever was typed in the form", async () => {
+    mockApiWithSignin(async () => ({
+      api_key_set: true,
+      api_key_masked: 'sk-t...9876',
+      card: TD_CARD,
+      test: { ok: true, status: null, code: null, message: 'ok' },
+    }));
     render(<LLMProviderSettings mode="global" />);
     const btn = await screen.findByTestId('tokendance-signin');
     // Fixture catalog has no suggested_models → free-text model input.
-    fireEvent.change(screen.getByPlaceholderText(/Type model name/), {
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
       target: { value: 'glm-5.2' },
     });
     fireEvent.click(btn);
     await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
-    expect(settingsPutBody()).toMatchObject({ llm_model: 'glm-5.2' });
+    // Spec 082 §3.6: the card the daemon creates carries the registry's
+    // default model, and the card is the configuration. Typing a model before
+    // one-click no longer changes what gets provisioned — the user edits the
+    // card afterwards to change it.
+    expect(
+      (screen.getByDisplayValue('deepseek-v4-flash') as HTMLInputElement).value,
+    ).toBe('deepseek-v4-flash');
+  });
+
+  it('re-connect names the card being re-keyed, so no other card is touched', async () => {
+    mockApiWithSignin(async () => ({
+      api_key_set: true,
+      api_key_masked: 'sk-t...9876',
+      card: TD_CARD,
+      test: { ok: true, status: null, code: null, message: 'ok' },
+    }));
+    render(
+      <LLMProviderSettings
+        mode="global"
+        card={{ ...TD_CARD, key_masked: 'sk-t...1111' }}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId('tokendance-reconnect'));
+    await waitFor(() => expect(screen.getByText('API key created and saved.')).toBeTruthy());
+    const call = apiMock.mock.calls.find(
+      ([path]) => path === '/api/v2/providers/tokendance/signin',
+    );
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ card_id: 'card_td' });
   });
 
   it('button is absent when the saved provider is tokendance with a key set', async () => {
@@ -947,29 +906,176 @@ describe('LLMProviderSettings — model list fetch', () => {
   });
 });
 
-// ---- Spec 072: project API-key auth-fallback hint ----
+// ---- Spec 082: the form saves a credential card, test included ----
 
-describe('LLMProviderSettings — project-key auth-fallback hint (Spec 072)', () => {
-  const HINT = 'If this key is rejected, runs fall back to the global default.';
+describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
+  const CARD = {
+    id: 'card_or',
+    name: 'DeepSeek · deepseek-chat',
+    provider: 'deepseek',
+    region: 'global' as const,
+    base_url: null,
+    sdk: null,
+    model: 'deepseek-chat',
+    created_at: '2026-09-04T10:00:00+00:00',
+    verified_at: null,
+    last_used_at: null,
+    last_error: null,
+    key_set: true,
+    key_masked: 'sk-o...wxyz',
+    key_source: 'keychain' as const,
+    is_default: false,
+    read_only: false,
+  };
 
-  it('shows the hint under the API key field in project mode', async () => {
-    mockApi({});
-    render(
-      <LLMProviderSettings
-        mode="project"
-        projectValues={{ provider: 'deepseek', model: 'deepseek-v4-flash', sdk: 'openai' }}
-        onChange={vi.fn()}
-      />,
+  /** Card routes on top of the standard registry/settings mocks. */
+  function mockCardApi(
+    postResult: () => Promise<unknown> = async () => ({
+      card: CARD,
+      test: { ok: true, status: null, code: null, message: 'Connected to DeepSeek using x' },
+    }),
+  ) {
+    apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
+      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') return postResult();
+      if (path.startsWith('/api/v2/settings/cards/') && opts?.method === 'PUT') return postResult();
+      if (path === '/api/v2/settings') {
+        return {
+          llm: {
+            api_key_set: false,
+            api_key_masked: '',
+            base_url: null,
+            model: null,
+            sdk: 'openai',
+            provider: '',
+          },
+        };
+      }
+      if (path === '/api/v2/providers') return REGISTRY;
+      if (path === '/api/v2/settings/api-key/status') {
+        return { configured: false, source: 'none' };
+      }
+      return {};
+    });
+  }
+
+  function cardCall(method: string) {
+    return apiMock.mock.calls.find(
+      ([path, opts]) =>
+        String(path).startsWith('/api/v2/settings/cards') &&
+        (opts as RequestInit)?.method === method,
     );
-    // Project mode renders collapsed — expand to reach the fields.
-    fireEvent.click(await screen.findByText('LLM Provider'));
-    expect(await screen.findByText(HINT)).toBeTruthy();
+  }
+
+  it('Save POSTs a new card with provider, region, model and the typed key', async () => {
+    mockCardApi();
+    const onCardSaved = vi.fn();
+    render(<LLMProviderSettings mode="global" onCardSaved={onCardSaved} />);
+    await screen.findByText('API Key');
+
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-test-key' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.click(screen.getByTestId('card-save'));
+
+    await waitFor(() => expect(cardCall('POST')).toBeTruthy());
+    const body = JSON.parse(String((cardCall('POST')![1] as RequestInit).body));
+    expect(body).toMatchObject({
+      provider: 'deepseek',
+      region: 'global',
+      model: 'deepseek-chat',
+      api_key: 'sk-test-key',
+    });
+    // A registry provider's endpoint is provider+region, not a copied string —
+    // storing it would resurrect the "key from one provider, endpoint from
+    // another" pairing the cards exist to prevent.
+    expect(body.base_url).toBeUndefined();
+    await waitFor(() => expect(onCardSaved).toHaveBeenCalled());
   });
 
-  it('does not show the hint in global mode (nothing to fall back to)', async () => {
-    mockApi({});
+  it('shows the save-test verdict inline on success', async () => {
+    mockCardApi();
     render(<LLMProviderSettings mode="global" />);
     await screen.findByText('API Key');
-    expect(screen.queryByText(HINT)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.click(screen.getByTestId('card-save'));
+    const verdict = await screen.findByTestId('card-save-test');
+    expect(verdict.textContent).toContain('Connected to DeepSeek');
+  });
+
+  it('a failed test still saves the card and says so, in red', async () => {
+    mockCardApi(async () => ({
+      card: { ...CARD, last_error: { status: 401, code: 'invalid_api_key', message: 'Invalid API key', at: '2026-09-04T10:00:00+00:00' } },
+      test: { ok: false, status: 401, code: 'invalid_api_key', message: 'Invalid API key' },
+    }));
+    const onCardSaved = vi.fn();
+    render(<LLMProviderSettings mode="global" onCardSaved={onCardSaved} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.click(screen.getByTestId('card-save'));
+
+    const verdict = await screen.findByTestId('card-save-test');
+    // D9: an outage or a bad key must never block saving — the card exists,
+    // and the failure is where the user will look for it.
+    expect(verdict.textContent).toContain('Saved, but the connection test failed');
+    expect(verdict.textContent).toContain('Invalid API key');
+    expect(verdict.className).toContain('text-error');
+    expect(onCardSaved).toHaveBeenCalled();
+    expect(screen.queryByTestId('card-save-error')).toBeNull();
+  });
+
+  it('editing an existing card PUTs to that card id and populates from it', async () => {
+    mockCardApi();
+    // Moonshot, deliberately NOT the fresh-install default provider: the form
+    // has to be the CARD's configuration, and 'deepseek' would be the same
+    // value either branch produced.
+    render(
+      <LLMProviderSettings
+        mode="global"
+        card={{ ...CARD, provider: 'moonshot', model: 'kimi-k2.5' }}
+      />,
+    );
+    await waitFor(() => {
+      const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
+      expect(select.value).toBe('moonshot');
+    });
+    expect(((await screen.findByDisplayValue('kimi-k2.5')) as HTMLInputElement).value)
+      .toBe('kimi-k2.5');
+    // The card's own masked key is shown — never the global slot's.
+    expect(screen.getByText(/sk-o\.\.\.wxyz/)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('card-save'));
+    await waitFor(() => expect(cardCall('PUT')).toBeTruthy());
+    expect(String(cardCall('PUT')![0])).toBe('/api/v2/settings/cards/card_or');
+  });
+
+  it('the env card is read-only: no key entry, no save', async () => {
+    mockCardApi();
+    render(
+      <LLMProviderSettings
+        mode="global"
+        card={{ ...CARD, id: 'env', read_only: true, key_source: 'environment' }}
+      />,
+    );
+    await screen.findByTestId('card-readonly-note');
+    expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('a save failure (not a test failure) surfaces as a save error', async () => {
+    mockCardApi(async () => {
+      throw new Error('missing model');
+    });
+    render(<LLMProviderSettings mode="global" />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.click(screen.getByTestId('card-save'));
+    expect((await screen.findByTestId('card-save-error')).textContent).toContain('missing model');
+    expect(screen.queryByTestId('card-save-test')).toBeNull();
   });
 });

@@ -21,7 +21,7 @@ vi.mock('../config', () => ({
 }));
 
 import { useChatHistory } from './useChatHistory';
-import type { ChatMessage } from '../types';
+import type { ActivityEvent, ChatMessage } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -150,5 +150,60 @@ describe('useChatHistory — sessionId param', () => {
 
     expect(result.current.messages.length).toBe(1);
     expect(result.current.messages[0].content).toBe('hello');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 078 §9.8 — the workspace panel's activity seam
+// ---------------------------------------------------------------------------
+
+function makeActivity(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
+  return {
+    type: 'agent.activity',
+    project_id: 'proj-1',
+    id: 'evt-1',
+    category: 'file_edit',
+    description: 'Edited src/a.ts',
+    tool_name: 'edit',
+    source: 'management',
+    timestamp: '2026-09-03T10:00:00Z',
+    ...overrides,
+  };
+}
+
+describe('useChatHistory — lastEvent (spec 078 §9.8)', () => {
+  beforeEach(() => {
+    apiFn = vi.fn();
+  });
+
+  it('starts null', () => {
+    const { result } = renderHook(() => useChatHistory({ sessionId: 'sess-1' }));
+    expect(result.current.lastEvent).toBeNull();
+  });
+
+  it('publishes an activity event the panel can follow', () => {
+    const { result } = renderHook(() => useChatHistory({ sessionId: 'sess-1' }));
+    const event = makeActivity();
+    act(() => result.current.mergeRealtimeEvent(event));
+    expect(result.current.lastEvent).toEqual(event);
+  });
+
+  it('publishes tool_result events too — they are only dropped from `messages`', () => {
+    const { result } = renderHook(() => useChatHistory({ sessionId: 'sess-1' }));
+    const before = result.current.messages.length;
+    const event = makeActivity({ category: 'tool_result', tool_name: 'call_abc', id: 'evt-2' });
+    act(() => result.current.mergeRealtimeEvent(event));
+
+    expect(result.current.lastEvent).toEqual(event);
+    // The "Tool result received" row still must not reach the transcript.
+    expect(result.current.messages.length).toBe(before);
+  });
+
+  it('clearMessages resets it', () => {
+    const { result } = renderHook(() => useChatHistory({ sessionId: 'sess-1' }));
+    act(() => result.current.mergeRealtimeEvent(makeActivity()));
+    act(() => result.current.clearMessages());
+    expect(result.current.lastEvent).toBeNull();
+    expect(result.current.messages).toEqual([]);
   });
 });

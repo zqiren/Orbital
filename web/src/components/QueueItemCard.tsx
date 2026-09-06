@@ -5,10 +5,15 @@
 import { CheckCheck, Paperclip, User, X, Zap } from 'lucide-react';
 import type { QueueAttempt, QueueItem } from '../types';
 import { useT } from '../i18n/useT';
+import MessageAvatar from './MessageAvatar';
 import type { StringKey } from '../i18n/strings';
+import { providerErrorKey } from '../utils/providerError';
 
 // Localizable block-reason codes (queue/dispatcher.py). `agent_declared` is
-// deliberately absent — that prose is agent content and renders verbatim.
+// deliberately absent — that prose is agent content and renders verbatim. So is
+// spec 079's `agent_dispatch_failed`: its reason IS the dispatch error ("Error:
+// agent 'x' is not installed"), and a translated stand-in would replace the one
+// thing that explains why the assigned worker never ran.
 const BLOCK_REASON_KEYS: Record<string, StringKey> = {
   daemon_restart: 'queue.blockReason.daemon_restart',
   inject_failed: 'queue.blockReason.inject_failed',
@@ -20,10 +25,19 @@ const BLOCK_REASON_KEYS: Record<string, StringKey> = {
   contract_violation: 'queue.blockReason.contract_violation',
 };
 
+// Provider/credential codes reach the queue too: an item whose management
+// turn could not START is blocked with the classifier's own code
+// (agent_manager._note_wake_failed). Route them through the same strings chat
+// uses for the identical failure rather than showing a raw SDK message.
+const PROVIDER_CODES = new Set([
+  'missing_api_key', 'missing_card', 'invalid_api_key',
+  'model_not_found', 'provider_unreachable', 'provider_error',
+]);
+
 function blockReasonText(latest: QueueAttempt, t: ReturnType<typeof useT>): string {
-  const key = latest.block_reason_code
-    ? BLOCK_REASON_KEYS[latest.block_reason_code]
-    : undefined;
+  const code = latest.block_reason_code;
+  if (code && PROVIDER_CODES.has(code)) return t(providerErrorKey(code));
+  const key = code ? BLOCK_REASON_KEYS[code] : undefined;
   return key ? t(key) : (latest.block_reason ?? '');
 }
 
@@ -119,6 +133,27 @@ function SourceChip({ source }: { source: QueueItem['source'] }) {
     <span className={`inline-flex shrink-0 items-center gap-1 ${META}`}>
       <SourceIcon source={source} className="w-2.5 h-2.5 shrink-0" />
       {t(labelKey)}
+    </span>
+  );
+}
+
+/**
+ * Spec 079 — the worker the user assigned to run this item. Drawn only when
+ * one was chosen: an unassigned item is run by Orbital, which is the norm and
+ * needs no mark. The avatar falls back to a monogram badge for a slug whose
+ * agent has since been uninstalled, so a stale choice stays visible rather than
+ * silently reading as "Orbital runs it".
+ */
+function AgentChip({ item }: { item: QueueItem }) {
+  const t = useT();
+  if (!item.agent) return null;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center"
+      title={t('queue.item.agent.chip', { name: item.agent })}
+      data-testid={`queue-item-agent-${item.id}`}
+    >
+      <MessageAvatar variant="agent" agentHandle={item.agent} />
     </span>
   );
 }
@@ -243,6 +278,7 @@ function RunningCard({
           </span>
         )}
         <div className="flex-1" />
+        <AgentChip item={item} />
         <SourceChip source={item.source} />
         {/* Disabled until the item idles — see RemoveButton's LOCKED BEHAVIOR note. */}
         <RemoveButton item={item} onRemove={onRemove} />
@@ -276,6 +312,7 @@ function QueuedRow({
         )}
         <StateDot tone="bg-idle" />
         <span className="min-w-0 flex-1 truncate text-[13px] text-primary">{item.content}</span>
+        <AgentChip item={item} />
         <span className={`shrink-0 text-[11px] ${pri.cls}`}>{t(pri.labelKey)}</span>
         {added && <span className={`shrink-0 font-mono tabular-nums ${META}`}>{added}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
@@ -302,6 +339,7 @@ function BlockedRow({
       <div className="flex items-center gap-2.5">
         <StateDot tone="bg-warning" />
         <span className="min-w-0 flex-1 break-words text-[13px] text-primary">{item.content}</span>
+        <AgentChip item={item} />
         <span className="shrink-0 text-[11px] font-medium text-warning">
           {t('queue.item.needsYou')}
         </span>
@@ -343,6 +381,7 @@ function DoneRow({
             </div>
           )}
         </div>
+        <AgentChip item={item} />
         {when && <span className={`shrink-0 font-mono tabular-nums ${META}`}>{when}</span>}
         <RemoveButton item={item} onRemove={onRemove} />
       </div>

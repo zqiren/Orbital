@@ -6,9 +6,10 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import i18nEditor from './dev/i18nEditorPlugin'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), i18nEditor()],
   build: {
     outDir: 'dist',
   },
@@ -23,7 +24,13 @@ export default defineConfig({
       // a backend change you just made appears to 404/422 and reads as a
       // frontend bug. Point the dev UI at a dev daemon with
       // `ORBITAL_DEV_API_PORT=8391 npx vite`.
-      '/api': `http://localhost:${process.env.ORBITAL_DEV_API_PORT || 8000}`,
+      // `ws: true` because the live browser view (spec 078) opens a WebSocket
+      // under /api/v2/agents/{id}/browser/live; without it the dev proxy never
+      // upgrades the connection and the view sits on "Connecting".
+      '/api': {
+        target: `http://localhost:${process.env.ORBITAL_DEV_API_PORT || 8000}`,
+        ws: true,
+      },
       '/ws': {
         target: `ws://localhost:${process.env.ORBITAL_DEV_API_PORT || 8000}`,
         ws: true,

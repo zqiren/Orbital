@@ -22,6 +22,15 @@ import AgentErrorNotice from './AgentErrorNotice';
 import { parseProviderError, providerErrorKey } from '../utils/providerError';
 import AttachmentChip from './AttachmentChip';
 import { useAttachments } from '../hooks/useAttachments';
+import { useAnnotations } from '../hooks/useAnnotations';
+import {
+  annotationFilename,
+  formatQuotes,
+  renderAnnotatedPng,
+  type Annotation,
+} from '../utils/annotations';
+import { uploadFile } from '../lib/attachment-upload';
+import { BASE_URL, isRelayMode } from '../config';
 import { buildAttachmentsBlock, parseAttachmentsBlock } from '../lib/attachment-parsing';
 import ComposerDisabledPrompt from './ComposerDisabledPrompt';
 import PinTargetSelect, { resolveSendTarget } from './PinTargetSelect';
@@ -32,6 +41,7 @@ import { useContextUsage } from '../hooks/useContextUsage';
 import { useT, translate } from '../i18n/useT';
 import { useLocale } from '../i18n/LocaleContext';
 import type { StringKey } from '../i18n/strings';
+import { publishSessionMessages, sessionMessagesKey } from '../utils/sessionMessagesStore';
 import { budgetTimelineText } from '../budget/timelineText';
 
 type AgentRunItem = Extract<DisplayItem, { type: 'agent_run' }>;
@@ -42,6 +52,25 @@ function formatToolBreakdown(counts: Record<string, number>): string {
   if (entries.length === 0) return '';
   entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return entries.map(([n, c]) => (c === 1 ? n : `${c} ${n}s`)).join(', ');
+}
+
+/**
+ * One-line label for a staged annotation in the composer chip's expanded list.
+ * Deliberately NOT translated: every part of it is dynamic content the agent
+ * produced (a page title, a workspace path, a quoted span), which the i18n
+ * rules exclude. Only the bare "Browser" fallback is chrome.
+ */
+function annotationSummary(a: Annotation, tr: (key: StringKey) => string): string {
+  switch (a.kind) {
+    case 'browser':
+      return a.pageTitle || tr('panel.browser.label');
+    case 'image':
+      return a.path;
+    case 'text':
+      return a.lines ? `${a.path}:${a.lines[0]}-${a.lines[1]}` : a.path;
+    case 'file':
+      return a.path;
+  }
 }
 
 // Locale-aware translator for capsule summaries; defaults to English so any
@@ -361,7 +390,7 @@ import type {
   Project,
 } from '../types';
 import ChatMessage from './ChatMessage';
-import { OpenPathContext } from './FilePreviewDrawer';
+import { OpenPathContext } from './filePreviewContext';
 import StreamingMessage from './StreamingMessage';
 import MessageAvatar from './MessageAvatar';
 import ApprovalCard from './ApprovalCard';
@@ -465,6 +494,9 @@ interface PendingApproval {
 export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
+  // Chrome-only translator for the annotation chip's fallback label (the
+  // rest of each summary is dynamic content and stays untranslated).
+  const chromeTr = useMemo(() => (key: StringKey) => translate(locale, key), [locale]);
   // The WS effect's handler closures don't re-subscribe on locale change —
   // read the live locale through a ref (same staleness fix as sessionIdRef).
   const localeRef = useRef(locale);
@@ -484,6 +516,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // user messages, sub-agent messages, finalize-on-idle, etc.). The live tail
   // therefore layers on top of the transform-once history.
   const [rawMessages, setRawMessages] = useState<ChatMessageType[]>([]);
+  // Spec 078 §11.5: the workspace panel derives touched files and the
+  // fallback screenshot from this same transcript instead of fetching it
+  // again. Published by reference; ChatTab subscribes via useSessionMessages.
+  useEffect(() => {
+    publishSessionMessages(sessionMessagesKey(projectId, sessionId), rawMessages);
+  }, [projectId, sessionId, rawMessages]);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -600,6 +638,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     handlePaste,
     handleDrop: dropAttachments,
   } = useAttachments(projectId, { onError: setInjectError });
+  // Spec 078 §5.4 — annotation drafts the panel staged for THIS session. The
+  // store is module-level so the panel (which lives in ChatTab) and the
+  // composer share one list without prop drilling through the shell.
+  const {
+    annotations,
+    remove: removeAnnotation,
+    clear: clearAnnotations,
+    updateNote: updateAnnotationNote,
+  } = useAnnotations(sessionId);
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
   const [dragCounter, setDragCounter] = useState(0);
   // Stop-button optimistic state. Set true synchronously on click so the
   // input row immediately shows a loading affordance; cleared when
@@ -2442,10 +2490,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
   const hasText = inputText.trim().length > 0;
   // Send is enabled when there is text OR a done chip, AND no chip is uploading.
+  // A staged annotation is sendable on its own: the quote block + the note
+  // carry the whole question ("this one, not the ad") without typed text.
   const canSend =
     !anyUploading &&
     !allError &&
-    (hasText || anyDone) &&
+    (hasText || anyDone || annotations.length > 0) &&
     !(attachments.length > 0 && !hasText && !anyDone);
   const disabledReason = anyUploading
     ? t('chat.disabled.waitingUploads')
@@ -2453,10 +2503,42 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       ? t('chat.disabled.removeFailed')
       : '';
 
+  /**
+   * Spec 078 §5.4 step 2 — draw each box onto a copy of its source image and
+   * upload the result through the composer's own upload path, so the marked-up
+   * PNG arrives in the `<attached_files>` prefix and a vision model sees it.
+   *
+   * Failure is not fatal: the coordinates and the note are already in the
+   * quotes block, which is what a text-only model gets anyway. The caller
+   * surfaces `failed` through the existing inject-error banner and sends.
+   */
+  async function uploadAnnotationImages(anns: Annotation[]): Promise<{
+    attachments: { path: string; mime: string; size: number }[];
+    failed: boolean;
+  }> {
+    const out: { path: string; mime: string; size: number }[] = [];
+    let failed = false;
+    const baseUrl = isRelayMode ? window.location.origin : BASE_URL;
+    for (const a of anns) {
+      if (a.kind !== 'browser' && a.kind !== 'image') continue;
+      if (!a.imageDataUrl) continue;
+      try {
+        const blob = await renderAnnotatedPng(a.imageDataUrl, [{ n: a.n, box: a.box }]);
+        const file = new File([blob], annotationFilename(a.n), { type: 'image/png' });
+        const { path, size } = await uploadFile({ projectId, file, baseUrl, isRelayMode });
+        out.push({ path, mime: 'image/png', size });
+      } catch {
+        failed = true;
+      }
+    }
+    return { attachments: out, failed };
+  }
+
   async function handleSend() {
     const text = inputText.trim();
     const doneAttachments = attachments.filter((a) => a.status === 'done');
-    if (!text && doneAttachments.length === 0) return;
+    const pendingAnnotations = annotations;
+    if (!text && doneAttachments.length === 0 && pendingAnnotations.length === 0) return;
     if (anyUploading) return;
 
     // Slash command: /new
@@ -2471,7 +2553,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // — it routes down the management branch WITHOUT unpinning.
     const resolved = resolveSendTarget(text, pinnedTarget);
     const target = resolved.target;
-    const content = resolved.content;
+    let content = resolved.content;
 
     // Generate nonce so we can deduplicate the WS echo of our own message
     // crypto.randomUUID() requires secure context (HTTPS/localhost) — use fallback for LAN HTTP
@@ -2485,6 +2567,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       mime: a.mime,
       size: a.size,
     }));
+
+    // Spec 078 §5.4 — the annotated PNGs ride the attachments list, the quotes
+    // block is appended to the text. Both must be settled BEFORE the optimistic
+    // bubble is painted, so its wire content matches the WS echo exactly.
+    let annotationUploadFailed = false;
+    if (pendingAnnotations.length > 0) {
+      const uploaded = await uploadAnnotationImages(pendingAnnotations);
+      attachmentsPayload.push(...uploaded.attachments);
+      annotationUploadFailed = uploaded.failed;
+      const quotes = formatQuotes(pendingAnnotations);
+      content = content ? `${content}\n\n${quotes}` : quotes;
+    }
+
     // Build the same prefix the backend will emit, so the optimistic local
     // user_message has the identical wire content as the WS echo will.
     const wireContent = buildAttachmentsBlock(attachmentsPayload) + content;
@@ -2494,6 +2589,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       textareaRef.current.style.height = 'auto';
     }
     clearAttachments();
+    if (pendingAnnotations.length > 0) {
+      clearAnnotations();
+      setAnnotationsOpen(false);
+    }
 
     const optimisticTimestamp = new Date().toISOString();
     setItems((prev) => {
@@ -2528,7 +2627,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     scrollToBottom({ force: true });
 
     if (target) setSubAgentLoading(target);
-    setInjectError(null);
+    // An annotated PNG that failed to render/upload still gets sent — the
+    // coordinates + note in the quotes block carry the meaning — but the user
+    // is told the image did not make it.
+    setInjectError(annotationUploadFailed ? t('chat.uploadError') : null);
     try {
       // Serialize behind a just-fired pin PATCH: it holds the session file's
       // write lock on the backend, and an inject racing that burst gets
@@ -2790,6 +2892,64 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   }
 
   const isDragActive = dragCounter > 0;
+
+  // Spec 078 §5.4 — the annotation chip. Collapsed it is just the count;
+  // expanded it lists each quote with an editable note and a remove control,
+  // so a note typed in a hurry on the panel can be fixed before the message
+  // goes. Hoisted out of the composer card because it has to render in BOTH
+  // composer states: while the queue owns the chat the card is replaced by
+  // ComposerDisabledPrompt, and a strip that lived inside the card left
+  // annotations staged with nothing on screen to show for them (2026-09-05:
+  // "when i do the browser annotation, where did it go?").
+  const annotationStrip = annotations.length > 0 && (
+    <div className="flex flex-col gap-1" data-testid="annotation-strip">
+      <button
+        type="button"
+        onClick={() => setAnnotationsOpen((open) => !open)}
+        aria-expanded={annotationsOpen}
+        data-testid="annotation-chip"
+        className="self-start inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-secondary hover:text-primary transition-colors"
+      >
+        {annotations.length === 1
+          ? t('composer.annotations.one')
+          : t('composer.annotations.other', { n: annotations.length })}
+        {annotationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      {annotationsOpen && (
+        <ul
+          className="flex flex-col gap-1 max-h-[140px] overflow-y-auto"
+          data-testid="annotation-list"
+        >
+          {annotations.map((a) => (
+            <li key={a.n} className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-secondary shrink-0">[{a.n}]</span>
+              <span
+                className="text-[11px] text-secondary truncate max-w-[40%]"
+                title={annotationSummary(a, chromeTr)}
+              >
+                {annotationSummary(a, chromeTr)}
+              </span>
+              <input
+                value={a.note}
+                onChange={(e) => updateAnnotationNote(a.n, e.target.value)}
+                placeholder={t('panel.annotation.note')}
+                aria-label={`${t('panel.annotation.note')} [${a.n}]`}
+                className="flex-1 min-w-0 text-[11px] bg-transparent border border-border rounded px-1.5 py-0.5 text-primary outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={() => removeAnnotation(a.n)}
+                aria-label={`${t('panel.annotation.remove')} [${a.n}]`}
+                className="shrink-0 text-secondary hover:text-primary text-xs leading-none px-1"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 
   return (
     <div
@@ -3458,7 +3618,13 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
 
       <div className="shrink-0 px-4 pb-4 pt-2 max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:bg-card max-md:z-[60] max-md:pb-[env(safe-area-inset-bottom,12px)]">
         {queueActive ? (
-          <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+          // The panel stays usable while the queue runs, so annotations can
+          // still be staged here. Show them above the notice — pausing the
+          // queue (the notice's own button) hands them back to the composer.
+          <div className="flex flex-col gap-2">
+            {annotationStrip}
+            <ComposerDisabledPrompt onPauseQueue={stopQueue} />
+          </div>
         ) : (
         <>
         {/* Context meter. Sits above the composer rather than in the project
@@ -3510,6 +3676,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               )}
             </div>
           )}
+          {annotationStrip}
           {attachments.length > 0 && (
             <div
               className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto"

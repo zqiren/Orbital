@@ -38,7 +38,7 @@ from agent_os.queue.models import (
     QueueRunState,
     QueueState,
 )
-from agent_os.queue.store import QueueStore
+from agent_os.queue.store import QueueStore, _clean_agent
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,27 @@ class QueueDispatcher:
         ``session_id`` is the parked attempt's session_id; required so
         ``_start_loop`` locates the handle under its current F7 tuple key
         (``switch_session`` re-keyed it during the caller's swap).
+
+        Spec 079: an item assigned to a worker resumes by re-dispatching to that
+        worker, not by starting a management turn — ``stop()`` killed the worker
+        via ``stop_all``, so the work itself has to be asked for again. The
+        session already holds the item's user row, so only the send is repeated.
+        Once the manager HAS woken (a live loop exists for the session) the
+        parked turn is an ordinary management turn and resumes as one.
         """
+        chosen_agent = _clean_agent(getattr(item, "agent", None))
+        if chosen_agent and self._agent_manager.get_loop(
+            self._project_id, session_id=session_id,
+        ) is None:
+            logger.info(
+                "dispatcher(%s): resuming item %s by re-dispatching to '%s'",
+                self._project_id, item.id, chosen_agent,
+            )
+            await self._send_to_worker_and_hold(
+                item, session_id, chosen_agent, item.content,
+            )
+            return
+
         try:
             await self._agent_manager._start_loop(
                 self._project_id, session_id=session_id,
@@ -435,6 +455,25 @@ class QueueDispatcher:
         else:  # mode == "answer"
             injected = new_input
 
+        # Spec 079: an edited item assigned to a worker is re-run BY that
+        # worker. "answer" mode is deliberately excluded — a question card's
+        # answer replies to the question the MANAGER asked in its verdict turn,
+        # so it belongs to the manager and keeps the inject path below.
+        chosen_agent = _clean_agent(getattr(item, "agent", None))
+        if mode == "edit" and chosen_agent:
+            await self._retry_on_worker(
+                item, prior_session_id, chosen_agent,
+                wrapped_content=injected, worker_content=new_input,
+                attempt_number=attempt_number,
+            )
+            return {
+                "status": "retry_started",
+                "item_id": item_id,
+                "attempt_number": attempt_number,
+                "session_id": prior_session_id,
+                "mode": mode,
+            }
+
         try:
             # F7: pass session_id so inject_message locates the handle re-
             # keyed by switch_session above (not the default-session handle
@@ -478,6 +517,59 @@ class QueueDispatcher:
             "session_id": prior_session_id,
             "mode": mode,
         }
+
+    async def _retry_on_worker(
+        self, item: ItemRecord, session_id: str, agent: str, *,
+        wrapped_content: str, worker_content: str, attempt_number: int,
+    ) -> None:
+        """Re-run an edited, worker-assigned item on its worker.
+
+        The session already exists — ``retry_blocked_item`` swapped it back in —
+        so the re-wrapped header row is appended to it through the manager's
+        no-wake persistence funnel rather than by minting a session object. That
+        funnel is safe here precisely because the session is live and already
+        carries its queue origin; on a FIRST dispatch it would stamp
+        ``origin="chat"`` and is not used (see ``_persist_queue_user_row``).
+
+        The send itself is spawned, not awaited: the caller is an HTTP route
+        that must answer ``retry_started`` immediately, exactly as the
+        management-agent retry does with ``_retry_attempt_handler``.
+        """
+        try:
+            self._agent_manager.persist_mention_message(
+                self._project_id, session_id,
+                {
+                    "role": "user",
+                    "content": wrapped_content,
+                    "target": agent,
+                    "timestamp": _now_iso(),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): persisting the retry row for item %s failed",
+                self._project_id, item.id,
+            )
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.INTERRUPTED,
+                block_reason="inject failed during retry",
+                block_reason_code="inject_failed_retry",
+            )
+            self._store.set_item_state(item.id, ItemState.BLOCKED)
+            raise
+
+        logger.info(
+            "dispatcher(%s): retrying item %s attempt=%d on session=%s via "
+            "agent '%s'",
+            self._project_id, item.id, attempt_number, session_id, agent,
+        )
+        asyncio.create_task(
+            self._send_to_worker_and_hold(
+                item, session_id, agent, worker_content,
+            )
+        )
+        self._broadcast_state_changed(QueueRunState.RUNNING.value)
 
     async def _retry_attempt_handler(self, item: ItemRecord, session_id: str) -> None:
         """Wait for the retry's loop run to finish and route the exit.
@@ -776,6 +868,19 @@ class QueueDispatcher:
         )
         wrapped_content = attach_prefix + header + item.content
 
+        # Spec 079: the user chose a worker for this item — dispatch straight
+        # to it down the chat @mention path instead of injecting into the
+        # management loop. The manager still owns the verdict; it is woken by
+        # the worker's terminal event and classified by _await_and_handle.
+        chosen_agent = _clean_agent(getattr(item, "agent", None))
+        if chosen_agent:
+            await self._dispatch_to_worker(
+                item, session_id, chosen_agent,
+                wrapped_content=wrapped_content,
+                worker_content=attach_prefix + item.content,
+            )
+            return
+
         try:
             # Inject into the fresh session. inject_message Case 3 auto-starts
             # a loop for this new session_id in queue mode (queue_state=
@@ -842,6 +947,321 @@ class QueueDispatcher:
             )
 
     # ------------------------------------------------------------------
+    # Spec 079: dispatch straight to a user-chosen worker
+    # ------------------------------------------------------------------
+
+    async def _dispatch_to_worker(
+        self, item: ItemRecord, session_id: str, agent: str, *,
+        wrapped_content: str, worker_content: str,
+    ) -> None:
+        """First dispatch of an assigned item: open the session, then send.
+
+        See ``_send_to_worker_and_hold`` for the dispatch half. This half exists
+        only because a first dispatch has no session yet — resume and retry
+        already have one and go straight to the send.
+        """
+        try:
+            self._persist_queue_user_row(session_id, wrapped_content)
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): could not materialize session %s for item %s; "
+                "reclaiming rather than dispatching to %s",
+                self._project_id, session_id, item.id, agent,
+            )
+            # Same disposition as an inject failure: the worker was never asked
+            # to do anything, and a session with no user row would leave the
+            # manager's wake turn with no item to verify.
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.INTERRUPTED,
+                block_reason="could not open a session for the assigned agent",
+                block_reason_code="inject_failed",
+            )
+            self._reclaim_interrupted_item(item.id)
+            self._idle_event.set()
+            return
+
+        await self._send_to_worker_and_hold(
+            item, session_id, agent, worker_content,
+        )
+
+    # Terminal kinds that mean the worker got there. Everything else the
+    # lifecycle observer can report (error, failed, …) is a stop, not a finish.
+    _WORKER_DONE_KINDS = {"completed"}
+
+    def on_worker_terminal(
+        self, session_id: str, handle: str, *, kind: str,
+        summary: str = "", transcript_path: str = "",
+    ) -> bool:
+        """Close the item this worker was running. True when it did.
+
+        The user picked the runner, so the worker's terminal event IS the
+        item's outcome: finished → DONE with the worker's own final message as
+        the summary, anything else → BLOCKED with the worker's own reason. No
+        management turn is spent reaching the same conclusion, which also
+        removes the whole class of hangs where the wake could not start (a
+        missing or rejected API key used to leave the item RUNNING until the
+        30-minute backstop).
+
+        Returns False — leaving today's wake-for-verdict path in place — when
+        the item asked to be reviewed (``review_before_advance``), or when no
+        RUNNING item of ours matches this session and handle.
+
+        Called from the lifecycle observer's terminal path, i.e. on the event
+        loop and NOT inside ``_run``; it only touches the store and the ws,
+        both of which are sync. The hold in ``_await_and_handle`` notices the
+        item left RUNNING and returns without settling it a second time.
+        """
+        item = self._running_item_for(session_id, handle)
+        if item is None:
+            return False
+        if item.review_before_advance:
+            logger.info(
+                "dispatcher(%s): item %s is review-before-advance; leaving the "
+                "verdict to the manager's wake turn",
+                self._project_id, item.id,
+            )
+            return False
+
+        if kind in self._WORKER_DONE_KINDS:
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.COMPLETED,
+                summary=summary or "",
+            )
+            self._log_attempt_close(
+                item.id, "completed",
+                first_turn_signaled=True,
+                corrective_used=False,
+                reason=f"worker '{handle}' completed",
+            )
+            self._store.set_item_state(item.id, ItemState.DONE)
+            self._broadcast_advance(item.id, "completed")
+        else:
+            reason = summary or f"the assigned agent '{handle}' did not finish"
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.BLOCKED,
+                block_reason=reason,
+                block_reason_code="worker_terminal",
+            )
+            self._log_attempt_close(
+                item.id, "blocked",
+                first_turn_signaled=True,
+                corrective_used=False,
+                reason=reason,
+            )
+            self._store.set_item_state(item.id, ItemState.BLOCKED)
+            self._broadcast_advance(item.id, "blocked")
+
+        logger.info(
+            "dispatcher(%s): item %s settled from worker '%s' terminal "
+            "(kind=%s); no verdict turn",
+            self._project_id, item.id, handle, kind,
+        )
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+        return True
+
+    def on_wake_failed(self, session_id: str, *, reason: str,
+                       code: str = "wake_failed") -> bool:
+        """Block the item running in ``session_id`` when its wake cannot start.
+
+        A held item is waiting for a management turn (the verdict on a
+        reviewed worker item, or a continuation). If starting that turn fails
+        outright — no API key, a key the provider rejects, an unreachable
+        base URL — no turn will ever arrive, and the hold would sit out the
+        full runtime backstop before blocking the item as a *timeout*, which
+        says nothing about what actually went wrong.
+
+        Called from the injection path (same event loop, not inside ``_run``).
+        The hold notices the item left RUNNING and returns "settled".
+        """
+        item = self._running_item_by_session(session_id)
+        if item is None:
+            return False
+        self._store.close_latest_attempt(
+            item.id,
+            outcome=AttemptOutcome.BLOCKED,
+            block_reason=reason,
+            block_reason_code=code,
+        )
+        self._log_attempt_close(
+            item.id, "blocked",
+            first_turn_signaled=False,
+            corrective_used=False,
+            reason=f"wake failed: {reason}",
+        )
+        self._store.set_item_state(item.id, ItemState.BLOCKED)
+        self._broadcast_advance(item.id, "blocked")
+        logger.warning(
+            "dispatcher(%s): item %s blocked — its wake could not start (%s: %s)",
+            self._project_id, item.id, code, reason,
+        )
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+        return True
+
+    def _running_item_by_session(self, session_id: str):
+        """The RUNNING item whose latest attempt runs in ``session_id``, or
+        None. Unlike ``_running_item_for`` this does not care which agent is
+        assigned: a wake that cannot start fails the item either way."""
+        try:
+            qstate = self._store.load()
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): queue read during wake failure failed",
+                self._project_id,
+            )
+            return None
+        for item in qstate.items:
+            if item.state != ItemState.RUNNING:
+                continue
+            if item.attempts and item.attempts[-1].session_id == session_id:
+                return item
+        return None
+
+    def _running_item_for(self, session_id: str, handle: str):
+        """The RUNNING item assigned to ``handle`` whose latest attempt runs in
+        ``session_id``, or None. Both halves are checked: a session identifies
+        the item, and the handle guards against a stray worker in it."""
+        try:
+            qstate = self._store.load()
+        except Exception:
+            logger.exception(
+                "dispatcher(%s): queue read during worker terminal failed",
+                self._project_id,
+            )
+            return None
+        for item in qstate.items:
+            if item.state != ItemState.RUNNING:
+                continue
+            if _clean_agent(getattr(item, "agent", None)) != handle:
+                continue
+            if item.attempts and item.attempts[-1].session_id == session_id:
+                return item
+        return None
+
+    async def _send_to_worker_and_hold(
+        self, item: ItemRecord, session_id: str, agent: str,
+        worker_content: str,
+    ) -> None:
+        """Run this item on the worker the user picked, not on the manager.
+
+        The session's user row and this message are deliberately different. The
+        row carries the ``[QUEUE ITEM | id | attempt]`` header and
+        HEADER_CONTRACT because it is written for the MANAGER: its wake turn
+        reads that history, and the contract is what tells it to answer with
+        ``mark_task_complete`` / ``mark_task_blocked``. ``worker_content`` is
+        the item text (plus any attachment prefix) and nothing else, because CLI
+        workers cannot call the queue-signal tools — handing them the completion
+        contract would only instruct them to do something impossible.
+
+        Nothing here starts a management turn. The dispatch goes down the same
+        funnel a chat @mention takes; ``_await_and_handle(awaiting_worker=True)``
+        then holds the slot until the worker's terminal event wakes the manager
+        for the verdict.
+        """
+        sub_mgr = self._agent_manager.get_sub_agent_manager()
+        if sub_mgr is None:
+            self._block_item(
+                item, f"no sub-agent manager available to run '{agent}'",
+            )
+            return
+
+        from uuid import uuid4
+        dispatch_id = f"{session_id}:{uuid4().hex[:8]}"
+        try:
+            result = await sub_mgr.send(
+                self._project_id, agent, worker_content,
+                session_id=session_id, dispatch_id=dispatch_id,
+                initiator="queue_item",
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced as the block reason
+            logger.exception(
+                "dispatcher(%s): dispatch of item %s to '%s' raised",
+                self._project_id, item.id, agent,
+            )
+            self._block_item(
+                item, f"could not dispatch to '{agent}': {exc}",
+            )
+            return
+
+        # ``send`` reports a stale/uninstalled handle and a broken transport as
+        # an "Error: …" STRING, not an exception (spec 079 §3.1 / §5: same class
+        # as a stale spec-074 pin). Nothing is running, so no terminal event
+        # will ever wake the manager — block now with the reason rather than
+        # holding the slot until the backstop expires.
+        if isinstance(result, str) and result.startswith("Error"):
+            logger.warning(
+                "dispatcher(%s): item %s could not reach '%s': %s",
+                self._project_id, item.id, agent, result,
+            )
+            self._block_item(item, result)
+            return
+
+        logger.info(
+            "dispatcher(%s): item %s dispatched directly to '%s' "
+            "(session=%s, dispatch=%s); holding slot for the manager's verdict",
+            self._project_id, item.id, agent, session_id, dispatch_id,
+        )
+        await self._await_and_handle(item, session_id, awaiting_worker=True)
+
+    def _persist_queue_user_row(self, session_id: str, content: str) -> None:
+        """Materialize the item's session on disk with its user row, no turn.
+
+        Mirrors ``AgentManager._start_with_persisted_message`` up to (and NOT
+        including) ``start_agent``: build the session object with the queue
+        origin, wire the WS observers so the row echoes live into the timeline,
+        then write the row. It has to exist on disk before the worker finishes,
+        because the wake path (``inject_system_message`` with no live handle)
+        hydrates the session from disk and DROPS the terminal event when no
+        JSONL matches.
+
+        Deliberately not ``persist_mention_message`` — the chat @mention funnel
+        stamps ``origin="chat"``, which would make each queue item's session a
+        candidate for the project's persistent chat session and land the user's
+        next chat message inside a queue item.
+        """
+        from agent_os.agent.session import persist_user_row
+
+        mgr = self._agent_manager
+        config = mgr._build_agent_config_from_project(self._project_id)
+        session = mgr._new_session_object(
+            config, session_id, queue_state="running",
+        )
+        mgr._wire_session_observers(session, self._project_id, session_id)
+        persist_user_row(session, content)
+
+    def _block_item(self, item: ItemRecord, reason: str) -> None:
+        """Close the open attempt BLOCKED with ``reason`` and advance.
+
+        The disposition for "the assigned worker could not be reached at all":
+        terminal, visible, and carrying the send error verbatim so the reason
+        chip explains itself. Not an interruption — retrying the same stale slug
+        would fail identically, so it must not consume the poison-pill budget.
+        """
+        self._store.close_latest_attempt(
+            item.id,
+            outcome=AttemptOutcome.BLOCKED,
+            block_reason=reason,
+            block_reason_code="agent_dispatch_failed",
+        )
+        self._log_attempt_close(
+            item.id, "blocked",
+            first_turn_signaled=False,
+            corrective_used=False,
+            reason=reason,
+        )
+        self._store.set_item_state(item.id, ItemState.BLOCKED)
+        self._broadcast_advance(item.id, "blocked")
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+
+    # ------------------------------------------------------------------
     # Contract delivery: header + corrective turn
     # ------------------------------------------------------------------
 
@@ -901,7 +1321,10 @@ class QueueDispatcher:
             getattr(loop_obj, "_exit_block_reason", None),
         )
 
-    async def _await_and_handle(self, item: ItemRecord, session_id: str) -> None:
+    async def _await_and_handle(
+        self, item: ItemRecord, session_id: str, *,
+        awaiting_worker: bool = False,
+    ) -> None:
         """Wait for the in-flight loop task to finish then route the outcome
         based on AgentLoop._exit_reason. Honors watchdog, stop, and (CHANGE
         2 of the architecture amendments) gives the agent one corrective
@@ -919,10 +1342,43 @@ class QueueDispatcher:
         The corrective_turn_used flag is a local variable, so a retry of a
         blocked item (which calls _await_and_handle afresh from
         _retry_attempt_handler) gets its own corrective turn.
+
+        ``awaiting_worker`` (spec 079 §3.2) marks the one entry shape where the
+        management loop has NOT run and is not about to: the item was dispatched
+        straight to the worker the user chose. There is no turn to await and no
+        exit reason to read — reading one anyway yields ``("text", None, None)``
+        from the absent loop, which the classifier below would score as a
+        contract violation and use to kill an item whose worker is still
+        working. So the first pass skips the await entirely and parks in the
+        slot-hold, whose next-turn detection then catches the manager's wake.
+        It applies to the FIRST pass only: once the manager has taken its wake
+        turn, every later pass is an ordinary turn and is classified as one.
         """
         corrective_turn_used = False
+        no_turn_yet = awaiting_worker
 
         while True:
+            if no_turn_yet:
+                # The worker is running and the manager has not woken. Hold the
+                # slot rather than classify a turn that never happened; the hold
+                # is agnostic about the parked task being None (verified by the
+                # §3.2 gate suite), so it needs no first-turn special case.
+                no_turn_yet = False
+                hold = await self._hold_slot_for_continuation(
+                    item, session_id, self._stop_generation,
+                )
+                if hold != "resume":
+                    self._settle_released_hold(
+                        item, hold, corrective_turn_used=corrective_turn_used,
+                    )
+                    return
+                # The wake installed the manager's turn. It runs under the
+                # session's own queue origin but a fresh loop, so re-assert the
+                # queue contract flag the way resume()/retry do — best effort,
+                # the turn may already have started.
+                self._mark_loop_queue_running(session_id)
+                continue
+
             loop_obj = self._agent_manager.get_loop(self._project_id, session_id=session_id)
             gen_at_start = self._stop_generation
 
@@ -1152,59 +1608,9 @@ class QueueDispatcher:
                 if hold == "resume":
                     # The session's next turn started; re-await + classify it.
                     continue
-                if hold in ("paused", "shutdown"):
-                    # Preserve the attempt exactly (mirror the pause guard
-                    # above): no close, no advance, no rotation. resume() /
-                    # teardown owns the parked session.
-                    logger.info(
-                        "dispatcher(%s): item %s slot-hold released (%s); "
-                        "attempt preserved, no advance",
-                        self._project_id, item.id, hold,
-                    )
-                    return
-                if hold == "cancelled":
-                    # Out-of-band cancel during the hold — close INTERRUPTED so
-                    # the attempt can be reclaimed; no advance, no rotation
-                    # (mirror the cancelled branch above).
-                    self._store.close_latest_attempt(
-                        item.id,
-                        outcome=AttemptOutcome.INTERRUPTED,
-                        block_reason="cancelled",
-                        block_reason_code="cancelled",
-                    )
-                    self._log_attempt_close(
-                        item.id, "interrupted",
-                        first_turn_signaled=False,
-                        corrective_used=corrective_turn_used,
-                        reason="cancelled",
-                    )
-                    return
-                # hold == "timeout": the continuation never arrived within the
-                # backstop deadline (e.g. a hung sub-agent whose push-back never
-                # fired). Self-recover via the runtime-cap disposition — close
-                # the attempt and BLOCK so the queue advances rather than
-                # pinning the head forever.
-                logger.warning(
-                    "dispatcher(%s): item %s slot-hold exceeded %ss awaiting "
-                    "continuation; closing BLOCKED so the queue self-recovers",
-                    self._project_id, item.id, self._max_runtime_seconds,
+                self._settle_released_hold(
+                    item, hold, corrective_turn_used=corrective_turn_used,
                 )
-                self._store.close_latest_attempt(
-                    item.id,
-                    outcome=AttemptOutcome.INTERRUPTED,
-                    block_reason="exceeded hold deadline awaiting continuation",
-                    block_reason_code="hold_deadline",
-                )
-                self._log_attempt_close(
-                    item.id, "interrupted",
-                    first_turn_signaled=False,
-                    corrective_used=corrective_turn_used,
-                )
-                self._store.set_item_state(item.id, ItemState.BLOCKED)
-                self._broadcast_advance(item.id, "interrupted")
-                if self._store.auto_idle_if_empty():
-                    self._broadcast_state_changed(QueueRunState.IDLE.value)
-                self._idle_event.set()
                 return
 
             # text-only on a queue item.
@@ -1357,6 +1763,96 @@ class QueueDispatcher:
             return False
         return any((a or {}).get("status") == "running" for a in (active or []))
 
+    def _settle_released_hold(
+        self, item: ItemRecord, hold: str, *, corrective_turn_used: bool,
+    ) -> None:
+        """Dispose of an item whose slot-hold ended in anything but a resume.
+
+        Shared by both entries into the hold — the manager's ``yield_turn`` and
+        spec 079's direct worker dispatch — so the two cannot drift on what a
+        pause or an expired backstop means for the item.
+        """
+        if hold == "settled":
+            # Already closed by on_worker_terminal — the attempt is shut, the
+            # state is final, the advance was broadcast. Nothing left to do.
+            logger.info(
+                "dispatcher(%s): item %s slot-hold released (settled by the "
+                "worker's terminal event)",
+                self._project_id, item.id,
+            )
+            return
+        if hold in ("paused", "shutdown"):
+            # Preserve the attempt exactly (mirror the pause guard in
+            # _await_and_handle): no close, no advance, no rotation. resume() /
+            # teardown owns the parked session.
+            logger.info(
+                "dispatcher(%s): item %s slot-hold released (%s); "
+                "attempt preserved, no advance",
+                self._project_id, item.id, hold,
+            )
+            return
+        if hold == "cancelled":
+            # Out-of-band cancel during the hold — close INTERRUPTED so the
+            # attempt can be reclaimed; no advance, no rotation.
+            self._store.close_latest_attempt(
+                item.id,
+                outcome=AttemptOutcome.INTERRUPTED,
+                block_reason="cancelled",
+                block_reason_code="cancelled",
+            )
+            self._log_attempt_close(
+                item.id, "interrupted",
+                first_turn_signaled=False,
+                corrective_used=corrective_turn_used,
+                reason="cancelled",
+            )
+            return
+        # hold == "timeout": the continuation never arrived within the backstop
+        # deadline (e.g. a hung sub-agent whose push-back never fired, or a wake
+        # that lost a slot race). Self-recover via the runtime-cap disposition —
+        # close the attempt and BLOCK so the queue advances rather than pinning
+        # the head forever.
+        logger.warning(
+            "dispatcher(%s): item %s slot-hold exceeded %ss awaiting "
+            "continuation; closing BLOCKED so the queue self-recovers",
+            self._project_id, item.id, self._max_runtime_seconds,
+        )
+        self._store.close_latest_attempt(
+            item.id,
+            outcome=AttemptOutcome.INTERRUPTED,
+            block_reason="exceeded hold deadline awaiting continuation",
+            block_reason_code="hold_deadline",
+        )
+        self._log_attempt_close(
+            item.id, "interrupted",
+            first_turn_signaled=False,
+            corrective_used=corrective_turn_used,
+        )
+        self._store.set_item_state(item.id, ItemState.BLOCKED)
+        self._broadcast_advance(item.id, "interrupted")
+        if self._store.auto_idle_if_empty():
+            self._broadcast_state_changed(QueueRunState.IDLE.value)
+        self._idle_event.set()
+
+    def _mark_loop_queue_running(self, session_id: str) -> None:
+        """Re-assert ``_queue_state = "running"`` on this session's live loop.
+
+        Same best-effort nudge ``resume()`` and ``retry_blocked_item`` make. It
+        matters for a spec-079 wake because that turn is started by
+        ``inject_system_message``, which builds a fresh loop without the queue
+        flag — leaving an approval-required tool call to pause for a UI card
+        nobody is watching instead of blocking the item.
+        """
+        loop_obj = self._agent_manager.get_loop(
+            self._project_id, session_id=session_id,
+        )
+        if loop_obj is None:
+            return
+        try:
+            loop_obj._queue_state = "running"
+        except Exception:
+            pass
+
     async def _hold_slot_for_continuation(
         self, item: ItemRecord, session_id: str, gen_at_start: int,
     ) -> str:
@@ -1379,6 +1875,8 @@ class QueueDispatcher:
           * ``"cancelled"`` — the loop/session was cancelled out-of-band.
           * ``"timeout"``   — the backstop deadline elapsed (continuation never
                               arrived).
+          * ``"settled"``   — the item was closed from its worker's terminal
+                              event (spec 079 amendment); nothing to dispose.
         """
         parked_task = self._agent_manager.get_loop_task(
             self._project_id, session_id=session_id,
@@ -1399,8 +1897,17 @@ class QueueDispatcher:
             if self._stop_generation != gen_at_start:
                 return "paused"
             try:
-                if self._store.load().state == QueueRunState.PAUSED:
+                qstate = self._store.load()
+                if qstate.state == QueueRunState.PAUSED:
                     return "paused"
+                # Settled out from under the hold: ``on_worker_terminal``
+                # closed this item from the worker's own terminal event, so
+                # there is no verdict turn left to wait for.
+                current = next(
+                    (i for i in qstate.items if i.id == item.id), None,
+                )
+                if current is not None and current.state != ItemState.RUNNING:
+                    return "settled"
             except Exception:
                 logger.exception(
                     "dispatcher(%s): queue-state read during slot-hold failed; "

@@ -24,6 +24,12 @@ interface QueueTabProps {
    * projectId keep working (banner simply doesn't render without it).
    */
   project?: Project;
+  /**
+   * Spec 079 — installed sub-agents, offered per item as the runner. Optional
+   * so existing tests that mount with just a projectId keep working (the
+   * picker simply hides itself on an empty list).
+   */
+  agents?: Array<{ slug: string; name: string }>;
 }
 
 const WINDOW_WORD: Record<'daily' | 'weekly' | 'monthly' | 'total', StringKey> = {
@@ -66,7 +72,7 @@ function Section({
   );
 }
 
-export default function QueueTab({ projectId, project }: QueueTabProps) {
+export default function QueueTab({ projectId, project, agents = [] }: QueueTabProps) {
   const t = useT();
   const { locale } = useLocale();
   const { snapshot, loading, error, addItem, removeItem, stopQueue, resumeQueue } =
@@ -151,11 +157,13 @@ export default function QueueTab({ projectId, project }: QueueTabProps) {
       </div>
       <QueueComposer
         projectId={projectId}
+        agents={agents}
         onSubmit={(content, opts) =>
           addItem(content, {
             priority: opts.priority,
             review: opts.review,
             fileRefs: opts.fileRefs,
+            agent: opts.agent,
           })
         }
         hint={

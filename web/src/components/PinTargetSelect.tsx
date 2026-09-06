@@ -65,13 +65,41 @@ interface PinTargetSelectProps {
   /** Fired with the new slug, or null when Orbital is selected (unpin). */
   onChange: (slug: string | null) => void;
   disabled?: boolean;
+  /**
+   * Spec 079 — where this control is mounted.
+   *
+   * `'composer'` (the default, and ChatView's only spelling) keeps the
+   * edge-fusion geometry described above: negative margins that pull the mark
+   * through the composer card's padding, a full-height left-rounded button
+   * with a divider on its right, and a menu that opens upward off a control
+   * sitting at the bottom of the viewport.
+   *
+   * `'standalone'` is the same menu as an ordinary inline form control — a
+   * self-contained bordered pill that claims no space it wasn't given. Used by
+   * the queue composer's option row and the automation form, neither of which
+   * has a card edge to fuse to.
+   */
+  variant?: 'composer' | 'standalone';
+  /** Accessible name + tooltip for the manager (unassigned) state. Defaults to
+   *  the chat pin's wording; the queue and automation surfaces say "runs this"
+   *  rather than "talking to". */
+  managerLabel?: string;
+  'data-testid'?: string;
 }
 
 const MENU_ROW =
   'w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-primary text-left ' +
   'hover:bg-card-hover/50 max-md:min-h-[44px]';
 
-export default function PinTargetSelect({ agents, value, onChange, disabled }: PinTargetSelectProps) {
+export default function PinTargetSelect({
+  agents,
+  value,
+  onChange,
+  disabled,
+  variant = 'composer',
+  managerLabel,
+  'data-testid': testId,
+}: PinTargetSelectProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -107,28 +135,42 @@ export default function PinTargetSelect({ agents, value, onChange, disabled }: P
     onChange(slug);
   };
 
+  const standalone = variant === 'standalone';
+  const managerText = managerLabel ?? t('pinAgent.tooltipManager');
+
   return (
-    // -ml-3/-my-2 pull the control through the composer card's padding so the
-    // mark fuses to the card's left edge, full row height (self-stretch), per
-    // the aligned mockup. rounded-l matches the card's inner radius.
+    // Composer: -ml-3/-my-2 pull the control through the composer card's
+    // padding so the mark fuses to the card's left edge, full row height
+    // (self-stretch), per the aligned mockup. rounded-l matches the card's
+    // inner radius. Standalone drops all of that and sits inline.
     <div
       ref={rootRef}
-      className="relative self-stretch flex shrink-0 -ml-3 -my-2"
-      data-testid="pin-target-select"
+      className={
+        standalone
+          ? 'relative flex shrink-0'
+          : 'relative self-stretch flex shrink-0 -ml-3 -my-2'
+      }
+      data-testid={testId ?? 'pin-target-select'}
     >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         disabled={disabled}
-        aria-label={t('pinAgent.aria')}
+        aria-label={managerLabel ?? t('pinAgent.aria')}
         aria-haspopup="listbox"
         aria-expanded={open}
         title={pinnedName
           ? t('pinAgent.tooltipPinned', { name: pinnedName })
-          : t('pinAgent.tooltipManager')}
-        className="flex items-center gap-1 pl-3 pr-1.5 rounded-l-[7px] border-r border-border
-                   hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
-                   focus-visible:bg-card-hover/50 max-md:min-w-[48px]"
+          : managerText}
+        className={
+          standalone
+            ? `flex items-center gap-1 px-1.5 py-1 rounded-md border border-border
+               hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
+               focus-visible:bg-card-hover/50 max-md:min-h-[36px]`
+            : `flex items-center gap-1 pl-3 pr-1.5 rounded-l-[7px] border-r border-border
+               hover:bg-card-hover/50 disabled:opacity-50 focus-visible:outline-none
+               focus-visible:bg-card-hover/50 max-md:min-w-[48px]`
+        }
       >
         <MessageAvatar variant="agent" agentHandle={value ?? undefined} />
         <ChevronDown size={10} className="text-muted shrink-0" />
@@ -137,9 +179,12 @@ export default function PinTargetSelect({ agents, value, onChange, disabled }: P
       {open && (
         <div
           role="listbox"
-          aria-label={t('pinAgent.aria')}
-          className="absolute bottom-full left-0 mb-2 min-w-[220px] bg-card border border-border
-                     rounded-lg shadow-lg overflow-hidden z-50"
+          aria-label={managerLabel ?? t('pinAgent.aria')}
+          // Standalone opens downward: it is an ordinary field in the middle of
+          // a form, where an upward menu would clip against the surface above.
+          className={`absolute ${standalone ? 'top-full mt-1' : 'bottom-full mb-2'}
+                     left-0 min-w-[220px] bg-card border border-border
+                     rounded-lg shadow-lg overflow-hidden z-50`}
         >
           <button
             type="button"

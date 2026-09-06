@@ -9,7 +9,13 @@ import os
 
 import uuid
 
-from agent_os.platform.types import CommandResult, ProcessHandle, SANDBOX_PASSWORD_KEY, SANDBOX_USERNAME
+from agent_os.platform.types import (
+    CommandResult,
+    ProcessHandle,
+    SANDBOX_PASSWORD_KEY,
+    SANDBOX_USERNAME,
+    windows_worker_env,
+)
 from agent_os.platform.windows.credentials import CredentialStore
 
 logger = logging.getLogger("agent_os.platform.windows.process")
@@ -660,25 +666,26 @@ class ProcessLauncher:
         # when the daemon is launched from within a Claude Code session.
         env.pop("CLAUDECODE", None)
 
-        # Ensure TEMP/TMP point to a writable directory for the sandbox user.
-        # The parent user's temp dir is typically inaccessible to the sandbox
-        # account, so default to the Windows public temp directory.
-        if inherit_env and "TEMP" not in (env_vars or {}):
-            sandbox_tmp = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Temp")
-            env["TEMP"] = sandbox_tmp
-            env["TMP"] = sandbox_tmp
-
-        # Ensure HOMEDRIVE/HOMEPATH are set for the sandbox user.
-        # CreateProcessWithLogonW with LOGON_NO_PROFILE skips profile load,
-        # leaving the user without drive letter bindings or path resolution
-        # context.  Explicitly setting these prevents ERROR_DIRECTORY (267)
-        # when the sandbox user cannot resolve the working directory.
+        # Spec 077 W2 — point the worker at a home it actually owns
+        # (``C:\ProgramData\Orbital\worker``), replacing the C:\Temp /
+        # C:\Windows\Temp scheme.
+        #
+        # Two things were broken before. TEMP/TMP aimed at the Windows public
+        # temp directory, but APPDATA and LOCALAPPDATA were *inherited from the
+        # daemon* and therefore pointed into the main user's profile — which is
+        # owner-only, so every tool that writes a cache there (npm, pip, uv,
+        # pnpm) failed on write. And CreateProcessWithLogonW with
+        # LOGON_NO_PROFILE skips profile load, so without an explicit
+        # HOMEDRIVE/HOMEPATH the worker cannot resolve the working directory
+        # (ERROR_DIRECTORY 267).
+        #
+        # PATH is deliberately left inherited: it is what makes the W1
+        # toolchain grants discoverable.
         if inherit_env:
-            if "HOMEDRIVE" not in (env_vars or {}):
-                system_root = os.environ.get("SystemRoot", r"C:\Windows")
-                env["HOMEDRIVE"] = system_root[:2]       # e.g. "C:"
-                env["HOMEPATH"] = "\\Temp"
-                env["USERPROFILE"] = system_root[:2] + "\\Temp"
+            explicit = env_vars or {}
+            for key, value in windows_worker_env().items():
+                if key not in explicit:
+                    env[key] = value
 
         parts = [f"{k}={v}" for k, v in sorted(env.items())]
         block = "\0".join(parts) + "\0\0"

@@ -8,6 +8,7 @@ import { useLocale } from '../i18n/LocaleContext';
 import type { Trigger } from '../types';
 import type { TriggerDraft } from '../hooks/useTriggers';
 import ScheduleInput from './ScheduleInput';
+import PinTargetSelect from './PinTargetSelect';
 import Select from './Select';
 import { FIELD, FIELD_MULTILINE } from './fieldStyles';
 import {
@@ -45,6 +46,12 @@ interface AutomationFormProps {
   trigger?: Trigger;
   onSubmit: (draft: TriggerDraft) => Promise<void>;
   onCancel: () => void;
+  /**
+   * Spec 079 — installed sub-agents offered as the runner for this
+   * automation. Empty (the default) hides the picker entirely, so a user with
+   * no workers sees the form exactly as it is today.
+   */
+  agents?: Array<{ slug: string; name: string }>;
 }
 
 /**
@@ -57,7 +64,7 @@ interface AutomationFormProps {
  * Python only). Its 400 detail is shown inline, verbatim — a backend string,
  * not UI chrome, so it isn't translated.
  */
-export default function AutomationForm({ trigger, onSubmit, onCancel }: AutomationFormProps) {
+export default function AutomationForm({ trigger, onSubmit, onCancel, agents = [] }: AutomationFormProps) {
   const t = useT();
   const { locale } = useLocale();
   const isEdit = trigger !== undefined;
@@ -76,6 +83,9 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
   const [patterns, setPatterns] = useState((trigger?.patterns ?? []).join(', '));
   const [recursive, setRecursive] = useState(trigger?.recursive ?? false);
   const [debounce, setDebounce] = useState(String(trigger?.debounce_seconds ?? 5));
+  // Spec 079 — who runs this automation. Unlike the queue composer's per-item
+  // choice this one is part of the record, so edit seeds it from the trigger.
+  const [agent, setAgent] = useState<string | null>(trigger?.agent ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -101,6 +111,10 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
       name: name.trim() || deriveName(task),
       type,
       task: task.trim(),
+      // Always sent, null included: on edit an omitted field would leave a
+      // previously chosen worker in place, making "back to Orbital" impossible
+      // to express (the PATCH route reads presence, not nullness).
+      agent,
     };
     if (type === 'schedule') {
       const cron = cronForDraft(schedule);
@@ -236,6 +250,29 @@ export default function AutomationForm({ trigger, onSubmit, onCancel }: Automati
                 className={`${FIELD} w-24`}
               />
             </label>
+          </div>
+        </div>
+      )}
+
+      {agents.length > 0 && (
+        <div className="flex flex-col gap-1" data-testid="automation-form-agent-field">
+          <span className="text-[11px] uppercase tracking-wide text-secondary">
+            {t('automation.agent.label')}
+          </span>
+          <div className="flex items-center gap-2">
+            <PinTargetSelect
+              agents={agents}
+              value={agent}
+              onChange={setAgent}
+              variant="standalone"
+              managerLabel={t('automation.agent.aria')}
+              data-testid="automation-form-agent"
+            />
+            <span className="text-xs text-secondary">
+              {agent
+                ? (agents.find((a) => a.slug === agent)?.name ?? agent)
+                : t('pinAgent.orbital')}
+            </span>
           </div>
         </div>
       )}

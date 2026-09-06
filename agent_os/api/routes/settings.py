@@ -28,6 +28,9 @@ router = APIRouter(prefix="/api/v2")
 
 _settings_store = None
 _credential_store = None
+# Spec 082: DELETE /settings/cards/{id} re-points every project that
+# referenced the card, so the settings routes need the project store too.
+_project_store = None
 _setup_engine = None
 _sub_agent_config_store = None
 _ws_manager = None
@@ -76,11 +79,12 @@ def _strip_terminal_escapes(line: str) -> str:
 
 
 def configure(settings_store, credential_store=None, setup_engine=None,
-              sub_agent_config_store=None, ws_manager=None):
-    global _settings_store, _credential_store, _setup_engine
+              sub_agent_config_store=None, ws_manager=None, project_store=None):
+    global _settings_store, _credential_store, _setup_engine, _project_store
     global _sub_agent_config_store, _ws_manager, _installer
     _settings_store = settings_store
     _credential_store = credential_store
+    _project_store = project_store
     _setup_engine = setup_engine
     _sub_agent_config_store = sub_agent_config_store
     _ws_manager = ws_manager
@@ -112,36 +116,287 @@ class SetApiKeyRequest(BaseModel):
     api_key: str
 
 
+class CreateCardRequest(BaseModel):
+    """The Add-card form (spec 082 §3.2) — the same fields it always sent."""
+    name: str | None = None
+    provider: str
+    region: str = "global"
+    base_url: str | None = None
+    sdk: str | None = None
+    api_key: str | None = None
+    model: str
+
+
+class UpdateCardRequest(BaseModel):
+    """Every field optional; only PRESENT fields change.
+
+    ``api_key`` present ⇒ replace the key. The card id never changes, so no
+    project, fallback entry or session is touched by a re-key (D3).
+    """
+    name: str | None = None
+    provider: str | None = None
+    region: str | None = None
+    base_url: str | None = None
+    sdk: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+def _card_error(code: str, message: str, status: int = 400) -> HTTPException:
+    """Card routes answer with a machine code, never a bare sentence."""
+    return HTTPException(status_code=status,
+                         detail={"code": code, "message": message})
+
+
+def _card_or_404(card_id: str):
+    card = _settings_store.resolve_card(card_id)
+    if card is None:
+        raise _card_error("card_not_found",
+                          "That credential card no longer exists.", 404)
+    return card
+
+
+def _reject_read_only(card_id: str) -> None:
+    from agent_os.daemon_v2.credential_store import ENV_CARD_ID
+
+    if card_id == ENV_CARD_ID:
+        raise _card_error(
+            "card_read_only",
+            "The AGENT_OS_API_KEY card is read-only. Unset the variable to "
+            "manage credentials here.",
+        )
+
+
+def _validate_card_shape(provider: str, model: str, base_url: str | None) -> None:
+    """Reject a card that could never run, before it is saved."""
+    from agent_os.config.provider_registry import ProviderRegistry
+
+    if not (model or "").strip():
+        raise _card_error("missing_model", "Pick a model for this card.")
+    if provider == "custom":
+        if not (base_url or "").strip():
+            raise _card_error("missing_base_url",
+                              "A custom provider needs an endpoint URL.")
+        return
+    if not ProviderRegistry().get_provider_data(provider):
+        raise _card_error("unknown_provider", f"Unknown provider '{provider}'.")
+
+
+async def _test_and_record(card_id: str) -> dict:
+    """Save-then-test-then-record — the shared tail of every card write (D9)."""
+    from agent_os.api.routes.agents_v2 import _test_and_record as _impl
+
+    return await _impl(card_id)
+
+
+def _masked(card_id: str) -> dict:
+    return _settings_store.masked_card(_settings_store.get_card(card_id))
+
+
+@router.get("/settings/cards")
+async def list_cards():
+    """Every card, env card first then recency order (spec 082 §3.1)."""
+    return {"credential_cards": _settings_store.masked_cards(),
+            "default_card_id": _settings_store.effective_default_card_id()}
+
+
+@router.post("/settings/cards", status_code=201)
+async def create_card(req: CreateCardRequest):
+    """Create a card and verify it.
+
+    The card is saved FIRST and the test runs after: a failed test still
+    leaves a saved card carrying the error (D9), so a provider outage can
+    never cost the user the credential they just typed.
+    """
+    _validate_card_shape(req.provider, req.model, req.base_url)
+    try:
+        card = _settings_store.create_card(
+            provider=req.provider, model=req.model, name=(req.name or "").strip(),
+            region=req.region or "global", base_url=req.base_url, sdk=req.sdk,
+            api_key=req.api_key if req.api_key is not None else "",
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise _card_error("keychain_error", str(exc), 500)
+    telemetry.emit("key_set", {"provider": req.provider})
+    telemetry.latch("key_set")
+    test = await _test_and_record(card.id)
+    return {"card": _masked(card.id), "test": test}
+
+
+@router.put("/settings/cards/{card_id}")
+async def update_card(card_id: str, req: UpdateCardRequest):
+    """Patch a card. Re-tests only when the CREDENTIAL changed.
+
+    A rename is not a reason to spend a completion call — and on a rate-limited
+    account it is not a reason to paint a working card red.
+    """
+    _reject_read_only(card_id)
+    card = _card_or_404(card_id)
+    fields = {k: v for k, v in req.model_dump().items()
+              if k in req.model_fields_set}
+    if "name" in fields and not (fields["name"] or "").strip():
+        fields.pop("name")
+    provider = fields.get("provider", card.provider)
+    model = fields.get("model", card.model)
+    base_url = fields.get("base_url", card.base_url)
+    if "model" in fields or "provider" in fields or "base_url" in fields:
+        _validate_card_shape(provider, model, base_url)
+    retest = any(f in fields for f in
+                 ("api_key", "model", "region", "provider", "base_url", "sdk"))
+    try:
+        _settings_store.update_card(card_id, **fields)
+    except (RuntimeError, ValueError) as exc:
+        raise _card_error("keychain_error", str(exc), 500)
+    test = await _test_and_record(card_id) if retest else None
+    return {"card": _masked(card_id), "test": test}
+
+
+@router.delete("/settings/cards/{card_id}")
+async def delete_card(card_id: str):
+    """Delete a card, re-pointing everything that referenced it.
+
+    The default card cannot be deleted while it is the default (D5): every
+    project on ``card_id=null`` follows it, so removing it would silently
+    move the whole install onto nothing.
+    """
+    _reject_read_only(card_id)
+    card = _card_or_404(card_id)
+    if card_id == _settings_store.effective_default_card_id():
+        raise _card_error(
+            "card_is_default",
+            "This is the default card. Make another card the default first.",
+        )
+    reassigned = []
+    if _project_store is not None:
+        for project in _project_store.list_projects():
+            pid = project.get("project_id")
+            updates: dict = {}
+            if project.get("card_id") == card_id:
+                updates["card_id"] = None
+                updates["migration_note"] = f"card_deleted:{card.name}"
+                reassigned.append({"project_id": pid,
+                                   "name": project.get("name", "")})
+            refs = project.get("llm_fallback_models") or []
+            if any(isinstance(r, dict) and r.get("card_id") == card_id for r in refs):
+                updates["llm_fallback_models"] = [
+                    r for r in refs
+                    if not (isinstance(r, dict) and r.get("card_id") == card_id)
+                ]
+            if updates:
+                _project_store.update_project(pid, updates)
+
+    current = _settings_store.get()
+    kept = [fb for fb in (current.llm.fallback_models or [])
+            if fb.card_id != card_id]
+    if len(kept) != len(current.llm.fallback_models or []):
+        current.llm.fallback_models = kept
+        _settings_store.update(current)
+
+    _settings_store.delete_card(card_id)
+    return {"id": card_id, "deleted": True, "reassigned_projects": reassigned}
+
+
+@router.put("/settings/cards/{card_id}/default")
+async def set_default_card(card_id: str):
+    """Make a card the global default.
+
+    While ``AGENT_OS_API_KEY`` is set the choice is still recorded, but the
+    env card stays effective — the response says so with ``applied: false``
+    rather than pretending the switch took.
+    """
+    from agent_os.daemon_v2.credential_store import ENV_CARD_ID
+
+    _card_or_404(card_id)
+    if card_id != ENV_CARD_ID:
+        _settings_store.set_default_card(card_id)
+    effective = _settings_store.effective_default_card_id()
+    return {"default_card_id": effective, "applied": effective == card_id}
+
+
+@router.post("/settings/cards/{card_id}/test")
+async def test_card(card_id: str):
+    """Re-test a saved card and write its health. 200 even when it fails."""
+    _card_or_404(card_id)
+    test = await _test_and_record(card_id)
+    return {"card": _masked(card_id), "test": test}
+
+
 @router.get("/settings")
 async def get_settings():
     return _settings_store.get_masked()
 
 
+def _apply_legacy_llm_fields(req: UpdateSettingsRequest) -> None:
+    """Apply the pre-cards ``llm_*`` fields to the DEFAULT card (§3.8 shim).
+
+    One release only, for the first-run wizard and any older SPA that reaches
+    a newer daemon. New clients use the card routes. The default card is
+    created if there is none, so the wizard's "PUT /settings then PUT
+    /settings/api-key" order still ends with one complete card.
+    """
+    touched = [req.llm_provider, req.llm_model, req.llm_base_url,
+               req.llm_sdk, req.llm_api_key]
+    if all(v is None for v in touched):
+        return
+    from agent_os.daemon_v2.settings_store import (
+        default_card_name, region_for_base_url,
+    )
+
+    card = _settings_store.ensure_default_card()
+    fields: dict = {}
+    provider = req.llm_provider if req.llm_provider is not None else card.provider
+    if req.llm_provider is not None:
+        fields["provider"] = req.llm_provider
+    if req.llm_model is not None:
+        fields["model"] = req.llm_model
+    if req.llm_base_url is not None:
+        region, kept = region_for_base_url(provider, req.llm_base_url)
+        fields["region"] = region
+        fields["base_url"] = kept
+    if req.llm_sdk is not None and provider == "custom":
+        fields["sdk"] = req.llm_sdk
+    if req.llm_api_key is not None:
+        # Pre-cards parity: ``ApiKeyStore.set_api_key`` returned
+        # ``{"source": "environment"}`` WITHOUT writing whenever
+        # AGENT_OS_API_KEY was set — the variable is the key the daemon will
+        # actually use, so persisting another one is unobservable, and on a
+        # machine with no usable keyring (CI, a headless box, the null
+        # backend) the attempt raises and turns this whole PUT into a 500.
+        # The card routes stay strict; this is the legacy endpoint keeping
+        # its legacy contract.
+        from agent_os.daemon_v2.credential_store import _ENV_VAR
+
+        if os.environ.get(_ENV_VAR):
+            logger.info(
+                "PUT /settings: %s is set, so the submitted key is not "
+                "persisted; the environment key remains in effect", _ENV_VAR,
+            )
+        else:
+            fields["api_key"] = req.llm_api_key
+    # Keep the auto-generated name tracking provider/model; a user-chosen name
+    # is never overwritten.
+    if ("provider" in fields or "model" in fields) and (
+            not card.name
+            or card.name == default_card_name(card.provider, card.model)):
+        fields["name"] = default_card_name(
+            fields.get("provider", card.provider),
+            fields.get("model", card.model),
+        )
+    try:
+        _settings_store.update_card(card.id, **fields)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.put("/settings")
 async def update_settings(req: UpdateSettingsRequest):
+    _apply_legacy_llm_fields(req)
     current = _settings_store.get()
-    if req.llm_api_key is not None:
-        # Redirect API key writes to credential store when available
-        if _credential_store is not None:
-            try:
-                _credential_store.set_api_key(req.llm_api_key)
-            except RuntimeError:
-                # Fallback to JSON if keyring fails
-                current.llm.api_key = req.llm_api_key
-        else:
-            current.llm.api_key = req.llm_api_key
-    if req.llm_base_url is not None:
-        current.llm.base_url = req.llm_base_url
-    if req.llm_model is not None:
-        current.llm.model = req.llm_model
-    if req.llm_sdk is not None:
-        current.llm.sdk = req.llm_sdk
-    if req.llm_provider is not None:
-        current.llm.provider = req.llm_provider
     if req.llm_fallback_models is not None:
         from agent_os.daemon_v2.settings_store import FallbackModelConfig
         current.llm.fallback_models = [
             FallbackModelConfig(**fb) for fb in req.llm_fallback_models
+            if isinstance(fb, dict) and fb.get("card_id")
         ]
     if req.scratch_workspace is not None:
         current.scratch_workspace = req.scratch_workspace
@@ -185,7 +440,9 @@ async def update_settings(req: UpdateSettingsRequest):
     # `key_set` under-counted. Emitted after the update so a request that sets
     # provider and key together reports the provider the key belongs to.
     if req.llm_api_key is not None:
-        telemetry.emit("key_set", {"provider": current.llm.provider})
+        card = _settings_store.default_card()
+        telemetry.emit("key_set",
+                       {"provider": card.provider if card else "custom"})
         telemetry.latch("key_set")
 
     return _settings_store.get_masked()
@@ -193,19 +450,28 @@ async def update_settings(req: UpdateSettingsRequest):
 
 @router.put("/settings/api-key")
 async def set_api_key(req: SetApiKeyRequest):
+    """Set the DEFAULT card's key (§3.8 shim, one release).
+
+    A card is created first when there is none, so the wizard can paste a key
+    before it has picked a provider and model.
+    """
     if _credential_store is None:
         raise HTTPException(status_code=501, detail="Credential store not available")
     try:
         result = _credential_store.set_api_key(req.api_key)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    telemetry.emit("key_set", {"provider": _settings_store.get().llm.provider})
+    card = _settings_store.default_card()
+    telemetry.emit("key_set",
+                   {"provider": card.provider if card else "custom"})
     telemetry.latch("key_set")
-    return result
+    return {**result, "card_id": result.get("card_id",
+                                            card.id if card else None)}
 
 
 @router.delete("/settings/api-key")
 async def delete_api_key():
+    """Remove the DEFAULT card's key (§3.8 shim). The card itself stays."""
     if _credential_store is None:
         raise HTTPException(status_code=501, detail="Credential store not available")
     return _credential_store.delete_api_key()
@@ -245,13 +511,14 @@ async def get_telemetry_payload():
 
 @router.get("/settings/api-key/status")
 async def get_api_key_status():
+    """Whether the DEFAULT card carries a key (§3.8 shim)."""
+    card = _settings_store.default_card() if _settings_store else None
     if _credential_store is None:
-        # Fallback: check settings.json
-        settings = _settings_store.get()
-        configured = bool(settings.llm.api_key)
-        return {"configured": configured, "source": "settings" if configured else "none"}
+        return {"configured": False, "source": "none",
+                "card_id": card.id if card else None}
     source = _credential_store.get_source()
-    return {"configured": source != "none", "source": source}
+    return {"configured": source != "none", "source": source,
+            "card_id": card.id if card else None}
 
 
 # ---------------------------------------------------------------------------
@@ -876,15 +1143,18 @@ async def set_sub_agent_credential(slug: str, req: SubAgentCredentialRequest):
             "'use_llm_provider_key: true'"))
 
     if req.use_llm_provider_key:
-        provider = _settings_store.get().llm.provider
+        # Spec 082: "the global LLM key" is now the DEFAULT CARD's key, and
+        # the provider that owns it is the card's — settings.llm.provider is a
+        # derived, one-release compatibility field that migration drops, so
+        # reading it here would report "custom" for every migrated install and
+        # refuse a copy that should succeed.
+        card = _settings_store.default_card() if _settings_store else None
+        provider = card.provider if card is not None else "custom"
         if provider != "deepseek":
             raise HTTPException(status_code=409, detail=(
                 f"the global LLM key belongs to provider '{provider}', not "
                 f"deepseek — paste the key for '{slug}' directly instead"))
-        if _credential_store is None:
-            raise HTTPException(status_code=503,
-                                detail="Credential store not available")
-        supplied = (_credential_store.get_api_key() or "").strip()
+        supplied = (_settings_store.key_for(card.id) or "").strip()
         if not supplied:
             raise HTTPException(status_code=409,
                                 detail="no global LLM API key is configured")

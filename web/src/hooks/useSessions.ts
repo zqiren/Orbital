@@ -11,6 +11,17 @@ import { useWebSocket } from './useWebSocket';
 // and returns to one they've already loaded. Keyed by projectId.
 const sessionsCache = new Map<string, SessionListEntry[]>();
 
+// WS events that can change the session list's shape or a row's status.
+// `agent.status` covers every runtime transition of a session that has a
+// handle; the three `chat.pending_*` events cover a session that has none —
+// the spec-081 `queued` row appears, flips and disappears on those alone.
+const SESSION_LIST_EVENTS: ReadonlyArray<WebSocketEvent['type']> = [
+  'agent.status',
+  'chat.pending_enqueued',
+  'chat.pending_dispatched',
+  'chat.pending_cancelled',
+];
+
 // useSessions
 //
 // Fetches the per-project session list (GET /api/v2/projects/{pid}/sessions)
@@ -87,16 +98,24 @@ export function useSessions(projectId: string | null) {
   // this project. agent.status covers: new_session, idle, running, waiting,
   // stopped, error, pending_approval — all the events that can change the
   // session list shape or a session's status field.
+  //
+  // The three chat.pending_* events (spec 081) are the other way the list can
+  // change shape: a session whose first message is queued behind the project
+  // slot is listed as `queued` from the moment it is enqueued, flips when the
+  // message dispatches, and disappears when it is cancelled. None of those
+  // three emits an agent.status, so without these triggers the row would only
+  // appear on the next unrelated refresh.
   useEffect(() => {
     if (!projectId) return;
     const handler = (event: WebSocketEvent) => {
-      if (event.type !== 'agent.status') return;
-      if (event.project_id !== projectIdRef.current) return;
+      if (!SESSION_LIST_EVENTS.includes(event.type)) return;
+      // Every one of these events carries project_id; ignore other projects'.
+      if ((event as { project_id?: string }).project_id !== projectIdRef.current) return;
       void refresh();
     };
-    ws.on('agent.status', handler);
+    for (const type of SESSION_LIST_EVENTS) ws.on(type, handler);
     return () => {
-      ws.off('agent.status', handler);
+      for (const type of SESSION_LIST_EVENTS) ws.off(type, handler);
     };
   }, [projectId, refresh, ws]);
 

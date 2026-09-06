@@ -522,6 +522,51 @@ class TriggerManager:
             return datetime.min.replace(tzinfo=timezone.utc)
         return max(candidates)
 
+    async def _fire_on_worker(
+        self, project_id: str, config, agent: str, *,
+        initial_message: str, trigger_id: str,
+    ) -> None:
+        """Fire a worker-assigned automation down the chat @mention path.
+
+        Mirrors what ``start_agent(initial_message=…)`` does for an unassigned
+        trigger, minus the management turn: mint the fire's own session, write
+        the trigger's message into it as the user row, then dispatch to the
+        worker. The row has to be on disk before the worker finishes, because
+        the terminal event's wake hydrates the session from disk and is dropped
+        when no JSONL matches.
+
+        A ``send`` that reports an error — a slug the user uninstalled since
+        saving the automation is the likely one — raises, so the caller's
+        existing handler broadcasts it as an ``agent.status`` error instead of
+        letting the fire fail silently.
+        """
+        from agent_os.agent.session import persist_user_row
+
+        minted = await self._agent_manager.new_session(project_id)
+        session_id = minted["session_id"]
+
+        session = self._agent_manager._new_session_object(config, session_id)
+        self._agent_manager._wire_session_observers(
+            session, project_id, session_id,
+        )
+        persist_user_row(session, initial_message)
+
+        sub_mgr = self._agent_manager.get_sub_agent_manager()
+        if sub_mgr is None:
+            raise RuntimeError(
+                f"no sub-agent manager available to run '{agent}'"
+            )
+        result = await sub_mgr.send(
+            project_id, agent, initial_message,
+            session_id=session_id, initiator="queue_item",
+        )
+        if isinstance(result, str) and result.startswith("Error"):
+            raise RuntimeError(result)
+        logger.info(
+            "Trigger %s dispatched directly to '%s' (session=%s)",
+            trigger_id, agent, session_id,
+        )
+
     async def _fire_trigger(self, project_id: str, trigger_id: str,
                              changed_files: list[str] | None = None) -> None:
         """Execute a trigger: start the agent with the trigger's task."""
@@ -608,14 +653,28 @@ class TriggerManager:
         # got the stale endpoint paired with the current global key — every
         # scheduled run 401'd while chat on the same project worked. See
         # tests/unit/test_agent_config_parity.py.
+        chosen_agent = (trigger.get("agent") or "").strip() or None
         try:
             config = self._agent_manager._build_agent_config_from_project(project_id)
-            await self._agent_manager.start_agent(
-                project_id, config,
-                initial_message=initial_message,
-                trigger_source=trigger_type,
-                trigger_name=trigger_name,
-            )
+            if chosen_agent:
+                # Spec 079 §3.3: the user assigned this automation to a worker.
+                # Same mechanism as a chat @mention and as an assigned queue
+                # item — the task goes straight to the worker, and the manager
+                # is woken by the worker's terminal event to act on the result
+                # and notify, which is what its turn does today anyway. No hold
+                # is needed here: unlike the queue there is no verdict to await.
+                await self._fire_on_worker(
+                    project_id, config, chosen_agent,
+                    initial_message=initial_message,
+                    trigger_id=trigger_id,
+                )
+            else:
+                await self._agent_manager.start_agent(
+                    project_id, config,
+                    initial_message=initial_message,
+                    trigger_source=trigger_type,
+                    trigger_name=trigger_name,
+                )
             logger.info("Trigger %s fired: started agent for project %s", trigger_id, project_id)
 
             self._broadcast(project_id, {

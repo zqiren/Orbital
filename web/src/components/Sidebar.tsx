@@ -25,7 +25,9 @@ import type { Project, AgentRunStatus } from '../types';
 import type { Route } from '../route';
 import { api } from '../config';
 import { useT } from '../i18n/useT';
+import { projectDisplayName } from '../utils/projectDisplayName';
 import BetaBadge from './BetaBadge';
+import { getProjectDotColor } from '../utils/projectStatus';
 
 type ConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'daemon_offline';
 
@@ -45,6 +47,12 @@ interface SidebarProps {
    *  Receives the COMPLETE ordered id list. The caller applies it
    *  optimistically and reverts if the write fails. */
   onReorderProjects: (orderedIds: string[]) => Promise<unknown>;
+  /** 248px at x=12 with no left inset instead of 260 with a 12px one:
+   *  rendered beside the 20px EdgeStrip rail on a project route, so rail +
+   *  list is the same 260 every other route gives the full Sidebar, `<main>`
+   *  never moves, and the list's content sits at the same x in both (spec
+   *  078 pin amendment). */
+  narrow?: boolean;
 }
 
 /** One draggable project row. The whole row is the drag target. */
@@ -136,26 +144,6 @@ function useWorkbenchCount(): number {
   return count;
 }
 
-function getProjectDotColor(
-  projectId: string,
-  agentStatuses: Record<string, AgentRunStatus>,
-  pendingApprovals: Record<string, number>,
-): string {
-  const approvalCount = pendingApprovals[projectId] ?? 0;
-  if (approvalCount > 0) return 'bg-warning';
-
-  const status = agentStatuses[projectId] ?? 'idle';
-  switch (status) {
-    case 'running':
-    case 'waiting':
-      return 'bg-success';
-    case 'error':
-      return 'bg-error';
-    default:
-      return 'bg-idle';
-  }
-}
-
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
   return str.slice(0, max) + '…';
@@ -174,6 +162,7 @@ export default function Sidebar({
   onNewProject,
   onSettings,
   onReorderProjects,
+  narrow = false,
 }: SidebarProps) {
   const t = useT();
   const selectedProjectId = route.name === 'project' ? route.projectId : null;
@@ -258,7 +247,7 @@ export default function Sidebar({
         </span>
         <div className="min-w-0 flex-1">
           <span className="text-xs font-medium text-primary block truncate">
-            {truncate(project.name, 20)}
+            {truncate(projectDisplayName(project, t), 20)}
           </span>
           {summary && (
             <span className="text-2xs text-secondary block truncate mt-0.5">
@@ -273,8 +262,20 @@ export default function Sidebar({
   // pt-titlebar: clears the macOS traffic lights, which float over this
   // column's top-left corner when the desktop shell runs frameless. Padding
   // (not margin) so bg-nav still fills the band. 0 off macOS.
+  //
+  // Width and insets are one decision (spec 078 pin amendment). The column
+  // is always 260 on desktop. Its content is inset 12px on the left (so the
+  // wordmark lands at x=28 and every row at x=20, clear of the rail) and 4px
+  // on the right — less than the left because the left gap holds the rail's
+  // chevron and reads as filled, so an equal right gap looked empty (user,
+  // 2026-09-04). Beside the 20px EdgeStrip rail this is 248 wide at x=12
+  // with no left padding of its own — the rail covers the missing 12;
+  // everywhere else it is 260 wide with the 12px on its left. Either way the
+  // content sits at the same x, so the rail appearing (entering a project)
+  // or going (leaving one) never shifts it — only the chevron comes and
+  // goes. Mobile has no rail and no insets (max-md:w-full).
   return (
-    <aside className="w-[260px] shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar">
+    <aside className={`${narrow ? 'w-[248px] pr-1' : 'w-[260px] md:pl-3 md:pr-1'} shrink-0 bg-nav border-r border-border flex flex-col h-full max-md:w-full pt-titlebar`}>
       {/* Wordmark */}
       <div className="px-4 pt-4 pb-3 flex items-center gap-2">
         {/* Served straight from web/public (vite copies it to the dist root, so

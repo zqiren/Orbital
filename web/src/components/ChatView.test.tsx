@@ -227,6 +227,14 @@ import ChatView, {
   appendLiveReasoning,
   __clearChatHistoryCacheForTests,
 } from './ChatView';
+// Spec 078 §5.4 — the composer reads annotation drafts out of the per-session
+// store the panel writes into; the tests seed it directly.
+import {
+  __resetAnnotationsStore,
+  __seedAnnotations,
+} from '../hooks/useAnnotations';
+import type { Annotation } from '../utils/annotations';
+import { formatQuotes } from '../utils/annotations';
 import type { DisplayItem } from '../utils/chatTransform';
 import type { Project } from '../types';
 // Producer↔renderer parity fixture (backlog #23 D2 / #27) — the same file the
@@ -255,6 +263,7 @@ beforeEach(() => {
   apiWithTotalSignals.length = 0;
   chatResponseGate = null;
   __clearChatHistoryCacheForTests();
+  __resetAnnotationsStore();
   injectCalls.length = 0;
   startAgentCalls.length = 0;
   cancelMessageCalls.length = 0;
@@ -3113,5 +3122,291 @@ describe('mid-run remount: stale history cache pins the transcript', () => {
     await flushEffects();
 
     expect(container.textContent).toContain('round-two-message');
+  });
+});
+
+// ─── Spec 078 §5.4: the annotation chip and the send path ──────────────────
+//
+// The panel stages quotes into a per-session store; the composer shows them as
+// a chip, lets the note be edited, and on send appends the quotes block to the
+// message and uploads the marked-up PNG as an attachment.
+
+const browserAnnotation: Annotation = {
+  n: 1,
+  kind: 'browser',
+  pageTitle: 'Queue',
+  box: { x: 10, y: 20, w: 100, h: 40 },
+  note: 'click this one, not the ad',
+  imageDataUrl: 'data:image/png;base64,AAAA',
+};
+const textAnnotation: Annotation = {
+  n: 2,
+  kind: 'text',
+  path: 'web/src/components/QueueHeader.tsx',
+  text: 'const pending = 0;',
+  lines: [14, 14],
+  note: '',
+};
+
+/** jsdom has no canvas backend — fake just enough for renderAnnotatedPng. */
+function installAnnotationRenderMocks() {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage: () => {},
+    strokeRect: () => {},
+    fillRect: () => {},
+    fillText: () => {},
+    lineWidth: 0,
+    strokeStyle: '',
+    fillStyle: '',
+    font: '',
+    textBaseline: '',
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((cb) => {
+    (cb as BlobCallback)(new Blob(['png'], { type: 'image/png' }));
+  });
+  Object.defineProperty(HTMLImageElement.prototype, 'src', {
+    configurable: true,
+    set(this: HTMLImageElement) {
+      queueMicrotask(() => this.onload?.(new Event('load')));
+    },
+    get: () => 'data:image/png;base64,AAAA',
+  });
+  Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+    configurable: true,
+    get: () => 400,
+  });
+  Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+    configurable: true,
+    get: () => 300,
+  });
+}
+
+function uninstallAnnotationRenderMocks() {
+  vi.restoreAllMocks();
+  for (const prop of ['src', 'naturalWidth', 'naturalHeight']) {
+    delete (HTMLImageElement.prototype as unknown as Record<string, unknown>)[prop];
+  }
+}
+
+function chipButton(): HTMLButtonElement | null {
+  return container.querySelector('[data-testid="annotation-chip"]');
+}
+
+describe('Spec 078 ChatView: the annotation chip', () => {
+  afterEach(() => {
+    uninstallAnnotationRenderMocks();
+  });
+
+  it('renders no chip when the session has no annotations', async () => {
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(chipButton()).toBeNull();
+  });
+
+  it('counts the staged annotations, singular and plural', async () => {
+    __seedAnnotations('s1', [browserAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(chipButton()?.textContent).toContain('1 annotation');
+
+    __resetAnnotationsStore();
+    __seedAnnotations('s2', [browserAnnotation, textAnnotation]);
+    await renderChat({ sessionId: 's2' });
+    await flushEffects();
+    expect(chipButton()?.textContent).toContain('2 annotations');
+  });
+
+  // 2026-09-05, from the installer: "when i do the browser annotation, where
+  // did it go?" — the panel stays usable while the queue runs, but the chip
+  // lived inside the composer card, which ComposerDisabledPrompt replaces.
+  // The annotation was staged with nothing on screen to show for it.
+  it('still shows the chip while the queue owns the composer', async () => {
+    queueState = 'running';
+    __seedAnnotations('s1', [browserAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="composer-disabled-prompt"]')).toBeTruthy();
+    expect(chipButton()?.textContent).toContain('1 annotation');
+    // And it is still the working control, not a read-only echo.
+    await act(async () => {
+      chipButton()!.click();
+    });
+    expect(container.querySelector('[data-testid="annotation-list"]')).toBeTruthy();
+  });
+
+  it(`shows only THIS session's annotations`, async () => {
+    __seedAnnotations('other', [browserAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    expect(chipButton()).toBeNull();
+  });
+
+  it('expands into a list, edits a note, and removes an annotation', async () => {
+    __seedAnnotations('s1', [browserAnnotation, textAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="annotation-list"]')).toBeNull();
+    await act(async () => {
+      chipButton()!.click();
+    });
+    const list = container.querySelector('[data-testid="annotation-list"]')!;
+    expect(list.querySelectorAll('li').length).toBe(2);
+    // The summary is the page title / the path + lines — dynamic content.
+    expect(list.textContent).toContain('Queue');
+    expect(list.textContent).toContain('QueueHeader.tsx:14-14');
+
+    // The note is editable from the chip, so a hasty note can be fixed.
+    const noteInput = list.querySelectorAll('input')[1] as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!;
+    await act(async () => {
+      setter.call(noteInput, 'use the short label');
+      noteInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const remove = list.querySelector('button[aria-label="Remove annotation [1]"]') as HTMLButtonElement;
+    await act(async () => {
+      remove.click();
+    });
+    expect(chipButton()?.textContent).toContain('1 annotation');
+    expect(
+      container.querySelector('[data-testid="annotation-list"]')!.querySelectorAll('li').length,
+    ).toBe(1);
+  });
+
+  it('enables Send on annotations alone, with no typed text', async () => {
+    __seedAnnotations('s1', [textAnnotation]);
+    await renderChat({ sessionId: 's1' });
+    await flushEffects();
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    expect(send.disabled).toBe(false);
+  });
+});
+
+describe('Spec 078 ChatView: sending annotations', () => {
+  beforeEach(() => {
+    installAnnotationRenderMocks();
+  });
+  afterEach(() => {
+    uninstallAnnotationRenderMocks();
+  });
+
+  it('appends the quotes block, uploads the marked-up PNG, attaches it, and clears', async () => {
+    const uploadArgs: unknown[] = [];
+    uploadFileMock = async (...args: unknown[]) => {
+      uploadArgs.push(args[0]);
+      return { path: 'uploads/2026-annotation-1.png', size: 3 };
+    };
+    __seedAnnotations('s1', [browserAnnotation, textAnnotation]);
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('which one do I click?');
+    });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId)
+    const content = injectCalls[0][1] as string;
+    expect(content).toBe(
+      `which one do I click?\n\n${formatQuotes([browserAnnotation, textAnnotation])}`,
+    );
+
+    // Only the image-bearing annotation is uploaded, under annotation-<n>.png.
+    expect(uploadArgs.length).toBe(1);
+    const params = uploadArgs[0] as { file: File; projectId: string };
+    expect(params.file.name).toBe('annotation-1.png');
+    expect(params.file.type).toBe('image/png');
+    expect(params.projectId).toBe('p1');
+
+    // …and rides the attachments list, so the backend's <attached_files>
+    // prefix names it and the agent's read tool can see the marked-up image.
+    expect(injectCalls[0][4]).toEqual([
+      { path: 'uploads/2026-annotation-1.png', mime: 'image/png', size: 3 },
+    ]);
+
+    // The drafts are consumed by the send.
+    expect(chipButton()).toBeNull();
+  });
+
+  it('sends the quotes block alone when the composer is empty', async () => {
+    __seedAnnotations('s1', [textAnnotation]);
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(injectCalls.length).toBe(1);
+    expect(injectCalls[0][1]).toBe(formatQuotes([textAnnotation]));
+    expect(injectCalls[0][4]).toBeUndefined();
+  });
+
+  it('still sends the quotes when the PNG upload fails, and says so', async () => {
+    uploadFileMock = async () => {
+      throw new Error('upload exploded');
+    };
+    __seedAnnotations('s1', [browserAnnotation]);
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    // The coordinates + the note carry the meaning without the image.
+    expect(injectCalls.length).toBe(1);
+    expect(injectCalls[0][1]).toBe(formatQuotes([browserAnnotation]));
+    expect(injectCalls[0][4]).toBeUndefined();
+    expect(container.textContent ?? '').toContain('Upload failed');
+  });
+
+  it('renders the sent message with the chip, hiding the quotes behind it', async () => {
+    uploadFileMock = async () => ({ path: 'uploads/a.png', size: 3 });
+    __seedAnnotations('s1', [browserAnnotation]);
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+
+    await act(async () => {
+      typeInComposer('which one?');
+    });
+    const send = container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    const bubble = container.querySelector('[data-testid="user-message"]')!;
+    expect(bubble.textContent).toContain('which one?');
+    // The block itself is folded away until the chip is clicked.
+    expect(bubble.textContent).not.toContain('box 10,20');
+    const messageChip = bubble.querySelector(
+      '[data-testid="message-annotation-chip"]',
+    ) as HTMLButtonElement;
+    expect(messageChip.textContent).toContain('1 annotation');
+    await act(async () => {
+      messageChip.click();
+    });
+    expect(
+      container.querySelector('[data-testid="message-annotation-quotes"]')!.textContent,
+    ).toBe(formatQuotes([browserAnnotation]));
   });
 });
