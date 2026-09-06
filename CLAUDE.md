@@ -370,6 +370,10 @@ If a universal binary is needed later, that is a spec change (`target_arch='univ
 2. **Create GitHub Release** tied to the tag:
    - Title: `v{X.Y.Z}`
    - Upload both `Orbital-Setup-{X.Y.Z}.exe` and `Orbital-{X.Y.Z}-macOS.dmg` as release assets
+   - Then run `bash scripts/release-aliases.sh v{X.Y.Z}`. It re-uploads the two installers
+     under the stable names `Orbital-Setup.exe` / `Orbital-macOS.dmg`; the README's
+     download buttons link to `releases/latest/download/<stable name>`, so a release
+     without the aliases makes those buttons 404 until this runs.
    - Write release notes covering: user-visible changes, known issues (including the unsigned-installer warnings on both platforms), and install instructions
 
 3. **Update the README install links** if they reference a specific version rather than `/releases/latest`.
