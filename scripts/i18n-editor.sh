@@ -21,7 +21,13 @@ PORT="${PORT:-8331}"
 VITE_PORT="${VITE_PORT:-5173}"
 STATE="$HOME/.orbital-i18n-editor"
 DATA="${DATA_DIR:-$STATE/data}"
-PY="$ROOT/.venv/bin/python"; [[ -x "$PY" ]] || PY=python3
+# Python: ORBITAL_PYTHON, else this tree's .venv, else the main worktree's .venv
+# (a `git worktree` checkout has no .venv of its own), else python3.
+MAIN="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$ROOT/.git")")"
+PY="${ORBITAL_PYTHON:-}"
+[[ -x "$PY" ]] || PY="$ROOT/.venv/bin/python"
+[[ -x "$PY" ]] || PY="$MAIN/.venv/bin/python"
+[[ -x "$PY" ]] || PY=python3
 mkdir -p "$STATE"
 
 stop_pidfile() {
