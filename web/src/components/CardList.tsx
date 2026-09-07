@@ -599,9 +599,12 @@ function IconAction({
 }
 
 /**
- * The Add/Edit dialog. It wraps the existing provider form unchanged and
- * deliberately stays open after a save so the connection-test verdict the form
- * renders is readable; the user closes it when they have read it.
+ * The Add/Edit dialog. It wraps the existing provider form unchanged. Save
+ * is the last step: the form only lets a card be saved after its own key
+ * passed Test Connection, so a successful save simply closes the dialog and
+ * the card appears in the list. It stays open only when the save-time test
+ * failed (the provider went away between Test and Save), so the red verdict
+ * the form renders is readable; the user closes it when they have read it.
  */
 export function CardFormModal({
   card,
@@ -649,8 +652,12 @@ export function CardFormModal({
             mode="global"
             card={card}
             onCardSaved={(result) => {
-              setSavedOnce(true);
               onSaved(result);
+              if (!result.test || result.test.ok) {
+                onClose();
+              } else {
+                setSavedOnce(true);
+              }
             }}
           />
         </div>

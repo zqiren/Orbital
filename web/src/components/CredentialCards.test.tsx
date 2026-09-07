@@ -327,6 +327,32 @@ describe('CredentialCards — Add card', () => {
     await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
   });
 
+  it('a successful save closes the modal by itself — Save means saved and done', async () => {
+    mockCards([DEFAULT_CARD], (path, opts) => {
+      if (path === '/api/v2/settings/cards' && opts?.method === 'POST') {
+        return {
+          card: makeCard({ id: 'card_new', name: 'New card' }),
+          test: { ok: true, status: null, code: null, message: 'Connected to DeepSeek using deepseek-chat' },
+        };
+      }
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
+      return undefined;
+    });
+    renderList();
+    fireEvent.click(await screen.findByTestId('cards-add'));
+    await screen.findByTestId('card-modal');
+    fireEvent.change(await screen.findByPlaceholderText(/sk-/), { target: { value: 'sk-new-key' } });
+    fireEvent.change(await screen.findByPlaceholderText(/model name/), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() =>
+      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId('card-save'));
+    // No Done step: the dialog is gone and the list refreshed.
+    await waitFor(() => expect(screen.queryByTestId('card-modal')).toBeNull());
+    expect(screen.queryByTestId('card-modal-done')).toBeNull();
+  });
+
   it('offers no vendor-specific sign-in of its own — only "Add provider"', async () => {
     // TokenDance one-click lives INSIDE the Add flow, next to the key field it
     // replaces, so it is invisible to everyone who cannot use it rather than a
