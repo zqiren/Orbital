@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 import re
 from typing import AsyncIterator
 
@@ -444,12 +445,35 @@ def _apply_reasoning_policy(message: dict, reasoning) -> dict:
     return message
 
 
+def _resolve_static_headers(extra_headers: dict | None) -> dict | None:
+    """Copy the registry's static ``extra_headers``; a ``{version}`` token
+    (e.g. ``User-Agent: Orbital/{version}``) is expanded once here so the
+    registry can stay a static file while gateways that ask clients to
+    identify themselves (OpenCode Go) see the real build."""
+    if not extra_headers:
+        return None
+    out = dict(extra_headers)
+    for k, v in out.items():
+        if isinstance(v, str) and "{version}" in v:
+            from agent_os.version import get_version
+            out[k] = v.replace("{version}", get_version())
+    return out
+
+
+def _extra_headers_kw(headers: dict | None) -> dict:
+    """``{"extra_headers": headers}`` for the SDK call, or ``{}`` — the key is
+    omitted entirely so providers without a session header send requests
+    byte-identical to before."""
+    return {"extra_headers": headers} if headers else {}
+
+
 class LLMProvider:
     """Dual-SDK LLM client: OpenAI or Anthropic."""
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None, sdk: str = "openai",
                  max_output: int = 16384, capabilities=None, reasoning=None,
-                 provider: str = "unknown", extra_headers: dict | None = None):
+                 provider: str = "unknown", extra_headers: dict | None = None,
+                 session_header: str | None = None):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
@@ -461,7 +485,18 @@ class LLMProvider:
         # Static per-provider headers from the registry's `extra_headers`
         # (e.g. TokenDance X-App-Name/X-Site-URL attribution, Spec 47 §3e).
         # Never carries user data.
-        self.extra_headers = dict(extra_headers) if extra_headers else None
+        self.extra_headers = _resolve_static_headers(extra_headers)
+        # Per-conversation routing header (registry ``session_header``, e.g.
+        # OpenCode Go's ``x-opencode-session``): the gateway rejects every
+        # request without it (400 MissingSessionID) and uses a STABLE value
+        # per conversation for routing + prompt caching. The value is read at
+        # request time from ``bind_session_id`` (the loop binds its live
+        # session, so a session swap follows automatically); a client that
+        # never binds one (Test Connection, utility calls outside a loop)
+        # sends a per-instance id so the header is never missing.
+        self.session_header = session_header or None
+        self._session_id_getter = None
+        self._instance_session_id = uuid.uuid4().hex
 
         if sdk == "anthropic":
             import anthropic
@@ -477,6 +512,31 @@ class LLMProvider:
             self._openai_client = openai.AsyncOpenAI(
                 base_url=base_url, api_key=api_key, default_headers=self.extra_headers)
             self._anthropic_client = None
+
+    def bind_session_id(self, getter) -> None:
+        """Bind a zero-arg callable returning the CURRENT conversation id
+        (None/"" falls back to the per-instance id). Read on every request,
+        never snapshotted, so a loop whose session is swapped keeps sending
+        the id of the session it is actually serving."""
+        self._session_id_getter = getter
+
+    def request_session_id(self) -> str:
+        """The conversation id the next request's ``session_header`` carries."""
+        if self._session_id_getter is not None:
+            try:
+                sid = self._session_id_getter()
+            except Exception:
+                sid = None
+            if sid:
+                return str(sid)
+        return self._instance_session_id
+
+    def _request_headers(self) -> dict | None:
+        """Per-request headers (``extra_headers=`` on the SDK call), or None
+        for every provider without a registry ``session_header``."""
+        if not self.session_header:
+            return None
+        return {self.session_header: self.request_session_id()}
 
     @property
     def reasoning_locked_on(self) -> bool:
@@ -575,6 +635,7 @@ class LLMProvider:
                 **({"tools": tools} if tools else {}),
                 stream=True,
                 stream_options={"include_usage": True},
+                **_extra_headers_kw(self._request_headers()),
             )
         except (ContextOverflowError, LLMError):
             raise
@@ -603,6 +664,7 @@ class LLMProvider:
                         **({"tools": tools} if tools else {}),
                         stream=True,
                         stream_options={"include_usage": True},
+                        **_extra_headers_kw(self._request_headers()),
                     )
                 except (ContextOverflowError, LLMError):
                     raise
@@ -710,6 +772,7 @@ class LLMProvider:
         if translated["tools"]:
             kwargs["tools"] = translated["tools"]
 
+        kwargs.update(_extra_headers_kw(self._request_headers()))
         try:
             stream = await self._anthropic_client.messages.create(**kwargs)
         except (ContextOverflowError, LLMError):
@@ -765,6 +828,7 @@ class LLMProvider:
                 **({"tools": tools} if tools else {}),
                 stream=False,
                 **extra_kwargs,
+                **_extra_headers_kw(self._request_headers()),
             )
         except (ContextOverflowError, LLMError):
             raise
@@ -828,6 +892,7 @@ class LLMProvider:
         if translated["tools"]:
             kwargs["tools"] = translated["tools"]
 
+        kwargs.update(_extra_headers_kw(self._request_headers()))
         try:
             response = await self._anthropic_client.messages.create(**kwargs)
         except (ContextOverflowError, LLMError):

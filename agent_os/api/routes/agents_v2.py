@@ -3365,6 +3365,7 @@ async def run_connection_test(provider: str, model: str, api_key: str,
         client = LLMProvider(
             model, api_key, base_url, sdk=sdk,
             extra_headers=provider_info.get("extra_headers") if provider_info else None,
+            session_header=provider_info.get("session_header") if provider_info else None,
         )
         await client.complete(messages=[{"role": "user", "content": "hi"}])
         return {"ok": True, "status": 200, "code": None,

@@ -142,6 +142,7 @@ class AgentLoop:
         # lazily, only after a 401/403 proves the project key dead, so
         # transient-rotation semantics stay byte-identical until then.
         self._auth_fallback_provider = auth_fallback_provider
+        self.bind_session_headers()
         self._max_iterations = max_iterations
         # PURE token safety-net cap (NOT budget-derived). Budget Piece 2 cut the
         # dollar→token derivation that used to feed this; the gate now only
@@ -668,6 +669,26 @@ class AgentLoop:
                 getattr(self._session, "session_id", "?"),
                 exc_info=True,
             )
+
+    def _current_session_id(self):
+        """The conversation id gateways with a registry ``session_header``
+        receive (OpenCode Go's ``x-opencode-session``). The session uuid is
+        unique across projects; the F1 chat id is the fallback. Read live
+        from ``self._session`` so a session swap on this loop follows."""
+        session = self._session
+        return (getattr(session, "session_uuid", None)
+                or getattr(session, "session_id", None))
+
+    def bind_session_headers(self) -> None:
+        """Point every provider this loop owns at its live session id.
+        Called from __init__ and again whenever the manager rebuilds the
+        provider set on a hot resume (the new clients start unbound)."""
+        providers = [self._provider, self._utility_provider,
+                     self._auth_fallback_provider, *self._fallback_providers]
+        for prov in providers:
+            bind = getattr(prov, "bind_session_id", None)
+            if callable(bind):
+                bind(self._current_session_id)
 
     async def _stream_response(self, context, tool_schemas) -> LLMResponse:
         """Stream LLM response from the primary provider.

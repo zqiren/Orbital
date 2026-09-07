@@ -575,6 +575,11 @@ class AgentManager:
         def _headers_for(provider_key: str) -> dict | None:
             return self._provider_registry.get_provider_data(provider_key).get("extra_headers")
 
+        # Registry per-conversation routing header (OpenCode Go's
+        # x-opencode-session); the loop binds the live session id to it.
+        def _session_header_for(provider_key: str) -> str | None:
+            return self._provider_registry.get_provider_data(provider_key).get("session_header")
+
         # Per-model endpoint override (registry ``sdk``/``base_url``). An
         # aggregator serves different models over different wire protocols
         # under one key — OpenCode Go puts minimax-m3 on Anthropic /messages
@@ -591,6 +596,7 @@ class AgentManager:
             reasoning=model_info.reasoning,
             provider=config.provider,
             extra_headers=_headers_for(config.provider),
+            session_header=_session_header_for(config.provider),
         )
 
         fallback_providers = []
@@ -607,7 +613,8 @@ class AgentManager:
                             capabilities=fb_info.capabilities,
                             reasoning=fb_info.reasoning,
                             provider=getattr(fb, 'provider', 'custom'),
-                            extra_headers=_headers_for(getattr(fb, 'provider', 'custom')))
+                            extra_headers=_headers_for(getattr(fb, 'provider', 'custom')),
+                            session_header=_session_header_for(getattr(fb, 'provider', 'custom')))
             )
 
         if config.utility_model:
@@ -619,6 +626,7 @@ class AgentManager:
                 reasoning=utility_info.reasoning,
                 provider=config.provider,
                 extra_headers=_headers_for(config.provider),
+                session_header=_session_header_for(config.provider),
             )
         else:
             utility_provider = provider
@@ -646,6 +654,8 @@ class AgentManager:
             provider=af.provider,
             extra_headers=self._provider_registry.get_provider_data(
                 af.provider).get("extra_headers"),
+            session_header=self._provider_registry.get_provider_data(
+                af.provider).get("session_header"),
         )
 
     @staticmethod
@@ -4880,6 +4890,9 @@ class AgentManager:
             loop._utility_provider = utility_provider
             loop._fallback_providers = fallback_providers
             loop._auth_fallback_provider = self._build_auth_fallback_provider(fresh_cfg)
+            # Fresh clients start unbound — point them at the live session.
+            if hasattr(loop, "bind_session_headers"):
+                loop.bind_session_headers()
             handle.config_snapshot.update({
                 "model": fresh_cfg.model,
                 "provider": fresh_cfg.provider,

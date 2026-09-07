@@ -4206,6 +4206,10 @@
       "currency": "USD",
       "supports_model_list": true,
       "sdk": "openai",
+      "session_header": "x-opencode-session",
+      "extra_headers": {
+        "User-Agent": "Orbital/{version}"
+      },
       "suggested_models": [
         "glm-5.2",
         "kimi-k3",
@@ -4216,7 +4220,7 @@
         "deepseek-v4-flash",
         "deepseek-v4-pro"
       ],
-      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. grok-4.5 and gpt-5.6-luna use the Responses API, which Orbital does not speak. https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
+      "notes": "$10/month subscription ($5 first month) with dollar-capped usage: $12 per 5 hours, $30/week, $60/month. The per-token rates below are what meters against those caps — they are not incremental charges, so spend readings show cap burn, not a bill. Enable 'Use balance' in the console to fall back to your Zen credits past a cap. Same API key as Zen. minimax-* and qwen* are served over the Anthropic /messages protocol on this tier, while the same minimax ids are /chat/completions on Zen — Orbital resolves that per model. grok-4.5 and gpt-5.6-luna use the Responses API, which Orbital does not speak. Since 2026-09 the Go gateway rejects any request without a stable per-conversation x-opencode-session header (400 MissingSessionID, both wire protocols) and asks clients to identify with their own User-Agent — hence session_header + extra_headers on this entry. https://opencode.ai/docs/go/ NOTE: deepseek-v4-flash and deepseek-v4-pro answer 403 RegionError on this tier until the workspace explicitly opts into China hosting in the OpenCode console — verified 2026-08-19; every other Go model works without it.",
       "pricing": {
         "deepseek-v4-flash": {
           "input_per_1m": 0.22,
