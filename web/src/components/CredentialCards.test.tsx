@@ -298,15 +298,25 @@ describe('CredentialCards — Add card', () => {
         };
       }
       if (path === '/api/v2/settings/api-key/status') return { configured: true, source: 'keychain' };
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
       return undefined;
     });
     renderList();
     fireEvent.click(await screen.findByTestId('cards-add'));
     await screen.findByTestId('card-modal');
 
+    // A new card is saved only after its own key passed Test Connection —
+    // the Add form never borrows the default card's key (8.png).
+    fireEvent.change(await screen.findByPlaceholderText(/sk-/), {
+      target: { value: 'sk-new-key' },
+    });
     fireEvent.change(await screen.findByPlaceholderText(/model name/), {
       target: { value: 'deepseek-chat' },
     });
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() =>
+      expect((screen.getByTestId('card-save') as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(screen.getByTestId('card-save'));
 
     // The verdict is the thing the user opened the modal for, so the modal

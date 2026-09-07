@@ -171,6 +171,28 @@ export default function LLMProviderSettings({
 
   // Test connection state
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  // The exact credential inputs the last PASSING test exercised. Save is
+  // allowed only while the form still matches it (or nothing credential-
+  // related changed on an existing card): a save-time test can then only
+  // fail on an outage, never on a key the user never proved.
+  const [verifiedFingerprint, setVerifiedFingerprint] = useState<string | null>(null);
+  const fingerprintWithKey = (key: string) => JSON.stringify([
+    card?.id ?? null, provider, sdk, region, baseUrl.trim(),
+    model.trim() || modelInputValue.trim(), key,
+  ]);
+  const credentialFingerprint = fingerprintWithKey(apiKey.trim());
+  // The form as it stood right after the last successful save (the key
+  // field is cleared then). Until something changes, the save verdict is
+  // the state — not a fresh "test before saving" prompt above it.
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
+  // A passing verdict describes the inputs it ran against: once they change
+  // it is no longer true, so it goes away with the Save it unlocked.
+  useEffect(() => {
+    if (testStatus === 'success' && verifiedFingerprint !== credentialFingerprint) {
+      setTestStatus('idle');
+      setTestMessage('');
+    }
+  }, [credentialFingerprint, verifiedFingerprint, testStatus]);
   const [testMessage, setTestMessage] = useState('');
 
   const modelComboRef = useRef<HTMLDivElement>(null);
@@ -529,6 +551,7 @@ export default function LLMProviderSettings({
 
   // Test connection
   async function handleTestConnection() {
+    const fingerprint = credentialFingerprint;
     setTestStatus('testing');
     setTestMessage('');
     try {
@@ -554,6 +577,7 @@ export default function LLMProviderSettings({
       );
       if (result.status === 'ok') {
         setTestStatus('success');
+        setVerifiedFingerprint(fingerprint);
         const displayProvider =
           provider === CUSTOM_PROVIDER_KEY
             ? t('llm.test.customProvider')
@@ -582,21 +606,6 @@ export default function LLMProviderSettings({
     return () => { cancelled = true; };
   }, [mode]);
 
-  // Legacy global-slot key removal — reachable only from the wizard mount,
-  // where there is no card to delete instead. Inside the card modal the
-  // affordance is Delete card (the shim would hit the DEFAULT card, which is
-  // not necessarily the one on screen).
-  async function handleDeleteApiKey() {
-    if (!confirm(t('llm.apiKey.deleteConfirm'))) return;
-    try {
-      await api('/api/v2/settings/api-key', { method: 'DELETE' });
-      setApiKeyStatus({ configured: false, source: 'none' });
-      setGlobalSettings(prev => prev ? { ...prev, api_key_set: false, api_key_masked: '' } : prev);
-    } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : t('llm.apiKey.deleteError'));
-    }
-  }
-
   // TokenDance one-click key provisioning (Spec 47 Tier 2). Blocking POST:
   // the daemon opens the system browser for consent (up to ~5 min) and the
   // response arrives only after the key is minted, validated, and stored.
@@ -607,6 +616,9 @@ export default function LLMProviderSettings({
   // one-click signin the full form folds into a "ready to use" card so the
   // user sees the working defaults instead of a wall of fields.
   const [postSigninCollapsed, setPostSigninCollapsed] = useState(false);
+  // Mask of the key one-click signin just provisioned on THIS form's card —
+  // the only stored key a card-less mount may show.
+  const [provisionedKeyMasked, setProvisionedKeyMasked] = useState('');
 
   async function handleTokendanceSignin() {
     setTokendanceSigninBusy(true);
@@ -629,6 +641,7 @@ export default function LLMProviderSettings({
       );
       setApiKeyStatus({ configured: true, source: 'keyring' });
       setApiKey('');
+      setProvisionedKeyMasked(res.api_key_masked || '');
       // Values come from the response, never read back from state set inside
       // this handler (React 19 batching).
       const info = providers['tokendance'];
@@ -670,6 +683,12 @@ export default function LLMProviderSettings({
    * green or red, so a provider outage can never block saving.
    */
   async function doSave(): Promise<boolean> {
+    if (!connectionVerified) {
+      // Same reason the form shows under Test Connection; the wizard's Next
+      // reads the false and lets this line explain.
+      setSaveError(saveGateReason);
+      return false;
+    }
     setSaving(true);
     setSaved(false);
     setSaveError('');
@@ -712,6 +731,7 @@ export default function LLMProviderSettings({
       setSaveTest(res.test ?? null);
       if (apiKey.trim()) setApiKeyStatus({ configured: true, source: 'keyring' });
       setApiKey('');
+      setSavedFingerprint(fingerprintWithKey(''));
       setSaved(true);
       onCardSaved?.(res);
       return true;
@@ -735,15 +755,47 @@ export default function LLMProviderSettings({
     await doSave();
   }
 
-  // What the "current key" line shows: the edited card's own mask, or — on
-  // the card-less (wizard) mount — the default card's, via the derived `llm`
-  // block. Never a raw key: the daemon only ever serves the mask.
+  // What the "current key" line shows: the edited card's own mask, and
+  // nothing on a new card. It used to fall back to the DEFAULT card's mask,
+  // which read as "this key carries over" — it never did: Test Connection
+  // borrowed the default key and passed, Save created a keyless card, and
+  // the Remove-key link next to it deleted the default card's key.
   const storedKeyMasked = card
     ? (card.key_set ? card.key_masked : '')
-    : (globalSettings?.api_key_set ? globalSettings.api_key_masked : '');
+    : provisionedKeyMasked;
   const storedKeySource = card ? card.key_source : apiKeyStatus?.source;
 
   const canTestConnection = !!model.trim();
+  // A test needs a key it can call with: the one typed, or the edited card's
+  // own. Without either the daemon would fall back to the default card's key
+  // and vouch for a card that will be saved with none.
+  const hasTestableKey =
+    provider === CUSTOM_PROVIDER_KEY || !!apiKey.trim() || !!storedKeyCardId;
+  // Only a credential change needs a fresh test: a rename is not a reason to
+  // spend a completion call (mirrors the daemon's re-test rule).
+  const credentialsDirty = (() => {
+    if (!card) return true;
+    if (apiKey.trim()) return true;
+    const cardProviderKey =
+      card.provider && card.provider !== 'custom' && providers[card.provider]
+        ? card.provider
+        : CUSTOM_PROVIDER_KEY;
+    if (provider !== cardProviderKey) return true;
+    if ((model.trim() || modelInputValue.trim()) !== (card.model || '')) return true;
+    if (card.sdk && sdk !== card.sdk) return true;
+    if (region !== (card.region === 'china' ? 'china' : 'global')) return true;
+    // Provider and region already match the card here, so both sides
+    // resolve against the same registry default.
+    const info = provider === CUSTOM_PROVIDER_KEY ? undefined : providers[provider];
+    const registryUrl = info ? resolveBaseUrl(info, region) : '';
+    return (baseUrl.trim() || registryUrl) !== (card.base_url || registryUrl);
+  })();
+  const connectionVerified =
+    !credentialsDirty || (verifiedFingerprint !== null && verifiedFingerprint === credentialFingerprint);
+  const saveGateReason = hasTestableKey ? t('cards.save.testFirst') : t('cards.save.keyFirst');
+  const showSaveGate =
+    !connectionVerified && !card?.read_only && canTestConnection
+    && savedFingerprint !== credentialFingerprint;
 
   // ---- Wizard mode: the create-project modal only wants a heads-up when the
   // agent CAN'T start (no global API key) — the happy-path "using global
@@ -997,18 +1049,6 @@ export default function LLMProviderSettings({
                 <span className="ml-1 text-secondary/60">({storedKeySource})</span>
               )}
             </p>
-            {/* Only the legacy (card-less) mount offers key removal: inside
-                the card modal the affordance is Delete card, and the shim
-                would hit the DEFAULT card rather than the one on screen. */}
-            {!card && (
-              <button
-                type="button"
-                onClick={handleDeleteApiKey}
-                className="text-xs text-error hover:text-error/80 transition-colors"
-              >
-                {t('llm.apiKey.remove')}
-              </button>
-            )}
           </div>
         )}
       </div>
@@ -1135,7 +1175,8 @@ export default function LLMProviderSettings({
           <button
             type="button"
             onClick={handleTestConnection}
-            disabled={testStatus === 'testing'}
+            disabled={testStatus === 'testing' || !hasTestableKey}
+            data-testid="card-test"
             className="inline-flex items-center gap-2 text-sm font-medium text-secondary border border-border rounded-lg px-4 py-2 hover:border-secondary/40 hover:text-primary transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
           >
             {testStatus === 'testing' ? (
@@ -1159,6 +1200,11 @@ export default function LLMProviderSettings({
               {testMessage}
             </p>
           )}
+          {showSaveGate && testStatus !== 'error' && (
+            <p className="text-xs text-secondary mt-2" data-testid="card-save-gate">
+              {saveGateReason}
+            </p>
+          )}
         </div>
       )}
 
@@ -1168,7 +1214,7 @@ export default function LLMProviderSettings({
           <div className="flex items-center gap-3">
             <button
               type="submit"
-              disabled={saving || card?.read_only}
+              disabled={saving || card?.read_only || !connectionVerified}
               data-testid="card-save"
               className="inline-flex items-center gap-2 bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 disabled:opacity-50 max-md:w-full max-md:min-h-[44px] max-md:justify-center"
             >

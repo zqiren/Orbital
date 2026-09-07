@@ -938,6 +938,7 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
     apiMock.mockImplementation(async (path: string, opts?: RequestInit) => {
       if (path === '/api/v2/settings/cards' && opts?.method === 'POST') return postResult();
       if (path.startsWith('/api/v2/settings/cards/') && opts?.method === 'PUT') return postResult();
+      if (path === '/api/v2/providers/test') return { status: 'ok' };
       if (path === '/api/v2/settings') {
         return {
           llm: {
@@ -966,17 +967,27 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
     );
   }
 
+  const saveButton = () => screen.getByTestId('card-save') as HTMLButtonElement;
+
+  /** Fill a NEW card's key + model and pass Test Connection — the only way
+   *  Save unlocks for a card that has never been proven. */
+  async function fillAndVerifyNewCard(key = 'sk-test-key', modelName = 'deepseek-chat') {
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: key } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
+      target: { value: modelName },
+    });
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('card-test'));
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+  }
+
   it('Save POSTs a new card with provider, region, model and the typed key', async () => {
     mockCardApi();
     const onCardSaved = vi.fn();
     render(<LLMProviderSettings mode="global" onCardSaved={onCardSaved} />);
-    await screen.findByText('API Key');
-
-    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-test-key' } });
-    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
-      target: { value: 'deepseek-chat' },
-    });
-    fireEvent.click(screen.getByTestId('card-save'));
+    await fillAndVerifyNewCard();
+    fireEvent.click(saveButton());
 
     await waitFor(() => expect(cardCall('POST')).toBeTruthy());
     const body = JSON.parse(String((cardCall('POST')![1] as RequestInit).body));
@@ -996,11 +1007,8 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
   it('shows the save-test verdict inline on success', async () => {
     mockCardApi();
     render(<LLMProviderSettings mode="global" />);
-    await screen.findByText('API Key');
-    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
-      target: { value: 'deepseek-chat' },
-    });
-    fireEvent.click(screen.getByTestId('card-save'));
+    await fillAndVerifyNewCard();
+    fireEvent.click(saveButton());
     const verdict = await screen.findByTestId('card-save-test');
     expect(verdict.textContent).toContain('Connected to DeepSeek');
   });
@@ -1012,14 +1020,12 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
     }));
     const onCardSaved = vi.fn();
     render(<LLMProviderSettings mode="global" onCardSaved={onCardSaved} />);
-    await screen.findByText('API Key');
-    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
-      target: { value: 'deepseek-chat' },
-    });
-    fireEvent.click(screen.getByTestId('card-save'));
+    // The pre-save test passed; the provider went away between Test and Save.
+    await fillAndVerifyNewCard();
+    fireEvent.click(saveButton());
 
     const verdict = await screen.findByTestId('card-save-test');
-    // D9: an outage or a bad key must never block saving — the card exists,
+    // D9: an outage must never cost the user a saved card — the card exists,
     // and the failure is where the user will look for it.
     expect(verdict.textContent).toContain('Saved, but the connection test failed');
     expect(verdict.textContent).toContain('Invalid API key');
@@ -1070,12 +1076,160 @@ describe('LLMProviderSettings — card save (spec 082 §3.2)', () => {
       throw new Error('missing model');
     });
     render(<LLMProviderSettings mode="global" />);
-    await screen.findByText('API Key');
-    fireEvent.change(screen.getByPlaceholderText(/model name/i), {
-      target: { value: 'deepseek-chat' },
-    });
-    fireEvent.click(screen.getByTestId('card-save'));
+    await fillAndVerifyNewCard();
+    fireEvent.click(saveButton());
     expect((await screen.findByTestId('card-save-error')).textContent).toContain('missing model');
     expect(screen.queryByTestId('card-save-test')).toBeNull();
+  });
+});
+
+describe('LLMProviderSettings — Test Connection is compulsory before Save (bug 8.png, 2026-09-07)', () => {
+  const CARD_TB = {
+    id: 'card_tb',
+    name: 'DeepSeek',
+    provider: 'deepseek',
+    region: 'global' as const,
+    base_url: null,
+    sdk: 'openai' as const,
+    model: 'deepseek-chat',
+    created_at: '2026-09-04T10:00:00+00:00',
+    verified_at: null,
+    last_used_at: null,
+    last_error: null,
+    key_set: true,
+    key_masked: 'sk-d...tbtb',
+    key_source: 'keychain' as const,
+    is_default: false,
+    read_only: false,
+  };
+
+  function mockApiForGate(opts: { globalKey?: boolean } = {}) {
+    apiMock.mockImplementation(async (path: string, reqOpts?: RequestInit) => {
+      if (path === '/api/v2/providers/test') {
+        const body = JSON.parse(String(reqOpts?.body ?? '{}'));
+        return body.api_key === 'sk-bad' ? { status: 'error', error: 'Invalid API key' } : { status: 'ok' };
+      }
+      if (path === '/api/v2/settings/cards' && reqOpts?.method === 'POST') {
+        return { card: CARD_TB, test: { ok: true, status: null, code: null, message: 'ok' } };
+      }
+      if (path.startsWith('/api/v2/settings/cards/') && reqOpts?.method === 'PUT') {
+        return { card: CARD_TB, test: null };
+      }
+      if (path === '/api/v2/settings') {
+        return {
+          llm: {
+            api_key_set: !!opts.globalKey,
+            api_key_masked: opts.globalKey ? 'sk-F...czrq' : '',
+            base_url: null,
+            model: 'deepseek-v4-flash',
+            sdk: 'openai',
+            provider: 'deepseek',
+          },
+        };
+      }
+      if (path === '/api/v2/providers') return REGISTRY;
+      if (path === '/api/v2/settings/api-key/status') return { configured: !!opts.globalKey, source: opts.globalKey ? 'keychain' : 'none' };
+      return {};
+    });
+  }
+
+  const save = () => screen.getByTestId('card-save') as HTMLButtonElement;
+  const test = () => screen.getByTestId('card-test') as HTMLButtonElement;
+  const postBodies = () =>
+    apiMock.mock.calls
+      .filter(([p, o]) => p === '/api/v2/settings/cards' && (o as RequestInit)?.method === 'POST')
+      .map(([, o]) => JSON.parse(String((o as RequestInit).body)));
+
+  it('a new card never shows the default card\'s key, and cannot be tested or saved without one', async () => {
+    mockApiForGate({ globalKey: true });
+    render(<LLMProviderSettings mode="global" />);
+    await screen.findByText('API Key');
+    // 8.png: "Current key: sk-F...czrq (keychain)" + Remove key on an ADD form.
+    expect(screen.queryByText(/sk-F\.\.\.czrq/)).toBeNull();
+    expect(screen.queryByText('Remove key')).toBeNull();
+    // The Test button appears once the seeded model lands; wait for it.
+    await screen.findByTestId('card-test');
+    expect(save().disabled).toBe(true);
+    expect(test().disabled).toBe(true);
+    expect(screen.getByTestId('card-save-gate').textContent).toContain('Enter an API key');
+    // Nothing was created behind the user's back.
+    expect(postBodies()).toEqual([]);
+  });
+
+  it('Save stays disabled until a test passes, then any credential edit re-locks it', async () => {
+    mockApiForGate();
+    render(<LLMProviderSettings mode="global" />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    expect(save().disabled).toBe(true);
+    expect(screen.getByTestId('card-save-gate').textContent).toContain('Test the connection before saving');
+
+    fireEvent.click(test());
+    await waitFor(() => expect(save().disabled).toBe(false));
+    expect(screen.queryByTestId('card-save-gate')).toBeNull();
+
+    // Changing the model invalidates the verdict: the green line goes with it.
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-reasoner' } });
+    await waitFor(() => expect(save().disabled).toBe(true));
+    expect(screen.queryByText(/Connected to/)).toBeNull();
+
+    fireEvent.click(test());
+    await waitFor(() => expect(save().disabled).toBe(false));
+    fireEvent.click(save());
+    await waitFor(() => expect(postBodies().length).toBe(1));
+    // Saved exactly what was tested — key included.
+    expect(postBodies()[0]).toMatchObject({ model: 'deepseek-reasoner', api_key: 'sk-good' });
+    // After the save the verdict is the state: no "test before saving"
+    // prompt above the green line until the user edits something again.
+    await screen.findByTestId('card-save-test');
+    expect(screen.queryByTestId('card-save-gate')).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    await screen.findByTestId('card-save-gate');
+  });
+
+  it('a failed test keeps Save locked', async () => {
+    mockApiForGate();
+    render(<LLMProviderSettings mode="global" />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-bad' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(test());
+    await screen.findByText('Invalid API key');
+    expect(save().disabled).toBe(true);
+    fireEvent.click(save());
+    expect(postBodies()).toEqual([]);
+  });
+
+  it('the wizard\'s saveRef refuses an untested new card and says why', async () => {
+    mockApiForGate();
+    const saveRef = { current: null as (() => Promise<boolean>) | null };
+    render(<LLMProviderSettings mode="global" hideSaveButton saveRef={saveRef} />);
+    await screen.findByText('API Key');
+    fireEvent.change(screen.getByPlaceholderText(/sk-/), { target: { value: 'sk-good' } });
+    fireEvent.change(screen.getByPlaceholderText(/model name/i), { target: { value: 'deepseek-chat' } });
+    await waitFor(() => expect(saveRef.current).toBeTruthy());
+    expect(await saveRef.current!()).toBe(false);
+    // No Save button in the wizard: the reason lives under Test Connection.
+    expect(screen.getByTestId('card-save-gate').textContent).toContain('Test the connection');
+    expect(postBodies()).toEqual([]);
+  });
+
+  it('renaming an existing card needs no test; changing its model does', async () => {
+    mockApiForGate();
+    render(<LLMProviderSettings mode="global" card={CARD_TB} />);
+    await screen.findByDisplayValue('deepseek-chat');
+    // Untouched credentials: Save is open (the daemon skips the re-test too).
+    await waitFor(() => expect(save().disabled).toBe(false));
+    expect(screen.queryByTestId('card-save-gate')).toBeNull();
+
+    fireEvent.change(screen.getByDisplayValue('deepseek-chat'), { target: { value: 'deepseek-reasoner' } });
+    await waitFor(() => expect(save().disabled).toBe(true));
+    // The card's own key makes the test runnable without retyping it.
+    expect(test().disabled).toBe(false);
+    fireEvent.click(test());
+    await waitFor(() => expect(save().disabled).toBe(false));
+    const body = JSON.parse(String((apiMock.mock.calls.find(([p]) => p === '/api/v2/providers/test')![1] as RequestInit).body));
+    expect(body).toMatchObject({ card_id: 'card_tb', model: 'deepseek-reasoner' });
   });
 });
