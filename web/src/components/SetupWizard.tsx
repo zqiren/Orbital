@@ -101,7 +101,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   // The provider the form must EDIT. undefined while loading and when there is
   // genuinely none, which is the true first run — there the form's create
   // branch is right, and the new provider becomes the default by being first.
-  const { cards, defaultCardId } = useCredentialCards();
+  const { cards, defaultCardId, refresh: refreshCards } = useCredentialCards();
   const defaultCard = cards.find((c) => c.id === defaultCardId) ?? undefined;
   const [checkingKey, setCheckingKey] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -271,6 +271,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               hideSaveButton
               saveRef={saveRef}
               providerPicker="cards"
+              // One-click sign-in creates (or re-keys) a card on the daemon;
+              // re-read so "Adjust settings" edits THAT card, not the one
+              // that happened to be default at mount.
+              onCardSaved={() => { void refreshCards(); }}
             />
 
             {/* First-run telemetry disclosure (spec 046 §6) — one sentence,
