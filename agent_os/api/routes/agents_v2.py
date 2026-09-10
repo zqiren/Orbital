@@ -1293,100 +1293,6 @@ async def cold_start_scan(project_id: str):
     return {"status": "started", "session_id": session_id}
 
 
-# ---- Spec 074 §3.4: transcript recap preamble for pinned dispatches ----
-
-# Total budget for the recap block (mirrors _build_session_summary's cap) and
-# the per-message excerpt cap inside it.
-_RECAP_CAP_CHARS = 10_000
-_RECAP_LINE_CAP = 500
-
-# Extracts the summary text out of a completed-terminal row's display copy
-# ("[Sub-agent] {handle} completed. Summary: {text}. Transcript: {path}.").
-# Greedy body + the literal tail anchors on the LAST ". Transcript: ", so
-# summaries containing periods survive. The handle is deliberately dropped —
-# recap replies are worker-ANONYMOUS ("assistant").
-_RECAP_COMPLETED_RE = re.compile(
-    r"\[Sub-agent\] \S+ completed\. Summary: ([\s\S]*)\. Transcript: "
-)
-
-
-def _recap_scope(messages: list, handle: str) -> list:
-    """Messages after ``handle``'s last participation in this session.
-
-    Participation = a user row targeted at the handle, a dispatch-marker row
-    whose ``_meta.handle`` is the handle, or one of the handle's own terminal
-    rows (their content starts with ``[Sub-agent] {handle} `` — terminal meta
-    carries no handle field). Never participated → the whole session. An
-    empty result means the worker's own thread already holds the conversation
-    (own-thread resume) — no recap.
-    """
-    own_prefix = f"[Sub-agent] {handle} "
-    last = -1
-    for i, m in enumerate(messages):
-        meta = m.get("_meta") or {}
-        if m.get("role") == "user" and m.get("target") == handle:
-            last = i
-        elif meta.get("handle") == handle:
-            last = i
-        elif meta.get("event") == "sub_agent_terminal":
-            text = meta.get("display_content") or m.get("content") or ""
-            if isinstance(text, str) and text.startswith(own_prefix):
-                last = i
-    return messages[last + 1:]
-
-
-def _build_recap_preamble(session, handle: str) -> str:
-    """Build the capped, worker-anonymous "Conversation so far" block.
-
-    Content: user messages plus prior reply summaries — management replies
-    verbatim and sub-agent completion summaries extracted from their terminal
-    rows — every reply labeled "assistant", never naming the producing agent.
-    Framed as a visible context block (not fabricated turns), newest-favored
-    under the ~10k-char cap, prepended to the pinned worker's first message
-    by the inject route. Returns "" when there is nothing the worker missed.
-    """
-    try:
-        messages = session.get_messages()
-    except Exception:
-        return ""
-    lines: list[str] = []
-    total = 0
-    for m in reversed(_recap_scope(messages, handle)):
-        role = m.get("role")
-        content = m.get("content")
-        line = None
-        if role in ("user", "assistant"):
-            if isinstance(content, str) and content.strip():
-                label = "user" if role == "user" else "assistant"
-                line = f"{label}: {content.strip()[:_RECAP_LINE_CAP]}"
-        elif role == "system":
-            meta = m.get("_meta") or {}
-            if (meta.get("event") == "sub_agent_terminal"
-                    and meta.get("kind") == "completed"):
-                display = meta.get("display_content") or (
-                    content if isinstance(content, str) else "")
-                match = _RECAP_COMPLETED_RE.match(display)
-                if match:
-                    summary = match.group(1).strip()
-                    if summary and summary != "(no output)":
-                        line = f"assistant: {summary[:_RECAP_LINE_CAP]}"
-        if line is None:
-            continue
-        if total + len(line) > _RECAP_CAP_CHARS:
-            break
-        lines.append(line)
-        total += len(line)
-    if not lines:
-        return ""
-    lines.reverse()
-    return (
-        "Conversation so far (earlier messages in this chat, provided as "
-        "context; prior replies are labeled \"assistant\"):\n\n"
-        + "\n\n".join(lines)
-        + "\n\n--- end of conversation so far ---\n\n"
-    )
-
-
 # The session JSONL's advisory lock is held in short bursts by concurrent
 # same-process writers — the pin PATCH's load + meta-rewrite is the known
 # collider (the composer fires it fire-and-forget, so a send routinely lands
@@ -1425,30 +1331,11 @@ async def inject_message(project_id: str, req: InjectRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Spec 074 §3.4: recap preamble for a pinned worker starting a thread
-    # that lacks this session's prior conversation. Resolved BEFORE the user
-    # message is persisted so the recap covers strictly prior rows, and the
-    # resolved concrete session id is reused for persistence (a None
-    # session_id must not be minted twice). The recap rides ONLY the
-    # dispatched message body — the persisted chat row stays the user's
-    # authored text. No LLM call anywhere in this path.
-    recap_preamble = ""
+    # The "Conversation so far" block a worker receives is built by
+    # SubAgentManager at dispatch time (agent_os/daemon_v2/recap.py) for
+    # every entry path; this route only persists the authored row and
+    # hands the raw text to send().
     inject_session_id = req.session_id
-    if req.target and req.pinned and _sub_agent_manager is not None:
-        try:
-            inject_session_id, prior_session = await _retry_session_lock(
-                lambda: _agent_manager.peek_chat_session(
-                    project_id, req.session_id,
-                ))
-            if prior_session is not None:
-                recap_preamble = _build_recap_preamble(prior_session, req.target)
-        except Exception:
-            logger.warning(
-                "recap preamble build failed for %s/%s — dispatching without",
-                project_id, req.target, exc_info=True,
-            )
-            recap_preamble = ""
-            inject_session_id = req.session_id
 
     # Single-slot enforcement now lives at the MANAGER level: start_agent()
     # raises ValueError("Slot held by session …") when a different session
@@ -1501,9 +1388,8 @@ async def inject_message(project_id: str, req: InjectRequest):
         # Persist the authored user message BEFORE dispatch, and adopt the
         # resolved concrete session id for dispatch + ack + lifecycle. A pure
         # resolve-then-append: it never starts/queues the management loop.
-        # ``inject_session_id`` is the recap peek's resolved id when the
-        # dispatch is pinned (identical resolution funnel), else the raw
-        # request value.
+        # ``inject_session_id`` is the raw request value; the mention
+        # persist below resolves it through the canonical funnel.
         try:
             mention_session_id = await _retry_session_lock(
                 lambda: _agent_manager.persist_mention_message(
@@ -1548,13 +1434,9 @@ async def inject_message(project_id: str, req: InjectRequest):
             # any pending quiescence consolidation timer.
             _pinned_consolidation.note_pinned_dispatch(
                 project_id, mention_session_id)
-        dispatch_content = (
-            recap_preamble + effective_content if recap_preamble
-            else effective_content
-        )
         try:
             result = await _sub_agent_manager.send(
-                project_id, req.target, dispatch_content,
+                project_id, req.target, effective_content,
                 session_id=mention_session_id, dispatch_id=dispatch_id,
                 initiator=initiator,
             )

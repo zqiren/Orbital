@@ -333,13 +333,24 @@ class LifecycleObserver:
                            transcript_path: str,
                            *, session_id: str | None = None) -> None:
         """Sub-agent finished its current task."""
+        from agent_os.daemon_v2.recap import REPLY_CAP_CHARS
+
         summary_text = summary[:500] if summary else "(no output)"
+        # The chat is one conversation: the manager (and, through the recap
+        # block, every later worker) reads the worker's FULL reply off this
+        # row — ``_meta.reply`` and the LLM-facing content — while the
+        # timeline keeps rendering the short display text.
+        reply_text = summary.strip()[:REPLY_CAP_CHARS] if summary else "(no output)"
         # Display split (backend _meta contract, mirrors commit 967237d's
         # fanout join-summary split): display_content is the clean,
         # user-visible marker; the steering guidance below is agent-facing
         # only and must never render in the chat timeline.
         display_content = (
             f"[Sub-agent] {handle} completed. Summary: {summary_text}. "
+            f"Transcript: {transcript_path}."
+        )
+        llm_content = (
+            f"[Sub-agent] {handle} completed. Summary: {reply_text}. "
             f"Transcript: {transcript_path}."
         )
         if summary and summary.strip():
@@ -359,7 +370,7 @@ class LifecycleObserver:
                 " The sub-agent produced no final message, so nothing was shown to "
                 "the user — briefly tell the user the outcome yourself."
             )
-        content = display_content + guidance
+        content = llm_content + guidance
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         # An assigned queue item closes on its worker's finish, not on a
         # manager verdict turn (2026-09-05). The row below still lands so the
@@ -384,6 +395,7 @@ class LifecycleObserver:
                 project_id, content, session_id=session_id,
                 meta={"event": "sub_agent_terminal", "kind": "completed",
                       "display_content": display_content,
+                      "reply": reply_text,
                       **({"suppress_wake": True}
                          if (pinned or queue_settled) else {})},
             )

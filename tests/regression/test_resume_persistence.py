@@ -368,12 +368,33 @@ class TestAgentManagerRecord:
         assert Session.load(session._filepath).get_sub_agent_thread(
             "claude-code")["session_id"] == "sid-1"
 
-    async def test_record_with_no_hydrated_session_is_a_noop(self):
+    async def test_record_with_no_hydrated_session_writes_the_disk_session(
+            self, tmp_path):
+        """While a chat is pinned the manager loop takes no turns and its
+        handle is routinely evicted; the record must still land on the
+        on-disk session, or the next resume starts fresh (seen live)."""
+        from agent_os.daemon_v2.agent_manager import AgentManager
+
+        session = _new_session(tmp_path)
+        am = AgentManager.__new__(AgentManager)
+        am._handles = {}
+        am._load_session_from_disk = (
+            lambda pid, sid: Session.load(session._filepath))
+        am.record_sub_agent_thread(
+            "proj_x", "claude-code", claude_session_id="sid-1", model="m",
+            session_id="sess_x",
+        )
+        assert Session.load(session._filepath).get_sub_agent_thread(
+            "claude-code")["session_id"] == "sid-1"
+
+    async def test_record_with_no_session_anywhere_is_a_noop(self):
         from agent_os.daemon_v2.agent_manager import AgentManager
 
         am = AgentManager.__new__(AgentManager)
         am._handles = {}
-        # Must not raise — completion racing an eviction is logged, not fatal.
+        am._project_store = None  # nothing on disk to fall back to
+        # Must not raise — a completion racing a project deletion is logged,
+        # not fatal.
         am.record_sub_agent_thread(
             "proj_x", "claude-code", claude_session_id="sid-1", model="m",
             session_id="sess_x",

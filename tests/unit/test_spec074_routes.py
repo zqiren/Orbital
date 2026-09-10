@@ -4,7 +4,7 @@
 
 """Spec 074 — route-level coverage: the sessions PATCH (pin/retarget/unpin
 validation + side effects) and the inject route's pinned dispatch path
-(initiator mapping + recap preamble placement).
+(initiator mapping; the recap block is built at dispatch, see test_recap_shared_chat.py).
 
 Real FastAPI app via create_app (the test_sub_agent_memory_viewer pattern);
 setup_engine.check_all patched to a deterministic installed set; the
@@ -258,8 +258,11 @@ def dispatch_env(client, tmp_path):
 
 class TestPinnedInject:
 
-    def test_pinned_inject_maps_to_user_pinned_and_prepends_recap(
+    def test_pinned_inject_maps_to_user_pinned_and_sends_raw_text(
             self, dispatch_env):
+        """The route persists the authored row and hands send() the raw
+        text: the "Conversation so far" block is built by SubAgentManager
+        at dispatch time (recap.py) for every entry path, never here."""
         client, stub, consolidation, pid, ws, sid = dispatch_env
 
         resp = client.post(f"/api/v2/agents/{pid}/inject", json={
@@ -271,13 +274,8 @@ class TestPinnedInject:
         assert len(stub.sends) == 1
         send = stub.sends[0]
         assert send["initiator"] == "user_pinned"
-        # Recap preamble: codex never participated in this session, which has
-        # history → the DISPATCHED body carries the context block…
-        assert send["message"].startswith("Conversation so far")
-        assert "earlier context message" in send["message"]
-        assert send["message"].endswith("please fix the login bug")
+        assert send["message"] == "please fix the login bug"
 
-        # …while the PERSISTED chat row stays the authored text only.
         rows = _session_rows(ws, sid)
         user_rows = [r for r in rows if r.get("role") == "user"]
         assert user_rows[-1]["content"] == "please fix the login bug"
@@ -286,7 +284,7 @@ class TestPinnedInject:
         # A pinned dispatch resets the quiescence timer.
         consolidation.note_pinned_dispatch.assert_called_once()
 
-    def test_mention_inject_keeps_user_mention_and_no_recap(
+    def test_mention_inject_keeps_user_mention_and_sends_raw_text(
             self, dispatch_env):
         client, stub, consolidation, pid, ws, sid = dispatch_env
 
@@ -301,9 +299,7 @@ class TestPinnedInject:
         assert send["message"] == "please fix the login bug"
         consolidation.note_pinned_dispatch.assert_not_called()
 
-    def test_pinned_resume_of_own_thread_gets_no_recap(self, dispatch_env):
-        """Second pinned message to the same worker: the first dispatch made
-        it a participant, so the second body carries no context block."""
+    def test_second_pinned_message_is_also_raw_text(self, dispatch_env):
         client, stub, consolidation, pid, ws, sid = dispatch_env
 
         client.post(f"/api/v2/agents/{pid}/inject", json={
@@ -315,8 +311,8 @@ class TestPinnedInject:
             "target": "codex", "pinned": True, "session_id": sid,
         })
 
-        second = stub.sends[1]
-        assert second["message"] == "second pinned message"
+        assert stub.sends[0]["message"] == "first pinned message"
+        assert stub.sends[1]["message"] == "second pinned message"
 
 
 # ---------------------------------------------------------------------------
@@ -342,8 +338,8 @@ class TestPinnedInjectLockContention:
 
     def test_send_survives_briefly_held_session_lock(self, dispatch_env):
         """Lock held for ~300ms (a realistic patch_session burst): the route
-        retries both the recap peek and the persist — 200, dispatched WITH
-        the recap, and the authored row lands in the JSONL."""
+        retries the persist — 200, dispatched, and the authored row lands in
+        the JSONL."""
         import threading
 
         client, stub, consolidation, pid, ws, sid = dispatch_env
@@ -362,8 +358,7 @@ class TestPinnedInjectLockContention:
 
         assert resp.status_code == 200, resp.text
         assert len(stub.sends) == 1
-        # The peek retried too — recap preserved, not degraded away.
-        assert stub.sends[0]["message"].startswith("Conversation so far")
+        assert stub.sends[0]["message"] == "racing the pin patch"
         rows = _session_rows(ws, sid)
         user_rows = [r for r in rows if r.get("role") == "user"]
         assert user_rows[-1]["content"] == "racing the pin patch"

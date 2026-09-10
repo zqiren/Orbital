@@ -361,9 +361,10 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # per-(SessionKey, handle) thread records off the management session.
     # (get_session's session_id is keyword-only; the resolver contract is
     # positional (project_id, session_id).)
-    sub_agent_manager._session_resolver = (
-        lambda pid, sid: agent_manager.get_session(pid, session_id=sid)
-    )
+    # Reads through the disk-fallback accessor: a pinned chat's manager loop
+    # is idle and often evicted, and both the recap block and the resume
+    # record must still see the session.
+    sub_agent_manager._session_resolver = agent_manager.resolve_session_for_read
 
     # 6a2. Fanout registry (spec 009, Task 2/6): join/gather core for parallel
     # native-worker dispatch. Wired post-construction, mirrors lifecycle_observer
