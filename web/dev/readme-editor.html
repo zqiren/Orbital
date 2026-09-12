@@ -39,8 +39,8 @@
 <body>
 <header>
   <span class="title">README proposal</span>
-  <button class="tab" data-file="README.md">README.md（中文）</button>
-  <button class="tab" data-file="README.en.md">README.en.md</button>
+  <button class="tab" data-file="README.md">README.md (English)</button>
+  <button class="tab" data-file="README.zh-CN.md">README.zh-CN.md（中文）</button>
   <span class="spacer"></span>
   <span id="status" class="status"></span>
   <button class="act" id="copy">Copy markdown</button>
@@ -62,7 +62,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script>
 (function () {
-  const FILES = ['README.md', 'README.en.md'];
+  const FILES = ['README.md', 'README.zh-CN.md'];
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
   let file = FILES.includes(params.get('file')) ? params.get('file') : 'README.md';
@@ -160,7 +160,7 @@
   async function load() {
     for (const t of document.querySelectorAll('header .tab')) t.classList.toggle('on', t.dataset.file === file);
     $('fname').textContent = file;
-    document.documentElement.lang = file === 'README.md' ? 'zh' : 'en';
+    document.documentElement.lang = file === 'README.zh-CN.md' ? 'zh' : 'en';
     history.replaceState(null, '', `?file=${encodeURIComponent(file)}`);
     setStatus('Loading…');
     const r = await fetch(`/__i18n/readme/source?file=${encodeURIComponent(file)}`);

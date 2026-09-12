@@ -26,7 +26,7 @@ const pendingDir = path.join(repoRoot, 'docs', 'i18n', 'pending');
 const overridesFile = path.join(pendingDir, 'ui-overrides.json');
 const editorPage = path.join(here, 'readme-editor.html');
 
-const DRAFT_FILES = new Set(['README.md', 'README.en.md']);
+const DRAFT_FILES = new Set(['README.md', 'README.zh-CN.md']);
 const MIME: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.svg': 'image/svg+xml', '.webp': 'image/webp', '.mp4': 'video/mp4',

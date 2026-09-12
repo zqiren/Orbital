@@ -213,7 +213,7 @@ are in `docs/i18n/MAINTAINABILITY.md`.
   is the README proposal editor. Both are served by
   `web/dev/i18nEditorPlugin.ts` (`apply: 'serve'`, never built). Edits land as
   plain files under `docs/i18n/pending/` (`ui-overrides.json` = catalog changes
-  keyed by string key; `README.md` / `README.en.md` = draft READMEs) and are
+  keyed by string key; `README.md` / `README.zh-CN.md` = draft READMEs) and are
   **not** applied to `strings.ts` or the real READMEs until someone folds them
   in. API keys pasted into that daemon last only for its lifetime.
 
