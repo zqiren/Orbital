@@ -279,6 +279,19 @@ class BrowserManager:
         self._worker_contexts: dict[str, BrowserContext] = {}  # scope -> BrowserContext
         self._worker_lock = asyncio.Lock()
 
+        # Main (persistent-profile) browser: every launch / crash-recovery /
+        # stale-relaunch state transition runs under _main_lock, with a
+        # re-check after acquiring it — the second of two concurrent first
+        # users finds the context the first one just launched and returns it,
+        # instead of double-launching against the profile's SingletonLock and
+        # overwriting the winner's context (spec 085 §4.3: that overwrite left
+        # ``_context`` None while ``_browser`` stayed connected, so every
+        # later ensure_browser() relaunched into the lock and failed — all
+        # projects' browser tools dead until daemon restart). Same trap as
+        # _worker_lock: asyncio.Lock is not reentrant, so the *_unlocked
+        # internals below must never call ensure_browser()/close_for_handoff().
+        self._main_lock = asyncio.Lock()
+
         # Per-project page tracking: project_id -> list[page]
         self._project_pages: dict[str, list] = {}
 
@@ -302,9 +315,24 @@ class BrowserManager:
     # ------------------------------------------------------------------
 
     async def ensure_browser(self):
-        """Ensure browser is running. Launch if needed. Recover if crashed."""
+        """Ensure browser is running. Launch if needed. Recover if crashed.
+
+        Public entry point — takes ``_main_lock`` for the whole check /
+        launch / recover sequence. Never call from a path that already holds
+        the lock; use ``_ensure_browser_unlocked`` there.
+        """
         if async_playwright is None and self._playwright is None:
             raise RuntimeError("patchright is not installed — install with: pip install patchright")
+        async with self._main_lock:
+            return await self._ensure_browser_unlocked()
+
+    async def _ensure_browser_unlocked(self):
+        """Body of ``ensure_browser``. Caller must hold ``_main_lock``.
+
+        Re-evaluates the state *after* the lock was acquired: a caller that
+        queued behind a launch or a recovery sees the live result and returns
+        it — that re-check is what makes concurrent first use single-launch.
+        """
         if self._context and self._browser and self._browser.is_connected():
             # Browser process is alive, but verify the CDP connection is still
             # responsive (catches stale connections after sleep/wake).
@@ -314,7 +342,7 @@ class BrowserManager:
         # Browser is dead or never started
         if self._browser and not self._browser.is_connected():
             logger.warning("Browser crashed — attempting recovery")
-            await self._handle_crash()
+            await self._handle_crash_unlocked()
             return self._context
 
         return await self._launch()
@@ -515,14 +543,19 @@ class BrowserManager:
         # Try system Chrome → Edge → bundled Chromium. (There is no WebKit
         # tier: it needed a Playwright WebKit build nothing ever downloads,
         # so it could only fail.)
-        self._context = None
+        #
+        # The result is built in a local and committed to ``self._context``
+        # only once a launch succeeded: this path runs under _main_lock, and
+        # the old unconditional ``self._context = None`` here was the write
+        # that clobbered a sibling's freshly launched context (spec 085 §4.3).
+        context = None
         channels = [
             ("chrome", "system Chrome"),
             ("msedge", "system Edge"),
         ]
         for channel, label in channels:
             try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
+                context = await self._playwright.chromium.launch_persistent_context(
                     channel=channel, **launch_kwargs
                 )
                 logger.info("Browser launched using %s", label)
@@ -534,7 +567,7 @@ class BrowserManager:
                 )
         else:
             try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
+                context = await self._playwright.chromium.launch_persistent_context(
                     **launch_kwargs
                 )
                 logger.info("Browser launched using bundled Chromium")
@@ -559,7 +592,8 @@ class BrowserManager:
         # resolution on Patchright persistent contexts (Windows).  Stealth
         # JS is injected per-page via _apply_stealth() instead.
 
-        self._browser = self._context.browser
+        self._context = context
+        self._browser = context.browser
 
         # Check User-Agent for headless leak
         pages = self._context.pages
@@ -582,7 +616,24 @@ class BrowserManager:
     # ------------------------------------------------------------------
 
     async def _handle_crash(self):
-        """Handle browser crash. Re-launch with rate limiting."""
+        """Handle browser crash. Re-launch with rate limiting.
+
+        Lock-taking wrapper for callers outside the ensure_browser path;
+        ``_ensure_browser_unlocked`` calls ``_handle_crash_unlocked`` directly.
+        """
+        async with self._main_lock:
+            await self._handle_crash_unlocked()
+
+    async def _handle_crash_unlocked(self):
+        """Body of ``_handle_crash``. Caller must hold ``_main_lock``.
+
+        Idempotent: a second entrant that queued behind a recovery finds the
+        replacement browser connected and returns without recording a second
+        restart for the same crash — two timestamps for one crash would have
+        tripped the 3-in-5-minutes limiter on the next genuine one.
+        """
+        if self._browser is not None and self._browser.is_connected() and self._context is not None:
+            return
         now = time.monotonic()
         self._restart_timestamps.append(now)
 
@@ -595,10 +646,9 @@ class BrowserManager:
                     "Check system resources and restart the daemon."
                 )
 
-        # Clean up stale state
-        self._project_pages.clear()
-        self._page_state.clear()
-        self._pending_file_choosers.clear()
+        # Clean up stale state — the MAIN browser's only; worker contexts
+        # live in a separate browser and are still alive (spec 085 §5.3).
+        self._forget_main_bookkeeping()
 
         # Re-launch
         self._browser = None
@@ -612,6 +662,10 @@ class BrowserManager:
         After sleep/wake the browser process may still be running but the CDP
         connection can be broken.  Accessing ``self._context.pages`` is a
         lightweight round-trip that will throw if the connection is stale.
+
+        Caller must hold ``_main_lock`` — the stale relaunch is a state
+        transition, and a sibling session's action must not have its context
+        closed under it by a concurrent entrant.
         """
         try:
             _ = self._context.pages
@@ -620,11 +674,30 @@ class BrowserManager:
             await self._cleanup_stale()
             await self._launch()
 
+    def _forget_main_bookkeeping(self) -> None:
+        """Drop page/state/chooser bookkeeping for the main browser only.
+
+        Crash recovery and stale cleanup clear the residue of a DEAD main
+        browser. Worker scopes (``worker:`` keys) run in a separate plain
+        launch that is still alive, so their bookkeeping is owned by
+        ``close_worker_scope`` and must survive here (spec 085 §5.3).
+        """
+        for project_id in [k for k in self._project_pages if not k.startswith(WORKER_SCOPE_PREFIX)]:
+            for page in self._project_pages.pop(project_id, []):
+                self._page_state.pop(id(page), None)
+        for project_id in [k for k in self._pending_file_choosers if not k.startswith(WORKER_SCOPE_PREFIX)]:
+            self._pending_file_choosers.pop(project_id, None)
+        # Page state whose page no longer belongs to any tracked scope.
+        live_ids = {id(p) for pages in self._project_pages.values() for p in pages}
+        for page_id in [k for k in self._page_state if k not in live_ids]:
+            self._page_state.pop(page_id, None)
+
     async def _cleanup_stale(self):
-        """Safely tear down stale browser/context handles and reset state."""
-        self._project_pages.clear()
-        self._page_state.clear()
-        self._pending_file_choosers.clear()
+        """Safely tear down stale browser/context handles and reset state.
+
+        Caller must hold ``_main_lock`` (``close_for_handoff`` takes it).
+        """
+        self._forget_main_bookkeeping()
 
         if self._context:
             try:
@@ -852,21 +925,23 @@ class BrowserManager:
         for project_id in list(self._project_pages.keys()):
             logger.debug("Closing pages for project %s", project_id)
             await self.close_project_pages(project_id)
-        if self._context:
-            try:
-                await self._context.close()
-                logger.debug("Browser context closed")
-            except Exception as exc:
-                logger.warning("Error closing browser context: %s", exc)
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-                logger.debug("Playwright stopped")
-            except Exception as exc:
-                logger.warning("Error stopping playwright: %s", exc)
-        self._browser = None
-        self._context = None
-        self._playwright = None
+        # Wait for any in-flight launch/recovery rather than closing under it.
+        async with self._main_lock:
+            if self._context:
+                try:
+                    await self._context.close()
+                    logger.debug("Browser context closed")
+                except Exception as exc:
+                    logger.warning("Error closing browser context: %s", exc)
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                    logger.debug("Playwright stopped")
+                except Exception as exc:
+                    logger.warning("Error stopping playwright: %s", exc)
+            self._browser = None
+            self._context = None
+            self._playwright = None
         logger.info("Browser shutdown complete")
 
     async def close_for_handoff(self):
@@ -879,11 +954,12 @@ class BrowserManager:
         ``_project_pages``/``_page_state`` — the manager stays relaunchable
         via the lazy ``ensure_browser()``. No-op when no context exists.
         """
-        if self._context is None and self._playwright is None:
-            return
-        logger.info("Closing daemon browser context for sign-in handoff")
-        await self._cleanup_stale()
-        logger.info("Daemon browser context closed — profile lock released")
+        async with self._main_lock:
+            if self._context is None and self._playwright is None:
+                return
+            logger.info("Closing daemon browser context for sign-in handoff")
+            await self._cleanup_stale()
+            logger.info("Daemon browser context closed — profile lock released")
 
     # ------------------------------------------------------------------
     # Browser warmup (headed session for cookie warmup)
