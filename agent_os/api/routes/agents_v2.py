@@ -74,6 +74,10 @@ class CreateProjectRequest(BaseModel):
     budget_action: str | None = None
     budget_period: str | None = None
     budget_currency: str | None = None
+    # Spec 084 §3.3: a derived name (the import wizard's folder basename) may
+    # be suffixed -2, -3, … when taken. Default False keeps an explicit,
+    # user-typed duplicate 409ing loudly in the create-project modal.
+    auto_unique_name: bool = False
 
     @field_validator("sub_agent_deployment_instructions", mode="before")
     @classmethod
@@ -668,6 +672,8 @@ async def create_project(req: CreateProjectRequest):
     }
     if req.agent_name is not None:
         project_data["agent_name"] = req.agent_name
+    if req.auto_unique_name:
+        project_data["auto_unique_name"] = True
     if req.agent_slug is not None:
         project_data["agent_slug"] = req.agent_slug
     if req.enabled_sub_agents is not None:

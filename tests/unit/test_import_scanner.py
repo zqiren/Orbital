@@ -317,3 +317,39 @@ def test_symlinked_folder_dedupes_to_real_path(home, tmp_path):
     agentish = [c for c in cands if c.source in {SOURCE_CLAUDE_CODE, SOURCE_CODEX}]
     assert len(agentish) == 1
     assert agentish[0].session_count == 2
+
+
+# --------------------------------------------------------------------------
+# Spec 084 §3.2 — already-imported candidates are marked, never hidden
+# --------------------------------------------------------------------------
+
+
+def test_already_imported_marks_candidate_whose_workspace_exists(home, tmp_path):
+    imported = str(tmp_path / "real" / "imported")
+    fresh = str(tmp_path / "real" / "fresh")
+    for p in (imported, fresh):
+        os.makedirs(p, exist_ok=True)
+    _write_claude_project(os.path.join(home, ".claude", "projects"), imported)
+    _write_claude_project(os.path.join(home, ".claude", "projects"), fresh)
+
+    found = scan_importable_projects(home=home, existing_workspaces=[imported])
+    by_path = {c.path: c for c in found}
+    assert by_path[imported].already_imported is True
+    assert by_path[fresh].already_imported is False
+    assert by_path[imported].to_dict()["already_imported"] is True
+    # Default: nothing is marked and the payload still carries the key.
+    plain = scan_importable_projects(home=home)
+    assert all(c.already_imported is False for c in plain)
+
+
+def test_already_imported_matches_through_a_symlink(home, tmp_path):
+    real = str(tmp_path / "real" / "proj")
+    os.makedirs(real, exist_ok=True)
+    link = str(tmp_path / "link-proj")
+    os.symlink(real, link)
+    _write_claude_project(os.path.join(home, ".claude", "projects"), real)
+
+    # The project was imported via the symlink path; the candidate is the
+    # real path. Same realpath/normcase key as _dedupe → still a match.
+    found = scan_importable_projects(home=home, existing_workspaces=[link])
+    assert [c.already_imported for c in found] == [True]

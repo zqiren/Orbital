@@ -38,6 +38,7 @@ import logging
 import os
 import sqlite3
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -73,6 +74,10 @@ class ImportCandidate:
     path: str
     session_count: int = 0
     last_activity: str | None = None
+    # Spec 084 §3.2: True when the folder is already a project's workspace, so
+    # the wizard shows it as imported instead of offering an Add that can only
+    # 409 against the project it created itself.
+    already_imported: bool = False
     # Internal: every source that contributed to this (post-dedup) candidate.
     # Not part of the public {source,name,path,session_count,last_activity}
     # payload, but handy for debugging/telemetry.
@@ -85,6 +90,7 @@ class ImportCandidate:
             "path": self.path,
             "session_count": self.session_count,
             "last_activity": self.last_activity,
+            "already_imported": self.already_imported,
         }
 
 
@@ -99,6 +105,7 @@ def scan_importable_projects(
     claude_projects_dir: str | None = None,
     codex_dir: str | None = None,
     obsidian_config_path: str | None = None,
+    existing_workspaces: Iterable[str] = (),
 ) -> list[ImportCandidate]:
     """Scan all v1 sources and return ranked, deduped, path-verified candidates.
 
@@ -106,6 +113,12 @@ def scan_importable_projects(
     ``home`` (default ``~``), but every one is injectable so tests can point at
     fixture home directories. Any source that is missing or unreadable is
     skipped silently — discovery never raises.
+
+    ``existing_workspaces`` (spec 084 §3.2) are the workspaces of projects that
+    already exist; a candidate resolving to one of them is returned with
+    ``already_imported=True`` rather than dropped, so the wizard can show it
+    honestly. Matching uses the same realpath/normcase key as ``_dedupe``, so a
+    symlinked import still matches its real folder.
     """
     home = home or os.path.expanduser("~")
 
@@ -123,6 +136,10 @@ def scan_importable_projects(
 
     verified = [c for c in raw if _path_is_live(c.path)]
     deduped = _dedupe(verified)
+    imported_keys = {_path_key(w) for w in existing_workspaces if w}
+    if imported_keys:
+        for cand in deduped:
+            cand.already_imported = _path_key(cand.path) in imported_keys
     return _rank(deduped)
 
 
@@ -408,9 +425,7 @@ def _dedupe(candidates: list[ImportCandidate]) -> list[ImportCandidate]:
     """
     merged: dict[str, ImportCandidate] = {}
     for cand in candidates:
-        # normcase folds case + separators on Windows (identity on POSIX), so
-        # C:\Foo and c:/foo collapse to one candidate as they should.
-        key = os.path.normcase(os.path.realpath(cand.path))
+        key = _path_key(cand.path)
         existing = merged.get(key)
         if existing is None:
             merged[key] = ImportCandidate(
@@ -432,6 +447,17 @@ def _dedupe(candidates: list[ImportCandidate]) -> list[ImportCandidate]:
         if existing.source not in _AGENT_SOURCES and cand.source in _AGENT_SOURCES:
             existing.source = cand.source
     return list(merged.values())
+
+
+def _path_key(path: str) -> str:
+    """Identity key for a folder: realpath, then normcase.
+
+    normcase folds case + separators on Windows (identity on POSIX), so
+    ``C:\\Foo`` and ``c:/foo`` collapse to one candidate as they should. The
+    same key decides dedup and the already-imported match (spec 084) so the
+    two can never disagree about which folder is which.
+    """
+    return os.path.normcase(os.path.realpath(path))
 
 
 def _rank(candidates: list[ImportCandidate]) -> list[ImportCandidate]:

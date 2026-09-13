@@ -22,7 +22,7 @@
 
 import { useCallback, useState } from 'react';
 import { Loader2, Search, Check, FolderPlus } from 'lucide-react';
-import { api } from '../config';
+import { api, ApiError } from '../config';
 import type { Project } from '../types';
 import { useT } from '../i18n/useT';
 
@@ -33,6 +33,8 @@ export interface ImportCandidate {
   path: string;
   session_count: number;
   last_activity: string | null;
+  /** Spec 084: the folder is already a project's workspace (no Add offered). */
+  already_imported?: boolean;
 }
 
 interface ImportableResponse {
@@ -41,6 +43,33 @@ interface ImportableResponse {
 
 type ScanPhase = 'idle' | 'scanning' | 'done' | 'error';
 type RowStatus = 'idle' | 'adding' | 'added' | 'error';
+
+/**
+ * Spec 084: why an Add failed, keyed by HTTP status so the row can say
+ * something true. A 409 is a name collision the backend will return forever
+ * (retry cannot fix it); a 400 is a folder that vanished between scan and
+ * click; anything else is genuinely retryable.
+ */
+type AddFailure = 'conflict' | 'gone' | 'failed';
+
+function classifyAddFailure(err: unknown): AddFailure {
+  if (err instanceof ApiError) {
+    if (err.status === 409) return 'conflict';
+    if (err.status === 400) return 'gone';
+  }
+  return 'failed';
+}
+
+function addFailureKey(f: AddFailure): 'import.addConflict' | 'import.addGone' | 'import.addFailed' {
+  switch (f) {
+    case 'conflict':
+      return 'import.addConflict';
+    case 'gone':
+      return 'import.addGone';
+    default:
+      return 'import.addFailed';
+  }
+}
 
 interface ImportProjectsStepProps {
   /** Called after a candidate is successfully created (link-only). */
@@ -75,6 +104,7 @@ export default function ImportProjectsStep({ onProjectCreated }: ImportProjectsS
   const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
   // Keyed by candidate path (paths are unique post-dedup).
   const [rowStatus, setRowStatus] = useState<Record<string, RowStatus>>({});
+  const [rowFailure, setRowFailure] = useState<Record<string, AddFailure>>({});
 
   const handleScan = useCallback(async () => {
     setPhase('scanning');
@@ -93,13 +123,17 @@ export default function ImportProjectsStep({ onProjectCreated }: ImportProjectsS
       try {
         // Reuse the standard project-creation flow verbatim: link-only, the
         // real folder IS the workspace. Backend triggers the cold-start scan.
+        // auto_unique_name (spec 084): the name is the folder basename, not
+        // something the user typed, so a taken name becomes name-2 rather
+        // than a 409 the wizard could never get past.
         const project = await api<Project>('/api/v2/projects', {
           method: 'POST',
-          body: JSON.stringify({ name: c.name, workspace: c.path }),
+          body: JSON.stringify({ name: c.name, workspace: c.path, auto_unique_name: true }),
         });
         setRowStatus((s) => ({ ...s, [c.path]: 'added' }));
         onProjectCreated?.(project);
-      } catch {
+      } catch (err) {
+        setRowFailure((s) => ({ ...s, [c.path]: classifyAddFailure(err) }));
         setRowStatus((s) => ({ ...s, [c.path]: 'error' }));
       }
     },
@@ -160,6 +194,9 @@ export default function ImportProjectsStep({ onProjectCreated }: ImportProjectsS
         <ul className="space-y-2" data-testid="import-list">
           {candidates.map((c) => {
             const status = rowStatus[c.path] ?? 'idle';
+            // Spec 084: an already-imported folder shows the same check state
+            // as a row added in this session, labelled honestly.
+            const imported = status === 'added' || c.already_imported === true;
             return (
               <li
                 key={c.path}
@@ -181,13 +218,13 @@ export default function ImportProjectsStep({ onProjectCreated }: ImportProjectsS
                     </p>
                     <p className="text-xs text-secondary/80">{metaLabel(t, c)}</p>
                   </div>
-                  {status === 'added' ? (
+                  {imported ? (
                     <span
                       className="shrink-0 inline-flex items-center gap-1 text-xs text-success"
                       data-testid={`import-added-${c.path}`}
                     >
                       <Check className="w-3.5 h-3.5" />
-                      {t('import.added')}
+                      {status === 'added' ? t('import.added') : t('import.alreadyImported')}
                     </span>
                   ) : (
                     <button
@@ -214,7 +251,7 @@ export default function ImportProjectsStep({ onProjectCreated }: ImportProjectsS
                     role="alert"
                     data-testid={`import-add-error-${c.path}`}
                   >
-                    {t('import.addFailed')}
+                    {t(addFailureKey(rowFailure[c.path] ?? 'failed'))}
                   </p>
                 )}
               </li>

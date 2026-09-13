@@ -532,7 +532,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # Stateless and metadata-only — creates nothing (confirmed candidates route
     # back through POST /api/v2/projects).
     from agent_os.api.routes import onboarding as onboarding_routes
-    onboarding_routes.configure()
+    onboarding_routes.configure(project_store=project_store)
     app.include_router(onboarding_routes.router)
 
     # 7c-pricing. Pricing-table routes (resolved rates + per-field origin GET,
