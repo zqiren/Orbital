@@ -3188,6 +3188,101 @@
         "notes": "MiniMax caching behavior for the OpenAI-compatible endpoint is unverified."
       }
     },
+    "hunyuan": {
+      "display_name": "Tencent Hunyuan (HY)",
+      "base_url": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+      "china_base_url": "https://tokenhub.tencentmaas.com/v1",
+      "console_url": "https://console.cloud.tencent.com/tokenhub/apikey",
+      "currency": "CNY",
+      "supports_model_list": true,
+      "sdk": "openai",
+      "suggested_models": [
+        "hy4-preview",
+        "hy3"
+      ],
+      "notes": "Tencent Cloud TokenHub serves the HY (混元) chat models over the OpenAI chat-completions protocol (an Anthropic /messages surface also exists). Flagship: hy4-preview (770B MoE, 1M ctx, 64K out, thinking on by default at high effort). Previous GA: hy3 (295B MoE, 256K ctx, 128K out, open weights). Regions: tokenhub-intl.tencentcloudmaas.com (global) vs tokenhub.tencentmaas.com (mainland, keys from console.cloud.tencent.com/tokenhub/apikey) — keys are region-specific, same model ids on both. The older direct endpoint api.hunyuan.cloud.tencent.com/v1 serves the legacy hunyuan-turbos/-t1 family, not HY. hy3 pricing is tiered by input length (1.2/4 under 16K, 1.6/6.4 to 32K, 2/8 above); the base tier is recorded here.",
+      "pricing": {
+        "hy4-preview": {
+          "input_per_1m": 6.0,
+          "cached_input_per_1m": 0.3,
+          "output_per_1m": 18.0
+        },
+        "hy3": {
+          "input_per_1m": 1.2,
+          "cached_input_per_1m": 0.4,
+          "output_per_1m": 4.0
+        },
+        "_default": {
+          "input_per_1m": 1.2,
+          "cached_input_per_1m": 0.4,
+          "output_per_1m": 4.0
+        }
+      },
+      "models": {
+        "hy4-preview": {
+          "display_name": "HY4 Preview",
+          "tier": "flagship",
+          "context_window": 1000000,
+          "max_output": 64000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "needs_verification": true,
+            "notes": "Thinking on by default (high effort); thinking={type:enabled|disabled} and reasoning_effort=high|low per Tencent Cloud docs; reasoning_content in the stream. Echo-back tolerance not yet probed live."
+          }
+        },
+        "hy3": {
+          "display_name": "HY3",
+          "tier": "balanced",
+          "context_window": 262144,
+          "max_output": 128000,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          },
+          "reasoning": {
+            "supported": true,
+            "field": "reasoning_content",
+            "echo_back": "optional",
+            "enable": "param:thinking.type=enabled",
+            "needs_verification": true,
+            "notes": "Reasoning-enabled; same thinking/reasoning_effort contract as hy4-preview. Not yet probed live."
+          }
+        },
+        "_default": {
+          "context_window": 262144,
+          "max_output": 65536,
+          "capabilities": {
+            "vision": false,
+            "tool_use": true,
+            "streaming": true
+          }
+        }
+      },
+      "cache": {
+        "supported": "implicit",
+        "control": "automatic",
+        "default_ttl_min": null,
+        "extended_ttl_min": null,
+        "extended_ttl_param": null,
+        "isolation": "per_account",
+        "isolation_confidence": "inferred",
+        "min_tokens": null,
+        "max_breakpoints": null,
+        "observable": false,
+        "observability_field": null,
+        "pollution_risk": "likely_safe",
+        "notes": "TokenHub publishes cache-hit input pricing (0.3 for hy4-preview, 0.4-0.8 tiered for hy3) but the usage field that reports hits is undocumented; treated as implicit and unobservable until probed."
+      }
+    },
     "tokendance": {
       "display_name": "TokenDance (词元跳动)",
       "base_url": "https://tokendance.space/gateway/v1",

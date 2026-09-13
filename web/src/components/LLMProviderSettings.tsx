@@ -69,7 +69,7 @@ const DEFAULT_PROVIDER = 'deepseek';
  * below the international block for en. No geo-detection — a wrong locale
  * guess only affects sort position, the provider still works if selected. */
 const PROVIDER_ORDER = [
-  'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax',
+  'deepseek', 'moonshot', 'zhipu', 'qwen', 'minimax', 'hunyuan',
   'openai', 'anthropic', 'google', 'xai', 'mistral', 'groq', 'together', 'openrouter',
   // Aggregators last, next to OpenRouter. Zen (pay-as-you-go credits) before
   // Go (the $10/mo subscription) — one account and one key serve both.
