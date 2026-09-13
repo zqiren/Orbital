@@ -3942,12 +3942,15 @@ class AgentManager:
         completion racing an eviction (session no longer hydrated) is logged
         and dropped — the previous record, if any, remains valid.
         """
-        # Reuses the existing get_session accessor (keyword-only session_id,
-        # defined further down with the queue-era helpers).
-        session = self.get_session(project_id, session_id=session_id)
+        # While a chat is pinned the management loop takes no turns and its
+        # handle is routinely evicted, so a live-handle-only lookup dropped
+        # every pinned turn's record (seen live: "no hydrated session" on
+        # each claude-code completion) and the next resume started fresh.
+        # Fall back to the on-disk session — the record is a meta row append.
+        session = self.resolve_session_for_read(project_id, session_id)
         if session is None:
             logger.warning(
-                "record_sub_agent_thread: no hydrated session for %s/%s — "
+                "record_sub_agent_thread: no session on disk for %s/%s — "
                 "thread id %s for handle %s not recorded",
                 project_id, session_id, claude_session_id, handle,
             )
@@ -4376,6 +4379,21 @@ class AgentManager:
             "blocked_sessions": blocked,
             "budget_paused_projects": self.list_blocked_budget_projects(),
         })
+
+    def resolve_session_for_read(self, project_id: str,
+                                 session_id: str | None):
+        """The session for ``(project, session_id)`` whether or not its
+        management loop is hydrated: the live handle's session when there is
+        one, else the on-disk JSONL loaded fresh. Sub-agent code (recap
+        block, resume records) reads through this so a pinned chat — whose
+        manager loop is idle and often evicted — still sees its history.
+        """
+        session = self.get_session(project_id, session_id=session_id)
+        if session is not None:
+            return session
+        if session_id is None:
+            return None
+        return self._load_session_from_disk(project_id, session_id)
 
     def get_session(self, project_id: str, *,
                     session_id: str | None = None):

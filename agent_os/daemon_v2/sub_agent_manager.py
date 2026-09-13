@@ -1152,9 +1152,15 @@ class SubAgentManager:
                        session_id=session_id)
         self._process_manager.set_active_dispatch(
             project_id, handle, prompt.dispatch_id, session_id=session_id)
+        # The chat is one conversation: prepend what this worker has not
+        # been shown (see recap.py). Built HERE, at the moment the prompt
+        # actually goes out (drain time for a queued one), so the block and
+        # the marker written below agree on the watermark, and every entry
+        # path — pinned, @mention, manager dispatch — gets the same block.
+        preamble = self._build_recap(adapter, project_id, session_id, handle)
         try:
             await self._dispatch_async(
-                adapter, project_id, handle, prompt.message,
+                adapter, project_id, handle, preamble + prompt.message,
                 session_id=session_id, dispatch_id=prompt.dispatch_id)
         except Exception:
             self._process_manager.clear_dispatch(
@@ -1170,6 +1176,41 @@ class SubAgentManager:
                 session_id=session_id,
                 dispatch_id=prompt.dispatch_id,
             )
+
+    def _build_recap(self, adapter, project_id: str, session_id: str,
+                     handle: str) -> str:
+        """The "Conversation so far" block for this dispatch, or "".
+
+        A FRESH spawn's first dispatch gets the whole session (its thread is
+        empty); after that, and for a resumed thread, only the gap since the
+        worker's last dispatch marker. Never raises — a recap failure must
+        not block a dispatch.
+        """
+        from agent_os.daemon_v2.recap import build_recap
+
+        resolver = self._session_resolver
+        if resolver is None:
+            return ""
+        status = getattr(adapter, "_resume_status", (None, None))
+        fresh = (
+            isinstance(status, tuple) and status and status[0] == "fresh"
+            and getattr(adapter, "_recap_primed", None) is not True
+        )
+        try:
+            session = resolver(project_id, session_id)
+            messages = session.get_messages() if session is not None else []
+            block = build_recap(messages, handle, fresh=bool(fresh))
+        except Exception:
+            logger.warning(
+                "recap build failed for %s/%s — dispatching without",
+                project_id, handle, exc_info=True,
+            )
+            return ""
+        try:
+            adapter._recap_primed = True
+        except Exception:
+            pass
+        return block
 
     async def _mark_queued_prompts_dropped(
         self, dropped, project_id: str, handle: str, *, session_id: str,
@@ -1605,7 +1646,7 @@ class SubAgentManager:
                         else:
                             await self._lifecycle_observer.on_completed(
                                 project_id, handle,
-                                summary=response[:200] if response else "(no output)",
+                                summary=response if response else "(no output)",
                                 transcript_path=transcript.filepath,
                                 session_id=session_id,
                             )
