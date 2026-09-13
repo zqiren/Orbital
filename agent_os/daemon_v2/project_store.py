@@ -193,6 +193,22 @@ class ProjectStore:
         config.setdefault("agent_name", config.get("name", ""))
         # Default is_scratch to False
         config.setdefault("is_scratch", False)
+        # Spec 084 §3.3: opt-in uniquifier for callers whose name is derived,
+        # not typed (the import wizard uses the folder basename). Suffix -2,
+        # -3, … until the agent_name is free; the display name moves with it
+        # only when it IS the colliding value, so an explicit agent_name
+        # collision leaves a distinct project name alone. The flag is a
+        # request-time instruction, never a stored field.
+        auto_unique = bool(config.pop("auto_unique_name", False))
+        if auto_unique and self._agent_name_taken(config["agent_name"]):
+            base_agent = config["agent_name"]
+            base_name = config.get("name", "")
+            n = 2
+            while self._agent_name_taken(f"{base_agent}-{n}"):
+                n += 1
+            config["agent_name"] = f"{base_agent}-{n}"
+            if base_name == base_agent:
+                config["name"] = f"{base_name}-{n}"
         # Validate agent_name uniqueness
         if self._agent_name_taken(config["agent_name"]):
             raise ValueError(f"agent_name '{config['agent_name']}' already in use")

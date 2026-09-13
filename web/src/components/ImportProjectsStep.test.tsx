@@ -25,12 +25,18 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-libra
 let apiFn = vi.fn();
 vi.mock('../config', () => ({
   api: (...args: unknown[]) => apiFn(...args),
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, public detail: string) {
+      super(detail);
+      this.name = 'ApiError';
+    }
+  },
   isRelayMode: false,
   BASE_URL: 'http://localhost:8000',
 }));
 
 import ImportProjectsStep from './ImportProjectsStep';
+import { ApiError } from '../config';
 
 const IMPORT_PATH = '/api/v2/onboarding/importable-projects';
 
@@ -100,7 +106,7 @@ describe('ImportProjectsStep', () => {
     // Exact link-only create payload against the EXISTING projects endpoint.
     expect(apiFn).toHaveBeenCalledWith('/api/v2/projects', {
       method: 'POST',
-      body: JSON.stringify({ name: 'orbital', workspace: '/Users/x/orbital' }),
+      body: JSON.stringify({ name: 'orbital', workspace: '/Users/x/orbital', auto_unique_name: true }),
     });
     await waitFor(() =>
       expect(screen.getByTestId('import-added-/Users/x/orbital')).toBeInTheDocument(),
@@ -155,5 +161,72 @@ describe('ImportProjectsStep', () => {
     });
     await waitFor(() => expect(screen.getByTestId('import-error')).toBeInTheDocument());
     expect(screen.getByTestId('import-rescan')).toBeInTheDocument();
+  });
+  // ---- spec 084: failures keyed by status; already-imported rows ----
+
+  async function scanThenAdd(path: string) {
+    render(<ImportProjectsStep />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('import-scan'));
+    });
+    await waitFor(() => expect(screen.getByTestId('import-list')).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId(`import-add-${path}`));
+    });
+  }
+
+  it('a 409 renders the name-conflict message, not the retryable one', async () => {
+    apiFn.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === IMPORT_PATH) return { candidates: CANDIDATES };
+      if (path === '/api/v2/projects' && options?.method === 'POST') {
+        throw new ApiError(409, "agent_name 'api-svc' already in use");
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    await scanThenAdd('/Users/x/api-svc');
+    const err = await screen.findByTestId('import-add-error-/Users/x/api-svc');
+    expect(err).toHaveTextContent(/already exists/);
+    expect(err).not.toHaveTextContent(/try again/i);
+  });
+
+  it('a 400 renders the folder-gone message', async () => {
+    apiFn.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === IMPORT_PATH) return { candidates: CANDIDATES };
+      if (path === '/api/v2/projects' && options?.method === 'POST') {
+        throw new ApiError(400, 'Workspace path does not exist');
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    await scanThenAdd('/Users/x/api-svc');
+    const err = await screen.findByTestId('import-add-error-/Users/x/api-svc');
+    expect(err).toHaveTextContent(/no longer exists/);
+  });
+
+  it('a 500 keeps the retryable message', async () => {
+    apiFn.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === IMPORT_PATH) return { candidates: CANDIDATES };
+      if (path === '/api/v2/projects' && options?.method === 'POST') {
+        throw new ApiError(500, 'boom');
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    await scanThenAdd('/Users/x/api-svc');
+    const err = await screen.findByTestId('import-add-error-/Users/x/api-svc');
+    expect(err).toHaveTextContent(/try again/i);
+  });
+
+  it('an already-imported candidate renders the check state with no Add button', async () => {
+    apiFn.mockResolvedValueOnce({
+      candidates: [{ ...CANDIDATES[0], already_imported: true }, CANDIDATES[1]],
+    });
+    render(<ImportProjectsStep />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('import-scan'));
+    });
+    await waitFor(() => expect(screen.getByTestId('import-list')).toBeInTheDocument());
+    expect(screen.queryByTestId('import-add-/Users/x/orbital')).toBeNull();
+    expect(screen.getByTestId('import-added-/Users/x/orbital')).toHaveTextContent('Already imported');
+    // The other row is untouched.
+    expect(screen.getByTestId('import-add-/Users/x/api-svc')).toBeInTheDocument();
   });
 });

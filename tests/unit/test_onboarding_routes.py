@@ -36,7 +36,8 @@ async def test_returns_ranked_candidates(client, monkeypatch):
             session_count=0, last_activity="2026-08-01T00:00:00+00:00",
         ),
     ]
-    monkeypatch.setattr(onboarding_routes, "scan_importable_projects", lambda: fake)
+    monkeypatch.setattr(onboarding_routes, "scan_importable_projects",
+                        lambda **_kw: fake)
 
     async with client:
         r = await client.get("/api/v2/onboarding/importable-projects")
@@ -44,13 +45,14 @@ async def test_returns_ranked_candidates(client, monkeypatch):
     body = r.json()
     assert [c["name"] for c in body["candidates"]] == ["alpha", "notes"]
     first = body["candidates"][0]
-    assert set(first) == {"source", "name", "path", "session_count", "last_activity"}
+    assert set(first) == {"source", "name", "path", "session_count", "last_activity",
+                          "already_imported"}
     assert first["source"] == "claude-code"
     assert first["session_count"] == 3
 
 
 async def test_scanner_failure_yields_empty_list_not_500(client, monkeypatch):
-    def boom():
+    def boom(**_kw):
         raise RuntimeError("disk exploded")
 
     monkeypatch.setattr(onboarding_routes, "scan_importable_projects", boom)
@@ -59,3 +61,46 @@ async def test_scanner_failure_yields_empty_list_not_500(client, monkeypatch):
         r = await client.get("/api/v2/onboarding/importable-projects")
     assert r.status_code == 200
     assert r.json() == {"candidates": []}
+
+
+async def test_route_passes_store_workspaces_and_payload_carries_flag(monkeypatch):
+    """Spec 084 §3.2: the route hands the project store's workspaces to the
+    scanner and the candidate payload carries ``already_imported``."""
+    class FakeStore:
+        def list_projects(self):
+            return [{"workspace": "/p/alpha"}, {"workspace": "/p/zeta"}]
+
+    seen = {}
+
+    def fake_scan(*, existing_workspaces=()):
+        seen["existing"] = set(existing_workspaces)
+        return [ImportCandidate(source="codex", name="alpha", path="/p/alpha",
+                                already_imported=True)]
+
+    app = FastAPI()
+    onboarding_routes.configure(project_store=FakeStore())
+    app.include_router(onboarding_routes.router)
+    monkeypatch.setattr(onboarding_routes, "scan_importable_projects", fake_scan)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/v2/onboarding/importable-projects")
+    assert r.status_code == 200
+    assert seen["existing"] == {"/p/alpha", "/p/zeta"}
+    cand = r.json()["candidates"][0]
+    assert cand["already_imported"] is True
+    assert set(cand) == {"source", "name", "path", "session_count",
+                         "last_activity", "already_imported"}
+
+
+async def test_route_without_a_store_scans_without_exclusion(client, monkeypatch):
+    seen = {}
+
+    def fake_scan(*, existing_workspaces=()):
+        seen["existing"] = list(existing_workspaces)
+        return []
+
+    monkeypatch.setattr(onboarding_routes, "scan_importable_projects", fake_scan)
+    async with client:
+        r = await client.get("/api/v2/onboarding/importable-projects")
+    assert r.status_code == 200
+    assert seen["existing"] == []

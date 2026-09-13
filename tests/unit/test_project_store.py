@@ -65,3 +65,40 @@ class TestIsScratch:
         pid = store.create_project({"name": "Quick Tasks", "is_scratch": True})
         with pytest.raises(ValueError, match="cannot.*delete.*scratch"):
             store.delete_project(pid)
+
+
+class TestAutoUniqueName:
+    """Spec 084 §3.3: opt-in ``auto_unique_name`` suffixes a taken name with
+    ``-2``, ``-3``, … on BOTH ``name`` and the defaulted ``agent_name``; the
+    default (flag off) keeps the loud 409 for an explicit duplicate."""
+
+    def test_suffixes_until_free(self, tmp_path):
+        store = ProjectStore(data_dir=str(tmp_path))
+        pids = [
+            store.create_project({"name": "src", "auto_unique_name": True})
+            for _ in range(3)
+        ]
+        names = [store.get_project(p)["name"] for p in pids]
+        agent_names = [store.get_project(p)["agent_name"] for p in pids]
+        assert names == ["src", "src-2", "src-3"]
+        assert agent_names == ["src", "src-2", "src-3"]
+
+    def test_flag_is_not_persisted_on_the_project(self, tmp_path):
+        store = ProjectStore(data_dir=str(tmp_path))
+        pid = store.create_project({"name": "src", "auto_unique_name": True})
+        assert "auto_unique_name" not in store.get_project(pid)
+
+    def test_explicit_duplicate_without_flag_still_raises(self, tmp_path):
+        store = ProjectStore(data_dir=str(tmp_path))
+        store.create_project({"name": "src"})
+        with pytest.raises(ValueError, match="already in use"):
+            store.create_project({"name": "src"})
+
+    def test_explicit_agent_name_is_also_suffixed(self, tmp_path):
+        store = ProjectStore(data_dir=str(tmp_path))
+        store.create_project({"name": "P1", "agent_name": "Bot"})
+        pid = store.create_project(
+            {"name": "P2", "agent_name": "Bot", "auto_unique_name": True})
+        assert store.get_project(pid)["agent_name"] == "Bot-2"
+        # The display name only moves when it is the thing colliding.
+        assert store.get_project(pid)["name"] == "P2"

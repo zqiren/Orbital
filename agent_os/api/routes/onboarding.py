@@ -22,25 +22,43 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/onboarding")
 
+_project_store = None
 
-def configure() -> None:
-    """No dependencies to inject — the scanner is stateless and read-only.
 
-    Present for parity with the other route modules' app-factory wiring.
+def configure(project_store=None) -> None:
+    """Inject the project store (spec 084 §3.2) so the scan can mark folders
+    that are already a project's workspace. Optional: with no store the scan
+    runs without exclusion, which keeps the pure-scanner tests dependency-free.
     """
-    return None
+    global _project_store
+    _project_store = project_store
+
+
+def _existing_workspaces() -> set[str]:
+    if _project_store is None:
+        return set()
+    try:
+        return {
+            p.get("workspace") for p in _project_store.list_projects()
+            if p.get("workspace")
+        }
+    except Exception:
+        logger.exception("importable-projects: could not list existing projects")
+        return set()
 
 
 @router.get("/importable-projects")
 async def importable_projects():
     """Ranked, deduped, path-verified candidates for link-only import.
 
-    Each candidate is ``{source, name, path, session_count, last_activity}``.
-    The scan is best-effort and never raises: an unreadable or missing source
-    contributes nothing rather than failing the whole response.
+    Each candidate is ``{source, name, path, session_count, last_activity,
+    already_imported}``. The scan is best-effort and never raises: an
+    unreadable or missing source contributes nothing rather than failing the
+    whole response.
     """
     try:
-        candidates = scan_importable_projects()
+        candidates = scan_importable_projects(
+            existing_workspaces=_existing_workspaces())
     except Exception:
         logger.exception("importable-projects scan failed")
         candidates = []
