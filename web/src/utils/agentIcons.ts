@@ -36,6 +36,7 @@ const ICONS: Record<string, AgentIcon> = {
   'claude-code': { src: '/agents/claude-code.svg', monogram: 'CC', color: '#D97757' },
   claude: { src: '/agents/claude-code.svg', monogram: 'CC', color: '#D97757' },
   codex: { src: '/agents/codex.svg', monogram: 'CX', color: '#10A37F' },
+  codebuddy: { src: '/agents/codebuddy.svg', monogram: 'CB', color: '#0052D9' },
   cursor: { src: '/agents/cursor.svg', monogram: 'CU', color: '#1A1A1A' },
   dsh: { src: '/agents/dsh.svg', monogram: 'DS', color: '#4D6BFE' },
   gemini: { src: '/agents/gemini.svg', monogram: 'GM', color: '#4285F4' },

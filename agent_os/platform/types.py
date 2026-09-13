@@ -282,6 +282,8 @@ DEFAULT_ALLOWLIST_DOMAINS: list[str] = [
     "api.moonshot.ai",       # Kimi (intl)
     "api.minimaxi.com",      # MiniMax (China)
     "api.minimax.io",        # MiniMax (intl)
+    "tokenhub-intl.tencentcloudmaas.com",  # Tencent Hunyuan / TokenHub (intl)
+    "tokenhub.tencentmaas.com",            # Tencent Hunyuan / TokenHub (China)
     "api.z.ai",              # Zhipu/GLM (intl)
     "open.bigmodel.cn",      # Zhipu/GLM (China)
     "dashscope-intl.aliyuncs.com",  # Qwen (intl)

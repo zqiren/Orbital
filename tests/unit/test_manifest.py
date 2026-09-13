@@ -305,3 +305,38 @@ class TestAgentRegistry:
         # Should not raise, just warn
         registry.load_directory("/nonexistent/directory")
         assert len(registry.list_all()) == 0
+
+
+class TestCodeBuddyManifest:
+    """Tencent CodeBuddy rides the acp-sdk transport with an Orbital-held API
+    key (no CLI credential store to delegate to) — the cursor/dsh shape."""
+
+    def _load(self):
+        from agent_os.agents.manifest import ManifestLoader
+        return ManifestLoader.load(os.path.join(_MANIFESTS_DIR, "codebuddy.yaml"))
+
+    def test_runtime_is_acp_over_stdio(self):
+        m = self._load()
+        assert m.slug == "codebuddy"
+        assert m.runtime.adapter == "cli"
+        assert m.runtime.command == "codebuddy"
+        assert m.runtime.transport == "acp-sdk"
+        assert m.runtime.args == ["--acp"]
+        assert m.runtime.interactive is False
+
+    def test_credentials_are_env_injected_secrets(self):
+        # Both must carry env_var: SetupEngine silently drops a credential
+        # without one, and CodeBuddy reads exactly these two names.
+        m = self._load()
+        creds = {c.key: c for c in m.setup.credentials}
+        assert creds["CODEBUDDY_API_KEY"].required is True
+        assert creds["CODEBUDDY_API_KEY"].env_var == "CODEBUDDY_API_KEY"
+        assert creds["CODEBUDDY_API_KEY"].type == "secret"
+        assert creds["CODEBUDDY_INTERNET_ENVIRONMENT"].required is False
+        assert creds["CODEBUDDY_INTERNET_ENVIRONMENT"].env_var == "CODEBUDDY_INTERNET_ENVIRONMENT"
+
+    def test_install_and_detection(self):
+        m = self._load()
+        assert m.setup.install_command == "npm install -g @tencent-ai/codebuddy-code"
+        assert m.setup.check_command == "codebuddy --version"
+        assert m.permissions.network_domains == []

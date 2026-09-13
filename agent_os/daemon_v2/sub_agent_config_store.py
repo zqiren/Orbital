@@ -115,6 +115,27 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             default="auto",
         ),
     },
+    "codebuddy": {
+        # CodeBuddy's model catalogue is account- and region-dependent (the
+        # China build lists hy3/deepseek/glm/kimi/minimax ids, the global build
+        # gpt/gemini/glm/kimi ids, plus role aliases like default-model), so
+        # this stays free-text. Delivered through the ACP transport, which
+        # lifts ``--model`` out of argv and applies it to the session.
+        "model": _ParamSchema(
+            name="model",
+            allowed=None,
+            flag_template="--model {value}",
+        ),
+        # Orbital's own ACP permission policy (same contract as cursor), not
+        # a CodeBuddy flag: ``auto`` answers every permission request itself
+        # so queue runs never block; ``ask`` routes them to the approval card.
+        "permission-mode": _ParamSchema(
+            name="permission-mode",
+            allowed=("auto", "ask"),
+            flag_template="--orbital-permission-mode {value}",
+            default="auto",
+        ),
+    },
     "gemini-cli": {
         # gemini-cli may not be installed today; this entry exists so the UI
         # can render the right dropdowns the moment it shows up in the

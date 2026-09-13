@@ -452,3 +452,41 @@ class TestPerModelEndpointOverride:
         assert unknown.context_window == 400, "specs still inherit"
         assert unknown.sdk is None, "but never the endpoint"
         assert unknown.base_url is None
+
+
+# --- Tencent Hunyuan (HY) via TokenHub ---
+
+class TestHunyuan:
+    """Tencent's HY models ride the OpenAI-compatible TokenHub gateway, which
+    has one host per region with region-locked keys — the same two-region
+    shape as moonshot/zhipu/qwen/minimax, so the settings UI's region toggle
+    and the sandbox allowlist parity test cover it without new code."""
+
+    def test_registered_with_two_regions_and_a_console(self, registry):
+        data = registry.get_provider_data("hunyuan")
+        assert data["sdk"] == "openai"
+        assert data["base_url"] == "https://tokenhub-intl.tencentcloudmaas.com/v1"
+        assert data["china_base_url"] == "https://tokenhub.tencentmaas.com/v1"
+        assert data["console_url"].startswith("https://console.cloud.tencent.com/")
+        assert data["currency"] == "CNY"
+        assert "no_china_endpoint" not in data
+
+    def test_flagship_first_in_suggestions(self, registry):
+        assert registry.suggested_models("hunyuan") == ["hy4-preview", "hy3"]
+
+    def test_model_specs(self, registry):
+        hy4 = registry.get_model_info("hunyuan", "hy4-preview")
+        assert hy4.context_window == 1_000_000
+        assert hy4.max_output == 64_000
+        assert hy4.reasoning.supported is True
+        assert hy4.reasoning.field == "reasoning_content"
+        hy3 = registry.get_model_info("hunyuan", "hy3")
+        assert hy3.context_window == 262_144
+        assert hy3.max_output == 128_000
+
+    def test_unknown_hy_model_inherits_the_flagship_spec(self, registry):
+        # A just-released id (hy4, hy5-preview…) should get hy4-preview's
+        # spec via the suggested_models[0] inheritance rule, never the
+        # conservative unknown-model defaults.
+        info = registry.get_model_info("hunyuan", "hy5-preview")
+        assert info.context_window == 1_000_000

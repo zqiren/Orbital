@@ -1,0 +1,103 @@
+# -----------------------------------------------------------------------
+# Tencent CodeBuddy Code — Research Notes (probed 2026-09-13, v2.150.0)
+# -----------------------------------------------------------------------
+# CLI command: codebuddy (aliases: cbc, codebuddy-code)
+# Install: npm install -g @tencent-ai/codebuddy-code   (Node CLI, no engines pin)
+# ACP: `codebuddy --acp` speaks Agent Client Protocol over stdio. Orbital's
+#   ACPSDKTransport drives it unchanged: initialize negotiates protocol v1
+#   and the agent advertises loadSession=true (session resume works, unlike
+#   dsh), prompt image input, and http/sse MCP.
+# Auth: the ACP initialize response lists only browser OAuth methods (WeChat,
+#   Google/GitHub, iOA, enterprise domain). Unattended runs use an API key:
+#   CODEBUDDY_API_KEY in the spawn env, paired with
+#   CODEBUDDY_INTERNET_ENVIRONMENT — unset for the global build, "internal"
+#   for the China build (中国版), "ioa" for Tencent-internal iOA. Wrong pair
+#   = 401 at session/new ("Authentication required"). There is no
+#   `codebuddy login` subcommand; login lives in the TUI (/login).
+# Models: --model is account/region dependent. China build lists hy3, glm-5.x,
+#   kimi-k3-1/k2.x, minimax-m3/m2.7, deepseek-v4-pro/-flash; global build
+#   lists gpt-5.x, gemini-3.5-flash, glm, kimi, minimax. Role aliases
+#   (default-model, fast-model, balanced-model, primary-model, deep-model)
+#   resolve per account. Left free-text in sub_agent_config_store.SCHEMA.
+# Headless fallback: `codebuddy -p --output-format stream-json` emits
+#   Claude-Code-shaped events (system/assistant/result + session_id) with
+#   --resume; not used here because the ACP path is the maintained one.
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "CodeBuddy"
+slug: "codebuddy"
+description: "Tencent's CodeBuddy Code coding agent, driven over ACP"
+author: "tencent"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "codebuddy"
+  transport: acp-sdk
+  mode: pipe
+  interactive: false
+  args: ["--acp"]
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "18.0.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g @tencent-ai/codebuddy-code"
+  check_command: "codebuddy --version"
+  credentials:
+    # CodeBuddy has no CLI credential store Orbital can delegate to, so the
+    # key lands in Orbital's dedicated sub-agent keychain service (the dsh
+    # precedent) and reaches the process as an env var. env_var is REQUIRED —
+    # a credential without it is silently dropped (setup_engine.py).
+    - key: "CODEBUDDY_API_KEY"
+      label: "CodeBuddy API Key"
+      type: secret
+      required: true
+      env_var: "CODEBUDDY_API_KEY"
+    - key: "CODEBUDDY_INTERNET_ENVIRONMENT"
+      label: "CodeBuddy region (leave empty for global; 'internal' for the China build 中国版)"
+      type: secret
+      required: false
+      env_var: "CODEBUDDY_INTERNET_ENVIRONMENT"
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\codebuddy.cmd"
+      - "%PROGRAMFILES%\\nodejs\\codebuddy.cmd"
+    macos:
+      - "/usr/local/bin/codebuddy"
+      - "$HOME/.npm-global/bin/codebuddy"
+      - "$HOME/.npm/bin/codebuddy"
+      - "/opt/homebrew/bin/codebuddy"
+    linux:
+      - "/usr/local/bin/codebuddy"
+      - "$HOME/.npm-global/bin/codebuddy"
+      - "$HOME/.npm/bin/codebuddy"
+      - "$HOME/.local/bin/codebuddy"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks on Tencent-hosted models (HY, DeepSeek, GLM, Kimi) via CodeBuddy"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  # network_domains deliberately omitted: transport-backed sub-agents spawn
+  # outside the project sandbox/proxy, so an entry here would be a claim
+  # Orbital cannot enforce (see the dsh manifest for the full note).
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: hands_off

@@ -121,3 +121,22 @@ class TestDshSchema:
             "workspace-write", "danger-full-access",
         )
         assert SCHEMA["dsh"]["permission-mode"].default == "workspace-write"
+
+
+class TestCodeBuddySchema:
+    """CodeBuddy is an ACP sub-agent like cursor: model is free-text (the
+    catalogue is account- and region-dependent) and permission-mode is
+    Orbital's own ACP policy flag, which the transport strips from argv."""
+
+    def test_model_is_free_text_and_argv_delivered(self):
+        assert SCHEMA["codebuddy"]["model"].allowed is None
+        assert SCHEMA["codebuddy"]["model"].flag_template == "--model {value}"
+
+    def test_permission_mode_is_the_acp_policy(self):
+        schema = SCHEMA["codebuddy"]["permission-mode"]
+        assert schema.allowed == ("auto", "ask")
+        assert schema.default == "auto"
+        assert schema.flag_template == "--orbital-permission-mode {value}"
+
+    def test_defaults_without_a_store(self):
+        assert resolve_params("codebuddy") == {"permission-mode": "auto"}

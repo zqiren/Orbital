@@ -7,7 +7,7 @@ import { getAgentIcon, MAIN_AGENT_HANDLE } from './agentIcons';
 
 describe('getAgentIcon', () => {
   it('gives every known slug a distinct mark and monogram', () => {
-    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codex', 'cursor', 'dsh', 'gemini', 'grok'];
+    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codebuddy', 'codex', 'cursor', 'dsh', 'gemini', 'grok'];
     const icons = known.map((slug) => getAgentIcon(slug));
 
     for (const icon of icons) {
@@ -76,5 +76,11 @@ describe('getAgentIcon', () => {
   it('normalizes case and surrounding whitespace', () => {
     expect(getAgentIcon('Claude-Code').monogram).toBe('CC');
     expect(getAgentIcon('  CODEX  ').src).toBe('/agents/codex.svg');
+  });
+  it('resolves codebuddy → CB / Tencent blue', () => {
+    const i = getAgentIcon('codebuddy');
+    expect(i.monogram).toBe('CB');
+    expect(i.color).toBe('#0052D9');
+    expect(i.src).toBe('/agents/codebuddy.svg');
   });
 });
