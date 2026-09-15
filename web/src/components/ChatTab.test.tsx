@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, act, cleanup, screen, fireEvent } from '@testing-library/react';
+import { render, act, cleanup, screen, fireEvent, within } from '@testing-library/react';
 import type {
   ActivityEvent,
   AgentRunStatus,
@@ -775,6 +775,31 @@ describe('ChatTab — panel column vs. overlay (push threshold)', () => {
     expect(lastSessionSidebarProps.selectedSessionId).toBe('sess-x');
     expect(lastChatViewProps.sessionId).toBe('sess-x');
     expect(screen.getByRole('tab', { name: 'Files' })).toBeInTheDocument();
+  });
+
+  it('the Files | Browser switch and collapse share the panel’s ONE top row (spec 088)', async () => {
+    setViewportWidth(1440);
+    mockSessions = [makeSession({ session_id: 'sess-x' })];
+    await act(async () => {
+      renderChatTab();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('panel-handle'));
+    });
+
+    expect(screen.getAllByRole('tablist')).toHaveLength(1);
+    const row = screen.getByTestId('workspace-panel-header');
+    expect(within(row).getByRole('tablist')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Hide workspace' })).toBeInTheDocument();
+    expect(within(row).queryByTestId('files-view')).toBeNull();
+
+    // Browser: Annotate joins the same row; the view body sits below it.
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('tab', { name: 'Browser' }));
+    });
+    expect(within(screen.getByTestId('workspace-panel-header')).getByTestId('panel-annotate')).toBeInTheDocument();
+    expect(screen.getAllByRole('tablist')).toHaveLength(1);
+    expect(screen.getByTestId('browser-view')).toBeInTheDocument();
   });
 
   it('the panel’s collapse button puts the handle back', async () => {

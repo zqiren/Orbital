@@ -245,18 +245,46 @@ describe('FilesView — preview state', () => {
     expect(screen.getByTestId('file-preview')).toHaveTextContent('src/app.ts');
   });
 
-  it('"‹ Files" returns to the tree by clearing the selection', async () => {
+  it('paints no navigation row of its own — Back and More live in the preview header (spec 088)', async () => {
+    renderView({ file: 'README.md' });
+    await settle();
+    // FilePreview is mocked to a bare div, so any button here would be a
+    // FilesView-owned bar stacked above the file header.
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(lastFilePreviewProps.panelHeader).toBeDefined();
+  });
+
+  it('the header’s Back returns to the tree by clearing the selection', async () => {
     const { props } = renderView({ file: 'README.md' });
     await settle();
-    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    act(() => {
+      (lastFilePreviewProps.panelHeader as { onBack: () => void }).onBack();
+    });
     expect(props.onSelectFile).toHaveBeenCalledWith(null);
   });
 
-  it('"Open in Files" hands the resolved path to the parent', async () => {
-    const { props } = renderView({ file: 'README.md' });
+  it('the header’s "Open in Files" hands the resolved path to the parent', async () => {
+    getFileContent.mockImplementation(async (_projectId, path) =>
+      path === 'src/app.ts'
+        ? { path, content: 'x', size: 1, truncated: false, type: 'text' }
+        : null,
+    );
+    resolvePath.mockResolvedValue(['src/app.ts']);
+    const { props } = renderView({ file: 'app.ts' });
     await settle();
-    fireEvent.click(screen.getByRole('button', { name: 'Open in Files' }));
-    expect(props.onOpenInFiles).toHaveBeenCalledWith('README.md');
+    act(() => {
+      (lastFilePreviewProps.panelHeader as { onOpenInFiles: () => void }).onOpenInFiles();
+    });
+    expect(props.onOpenInFiles).toHaveBeenCalledWith('src/app.ts');
+  });
+
+  it('keeps the header (and so Back) while the file is still loading', async () => {
+    getFileContent.mockImplementation(() => new Promise(() => {}));
+    renderView({ file: 'README.md' });
+    await settle();
+    expect(lastFilePreviewProps.loading).toBe(true);
+    expect(lastFilePreviewProps.selectedPath).toBe('README.md');
+    expect(lastFilePreviewProps.panelHeader).toBeDefined();
   });
 
   it('always enables quoting in the preview — Files has no Annotate mode', async () => {

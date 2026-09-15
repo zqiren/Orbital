@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FilePreviewDrawer from './FilePreviewDrawer';
 
@@ -227,6 +227,25 @@ describe('FilePreviewDrawer — docked mode', () => {
     expect(screen.getByTestId('panel-body')).toBeInTheDocument();
     // FilePreview's empty state must not be rendered underneath.
     expect(screen.queryByText('Select a file to preview')).toBeNull();
+  });
+
+  it('puts the header slot and the collapse button in ONE row (spec 088)', () => {
+    renderDocked({
+      header: <span data-testid="panel-header">switch</span>,
+      children: <div data-testid="panel-body">the panel</div>,
+    });
+    const row = screen.getByTestId('workspace-panel-header');
+    expect(within(row).getByTestId('panel-header')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Hide workspace' })).toBeInTheDocument();
+    expect(within(row).queryByTestId('panel-body')).toBeNull();
+  });
+
+  it('reserves no empty header row when no header is given, keeping collapse (spec 088)', () => {
+    const onClose = vi.fn();
+    renderDocked({ onClose, children: <div data-testid="panel-body">the panel</div> });
+    expect(screen.queryByTestId('workspace-panel-header')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide workspace' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('collapses via a "Hide workspace" button rather than "Close preview"', () => {

@@ -10,10 +10,11 @@ import {
   type IframeHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { File, Download, Copy, Check, Pencil } from 'lucide-react';
+import { File, Download, Copy, Check, Pencil, ChevronLeft, FolderOpen } from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
 import AnnotateOverlay from './panel/AnnotateOverlay';
+import PanelMoreMenu, { type PanelMenuItem } from './panel/PanelMoreMenu';
 import type { AnnotationBox } from '../utils/annotations';
 import { useT } from '../i18n/useT';
 
@@ -46,6 +47,23 @@ export interface FilePreviewProps {
     box?: { x: number; y: number; w: number; h: number };
     imageDataUrl?: string;
   }) => void;
+  /**
+   * Spec 088 — opt-in compact header for the docked workspace panel: ONE row
+   * of icon Back · filename · `headerExtras` · the file's mode actions (Edit,
+   * or Write|Preview · Cancel · Save) · More (Copy / Download, Open in Files).
+   * Loading and error states keep the row, so Back is never lost. Omit it (the
+   * Files tab) and every header renders exactly as before.
+   */
+  panelHeader?: {
+    onBack: () => void;
+    onOpenInFiles: () => void;
+  };
+  /**
+   * Spec 088/090 extension point: navigation a document renderer places in the
+   * panel header row, after the filename and before More (PDF page x/y + zoom,
+   * sheet tabs). Only rendered with `panelHeader`.
+   */
+  headerExtras?: ReactNode;
 }
 
 // Defense-in-depth CSP for the HTML preview iframe (spec 003 §0.1). The
@@ -216,6 +234,84 @@ function QuoteRegion({
   );
 }
 
+/** The slice of an mdast node the comment filter reads. */
+interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+}
+
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+
+/**
+ * Spec 088 §7a.6 — a remark plugin that drops HTML comments from a rendered
+ * Markdown preview. react-markdown shows raw HTML as literal text, so memory
+ * bookkeeping such as `<!--mem id:… -->` read as prose. Only `html` nodes are
+ * touched: a comment inside a code span or fence is code and stays, and text
+ * that shares an HTML block with a comment survives.
+ */
+function remarkHideHtmlComments() {
+  const prune = (node: MdNode) => {
+    if (!node.children) return;
+    node.children = node.children.filter((child) => {
+      if (child.type !== 'html') {
+        prune(child);
+        return true;
+      }
+      child.value = (child.value ?? '').replace(HTML_COMMENT_RE, '');
+      return child.value.trim() !== '';
+    });
+  };
+  return prune;
+}
+
+const PREVIEW_REMARK_PLUGINS = [remarkHideHtmlComments];
+
+/**
+ * Spec 088 — the panel's contextual file header: one row for what the Files
+ * tab spreads over a navigation bar and a file bar. The row is a size
+ * container, so a narrow panel can hide secondary pieces (`@max-[24rem]:`)
+ * while Back, Cancel and Save stay and only the filename truncates. Sticky, so
+ * Back stays reachable in states that scroll as a whole.
+ */
+function PanelFileHeader({
+  fileName,
+  onBack,
+  extras,
+  actions,
+  menuItems,
+}: {
+  fileName: string;
+  onBack: () => void;
+  extras?: ReactNode;
+  actions?: ReactNode;
+  menuItems: PanelMenuItem[];
+}) {
+  const t = useT();
+  return (
+    <div
+      data-testid="file-preview-panel-header"
+      className="@container sticky top-0 z-20 flex shrink-0 min-w-0 items-center gap-1.5 border-b border-border bg-background py-1.5 pl-1.5 pr-2"
+    >
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label={t('panel.files.back')}
+        title={t('panel.files.back')}
+        className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <ChevronLeft size={16} aria-hidden />
+      </button>
+      <h3 title={fileName} className="min-w-0 flex-1 truncate text-sm font-semibold text-primary">
+        {fileName}
+      </h3>
+      {extras}
+      {actions}
+      {menuItems.length > 0 && <PanelMoreMenu items={menuItems} />}
+    </div>
+  );
+}
+
 /**
  * Read-only file preview pane (spec 002 §3.3). Lifted verbatim out of
  * `FileExplorer.tsx` into its own module so both the Files-tab explorer and the
@@ -234,6 +330,8 @@ export default function FilePreview({
   onSave,
   quoting,
   onQuote,
+  panelHeader,
+  headerExtras,
 }: FilePreviewProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -310,6 +408,25 @@ export default function FilePreview({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, []);
 
+  // Spec 088: in the docked panel every state below, loading and error
+  // included, leads with the one contextual header row. Nothing in the Files tab.
+  const renderPanelHeader = (name: string, actions: ReactNode, menuItems: PanelMenuItem[]) =>
+    panelHeader && (
+      <PanelFileHeader
+        fileName={name}
+        onBack={panelHeader.onBack}
+        extras={headerExtras}
+        actions={actions}
+        menuItems={menuItems}
+      />
+    );
+  const openInFilesItem: PanelMenuItem = {
+    id: 'open-in-files',
+    label: t('panel.openInFiles'),
+    icon: <FolderOpen size={14} aria-hidden />,
+    onSelect: () => panelHeader?.onOpenInFiles(),
+  };
+
   if (!selectedPath) {
     return (
       <div className="flex items-center justify-center h-full min-h-[200px]">
@@ -318,8 +435,10 @@ export default function FilePreview({
     );
   }
 
+  const requestedName = selectedPath.split('/').pop() || selectedPath;
+
   if (loading) {
-    return (
+    const skeleton = (
       <div className="p-4">
         <div className="h-5 w-48 bg-sidebar rounded animate-pulse mb-4" />
         <div className="space-y-2">
@@ -332,12 +451,26 @@ export default function FilePreview({
         </div>
       </div>
     );
+    if (!panelHeader) return skeleton;
+    return (
+      <div className="flex flex-col h-full">
+        {renderPanelHeader(requestedName, null, [openInFilesItem])}
+        {skeleton}
+      </div>
+    );
   }
 
   if (!fileContent) {
-    return (
+    const unableToLoad = (
       <div className="flex items-center justify-center h-full min-h-[200px]">
         <p className="text-sm text-secondary">{t('fileExplorer.unableToLoad')}</p>
+      </div>
+    );
+    if (!panelHeader) return unableToLoad;
+    return (
+      <div className="flex flex-col h-full">
+        {renderPanelHeader(requestedName, null, [openInFilesItem])}
+        <div className="flex-1 min-h-0">{unableToLoad}</div>
       </div>
     );
   }
@@ -373,10 +506,20 @@ export default function FilePreview({
     );
     return (
       <div className="flex flex-col h-full">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-          <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
-        </div>
+        {panelHeader ? (
+          renderPanelHeader(
+            fileName,
+            <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
+              {formatSize(fileContent.size)}
+            </span>,
+            [openInFilesItem],
+          )
+        ) : (
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
+          </div>
+        )}
         <div className="flex-1 overflow-auto flex items-center justify-center p-4 bg-sidebar">
           {quoting && onQuote ? (
             // The wrapper shrink-wraps the <img>, so the overlay's coordinate
@@ -407,9 +550,13 @@ export default function FilePreview({
   if (fileType === 'binary') {
     return (
       <div className="flex flex-col h-full">
-        <div className="px-4 py-3 border-b border-border">
-          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-        </div>
+        {panelHeader ? (
+          renderPanelHeader(fileName, null, [openInFilesItem])
+        ) : (
+          <div className="px-4 py-3 border-b border-border">
+            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+          </div>
+        )}
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="bg-sidebar rounded-lg p-6 max-w-sm w-full text-center">
             <File size={48} className="mx-auto text-secondary mb-4" />
@@ -447,41 +594,65 @@ export default function FilePreview({
   // "Rendered | Source" toggle and an "Open in new tab" escape hatch.
   if (fileType === 'html') {
     const showSource = htmlViewMode === 'source';
+    const renderedSourceToggle = (className: string) => (
+      <div className={className}>
+        <button
+          onClick={() => setHtmlViewMode('rendered')}
+          aria-pressed={!showSource}
+          className={`text-xs px-2 py-1 transition-colors ${
+            showSource ? 'text-secondary hover:text-primary' : 'bg-accent text-white'
+          }`}
+        >
+          {t('fileExplorer.rendered')}
+        </button>
+        <button
+          onClick={() => setHtmlViewMode('source')}
+          aria-pressed={showSource}
+          className={`text-xs px-2 py-1 transition-colors ${
+            showSource ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
+          }`}
+        >
+          {t('fileExplorer.source')}
+        </button>
+      </div>
+    );
     return (
       <div className="flex flex-col h-full">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
-            <div className="flex items-center rounded-md border border-border overflow-hidden">
+        {panelHeader ? (
+          renderPanelHeader(
+            fileName,
+            <>
+              <span className="text-xs text-secondary shrink-0 @max-[24rem]:hidden">
+                {formatSize(fileContent.size)}
+              </span>
+              {renderedSourceToggle('flex shrink-0 items-center rounded-md border border-border overflow-hidden')}
+            </>,
+            [
+              {
+                id: 'download',
+                label: t('fileExplorer.download'),
+                icon: <Download size={14} aria-hidden />,
+                onSelect: () => handleDownloadRaw(fileContent.content, 'text/html', fileName),
+              },
+              openInFilesItem,
+            ],
+          )
+        ) : (
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-secondary">{formatSize(fileContent.size)}</span>
+              {renderedSourceToggle('flex items-center rounded-md border border-border overflow-hidden')}
               <button
-                onClick={() => setHtmlViewMode('rendered')}
-                aria-pressed={!showSource}
-                className={`text-xs px-2 py-1 transition-colors ${
-                  showSource ? 'text-secondary hover:text-primary' : 'bg-accent text-white'
-                }`}
+                onClick={() => handleDownloadRaw(fileContent.content, 'text/html', fileName)}
+                className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
               >
-                {t('fileExplorer.rendered')}
-              </button>
-              <button
-                onClick={() => setHtmlViewMode('source')}
-                aria-pressed={showSource}
-                className={`text-xs px-2 py-1 transition-colors ${
-                  showSource ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
-                }`}
-              >
-                {t('fileExplorer.source')}
+                <Download size={14} />
+                {t('fileExplorer.download')}
               </button>
             </div>
-            <button
-              onClick={() => handleDownloadRaw(fileContent.content, 'text/html', fileName)}
-              className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
-            >
-              <Download size={14} />
-              {t('fileExplorer.download')}
-            </button>
           </div>
-        </div>
+        )}
         {fileContent.truncated && (
           <div className="px-4 py-2 bg-sidebar border-b border-border">
             <p className="text-xs text-secondary">{t('fileExplorer.truncated')}</p>
@@ -566,76 +737,137 @@ export default function FilePreview({
     setSaving(false);
   };
 
+  // Header pieces shared by the Files-tab header and the panel header.
+  const writePreviewToggle = (className: string) => (
+    <div className={className}>
+      <button
+        onClick={() => setEditView('write')}
+        aria-pressed={editView === 'write'}
+        className={`text-xs px-2 py-1 transition-colors ${
+          editView === 'write' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
+        }`}
+      >
+        {t('fileExplorer.editWrite')}
+      </button>
+      <button
+        onClick={() => setEditView('preview')}
+        aria-pressed={editView === 'preview'}
+        className={`text-xs px-2 py-1 transition-colors ${
+          editView === 'preview' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
+        }`}
+      >
+        {t('fileExplorer.editPreview')}
+      </button>
+    </div>
+  );
+  const cancelButton = (
+    <button
+      onClick={handleCancelEdit}
+      disabled={saving}
+      className="text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
+    >
+      {t('fileExplorer.cancel')}
+    </button>
+  );
+  const saveButton = (
+    <button
+      onClick={handleSave}
+      disabled={saving}
+      className="bg-accent text-white text-xs font-medium rounded-md px-2.5 py-1 hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {saving ? t('fileExplorer.saving') : t('fileExplorer.save')}
+    </button>
+  );
+  const editButton = editable && (
+    <button
+      onClick={handleStartEdit}
+      className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
+    >
+      <Pencil size={14} />
+      {t('fileExplorer.edit')}
+    </button>
+  );
+  const tooLargeHint = (className: string) =>
+    isMarkdown &&
+    fileContent.truncated && (
+      <span className={className} aria-disabled="true">
+        {t('fileExplorer.editTooLarge')}
+      </span>
+    );
+
+  // Spec 088 panel row. Viewing: Edit visible, Copy + Open in Files in More.
+  // Editing: Write|Preview · Cancel · Save; below a 24rem row Write|Preview
+  // folds into its own More, while Cancel and Save never move.
+  const panelActions = editing ? (
+    <>
+      {writePreviewToggle('flex shrink-0 items-center rounded-md border border-border overflow-hidden @max-[24rem]:hidden')}
+      {cancelButton}
+      {saveButton}
+      <PanelMoreMenu
+        className="hidden @max-[24rem]:block"
+        items={[
+          {
+            id: 'write',
+            label: t('fileExplorer.editWrite'),
+            checked: editView === 'write',
+            onSelect: () => setEditView('write'),
+          },
+          {
+            id: 'preview',
+            label: t('fileExplorer.editPreview'),
+            checked: editView === 'preview',
+            onSelect: () => setEditView('preview'),
+          },
+        ]}
+      />
+    </>
+  ) : (
+    <>
+      {editButton}
+      {tooLargeHint('shrink-0 text-xs text-secondary opacity-70 @max-[24rem]:hidden')}
+      <span role="status" className="shrink-0 text-xs text-secondary empty:hidden">
+        {copied ? t('fileExplorer.copied') : ''}
+      </span>
+    </>
+  );
+  const copyItem: PanelMenuItem = {
+    id: 'copy',
+    label: t('fileExplorer.copy'),
+    icon: <Copy size={14} aria-hidden />,
+    onSelect: () => void handleCopy(),
+  };
+
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-        <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
-        <div className="flex items-center gap-2 shrink-0">
-          {editing ? (
-            <>
-              {/* Write | Preview segmented toggle (mirrors the html Rendered|Source control). */}
-              <div className="flex items-center rounded-md border border-border overflow-hidden">
+      {panelHeader ? (
+        renderPanelHeader(fileName, panelActions, editing ? [] : [copyItem, openInFilesItem])
+      ) : (
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                {/* Write | Preview segmented toggle (mirrors the html Rendered|Source control). */}
+                {writePreviewToggle('flex items-center rounded-md border border-border overflow-hidden')}
+                {cancelButton}
+                {saveButton}
+              </>
+            ) : (
+              <>
+                {editButton}
+                {tooLargeHint('text-xs text-secondary opacity-70')}
                 <button
-                  onClick={() => setEditView('write')}
-                  aria-pressed={editView === 'write'}
-                  className={`text-xs px-2 py-1 transition-colors ${
-                    editView === 'write' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
-                  }`}
-                >
-                  {t('fileExplorer.editWrite')}
-                </button>
-                <button
-                  onClick={() => setEditView('preview')}
-                  aria-pressed={editView === 'preview'}
-                  className={`text-xs px-2 py-1 transition-colors ${
-                    editView === 'preview' ? 'bg-accent text-white' : 'text-secondary hover:text-primary'
-                  }`}
-                >
-                  {t('fileExplorer.editPreview')}
-                </button>
-              </div>
-              <button
-                onClick={handleCancelEdit}
-                disabled={saving}
-                className="text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
-              >
-                {t('fileExplorer.cancel')}
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="bg-accent text-white text-xs font-medium rounded-md px-2.5 py-1 hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? t('fileExplorer.saving') : t('fileExplorer.save')}
-              </button>
-            </>
-          ) : (
-            <>
-              {editable && (
-                <button
-                  onClick={handleStartEdit}
+                  onClick={handleCopy}
                   className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
                 >
-                  <Pencil size={14} />
-                  {t('fileExplorer.edit')}
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                  {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
                 </button>
-              )}
-              {isMarkdown && fileContent.truncated && (
-                <span className="text-xs text-secondary opacity-70" aria-disabled="true">
-                  {t('fileExplorer.editTooLarge')}
-                </span>
-              )}
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors"
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? t('fileExplorer.copied') : t('fileExplorer.copy')}
-              </button>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       {fileContent.truncated && (
         <div className="px-4 py-2 bg-sidebar border-b border-border">
           <p className="text-xs text-secondary">
@@ -651,7 +883,7 @@ export default function FilePreview({
       {editing ? (
         editView === 'preview' ? (
           <div className="flex-1 overflow-auto bg-sidebar p-4 min-h-0">
-            <MarkdownContent content={draft} />
+            <MarkdownContent content={draft} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
           </div>
         ) : (
           <textarea
@@ -667,7 +899,7 @@ export default function FilePreview({
           {(() => {
             const body = isMarkdown ? (
               <div className="bg-sidebar p-4 min-h-full">
-                <MarkdownContent content={viewContent} />
+                <MarkdownContent content={viewContent} remarkPlugins={PREVIEW_REMARK_PLUGINS} />
               </div>
             ) : (
               <pre className="font-mono text-sm text-primary bg-sidebar p-4 whitespace-pre-wrap break-words min-h-full">
