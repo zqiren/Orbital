@@ -13,6 +13,7 @@ a fixed content-type map, inline disposition, ETag/Last-Modified, and the 50 MB
 download ceiling.
 """
 import base64
+import mimetypes
 import os
 from unittest.mock import MagicMock
 from urllib.parse import quote
@@ -175,7 +176,12 @@ class TestLegacyShapesWithoutFlag:
         assert resp.status_code == 200
         data = resp.json()
         assert data["type"] == "binary"
-        assert data["mime"] == mime
+        # The pre-090 binary card takes its mime from `mimetypes`, which reads
+        # the OS registry: a stock Windows runner has no OOXML entries and
+        # reports application/octet-stream. Assert that legacy rule exactly,
+        # and that it is the expected type wherever the registry knows it.
+        assert data["mime"] == (mimetypes.guess_type(path)[0] or "application/octet-stream")
+        assert data["mime"] in (mime, "application/octet-stream")
         assert data["size"] == len(raw)
         assert base64.b64decode(data["content"]) == raw
         assert data["download_url"] == f"/api/v2/projects/p1/files/download?path={path}"
