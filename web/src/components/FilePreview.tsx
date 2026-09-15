@@ -10,11 +10,14 @@ import {
   type IframeHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { File, Download, Copy, Check, Pencil, ChevronLeft, FolderOpen } from 'lucide-react';
+import { File, Download, Copy, Check, Pencil, ChevronLeft, FolderOpen, Info } from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
 import AnnotateOverlay from './panel/AnnotateOverlay';
 import PanelMoreMenu, { type PanelMenuItem } from './panel/PanelMoreMenu';
+import DocumentPreview from './preview/DocumentPreview';
+import DocumentNav from './preview/DocumentNav';
+import { useDocumentController } from './preview/documentController';
 import type { AnnotationBox } from '../utils/annotations';
 import { useT } from '../i18n/useT';
 
@@ -407,6 +410,9 @@ export default function FilePreview({
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, []);
+  // Spec 090 x 088: a document engine's navigation + download, lifted so the
+  // panel header row can host them. A hook, so it sits before the early returns.
+  const docController = useDocumentController();
 
   // Spec 088: in the docked panel every state below, loading and error
   // included, leads with the one contextual header row. Nothing in the Files tab.
@@ -585,6 +591,76 @@ export default function FilePreview({
               </button>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Spec 090: PDF / Word / Excel / CSV render client-side from raw bytes.
+  // DocumentPreview owns loading, failure + download fallback and the
+  // navigation state; text selected in its body (PDF text layer, sheet cells)
+  // quotes through the same QuoteRegion as the text views. In the docked panel
+  // (spec 088) the navigation joins the one contextual header row, the "may
+  // differ" note becomes an info icon, and Download / Quote this file / Open
+  // in Files move into More, so no toolbar or note row stacks above the page.
+  if (fileType === 'document') {
+    const quoteFile = quoting && onQuote ? () => onQuote({ path: quotePath }) : undefined;
+    const documentBody = (
+      <DocumentPreview
+        key={fileContent.path}
+        fileContent={fileContent}
+        controller={docController}
+        showToolbar={!panelHeader}
+        showNote={!panelHeader}
+        onQuoteFile={quoteFile}
+      />
+    );
+    const documentMenuItems: PanelMenuItem[] = [];
+    if (docController.download) {
+      documentMenuItems.push({
+        id: 'download',
+        label: t('fileExplorer.download'),
+        icon: <Download size={14} aria-hidden />,
+        onSelect: docController.download,
+      });
+    }
+    if (quoteFile) {
+      documentMenuItems.push({ id: 'quote-file', label: t('panel.files.quoteFile'), onSelect: quoteFile });
+    }
+    documentMenuItems.push(openInFilesItem);
+    return (
+      <div className="flex flex-col h-full">
+        {panelHeader ? (
+          renderPanelHeader(
+            fileName,
+            <>
+              <DocumentNav nav={docController.nav} compact />
+              <span
+                role="img"
+                aria-label={t('filePreview.doc.mayDiffer')}
+                title={t('filePreview.doc.mayDiffer')}
+                data-testid="document-may-differ"
+                className="shrink-0 text-secondary @max-[20rem]:hidden"
+              >
+                <Info size={14} aria-hidden />
+              </span>
+            </>,
+            documentMenuItems,
+          )
+        ) : (
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+            <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
+          </div>
+        )}
+        <div className="flex-1 min-h-0">
+          {quoting && onQuote ? (
+            <QuoteRegion source="" exact={false} path={quotePath} onQuote={onQuote} className="h-full">
+              {documentBody}
+            </QuoteRegion>
+          ) : (
+            documentBody
+          )}
         </div>
       </div>
     );

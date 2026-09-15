@@ -29,8 +29,11 @@ def workspace(tmp_path):
     # Image file
     (tmp_path / "icon.png").write_bytes(TINY_PNG)
 
-    # Binary file (PDF-like, with actual non-UTF-8 bytes)
+    # PDF-like file (spec 090: a document type, previewed from raw bytes)
     (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4\x00\x80\x81\xff\xfe binary")
+
+    # Binary file with no preview engine (non-UTF-8 bytes)
+    (tmp_path / "blob.bin").write_bytes(b"\x00\x80\x81\xff\xfe binary")
 
     # Subdirectory with a file
     sub = tmp_path / "subdir"
@@ -127,12 +130,34 @@ class TestGetContent:
         decoded = base64.b64decode(data["content"])
         assert decoded == TINY_PNG
 
-    def test_binary_file_content(self, client):
+    def test_pdf_is_a_document_envelope_when_requested(self, client):
+        # Spec 090: a client that renders documents opts in and gets metadata
+        # + a preview URL instead of base64.
+        resp = client.get("/api/v2/projects/proj_1/files/content?path=doc.pdf&document_preview=1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "document"
+        assert data["format"] == "pdf"
+        assert data["content"] == ""
+        assert "preview_url" in data
+
+    def test_pdf_without_the_flag_keeps_the_pre_090_binary_shape(self, client):
+        # Older frontends (the relay's own build, a cached SPA) never send the
+        # flag and must keep getting the download-card shape.
         resp = client.get("/api/v2/projects/proj_1/files/content?path=doc.pdf")
         assert resp.status_code == 200
         data = resp.json()
         assert data["type"] == "binary"
         assert data["mime"] == "application/pdf"
+        assert "download_url" in data
+        assert base64.b64decode(data["content"]) == b"%PDF-1.4\x00\x80\x81\xff\xfe binary"
+
+    def test_binary_file_content(self, client):
+        resp = client.get("/api/v2/projects/proj_1/files/content?path=blob.bin")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "binary"
+        assert data["mime"] == "application/octet-stream"
         assert "download_url" in data
         assert "content" in data
         # Verify content is valid base64 of the binary file
