@@ -60,7 +60,7 @@ import { SessionSidebar } from './SessionSidebar';
 import ChatView from './ChatView';
 import ScopeChip from './ScopeChip';
 import FilePreviewDrawer from './FilePreviewDrawer';
-import WorkspacePanel from './panel/WorkspacePanel';
+import WorkspacePanel, { WorkspacePanelBar } from './panel/WorkspacePanel';
 import FilesView from './panel/FilesView';
 import BrowserView from './panel/BrowserView';
 import PanelHandle from './panel/PanelHandle';
@@ -456,12 +456,17 @@ export default function ChatTab({
             fileContent={null}
             loading={false}
             onClose={collapsePanel}
+            header={
+              <WorkspacePanelBar
+                view={panelView}
+                onViewChange={setPanelView}
+                annotating={annotating}
+                onToggleAnnotate={() => setAnnotating(!annotating)}
+              />
+            }
           >
             <WorkspacePanel
               view={panelView}
-              onViewChange={setPanelView}
-              annotating={annotating}
-              onToggleAnnotate={() => setAnnotating(!annotating)}
               browser={
                 <BrowserView
                   projectId={projectId}

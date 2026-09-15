@@ -298,6 +298,17 @@ export default function FilePreviewDrawer({
     const dockedWidth = minWidth
       ? Math.max(drawerWidth, clampPreviewDrawerWidth(minWidth, availableWidth))
       : drawerWidth;
+    const collapseButton = (
+      <button
+        ref={closeBtnRef}
+        type="button"
+        onClick={onClose}
+        aria-label={t('panel.collapse')}
+        className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <ChevronRight size={16} />
+      </button>
+    );
     return (
       <section
         ref={panelRef}
@@ -307,18 +318,19 @@ export default function FilePreviewDrawer({
         className="relative z-0 hidden md:flex h-full min-h-0 shrink-0 flex-col border-l border-border bg-background w-[var(--file-preview-drawer-width)] max-w-[80%]"
       >
         {resizeHandle}
-        <div className="flex items-center justify-between gap-2 pl-3 pr-2 py-1.5 border-b border-border shrink-0 min-w-0">
-          <div className="min-w-0 flex-1">{header}</div>
-          <button
-            ref={closeBtnRef}
-            type="button"
-            onClick={onClose}
-            aria-label={t('panel.collapse')}
-            className="flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-secondary hover:text-primary hover:bg-card-hover transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        {header ? (
+          <div
+            data-testid="workspace-panel-header"
+            className="flex items-center justify-between gap-2 pl-3 pr-2 py-1.5 border-b border-border shrink-0 min-w-0"
           >
-            <ChevronRight size={16} />
-          </button>
-        </div>
+            <div className="min-w-0 flex-1">{header}</div>
+            {collapseButton}
+          </div>
+        ) : (
+          // Spec 088: with nothing to label, collapse floats in the corner
+          // rather than holding open an otherwise empty bar.
+          <div className="absolute right-2 top-1.5 z-10">{collapseButton}</div>
+        )}
         <div className="flex-1 overflow-hidden min-h-0 flex flex-col">{body}</div>
       </section>
     );
