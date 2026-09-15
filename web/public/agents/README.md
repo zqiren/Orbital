@@ -7,7 +7,7 @@ so a missing or broken file degrades rather than breaking the row.
 
 ## Source
 
-All five files come from **[lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)**,
+Every file comes from **[lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)**,
 `packages/static-svg/icons/`, fetched from `raw.githubusercontent.com` at the
 `master` tip on 2026-08-11. That repository is **MIT licensed** (© 2023 LobeHub).
 
@@ -20,6 +20,7 @@ All five files come from **[lobehub/lobe-icons](https://github.com/lobehub/lobe-
 | `grok.svg` | `grok.svg` | xAI / Grok |
 | `dsh.svg` | `deepseek.svg` | DeepSeek (Harness) — fetched 2026-08-14; upstream ships `currentColor`/`1em`, normalized here to the baked brand fill `#4D6BFE` + 24px box to match the older vendored files |
 | `codebuddy.svg` | `codebuddy.svg` | Tencent CodeBuddy — fetched 2026-09-13; upstream ships `currentColor`/`1em`, normalized here to Tencent blue `#0052D9` + 24px box |
+| `pi.svg` | `pi.svg` | Earendil Pi — fetched 2026-09-16; upstream ships `currentColor`/`1em`, normalized here to pi.dev's mark colour `#111111` + 24px box. lobe-icons titles it "Pi Agent" with description `https://pi.dev`, and its geometry matches pi.dev's own `favicon.svg` scaled into the 24px box — this is Earendil's Pi, not Inflection's |
 
 ## Local modifications
 

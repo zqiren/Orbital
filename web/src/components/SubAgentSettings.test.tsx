@@ -79,6 +79,7 @@ interface Entry {
   install?: InstallInfo;
   emits_tool_activity?: boolean;
   credentials?: CredentialSpec[];
+  credential_state?: 'configured' | 'missing' | 'unknown' | null;
 }
 
 function makeEntry(overrides: Partial<Entry> = {}): Entry {
@@ -379,6 +380,85 @@ describe('SubAgentSettings', () => {
     expect(screen.getByRole('option', { name: 'gpt-5.6' })).toBeInTheDocument();
     // The live options are still offered alongside it.
     expect(screen.getByRole('option', { name: 'gpt-5.5' })).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pi — credential state + host-permission disclosure
+// ---------------------------------------------------------------------------
+
+describe('SubAgentSettings — Pi', () => {
+  function makePiEntry(overrides: Partial<Entry> = {}): Entry {
+    return makeEntry({
+      slug: 'pi',
+      name: 'Pi',
+      binary_path: '/opt/homebrew/bin/pi',
+      version: '0.85.1',
+      credentials_configured: true,
+      missing_credentials: [],
+      supports_login: false,
+      config: {},
+      param_schema: {
+        model: { allowed: null, default: null },
+        effort: { allowed: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], default: null },
+      },
+      credentials: [
+        { key: 'PI_MODEL_PROVIDER_KEY', label: "Key for the configured model's provider", type: 'model_provider', required: true, configured: true, has_setup_command: false },
+      ],
+      credential_state: 'unknown',
+      ...overrides,
+    });
+  }
+
+  it('discloses host permissions and asks to verify sign-in in Pi', async () => {
+    api.mockResolvedValueOnce([makePiEntry()]);
+    render(<SubAgentSettings />);
+
+    await waitFor(() => expect(screen.getByText('Pi')).toBeInTheDocument());
+    expect(screen.getByTestId('sub-agent-host-note-pi')).toHaveTextContent(/user account's permissions/);
+    expect(screen.getByText('Verify sign-in in Pi')).toBeInTheDocument();
+    expect(screen.getByText(/provider\/model/)).toBeInTheDocument();
+    // Orbital owns neither a Pi login nor a Pi key field.
+    expect(screen.queryByRole('button', { name: 'Login' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Logout' })).toBeNull();
+    expect(screen.queryByTestId('sub-agent-credentials-pi')).toBeNull();
+  });
+
+  it.each([
+    ['configured', 'Credentials ready'],
+    ['missing', 'No credentials for this model'],
+  ] as const)('labels the %s credential state', async (state, label) => {
+    api.mockResolvedValueOnce([
+      makePiEntry({ credential_state: state, credentials_configured: state === 'configured' }),
+    ]);
+    render(<SubAgentSettings />);
+
+    await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Login' })).toBeNull();
+  });
+
+  it('renders the Pi notes in Simplified Chinese', async () => {
+    localStorage.setItem('orbital.locale', 'zh');
+    api.mockResolvedValueOnce([makePiEntry()]);
+    render(
+      <LocaleProvider>
+        <SubAgentSettings />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Pi')).toBeInTheDocument());
+    expect(screen.getByTestId('sub-agent-host-note-pi')).toHaveTextContent(/用户账户权限/);
+    expect(screen.getByText('请在 Pi 中确认登录状态')).toBeInTheDocument();
+    expect(screen.getByText('思考强度')).toBeInTheDocument();
+  });
+
+  it('leaves agents without a credential state on their login pill', async () => {
+    api.mockResolvedValueOnce([makeEntry({ credentials_configured: true, missing_credentials: [] })]);
+    render(<SubAgentSettings />);
+
+    await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+    expect(screen.getByText('Logged in')).toBeInTheDocument();
+    expect(screen.queryByTestId('sub-agent-host-note-claude-code')).toBeNull();
   });
 });
 

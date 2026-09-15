@@ -29,3 +29,7 @@ class AgentSetupStatus:
     credentials_configured: bool
     missing_credentials: list[str]
     setup_actions: list[SetupAction] = field(default_factory=list)
+    # "configured" | "missing" | "unknown", set only by a ``model_provider``
+    # credential (Pi). "unknown" is dispatchable but not verified. None for
+    # every other agent, whose state is ``credentials_configured`` alone.
+    credential_state: str | None = None

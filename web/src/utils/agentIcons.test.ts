@@ -7,7 +7,7 @@ import { getAgentIcon, MAIN_AGENT_HANDLE } from './agentIcons';
 
 describe('getAgentIcon', () => {
   it('gives every known slug a distinct mark and monogram', () => {
-    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codebuddy', 'codex', 'cursor', 'dsh', 'gemini', 'grok'];
+    const known = [MAIN_AGENT_HANDLE, 'claude-code', 'codebuddy', 'codex', 'cursor', 'dsh', 'gemini', 'grok', 'pi'];
     const icons = known.map((slug) => getAgentIcon(slug));
 
     for (const icon of icons) {
@@ -77,6 +77,15 @@ describe('getAgentIcon', () => {
     expect(getAgentIcon('Claude-Code').monogram).toBe('CC');
     expect(getAgentIcon('  CODEX  ').src).toBe('/agents/codex.svg');
   });
+  it('resolves pi → PI / pi.dev black, without branding lookalike handles', () => {
+    const i = getAgentIcon('pi');
+    expect(i.monogram).toBe('PI');
+    expect(i.color).toBe('#111111');
+    expect(i.src).toBe('/agents/pi.svg');
+    // A handle that merely starts with the letters is not Pi.
+    expect(getAgentIcon('pilot').src).toBeUndefined();
+  });
+
   it('resolves codebuddy → CB / Tencent blue', () => {
     const i = getAgentIcon('codebuddy');
     expect(i.monogram).toBe('CB');

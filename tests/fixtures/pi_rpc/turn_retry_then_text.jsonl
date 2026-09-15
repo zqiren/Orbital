@@ -1,0 +1,56 @@
+{"id": "p1", "type": "response", "command": "prompt", "success": true}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "message_start", "message": {"role": "user", "content": [{"type": "text", "text": "Without using any tools, reply with exactly two tokens separated by a space: the project codeword from AGENTS.md and your Orbital handle from the system prompt."}], "timestamp": 1789490979075}}
+{"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "Without using any tools, reply with exactly two tokens separated by a space: the project codeword from AGENTS.md and your Orbital handle from the system prompt."}], "timestamp": 1789490979075}}
+{"type": "message_start", "message": {"role": "assistant", "content": [], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "error", "timestamp": 1789490979083, "errorMessage": "Request timed out."}}
+{"type": "message_end", "message": {"role": "assistant", "content": [], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "error", "timestamp": 1789490979083, "errorMessage": "Request timed out."}}
+{"type": "turn_end", "message": {"role": "assistant", "content": [], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "error", "timestamp": 1789490979083, "errorMessage": "Request timed out."}, "toolResults": []}
+{"type": "agent_end", "messages": [{"role": "user", "content": [{"type": "text", "text": "Without using any tools, reply with exactly two tokens separated by a space: the project codeword from AGENTS.md and your Orbital handle from the system prompt."}], "timestamp": 1789490979075}, {"role": "assistant", "content": [], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "error", "timestamp": 1789490979083, "errorMessage": "Request timed out."}], "willRetry": true}
+{"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "Request timed out."}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "message_start", "message": {"role": "assistant", "content": [], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "pending", "timestamp": 1789490991623}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_start", "contentIndex": 0}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "The"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " project"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " cod"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "ew"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "ord"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " is"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " P"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "EL"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "IC"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "AN"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "-"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "42"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " and"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " Orb"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "ital"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " handle"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " is"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": " Z"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "EB"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "RA"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "-"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "7"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "."}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_start", "contentIndex": 1}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "P"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "EL"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "IC"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "AN"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "-"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "42"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": " Z"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "EB"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "RA"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "-"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "7"}}
+{"type": "message_update", "assistantMessageEvent": {"type": "thinking_end", "contentIndex": 0, "content": "The project codeword is PELICAN-42 and Orbital handle is ZEBRA-7."}}
+{"type": "message_update", "assistantMessageEvent": {"type": "text_end", "contentIndex": 1, "content": "PELICAN-42 ZEBRA-7"}}
+{"type": "message_end", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "The project codeword is PELICAN-42 and Orbital handle is ZEBRA-7.", "thinkingSignature": "reasoning_content"}, {"type": "text", "text": "PELICAN-42 ZEBRA-7"}], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "stop", "timestamp": 1789490991623, "responseId": "b66f47b4-2038-46da-b02d-fc96fb186d81", "rawStopReason": "stop"}}
+{"type": "auto_retry_end", "success": true, "attempt": 1}
+{"type": "turn_end", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "The project codeword is PELICAN-42 and Orbital handle is ZEBRA-7.", "thinkingSignature": "reasoning_content"}, {"type": "text", "text": "PELICAN-42 ZEBRA-7"}], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "stop", "timestamp": 1789490991623, "responseId": "b66f47b4-2038-46da-b02d-fc96fb186d81", "rawStopReason": "stop"}, "toolResults": []}
+{"type": "agent_end", "messages": [{"role": "assistant", "content": [{"type": "thinking", "thinking": "The project codeword is PELICAN-42 and Orbital handle is ZEBRA-7.", "thinkingSignature": "reasoning_content"}, {"type": "text", "text": "PELICAN-42 ZEBRA-7"}], "api": "openai-completions", "provider": "opencode-go", "model": "deepseek-v4-flash", "stopReason": "stop", "timestamp": 1789490991623, "responseId": "b66f47b4-2038-46da-b02d-fc96fb186d81", "rawStopReason": "stop"}], "willRetry": false}
+{"type": "agent_settled"}

@@ -1,0 +1,142 @@
+# -----------------------------------------------------------------------
+# Pi (Earendil) — Research Notes (probed 2026-09-16, pi 0.85.1, macOS arm64)
+# -----------------------------------------------------------------------
+# CLI command: pi  (npm bin -> dist/bundle/cli.js; engines node >=22.19.0)
+# Install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+#   (@mariozechner/pi-coding-agent is the deprecated old name). Bring your
+#   own: Orbital shows the command and never runs it.
+# Protocol: `pi --mode rpc` — strict LF-delimited JSONL on stdio, driven by
+#   PiRPCTransport. Observed on the released binary:
+#   - get_state answers at once (sessionId, sessionFile, model, thinkingLevel);
+#     the session JSONL is only written after the first prompt.
+#   - prompt -> {"type":"response","success":true}, then events. A missing
+#     provider key is success:false ("No API key found for <provider>") with
+#     no events at all.
+#   - agent_end is NOT terminal: a timed-out request gave agent_end
+#     (willRetry:true) -> auto_retry_start -> a second run -> agent_settled.
+#   - an unknown model id is accepted at startup (stderr warning); the
+#     provider error arrives as an assistant message_end with stopReason
+#     "error" and errorMessage, then agent_settled.
+#   - abort killed the running bash tool, emitted agent_settled, then answered.
+#   - a second prompt while streaming is refused (needs streamingBehavior).
+#   - stdin EOF -> exit 0 within ~10 ms.
+# Resume: --session <full id | partial id | file path> reopens a session from
+#   --session-dir; an unknown id exits 1 ("No session found matching '<id>'").
+#   --session-id is never used: it silently creates a missing session.
+# Trust: --no-approve skipped a sentinel .pi/extensions/*.ts while AGENTS.md
+#   and --append-system-prompt still reached the model (--approve loaded it).
+# Prompt: --append-system-prompt accepts text or a file path; Orbital passes a
+#   per-spawn file so multi-line text survives npm's Windows .cmd shim.
+# Auth: no Pi account. `pi auth check --model <m> --json --no-refresh` is a
+#   machine-readable readiness probe: {"status":"ready","authType":...} exit 0;
+#   {"status":"not_ready","reason":"credentials_not_configured" |
+#   "provider_not_found"} exit 1. Resolution order: --api-key >
+#   ~/.pi/agent/auth.json > provider env var > models.json. PI_CODING_AGENT_DIR
+#   relocates ~/.pi/agent (probes only — Orbital never sets it).
+# Sandbox: none of its own; pi runs with the user's permissions
+#   (docs/security.md). Transport-backed agents spawn outside Orbital's
+#   profile, so no network_domains are claimed.
+# -----------------------------------------------------------------------
+
+manifest_version: "1"
+name: "Pi"
+slug: "pi"
+description: "Earendil's Pi coding agent, driven over its native RPC mode"
+author: "earendil"
+version: "1.0.0"
+
+runtime:
+  adapter: cli
+  command: "pi"
+  transport: pi-rpc
+  mode: pipe
+  interactive: false
+  # --no-approve: ignore untrusted project-local .pi settings and extensions.
+  # Context files (AGENTS.md / CLAUDE.md) still load. Not a sandbox.
+  args: ["--mode", "rpc", "--no-approve"]
+
+setup:
+  dependencies:
+    - name: "Node.js"
+      check_command: "node --version"
+      min_version: "22.19.0"
+      install:
+        windows: "winget install OpenJS.NodeJS"
+        macos: "brew install node"
+  install_command: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+  check_command: "pi --version"
+  orbital_install:
+    platforms: []
+  credentials:
+    # Pi speaks to 40+ providers natively. It is ready when Orbital can hand
+    # it the key for the provider named by the configured model (`pi.model`
+    # as provider/model) from the user's credential cards — that ONE key,
+    # under Pi's env var for it — or when Pi's own auth answers ready. With
+    # no model configured Pi picks its own default, and readiness is
+    # "unknown" (verify in Pi). Gateway/custom-endpoint cards are left out:
+    # they need Pi's models.json, which is user config Orbital never writes.
+    - key: "PI_MODEL_PROVIDER_KEY"
+      label: "Key for the configured model's provider"
+      type: model_provider
+      required: true
+      check_command: "pi auth check --model {model} --json --no-refresh"
+      check_field: "status"
+      check_value: "ready"
+      check_missing_value: "not_ready"
+      provider_keys:
+        - {provider: openai, card_provider: openai, env_var: OPENAI_API_KEY}
+        - {provider: anthropic, card_provider: anthropic, env_var: ANTHROPIC_API_KEY}
+        - {provider: deepseek, card_provider: deepseek, env_var: DEEPSEEK_API_KEY}
+        - {provider: google, card_provider: google, env_var: GEMINI_API_KEY}
+        - {provider: xai, card_provider: xai, env_var: XAI_API_KEY}
+        - {provider: mistral, card_provider: mistral, env_var: MISTRAL_API_KEY}
+        - {provider: groq, card_provider: groq, env_var: GROQ_API_KEY}
+        - {provider: together, card_provider: together, env_var: TOGETHER_API_KEY}
+        - {provider: openrouter, card_provider: openrouter, env_var: OPENROUTER_API_KEY}
+        - {provider: opencode, card_provider: opencode-zen, env_var: OPENCODE_API_KEY}
+        - {provider: opencode-go, card_provider: opencode-go, env_var: OPENCODE_API_KEY}
+        # Region-locked keys: the card's region picks Pi's regional provider.
+        - {provider: moonshotai, card_provider: moonshot, card_region: global, env_var: MOONSHOT_API_KEY}
+        - {provider: moonshotai-cn, card_provider: moonshot, card_region: china, env_var: MOONSHOT_API_KEY}
+        - {provider: minimax, card_provider: minimax, card_region: global, env_var: MINIMAX_API_KEY}
+        - {provider: minimax-cn, card_provider: minimax, card_region: china, env_var: MINIMAX_CN_API_KEY}
+  auto_detect:
+    windows:
+      - "%APPDATA%\\npm\\pi.cmd"
+      - "%PROGRAMFILES%\\nodejs\\pi.cmd"
+    macos:
+      - "/opt/homebrew/bin/pi"
+      - "/usr/local/bin/pi"
+      - "$HOME/.npm-global/bin/pi"
+      - "$HOME/.npm/bin/pi"
+      - "$HOME/.local/bin/pi"
+      - "$HOME/.bun/bin/pi"
+    linux:
+      - "/usr/local/bin/pi"
+      - "$HOME/.npm-global/bin/pi"
+      - "$HOME/.npm/bin/pi"
+      - "$HOME/.local/bin/pi"
+      - "$HOME/.bun/bin/pi"
+
+capabilities:
+  skills:
+    - code_generation
+    - code_review
+    - debugging
+    - testing
+    - refactoring
+    - documentation
+  input_types: [text, files]
+  output_types: [text, files]
+  file_extensions: [.py, .js, .ts, .jsx, .tsx, .rs, .go, .java, .rb, .c, .cpp, .h]
+  routing_hint: "Use for coding tasks on any model Pi supports (Anthropic, OpenAI, DeepSeek, OpenRouter, OpenCode, Kimi, MiniMax and more)"
+  needs_shell: true
+  needs_network: true
+
+permissions:
+  # network_domains deliberately omitted: transport-backed sub-agents spawn
+  # outside the project sandbox/proxy, so an entry here would be a claim
+  # Orbital cannot enforce (see the dsh manifest for the full note).
+  shell: true
+  workspace_access: read_write
+  autonomy_recommended: hands_off

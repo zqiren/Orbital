@@ -34,7 +34,7 @@ class ManifestRuntime:
     prompt_flag: str = "-p"             # flag to pass prompt text
     resume_flag: str = "--resume"       # flag to resume session
     session_id_pattern: str = ""        # regex to extract session_id from output
-    transport: str = "auto"             # "sdk" | "acp-sdk" | "pipe" | "pty" | "codex-appserver" | "auto"
+    transport: str = "auto"             # "sdk" | "acp-sdk" | "pipe" | "pty" | "codex-appserver" | "pi-rpc" | "auto"
     approval_patterns: list[dict] = field(default_factory=list)
     activity_patterns: list[dict] = field(default_factory=list)
     # Filename of a composition template inside the agent's installed
@@ -57,7 +57,7 @@ class ManifestDependency:
 class ManifestCredential:
     key: str                              # "ANTHROPIC_API_KEY"
     label: str                            # "Anthropic API Key"
-    type: str = "secret"                  # "secret" | "text" | "oauth" | "oauth_cli"
+    type: str = "secret"                  # "secret" | "text" | "oauth" | "oauth_cli" | "model_provider"
     required: bool = True
     env_var: str = ""                     # injected as this env var at runtime
     check_command: str = ""               # e.g. "claude auth status --json"
@@ -65,6 +65,16 @@ class ManifestCredential:
     check_value: str = ""                 # expected value of check_field
     setup_command: str = ""               # e.g. "claude login"
     setup_label: str = ""                 # human-readable label for setup action
+    # ``model_provider`` only. The credential follows the agent's configured
+    # ``model`` param (provider/model): each entry maps the CLI's provider id
+    # to the credential-card provider (and region, for region-locked keys)
+    # whose key may be injected, and the env var the CLI reads it from —
+    # {provider, card_provider, card_region?, env_var}. ``check_command`` runs
+    # as an argv list with a ``{model}`` token; ``check_missing_value`` is the
+    # ``check_field`` value that means "definitely not configured" (any other
+    # non-ready answer is reported as unknown).
+    provider_keys: list[dict] = field(default_factory=list)
+    check_missing_value: str = ""
 
 
 @dataclass
@@ -256,6 +266,8 @@ class ManifestLoader:
                 check_value=cred.get("check_value", ""),
                 setup_command=cred.get("setup_command", ""),
                 setup_label=cred.get("setup_label", ""),
+                provider_keys=cred.get("provider_keys", []),
+                check_missing_value=cred.get("check_missing_value", ""),
             ))
         setup = ManifestSetup(
             dependencies=dependencies,
