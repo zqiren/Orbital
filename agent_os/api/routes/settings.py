@@ -648,6 +648,9 @@ def _build_sub_agent_status_entry(s) -> dict:
         "missing_dependencies": s.missing_dependencies,
         "credentials_configured": s.credentials_configured,
         "missing_credentials": s.missing_credentials,
+        # configured | missing | unknown for an agent whose credential follows
+        # its configured model's provider (Pi); None for everyone else.
+        "credential_state": getattr(s, "credential_state", None),
         "credentials": _declared_credentials(manifest, s.missing_credentials),
         "supports_login": _supports_login(s.slug),
         "install": _install_entry(manifest, installed=s.installed),

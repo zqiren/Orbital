@@ -47,10 +47,15 @@ class SetupEngine:
         credential_store=None,
         sub_agent_config_store=None,
         data_dir: str = "orbital-data",
+        card_store=None,
     ) -> None:
         self._registry = registry
         self._credential_store = credential_store
         self._sub_agent_config_store = sub_agent_config_store
+        # The user's credential cards (SettingsStore). Read-only here: a
+        # ``model_provider`` credential borrows ONE card key for the provider
+        # of the agent's configured model.
+        self._card_store = card_store
         # Absolutised once: auto_detect probes and the composition renderer
         # both need a path that survives a cwd change mid-daemon.
         self._data_dir = os.path.abspath(data_dir)
@@ -112,7 +117,8 @@ class SetupEngine:
         deps_met, missing_deps = self.check_dependencies(manifest)
 
         # Credentials
-        creds_ok, missing_creds = self.check_credentials(manifest, binary)
+        missing_creds, credential_state = self._evaluate_credentials(manifest, binary)
+        creds_ok = not missing_creds
 
         # Build setup actions
         actions = self._build_actions(manifest, installed, missing_deps, missing_creds)
@@ -128,6 +134,7 @@ class SetupEngine:
             credentials_configured=creds_ok,
             missing_credentials=missing_creds,
             setup_actions=actions,
+            credential_state=credential_state,
         )
 
     def check_all(self) -> list[AgentSetupStatus]:
@@ -244,9 +251,25 @@ class SetupEngine:
 
         Returns (all_configured, missing_keys).
         """
+        missing, _state = self._evaluate_credentials(manifest, resolved_binary)
+        return (len(missing) == 0, missing)
+
+    def _evaluate_credentials(self, manifest: AgentManifest,
+                              resolved_binary: str | None) -> tuple[list[str], str | None]:
+        """Missing required credential keys, plus the ``model_provider`` state.
+
+        The state is None unless the manifest declares a ``model_provider``
+        credential; only its "missing" answer counts as a missing key.
+        """
         missing: list[str] = []
+        state: str | None = None
         for cred in manifest.setup.credentials:
             if not cred.required:
+                continue
+            if cred.type == "model_provider":
+                state = self._model_provider_state(manifest, cred, resolved_binary)
+                if state == "missing":
+                    missing.append(cred.key)
                 continue
             # oauth_cli: check via CLI command
             if cred.type == "oauth_cli":
@@ -263,7 +286,99 @@ class SetupEngine:
             if os.environ.get(env_key):
                 continue
             missing.append(cred.key)
-        return (len(missing) == 0, missing)
+        return missing, state
+
+    def _model_provider_state(self, manifest: AgentManifest, cred,
+                              resolved_binary: str | None) -> str:
+        """Readiness of a credential that follows the configured model's provider.
+
+        "configured": a credential card holds the key Orbital would inject for
+        that provider, or the CLI's own auth probe answers ready. "missing":
+        the probe says the provider has no credentials. "unknown": no model is
+        configured (the CLI picks its own default), the binary is absent, or
+        the probe gave no verdict — dispatchable, but only the CLI can tell.
+        Which credential the CLI finally uses is its own resolution order;
+        this never claims one.
+        """
+        model = self._configured_model(manifest.slug)
+        if not model or resolved_binary is None:
+            return "unknown"
+        if self._card_key_for_model(cred, model)[1]:
+            return "configured"
+        verdict = self._probe_model_auth(
+            cred, manifest.runtime.command, resolved_binary, model)
+        if verdict is None:
+            return "unknown"
+        return "configured" if verdict else "missing"
+
+    def _configured_model(self, slug: str) -> str | None:
+        from agent_os.daemon_v2.sub_agent_config_store import resolve_params
+        return resolve_params(slug, self._sub_agent_config_store).get("model") or None
+
+    def _card_key_for_model(self, cred, model: str) -> tuple[str, str]:
+        """(env_var, key) from the user's cards for ``model``'s provider, or ("", "").
+
+        Exactly one entry can match — the one naming the model's provider — so
+        at most one card key is ever looked up, let alone injected.
+        """
+        if self._card_store is None or "/" not in model:
+            return "", ""
+        provider = model.split("/", 1)[0]
+        for entry in cred.provider_keys:
+            if entry.get("provider") != provider or not entry.get("env_var"):
+                continue
+            try:
+                key = self._card_store.key_for_provider(
+                    entry.get("card_provider") or provider, entry.get("card_region"))
+            except Exception:
+                logger.warning("credential-card lookup failed for provider %s",
+                               provider, exc_info=True)
+                return "", ""
+            return (entry["env_var"], key) if key else ("", "")
+        return "", ""
+
+    def _probe_model_auth(self, cred, command: str | None, resolved_binary: str,
+                          model: str) -> bool | None:
+        """Run the CLI's auth probe for ``model``: True ready, False missing, None unknown.
+
+        Built as an argv list — the model is user text and never meets a shell.
+        """
+        import json as _json
+        import shlex
+        try:
+            argv = shlex.split(cred.check_command)
+        except ValueError:
+            return None
+        if not argv:
+            return None
+        if command and argv[0] == command:
+            argv[0] = resolved_binary
+        argv = [model if token == "{model}" else token for token in argv]
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                creationflags=win_no_window_flags(),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        lines = (result.stdout or "").strip().splitlines()
+        try:
+            data = _json.loads(lines[-1]) if lines else None
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        actual = str(data.get(cred.check_field, ""))
+        if actual == cred.check_value:
+            return True
+        if cred.check_missing_value and actual == cred.check_missing_value:
+            return False
+        return None
 
     def _check_cli_auth(self, cred, command: str | None = None, resolved_binary: str | None = None) -> bool:
         """Run a CLI command to check auth status (e.g. claude auth status --json).
@@ -338,6 +453,14 @@ class SetupEngine:
         # Build env from manifest credentials + overrides
         env: dict[str, str] = {}
         for cred in manifest.setup.credentials:
+            if cred.type == "model_provider":
+                # Only the key for the configured model's provider, under the
+                # CLI's own env var — never every saved card key, never argv.
+                model = self._configured_model(slug)
+                env_var, key = self._card_key_for_model(cred, model) if model else ("", "")
+                if key:
+                    env[env_var] = key
+                continue
             value = (credential_overrides or {}).get(cred.key)
             if value is None and self._credential_store is not None:
                 value = self._credential_store.get(cred.key)

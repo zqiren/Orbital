@@ -401,7 +401,7 @@ class SubAgentManager:
         """Resolve the appropriate transport for a manifest.
 
         system_prompt, when provided, is forwarded to transports that
-        support it (SDK, Pipe). PTYTransport does not currently support
+        support it (SDK, Pipe, Pi RPC). PTYTransport does not currently support
         --append-system-prompt-file injection; the caller is responsible
         for the degraded first-turn injection path.
         """
@@ -477,6 +477,22 @@ class SubAgentManager:
                 autonomy=autonomy,
                 resume_record=resume_record,
             )
+        elif transport_type == "pi-rpc":
+            from agent_os.agent.transports.pi_rpc_transport import PiRPCTransport
+            # Pi takes the rendered prompt as a real system-prompt append, so
+            # pi-rpc forwards system_prompt (and MEMORY.md is created). The
+            # provider session store sits beside the sub-agent's other
+            # per-project files, the dsh layout; resume identity is confirmed
+            # by pi's get_state after start (transport.resume_outcome).
+            workspace = (config_dict or {}).get("workspace") or ""
+            session_dir = os.path.join(
+                ProjectPaths(workspace).sub_agent_dir(manifest.slug),
+                f"{manifest.slug}-sessions") if workspace else None
+            return PiRPCTransport(
+                system_prompt=system_prompt,
+                resume_record=resume_record,
+                session_dir=session_dir,
+            )
         else:
             # Fallback: no transport, use legacy CLIAdapter path
             return None
@@ -518,13 +534,14 @@ class SubAgentManager:
             manifest = self._registry.get(handle) if self._registry else None
             transport_hint = getattr(
                 getattr(manifest, "runtime", None), "transport", None)
-            if transport_hint == "acp-sdk":
-                # ACP session identity is provider-owned. There is no
+            if transport_hint in ("acp-sdk", "pi-rpc"):
+                # ACP and Pi session identity is provider-owned. There is no
                 # provider-neutral local file whose presence proves the
                 # session still exists, so pass the persisted candidate to
-                # session/load and let transport.resume_outcome report the
-                # authoritative result after start(). In particular, never
-                # interpret an ACP id as a Claude ~/.claude session id.
+                # session/load (ACP) or `pi --session` + get_state (Pi) and
+                # let transport.resume_outcome report the authoritative
+                # result after start(). In particular, never interpret such
+                # an id as a Claude ~/.claude session id.
                 return record, "resumed", None
             if transport_hint == "codex-appserver":
                 from agent_os.agent.transports.codex_transport import CodexTransport

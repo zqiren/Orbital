@@ -173,6 +173,24 @@ SCHEMA: dict[str, dict[str, _ParamSchema]] = {
             default="workspace-write",
         ),
     },
+    "pi": {
+        # `provider/model`, exactly as Pi's own --model takes it. Free text:
+        # Pi's catalogue spans 40+ providers and moves with every release.
+        # The provider half also picks which credential-card key (if any)
+        # Orbital hands the process (see the pi manifest).
+        "model": _ParamSchema(
+            name="model",
+            allowed=None,
+            flag_template="--model {value}",
+        ),
+        # Pi's reasoning level, surfaced under the shared `effort` key. Levels
+        # a model does not support are clamped by Pi itself.
+        "effort": _ParamSchema(
+            name="effort",
+            allowed=("off", "minimal", "low", "medium", "high", "xhigh", "max"),
+            flag_template="--thinking {value}",
+        ),
+    },
 }
 
 

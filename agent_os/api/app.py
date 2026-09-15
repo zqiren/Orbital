@@ -267,6 +267,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         credential_store=SubAgentCredentialStore(),
         sub_agent_config_store=sub_agent_config_store,
         data_dir=store_dir,
+        card_store=settings_store,
     )
 
     # 5c. Provider registry (model capabilities, context windows, max output)
