@@ -4,6 +4,9 @@
 
 """Integration (seam 3 / D1): a real in-process daemon @mention journey.
 
+Spec 091 deleted the @mention path; the composer pin's target send rides the
+same route and session funnel, so the journey below now sends pinned.
+
 POST /inject with a target must (1) dispatch to the (simulated) running
 sub-agent AND (2) persist the authored user message into the SAME concrete chat
 session — never a fabricated ``subagent_<hex>`` log — so the turn is in the
@@ -76,7 +79,8 @@ def test_mention_persists_to_dispatched_session_and_survives_reload(client_proje
     content = "how does it enforce memory use?"
     resp = client.post(
         f"/api/v2/agents/{pid}/inject",
-        json={"content": content, "target": "claude-code", "session_id": sid},
+        json={"content": content, "target": "claude-code", "pinned": True,
+              "session_id": sid},
     )
     assert resp.status_code == 200, resp.text
     # Dispatch reached the running sub-agent.

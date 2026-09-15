@@ -247,11 +247,11 @@ async def test_an_unsettled_queue_dispatch_wakes_the_manager_as_before(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_a_plain_mention_is_never_offered_to_the_queue(tmp_path):
+async def test_a_management_dispatch_is_never_offered_to_the_queue(tmp_path):
     observer, mgr = _observer()
     called = []
     observer.queue_terminal_hook = lambda *a, **k: called.append(a) or True
-    observer.set_dispatch_initiator("proj", "codex", "user_mention", session_id="s1")
+    observer.set_dispatch_initiator("proj", "codex", "management_agent", session_id="s1")
 
     await observer.on_completed(
         "proj", "codex", summary="1", transcript_path="/t.jsonl", session_id="s1",
@@ -262,15 +262,15 @@ async def test_a_plain_mention_is_never_offered_to_the_queue(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_later_mention_clears_the_queue_registration(tmp_path):
-    """The registry tracks the CURRENT dispatch: a mention after a queue
+async def test_a_later_pinned_send_clears_the_queue_registration(tmp_path):
+    """The registry tracks the CURRENT dispatch: a pinned send after a queue
     dispatch for the same worker must not be settled as a queue item."""
     observer, mgr = _observer()
     called = []
     observer.queue_terminal_hook = lambda *a, **k: called.append(a) or True
 
     observer.set_dispatch_initiator("proj", "codex", "queue_item", session_id="s1")
-    observer.set_dispatch_initiator("proj", "codex", "user_mention", session_id="s1")
+    observer.set_dispatch_initiator("proj", "codex", "user_pinned", session_id="s1")
     await observer.on_completed(
         "proj", "codex", summary="1", transcript_path="/t.jsonl", session_id="s1",
     )

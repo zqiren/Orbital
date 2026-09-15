@@ -12,10 +12,9 @@
  *  - dropdown renders Orbital + every installed sub-agent, and renders
  *    NOTHING when no sub-agents are installed;
  *  - selection payloads: an agent → its slug, Orbital → null (the unpin);
- *  - target precedence: leading @mention > sticky pin > management, with
- *    `pinned` true ONLY when the target came from the dropdown pin;
- *  - `@orbital` reserved routing: one message down the management branch
- *    without unpinning.
+ *  - target resolution (spec 091): the sticky pin, else management. A
+ *    leading `@slug` is plain text — it never picks a target, and `@orbital`
+ *    is no longer a one-message aside while pinned.
  */
 
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
@@ -30,46 +29,34 @@ const AGENTS = [
   { slug: 'codex', name: 'Codex' },
 ];
 
-describe('resolveSendTarget precedence', () => {
-  it('unpinned, no mention → management', () => {
+describe('resolveSendTarget', () => {
+  it('unpinned → management', () => {
     expect(resolveSendTarget('hello there', null)).toEqual({
       target: undefined, content: 'hello there', pinned: false,
     });
   });
 
-  it('pinned, no mention → the pinned worker, pinned=true', () => {
+  it('pinned → the pinned worker, pinned=true', () => {
     expect(resolveSendTarget('hello there', 'codex')).toEqual({
       target: 'codex', content: 'hello there', pinned: true,
     });
   });
 
-  it('leading @mention wins over the pin for that one message, pinned=false', () => {
+  it('a leading @slug to Orbital is sent verbatim to Orbital (no target)', () => {
+    expect(resolveSendTarget('@codex do the thing', null)).toEqual({
+      target: undefined, content: '@codex do the thing', pinned: false,
+    });
+  });
+
+  it('a leading @slug never overrides the pin — the pinned worker gets it verbatim', () => {
     expect(resolveSendTarget('@claude-code do the thing', 'codex')).toEqual({
-      target: 'claude-code', content: 'do the thing', pinned: false,
+      target: 'codex', content: '@claude-code do the thing', pinned: true,
     });
   });
 
-  it('@orbital routes to management WITHOUT unpinning', () => {
-    // pinned=false + target undefined → management branch; the sticky pin
-    // state itself is untouched (this helper never mutates it).
+  it('@orbital while pinned is plain text to the pinned worker (no aside)', () => {
     expect(resolveSendTarget('@orbital status update please', 'codex')).toEqual({
-      target: undefined, content: 'status update please', pinned: false,
-    });
-  });
-
-  it('@orbital is case-insensitive', () => {
-    expect(resolveSendTarget('@Orbital hi', 'codex').target).toBeUndefined();
-  });
-
-  it('a mid-text @ is not a mention', () => {
-    expect(resolveSendTarget('email me @ home', null)).toEqual({
-      target: undefined, content: 'email me @ home', pinned: false,
-    });
-  });
-
-  it('mention of the pinned worker itself is still a mention (pinned=false)', () => {
-    expect(resolveSendTarget('@codex try again', 'codex')).toEqual({
-      target: 'codex', content: 'try again', pinned: false,
+      target: 'codex', content: '@orbital status update please', pinned: true,
     });
   });
 });

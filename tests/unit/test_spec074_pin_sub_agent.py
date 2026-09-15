@@ -329,10 +329,11 @@ class TestObserverStamping:
         assert "display_content" in meta
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("initiator", ["management_agent", "user_mention"])
+    @pytest.mark.parametrize("initiator", ["management_agent", "queue_item"])
     async def test_non_pinned_dispatch_stays_unflagged(self, initiator):
         """The seven producers' defaults are untouched: anything but
-        user_pinned must not carry the flag (mention behavior unchanged)."""
+        user_pinned must not carry the flag (the manager's own and queue
+        dispatches still wake on their terminals)."""
         obs, am = _observer()
         obs.set_dispatch_initiator(
             "proj_test", "codex", initiator, session_id=SID)
@@ -383,16 +384,18 @@ class TestObserverStamping:
         assert "supervise" not in content
 
     @pytest.mark.asyncio
-    async def test_mention_routed_marker_unchanged(self):
+    async def test_management_routed_marker_wakes_without_guidance(self):
+        """Orbital's own dispatch marker still wakes; since spec 091 no
+        initiator adds the old @mention supervise/relay line."""
         obs, am = _observer()
 
         await obs.on_message_routed(
-            "proj_test", "codex", "user_mention", "fix the bug",
+            "proj_test", "codex", "management_agent", "fix the bug",
             "/tmp/t.jsonl", session_id=SID, dispatch_id="d1")
 
         content, kwargs = am.injections[0]
         assert "suppress_wake" not in kwargs["meta"]
-        assert "supervise or relay" in content
+        assert "supervise or relay" not in content
 
     @pytest.mark.asyncio
     async def test_pinned_terminal_fires_quiescence_hook(self):

@@ -1043,17 +1043,19 @@ class SubAgentManager:
         chat renderer joins the two by this id instead of by position
         (positional pairing broke once a transcript outlived the chat
         session that started it). Minted here when the caller doesn't
-        already have one in scope; the @mention API route mints its own up
-        front and passes it in.
+        already have one in scope; the inject route mints its own up front
+        and passes it in.
 
         ``initiator`` (backlog #23 D3) is threaded through ``_QueuedPrompt``
         to the ONE ``on_message_routed`` notification this dispatch ever
         gets (fired here, immediately, or later by
         ``_on_prompt_turn_closed`` when a queued prompt drains) — it is how
-        that single marker learns whether a human addressed the sub-agent
-        directly via @mention (``"user_mention"``) versus the management
-        agent dispatching it itself. The @mention route passes
-        ``initiator="user_mention"`` and fires no notification of its own.
+        that single marker learns who sent it: the user straight to the
+        sub-agent (``"user_pinned"``, the composer pin; ``"queue_item"``, a
+        queue item or automation assigned to it) versus the management agent
+        dispatching it itself. The inject route passes
+        ``initiator="user_pinned"`` for every ``target`` send (spec 091) and
+        fires no notification of its own.
         """
         session_id = self._resolve_session_id(session_id)
         if dispatch_id is None:

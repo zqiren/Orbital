@@ -134,7 +134,7 @@ export default function App() {
   }, [selectedProjectId, selectedStatus, fetchTriggers]);
 
   // Fetch agent availability ONCE at app mount. Pre-filtered to the shape the
-  // @-mention dropdown and the composer pin mark consume: installed
+  // composer pin mark consumes: installed
   // sub-agents, no 'built-in'. The list is project-independent (the endpoint
   // takes no project and probes installed CLI binaries on disk — slow), so
   // fetching per project select and clearing meanwhile made the pin control
@@ -142,7 +142,7 @@ export default function App() {
   // the list is never cleared once loaded.
   // installGeneration bumps when an Orbital-managed install completes, so the
   // cached list picks up a freshly installed agent (dsh) without a reload —
-  // otherwise the @-mention dropdown stays stale for the whole page lifetime.
+  // otherwise the pin menu stays stale for the whole page lifetime.
   const [installGeneration, setInstallGeneration] = useState(0);
   useEffect(() => {
     const bump = () => setInstallGeneration((g) => g + 1);
@@ -663,7 +663,7 @@ export default function App() {
                     projects={projects}
                     agentStatus={agentStatuses[selectedProject.project_id] ?? 'idle'}
                     statusTick={statusTicks[selectedProject.project_id] ?? 0}
-                    mentionAgents={agentsAvailable ?? []}
+                    agents={agentsAvailable ?? []}
                     route={route}
                     setRoute={setRoute}
                     onRefreshProject={refreshProject}

@@ -230,6 +230,30 @@ class TestPatchSideEffects:
 # ---------------------------------------------------------------------------
 
 
+class _FakeTransport:
+    def __init__(self):
+        self.dispatched = None
+
+    async def dispatch(self, message):
+        self.dispatched = message
+
+
+class _FakeAdapter:
+    """A live sub-agent adapter with no subprocess behind it (the
+    tests/integration/test_mention_persists_to_canonical_session.py double),
+    so the REAL SubAgentManager + LifecycleObserver run end to end."""
+
+    def __init__(self):
+        self._transport = _FakeTransport()
+        self._idle = False
+
+    def is_alive(self):
+        return True
+
+    def is_idle(self):
+        return False
+
+
 class _StubSubAgentManager:
     def __init__(self):
         self.sends: list[dict] = []
@@ -284,20 +308,68 @@ class TestPinnedInject:
         # A pinned dispatch resets the quiescence timer.
         consolidation.note_pinned_dispatch.assert_called_once()
 
-    def test_mention_inject_keeps_user_mention_and_sends_raw_text(
-            self, dispatch_env):
+    @pytest.mark.parametrize(
+        "pinned_field", [{"pinned": True}, {"pinned": False}, {}],
+        ids=["pinned", "pinned-false", "old-spa-mention"])
+    def test_every_target_send_maps_to_user_pinned(
+            self, dispatch_env, pinned_field):
+        """Spec 091: the @mention path is gone. Whatever ``pinned`` says —
+        true, false, or absent (a cached old SPA's @mention) — a ``target``
+        send is a pinned send, and the body is never rejected."""
         client, stub, consolidation, pid, ws, sid = dispatch_env
 
         resp = client.post(f"/api/v2/agents/{pid}/inject", json={
             "content": "please fix the login bug",
-            "target": "codex", "session_id": sid,
+            "target": "codex", "session_id": sid, **pinned_field,
         })
         assert resp.status_code == 200, resp.text
 
-        send = stub.sends[0]
-        assert send["initiator"] == "user_mention"
-        assert send["message"] == "please fix the login bug"
-        consolidation.note_pinned_dispatch.assert_not_called()
+        assert [s["initiator"] for s in stub.sends] == ["user_pinned"]
+        assert stub.sends[0]["message"] == "please fix the login bug"
+        consolidation.note_pinned_dispatch.assert_called_once_with(pid, sid)
+
+    @pytest.mark.parametrize(
+        "pinned_field", [{"pinned": True}, {}],
+        ids=["pinned", "old-spa-mention"])
+    def test_target_send_never_starts_the_management_loop(
+            self, client, tmp_path, monkeypatch, pinned_field):
+        """Through the REAL SubAgentManager and LifecycleObserver: the one
+        dispatch marker lands wake-suppressed with no supervise guidance, and
+        no management turn starts — the old @mention marker woke one."""
+        from unittest.mock import AsyncMock
+
+        from agent_os.daemon_v2.models import make_session_key
+
+        pid, ws = _make_project(client, tmp_path, "nowake")
+        sid = _make_session(ws)
+        routes_mod = _routes_mod()
+        adapter = _FakeAdapter()
+        routes_mod._sub_agent_manager._adapters[
+            make_session_key(pid, sid)] = {"codex": adapter}
+        am = routes_mod._agent_manager
+        monkeypatch.setattr(am, "start_agent", AsyncMock())
+        monkeypatch.setattr(am, "_start_loop", AsyncMock())
+        monkeypatch.setattr(am, "inject_message", AsyncMock())
+
+        resp = client.post(f"/api/v2/agents/{pid}/inject", json={
+            "content": "please fix the login bug",
+            "target": "codex", "session_id": sid, **pinned_field,
+        })
+        assert resp.status_code == 200, resp.text
+        assert adapter._transport.dispatched is not None
+
+        am.start_agent.assert_not_awaited()
+        am._start_loop.assert_not_awaited()
+        am.inject_message.assert_not_awaited()
+
+        markers = [
+            r for r in _session_rows(ws, sid)
+            if str(r.get("content", "")).startswith(
+                "[Sub-agent] Message sent to codex")
+        ]
+        assert len(markers) == 1
+        assert markers[0]["_meta"]["suppress_wake"] is True
+        assert "supervise" not in markers[0]["content"]
 
     def test_second_pinned_message_is_also_raw_text(self, dispatch_env):
         client, stub, consolidation, pid, ws, sid = dispatch_env

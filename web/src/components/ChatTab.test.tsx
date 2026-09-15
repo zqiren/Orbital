@@ -254,7 +254,7 @@ describe('ChatTab — route.sessionId undefined: resolution + setRoute reflectio
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -287,7 +287,7 @@ describe('ChatTab — route.sessionId undefined: resolution + setRoute reflectio
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -325,7 +325,7 @@ describe('ChatTab — route.sessionId undefined: resolution + setRoute reflectio
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -356,7 +356,7 @@ describe('ChatTab — route.sessionId already set: no override', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -377,7 +377,7 @@ describe('ChatTab — route.sessionId already set: no override', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={vi.fn()}
         />,
@@ -407,7 +407,7 @@ describe('ChatTab — persisted session gone: fallback to most-recent existing',
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -436,7 +436,7 @@ describe('ChatTab — controlled sidebar handoff (onSessionSelect)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={vi.fn()}
         />,
@@ -459,7 +459,7 @@ describe('ChatTab — controlled sidebar handoff (onSessionSelect)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -495,7 +495,7 @@ describe('ChatTab — composer prefill (route.draft → ChatView, spec 2026-07-2
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={vi.fn()}
         />,
@@ -514,7 +514,7 @@ describe('ChatTab — composer prefill (route.draft → ChatView, spec 2026-07-2
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={vi.fn()}
         />,
@@ -534,7 +534,7 @@ describe('ChatTab — composer prefill (route.draft → ChatView, spec 2026-07-2
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -575,7 +575,7 @@ describe('ChatTab — empty project (no sessions)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -615,7 +615,7 @@ describe('ChatTab — "+ new session" creates a genuinely blank session', () => 
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -667,7 +667,7 @@ describe('ChatTab — "+ new session" creates a genuinely blank session', () => 
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={route}
           setRoute={setRoute}
         />,
@@ -696,7 +696,7 @@ function renderChatTab(
     <ChatTab
       project={PROJECT}
       agentStatus={props.agentStatus ?? 'idle'}
-      mentionAgents={[]}
+      agents={[]}
       route={route}
       setRoute={setRoute}
     />,
@@ -846,7 +846,7 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="running"
-          mentionAgents={[]}
+          agents={[]}
           route={makeRoute({ sessionId: 'sess-x' })}
           setRoute={vi.fn()}
         />,
@@ -860,7 +860,7 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           route={makeRoute({ sessionId: 'sess-x' })}
           setRoute={vi.fn()}
         />,
@@ -876,7 +876,7 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="running"
-          mentionAgents={[]}
+          agents={[]}
           route={makeRoute({ sessionId: 'sess-x' })}
           setRoute={vi.fn()}
         />,
@@ -898,7 +898,7 @@ describe('ChatTab — the panel follows the agent (D8)', () => {
         <ChatTab
           project={PROJECT}
           agentStatus="running"
-          mentionAgents={[]}
+          agents={[]}
           route={makeRoute({ sessionId: 'sess-x' })}
           setRoute={vi.fn()}
         />,

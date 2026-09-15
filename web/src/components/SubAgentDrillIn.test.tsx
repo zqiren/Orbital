@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Task 5 (spec 009 §0.5): the drill-in view replaces the chat message area
-// (never a modal) and fetches the sub-agent's transcript read-only. The
-// composer is gated on `resumable` from the transcript response: worker
-// handles come back non-resumable (disabled, read-only placeholder); cli
-// handles come back resumable (enabled composer wired to the @mention inject
-// funnel).
+// (never a modal) and fetches the sub-agent's transcript read-only. Spec 091
+// removed its composer: worker and cli handles alike render no input, and a
+// direct send to a worker is the chat composer's pin switcher.
 
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -120,7 +118,7 @@ beforeEach(() => {
 });
 
 describe('SubAgentDrillIn', () => {
-  it('renders a disabled, read-only composer footer for a non-resumable (worker) handle', async () => {
+  it('renders a worker transcript read-only, with no composer', async () => {
     getSubAgentTranscriptMock.mockResolvedValue(workerTranscript());
     render(
       <SubAgentDrillIn
@@ -134,12 +132,10 @@ describe('SubAgentDrillIn', () => {
 
     expect(await screen.findByText('Starting research…')).toBeInTheDocument();
     expect(screen.getByText('Done. Found 3 sources.')).toBeInTheDocument();
-
-    const composer = screen.getByPlaceholderText('Worker task — read-only');
-    expect(composer).toBeDisabled();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
-  it('renders an enabled composer for a resumable (cli) handle, wired to injectMessage with target=handle', async () => {
+  it('a resumable (cli) handle gets no composer either — nothing here sends to the worker', async () => {
     getSubAgentTranscriptMock.mockResolvedValue(cliTranscript());
     render(
       <SubAgentDrillIn
@@ -152,24 +148,9 @@ describe('SubAgentDrillIn', () => {
     );
 
     expect(await screen.findByText('Ready.')).toBeInTheDocument();
-
-    const composer = await screen.findByTestId('drillin-composer-input');
-    expect(composer).toBeEnabled();
-
-    const user = userEvent.setup();
-    await user.type(composer, 'follow up question');
-    await user.click(screen.getByTestId('drillin-composer-send'));
-
-    await waitFor(() => {
-      expect(injectMessageMock).toHaveBeenCalledWith(
-        'p1',
-        'follow up question',
-        'claude-code',
-        undefined,
-        undefined,
-        's1',
-      );
-    });
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(injectMessageMock).not.toHaveBeenCalled();
   });
 
   it('the back button fires the onBack callback', async () => {
@@ -267,11 +248,6 @@ describe('SubAgentDrillIn', () => {
       expect(await screen.findByText('Done. Found 3 sources.')).toBeInTheDocument();
       // Chat-shaped rendering replaces the flat entries rendering entirely.
       expect(screen.queryByTestId('drillin-entry')).not.toBeInTheDocument();
-
-      // Composer stays disabled for workers regardless of rendering path
-      // (resumable logic is untouched by this task).
-      const composer = screen.getByPlaceholderText('Worker task — read-only');
-      expect(composer).toBeDisabled();
 
       expect(apiMock).toHaveBeenCalledWith(expect.stringContaining('/api/v2/agents/p1/chat?session_id=sess-worker-uuid-1'));
     });

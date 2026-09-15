@@ -130,10 +130,12 @@ export function useAgent() {
     );
   }, []);
 
-  // `pinned` (spec 074): true when `target` came from the composer's sticky
-  // "Talking to" dropdown (the session pin) rather than a leading @mention —
-  // the backend maps it to initiator="user_pinned" (wake-suppressed dispatch;
-  // the management agent takes zero turns). Omitted from the body when false.
+  // `pinned` (spec 074): true when `target` is the composer's sticky "Talking
+  // to" pin — since spec 091 the only way the composer sets `target`. The
+  // backend maps every `target` send to initiator="user_pinned"
+  // (wake-suppressed dispatch; the management agent takes zero turns) and
+  // accepts but ignores this field; the composer still sends it so an older
+  // daemon keeps pinned semantics. Omitted from the body when false.
   const injectMessage = useCallback(
     async (
       projectId: string,
