@@ -86,7 +86,7 @@ interface ChatTabProps {
   project: Project;
   agentStatus: AgentRunStatus;
   statusTick?: number;
-  mentionAgents: Array<{ slug: string; name: string }>;
+  agents: Array<{ slug: string; name: string }>;
   route: Extract<Route, { name: 'project' }>;
   setRoute: Dispatch<SetStateAction<Route>>;
   /** Re-fetch this project's runtime fields (e.g. budget) after a turn ends. */
@@ -131,7 +131,7 @@ export default function ChatTab({
   project,
   agentStatus,
   statusTick,
-  mentionAgents,
+  agents,
   route,
   setRoute,
   onRefreshProject,
@@ -437,7 +437,7 @@ export default function ChatTab({
             project={project}
             agentStatus={agentStatus}
             statusTick={statusTick}
-            mentionAgents={mentionAgents}
+            agents={agents}
             sessionId={routeSessionId}
             initialDraft={route.draft}
             onDraftConsumed={handleDraftConsumed}

@@ -410,13 +410,12 @@ interface ChatViewProps {
   agentStatus: AgentRunStatus;
   statusTick?: number;
   /**
-   * Installed sub-agents available for @-mention. Lifted to App-level state
-   * so tab switches don't refetch /agents/available. Empty array while
-   * App is still resolving the initial fetch — the dropdown then shows no
-   * matches, which is fine: `@` was typed before sub-agents loaded, the
-   * keystrokes that follow re-evaluate against the populated list.
+   * Installed sub-agents for the composer pin menu. Lifted to App-level
+   * state so tab switches don't refetch /agents/available. Empty array while
+   * App is still resolving the initial fetch — the pin control renders
+   * nothing until the list arrives.
    */
-  mentionAgents: Array<{ slug: string; name: string }>;
+  agents: Array<{ slug: string; name: string }>;
   /**
    * The F1 session_id currently being viewed (the active session for this
    * project). The conversation, history fetch, draft, and inject target are
@@ -491,7 +490,7 @@ interface PendingApproval {
   resolved?: 'approved' | 'denied';
 }
 
-export default function ChatView({ projectId, project, agentStatus, statusTick, mentionAgents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
+export default function ChatView({ projectId, project, agentStatus, statusTick, agents, sessionId, initialDraft, onDraftConsumed, onRefreshProject }: ChatViewProps) {
   const t = useT();
   const { locale } = useLocale();
   // Chrome-only translator for the annotation chip's fallback label (the
@@ -555,9 +554,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // viewed session IS the holder (viewing a non-holder session shows its
   // static history; live events for the holder are dropped here).
   const [holderSessionId, setHolderSessionId] = useState<string | null>(null);
-  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
-  const [mentionFilter, setMentionFilter] = useState('');
-  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
   // Spec 074 — the composer "Talking to" pin. Backend truth comes from the
   // session list (`pinned_target` on the entry); `localPin` is the
@@ -2379,11 +2375,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     }
   }
 
-  const filteredAgents = mentionAgents.filter(a =>
-    a.slug.toLowerCase().includes(mentionFilter) ||
-    a.name.toLowerCase().includes(mentionFilter)
-  );
-
   function handleInputChange(value: string) {
     setInputText(value);
     adjustTextareaHeight();
@@ -2393,33 +2384,10 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       setShowCommandDropdown(true);
       setCommandFilter(value.slice(1).toLowerCase());
       setSelectedCommandIndex(0);
-      // Hide @mention dropdown when in command mode
-      setShowMentionDropdown(false);
-      setMentionFilter('');
       return;
     }
     setShowCommandDropdown(false);
     setCommandFilter('');
-
-    // Check for @mention trigger
-    const atMatch = value.match(/@(\S*)$/);
-    if (atMatch) {
-      setShowMentionDropdown(true);
-      setMentionFilter(atMatch[1].toLowerCase());
-      setSelectedMentionIndex(0);
-    } else {
-      setShowMentionDropdown(false);
-      setMentionFilter('');
-    }
-  }
-
-  function selectMention(slug: string) {
-    // Replace @partial with @slug
-    const newText = inputText.replace(/@\S*$/, `@${slug} `);
-    setInputText(newText);
-    setShowMentionDropdown(false);
-    setMentionFilter('');
-    textareaRef.current?.focus();
   }
 
   const filteredCommands = SLASH_COMMANDS.filter(c =>
@@ -2547,10 +2515,9 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       return;
     }
 
-    // Spec 074 target precedence: a leading @mention wins for this one
-    // message; otherwise the sticky "Talking to" pin applies; otherwise the
-    // management agent. `@orbital` is the reserved one-message manager aside
-    // — it routes down the management branch WITHOUT unpinning.
+    // Spec 091: the sticky "Talking to" pin is the only direct-to-worker send;
+    // otherwise the management agent. Text goes out verbatim — a leading
+    // `@codex` is part of the message, never a target.
     const resolved = resolveSendTarget(text, pinnedTarget);
     const target = resolved.target;
     let content = resolved.content;
@@ -2832,31 +2799,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         return;
       }
     }
-    if (showMentionDropdown) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedMentionIndex(i => Math.min(i + 1, filteredAgents.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedMentionIndex(i => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        if (filteredAgents.length > 0) {
-          selectMention(filteredAgents[selectedMentionIndex].slug);
-        }
-        return;
-      }
-      if (e.key === 'Escape') {
-        setShowMentionDropdown(false);
-        return;
-      }
-    }
     // Pending-input queue (spec 006 v3 §11c + §12). ↑ in an EMPTY composer (no
-    // command/mention dropdown open — those guards above already handled ↑ and
+    // command dropdown open — the guard above already handled ↑ and
     // returned) recalls the NEWEST queued message for the VIEWED session into
     // the composer and dequeues it. No cycling, no input history (§12 R5). When
     // the composer is non-empty, or no queued message exists for this session,
@@ -3653,29 +3597,6 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ))}
             </div>
           )}
-          {showMentionDropdown && (
-            <div className="absolute bottom-full left-0 mb-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg overflow-hidden z-50">
-              {filteredAgents.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-zinc-500">{t('chat.noAgents')}</div>
-              ) : (
-                filteredAgents.map((agent, i) => (
-                  <button
-                    key={agent.slug}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-zinc-700 max-md:min-h-[44px] ${
-                      i === selectedMentionIndex ? 'bg-zinc-700' : ''
-                    }`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      selectMention(agent.slug);
-                    }}
-                  >
-                    <span className="font-medium text-zinc-200">@{agent.slug}</span>
-                    <span className="ml-2 text-zinc-500">{agent.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
           {annotationStrip}
           {attachments.length > 0 && (
             <div
@@ -3706,7 +3627,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
                 the first successful pinned send materializes a brand-new
                 session. */}
             <PinTargetSelect
-              agents={mentionAgents}
+              agents={agents}
               value={pinnedTarget}
               onChange={(slug) => {
                 if (sessionId === undefined) return;

@@ -107,7 +107,7 @@ describe('useAgent injectMessage pinned flag (spec 074)', () => {
     });
   });
 
-  it('omits pinned from the body for a plain @mention send', async () => {
+  it('omits pinned from the body when the flag is false', async () => {
     const { result } = renderHook(() => useAgent());
     await result.current.injectMessage(
       'p1', 'fix it', 'codex', 'nonce-1', undefined, 'sess-9', false,

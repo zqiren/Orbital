@@ -330,7 +330,7 @@ class TestDispatchBuildsTheBlock:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("initiator",
-                             ["user_pinned", "user_mention", "management_agent"])
+                             ["user_pinned", "queue_item", "management_agent"])
     async def test_every_entry_path_gets_the_block_and_a_raw_preview(
             self, initiator):
         mgr, session, observer = _manager([_user("earlier"), _assistant("reply")])

@@ -869,8 +869,8 @@ class QueueDispatcher:
         wrapped_content = attach_prefix + header + item.content
 
         # Spec 079: the user chose a worker for this item — dispatch straight
-        # to it down the chat @mention path instead of injecting into the
-        # management loop. The manager still owns the verdict; it is woken by
+        # to it through the direct-send funnel a pinned chat send uses, instead
+        # of injecting into the management loop. The manager still owns the verdict; it is woken by
         # the worker's terminal event and classified by _await_and_handle.
         chosen_agent = _clean_agent(getattr(item, "agent", None))
         if chosen_agent:
@@ -1160,7 +1160,7 @@ class QueueDispatcher:
         contract would only instruct them to do something impossible.
 
         Nothing here starts a management turn. The dispatch goes down the same
-        funnel a chat @mention takes; ``_await_and_handle(awaiting_worker=True)``
+        direct-send funnel a pinned chat send takes; ``_await_and_handle(awaiting_worker=True)``
         then holds the slot until the worker's terminal event wakes the manager
         for the verdict.
         """
@@ -1220,7 +1220,7 @@ class QueueDispatcher:
         hydrates the session from disk and DROPS the terminal event when no
         JSONL matches.
 
-        Deliberately not ``persist_mention_message`` — the chat @mention funnel
+        Deliberately not ``persist_mention_message`` — the chat direct-send funnel
         stamps ``origin="chat"``, which would make each queue item's session a
         candidate for the project's persistent chat session and land the user's
         next chat message inside a queue item.

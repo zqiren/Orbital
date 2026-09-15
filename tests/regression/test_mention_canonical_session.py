@@ -5,6 +5,11 @@
 """Regression (seam 3 / D1): an @mention persists the authored user message to
 the project's REAL chat session, never a fabricated ``subagent_<hex>`` log.
 
+Spec 091 deleted the @mention path. The composer pin's target send
+(``target`` + ``pinned``) rides the same route and the same canonical session
+funnel, so every case below now drives a pinned send; "mention" in the prose
+reads as "target send".
+
 Before this fix the @mention inject branch resolved its PERSISTENCE session via
 ``_get_or_create_session`` -> ``get_session(project_id)`` (no session_id), which
 under the seam-3 None-policy ALWAYS misses (``_resolve_session_id(None)`` is
@@ -145,7 +150,7 @@ async def test_t1_mention_into_live_session(tmp_path):
     sid = "proj_live_0001"
     _plant_idle_handle(mgr, ws, sid)
 
-    req = InjectRequest(content="hey @claude-code", target=TARGET, session_id=sid)
+    req = InjectRequest(content="hey @claude-code", target=TARGET, pinned=True, session_id=sid)
     await agents_v2.inject_message(PID, req)
 
     path = os.path.join(_sessions_dir(ws), f"{sid}.jsonl")
@@ -171,7 +176,7 @@ async def test_t2_mention_into_cold_disk_session(tmp_path):
     uuid = "proj_cold_0002"
     _seed_disk_session(ws, uuid)  # JSONL on disk, no live handle
 
-    req = InjectRequest(content="resume @claude-code", target=TARGET, session_id=uuid)
+    req = InjectRequest(content="resume @claude-code", target=TARGET, pinned=True, session_id=uuid)
     await agents_v2.inject_message(PID, req)
 
     path = os.path.join(_sessions_dir(ws), f"{uuid}.jsonl")
@@ -201,7 +206,7 @@ async def test_t2b_mention_into_disk_session_addressed_by_legacy_f1(tmp_path):
     f1 = "legacy_default"
     _seed_disk_session(ws, uuid, f1=f1)  # stem=uuid; records carry F1=legacy_default
 
-    req = InjectRequest(content="resume @claude-code", target=TARGET, session_id=f1)
+    req = InjectRequest(content="resume @claude-code", target=TARGET, pinned=True, session_id=f1)
     await agents_v2.inject_message(PID, req)
 
     path = os.path.join(_sessions_dir(ws), f"{uuid}.jsonl")  # the stem file, not {f1}.jsonl
@@ -223,7 +228,7 @@ async def test_t3_mention_first_message_mints_canonical_session(tmp_path):
     ws = str(tmp_path)
     mgr, sub, _ws, _lc = _wire(ws)
 
-    req = InjectRequest(content="first @claude-code", target=TARGET)  # session_id omitted
+    req = InjectRequest(content="first @claude-code", target=TARGET, pinned=True)  #session_id omitted
     await agents_v2.inject_message(PID, req)
 
     files = glob.glob(os.path.join(_sessions_dir(ws), "*.jsonl"))
@@ -260,7 +265,7 @@ async def test_t4_user_record_persisted_before_dispatch(tmp_path):
 
     sub.send = AsyncMock(side_effect=_send)
 
-    req = InjectRequest(content="q @claude-code", target=TARGET, session_id=sid)
+    req = InjectRequest(content="q @claude-code", target=TARGET, pinned=True, session_id=sid)
     await agents_v2.inject_message(PID, req)
 
     assert seen.get("present") is True
@@ -275,7 +280,7 @@ async def test_t5_mention_does_not_auto_wake_management(tmp_path):
     ws = str(tmp_path)
     mgr, sub, _ws, _lc = _wire(ws)
 
-    req = InjectRequest(content="hello @claude-code", target=TARGET)  # fresh, no session
+    req = InjectRequest(content="hello @claude-code", target=TARGET, pinned=True)  #fresh, no session
     await agents_v2.inject_message(PID, req)
 
     # red-before-green: the authored record landed in a canonical session,

@@ -7,9 +7,10 @@
 // Regression: /agents/available was previously fetched in ChatView's mount
 // effect, blocking chat render for up to 8 s on cold-cache calls. The fetch
 // now lives in App-level state and is delivered to ChatView via the
-// `mentionAgents` prop. These tests assert:
+// `agents` prop. These tests assert:
 //   1. ChatView mount issues NO `/agents/available` request.
-//   2. The @-mention dropdown renders the agents passed via prop.
+//   2. Typing `@` opens no mention menu, and `@slug …` goes to Orbital
+//      verbatim with no target (spec 091 deleted the @mention path).
 //
 // Approach: mock `../config` to count calls per URL, mock the WebSocket and
 // Agent hooks to no-op (they do network/event-bus work that's irrelevant
@@ -302,7 +303,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -322,7 +323,7 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -336,72 +337,47 @@ describe('ChatView mount-effect: /agents/available is not fetched', () => {
   });
 });
 
-describe('ChatView @-mention dropdown reads from mentionAgents prop', () => {
-  it('renders dropdown items from the prop when @ is typed', async () => {
-    await act(async () => {
-      root.render(
-        <ChatView
-          projectId="p1"
-          project={project}
-          agentStatus="idle"
-          mentionAgents={[
-            { slug: 'reviewer', name: 'Code Reviewer' },
-            { slug: 'planner', name: 'Planner' },
-          ]}
-          sessionId="s1"
-        />,
-      );
+describe('ChatView composer has no @-mention path (spec 091)', () => {
+  it('typing @ opens no mention menu', async () => {
+    await renderChat({
+      sessionId: 's1',
+      agents: [
+        { slug: 'reviewer', name: 'Code Reviewer' },
+        { slug: 'planner', name: 'Planner' },
+      ],
     });
     await flushEffects();
 
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    expect(textarea).toBeTruthy();
+    await act(async () => { typeInComposer('@'); });
 
-    // Trigger @-mention dropdown by simulating an input change with '@'.
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value',
-      )!.set!;
-      setter.call(textarea, '@');
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-
-    // The dropdown lists slugs of installed sub-agents from the prop.
+    // The installed agents are listed only inside the pin menu, which stays
+    // closed — nothing suggests a slug for the `@`.
     const text = container.textContent ?? '';
-    expect(text).toContain('reviewer');
-    expect(text).toContain('Code Reviewer');
-    expect(text).toContain('planner');
-    expect(text).toContain('Planner');
+    expect(text).not.toContain('Code Reviewer');
+    expect(text).not.toContain('@reviewer');
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it('renders no dropdown items when prop is empty', async () => {
-    await act(async () => {
-      root.render(
-        <ChatView
-          projectId="p1"
-          project={project}
-          agentStatus="idle"
-          mentionAgents={[]}
-          sessionId="s1"
-        />,
-      );
+  it('sends "@slug …" to Orbital verbatim, with no target', async () => {
+    await renderChat({
+      agentStatus: 'idle',
+      sessionId: 's1',
+      agents: [{ slug: 'codex', name: 'Codex' }],
     });
     await flushEffects();
 
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value',
-      )!.set!;
-      setter.call(textarea, '@');
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await act(async () => { typeInComposer('@codex fix the login bug'); });
+    const send = container.querySelector(
+      'button[aria-label="Send"]',
+    ) as HTMLButtonElement;
+    await act(async () => { send.click(); });
+    await flushEffects();
 
-    const text = container.textContent ?? '';
-    expect(text).not.toContain('reviewer');
-    expect(text).not.toContain('planner');
+    expect(injectCalls.length).toBe(1);
+    // injectMessage(projectId, content, target, nonce, attachments, sessionId, pinned)
+    expect(injectCalls[0][1]).toBe('@codex fix the login bug');
+    expect(injectCalls[0][2]).toBeUndefined();
+    expect(injectCalls[0][6]).toBe(false);
   });
 });
 
@@ -419,7 +395,7 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
           projectId="p1"
           project={project}
           agentStatus="running"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -474,7 +450,7 @@ describe('ChatView Stop button: isCancelling optimistic state', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -566,7 +542,7 @@ function renderChat(props: {
   sessionId?: string;
   initialDraft?: string;
   onDraftConsumed?: () => void;
-  mentionAgents?: Array<{ slug: string; name: string }>;
+  agents?: Array<{ slug: string; name: string }>;
 }) {
   return act(async () => {
     root.render(
@@ -574,7 +550,7 @@ function renderChat(props: {
         projectId="p1"
         project={project}
         agentStatus={(props.agentStatus ?? 'idle') as never}
-        mentionAgents={props.mentionAgents ?? []}
+        agents={props.agents ?? []}
         sessionId={props.sessionId}
         initialDraft={props.initialDraft}
         onDraftConsumed={props.onDraftConsumed}
@@ -1306,7 +1282,7 @@ describe('Spec 074: send serializes behind the in-flight pin PATCH', () => {
     await renderChat({
       agentStatus: 'idle',
       sessionId: 's1',
-      mentionAgents: [{ slug: 'claude-code', name: 'Claude Code' }],
+      agents: [{ slug: 'claude-code', name: 'Claude Code' }],
     });
     await flushEffects();
 
@@ -2466,7 +2442,7 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -2498,7 +2474,7 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -2539,7 +2515,7 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );
@@ -2567,7 +2543,7 @@ describe('credential-error surfacing (AgentErrorNotice)', () => {
           projectId="p1"
           project={{ ...project, is_empty_workspace: false }}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
         />,
       );
     });
@@ -2897,7 +2873,7 @@ describe('Bug #48: session-switch history cache + fetch abort', () => {
           projectId="p1"
           project={project}
           agentStatus="idle"
-          mentionAgents={[]}
+          agents={[]}
           sessionId={sessionId}
         />,
       );
@@ -2997,7 +2973,7 @@ describe('mid-run remount: stale history cache pins the transcript', () => {
           projectId="p1"
           project={project}
           agentStatus={agentStatus}
-          mentionAgents={[]}
+          agents={[]}
           sessionId="s1"
         />,
       );

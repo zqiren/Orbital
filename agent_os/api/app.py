@@ -66,8 +66,8 @@ workspace). When in scope:
 - Read, search (grep), and glob freely across those projects to answer
   "how did I do this before?" style questions — they are reference material.
 - You can only WRITE inside this Quick Tasks workspace. Never attempt to modify
-  another project; if work belongs there, hand it off (create a project or
-  @mention its agent).
+  another project; if work belongs there, hand it off (create a project, or
+  tell the user to continue in that project's chat).
 - When a finding comes from another project, CITE the source project (the search
   results are labeled `[project: <name>]`) so the user knows where it came from.
 - Another project's `orbital/` internals and `.git/` are intentionally invisible

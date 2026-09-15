@@ -19,38 +19,29 @@ import { ChevronDown } from 'lucide-react';
 import MessageAvatar from './MessageAvatar';
 import { useT } from '../i18n/useT';
 
-/** Result of resolving one composer send against the mention + pin rules. */
+/** Result of resolving one composer send against the session pin. */
 export interface ResolvedSendTarget {
   /** Slug to dispatch to, or undefined for the management agent. */
   target?: string;
-  /** Message text with any leading @mention stripped. */
+  /** Message text, always verbatim — a leading `@slug` is ordinary text. */
   content: string;
-  /** True when `target` came from the sticky dropdown pin (the backend maps
-   *  this to initiator="user_pinned" — the wake-suppressed dispatch class).
-   *  A leading @mention is always a one-message override with pinned=false,
-   *  keeping today's manager-supervises mention semantics. */
+  /** True whenever `target` is set: the sticky dropdown pin is the composer's
+   *  only direct-to-worker send (spec 091). The backend maps every `target`
+   *  send to initiator="user_pinned" — the wake-suppressed dispatch class. */
   pinned: boolean;
 }
 
 /**
- * Target precedence (spec 074 §3.2): a leading `@slug ` mention wins for that
- * one message; otherwise the sticky pin applies; otherwise management. The
- * reserved `@orbital` mention routes one message down the management branch
- * WITHOUT unpinning — the lightweight aside while pinned.
+ * Target resolution (spec 091, replacing spec 074 §3.2's @mention
+ * precedence): the sticky pin applies, otherwise the management agent. There
+ * is no `@` parse. `@codex do X` sent to Orbital is an ordinary request for
+ * Orbital to dispatch (its supervised path); sent while pinned, it reaches
+ * the pinned worker as typed. Switching who you talk to is the dropdown.
  */
 export function resolveSendTarget(
   text: string,
   pinnedTarget: string | null | undefined,
 ): ResolvedSendTarget {
-  const atMatch = text.match(/^@([\w-]+)\s+([\s\S]*)/);
-  if (atMatch) {
-    const slug = atMatch[1];
-    const content = atMatch[2];
-    if (slug.toLowerCase() === 'orbital') {
-      return { target: undefined, content, pinned: false };
-    }
-    return { target: slug, content, pinned: false };
-  }
   if (pinnedTarget) {
     return { target: pinnedTarget, content: text, pinned: true };
   }
@@ -58,7 +49,7 @@ export function resolveSendTarget(
 }
 
 interface PinTargetSelectProps {
-  /** Installed sub-agents — same enumeration + filter as the mention menu. */
+  /** Installed sub-agents (App-level `/agents/available`, built-in excluded). */
   agents: Array<{ slug: string; name: string }>;
   /** Currently pinned slug, or null when talking to Orbital (the manager). */
   value: string | null;

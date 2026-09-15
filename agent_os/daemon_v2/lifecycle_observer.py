@@ -186,32 +186,19 @@ class LifecycleObserver:
         that predate the id; such a marker renders no bubble on read (its
         one-line text still shows).
 
-        ``initiator == "user_mention"`` used to be a NO-OP (backlog #24 D3):
-        the @mention API route fired this notification itself, in ADDITION
-        to the one ``SubAgentManager.send()`` already fired internally (via
-        ``_dispatch_prompt_locked``) for the very same ``dispatch_id`` — one
-        physical dispatch, two markers, so the route's copy was dropped.
-
-        Backlog #23 D3 supersedes that: ``send()`` now threads the caller's
-        ``initiator`` all the way through ``_QueuedPrompt`` to this, its one
-        internal notification call (immediate dispatch AND a later-drained
-        queued one both go through ``_dispatch_prompt_locked`` the same
-        way) — the @mention route no longer fires a call of its own at all.
-        Since this is now the ONLY marker a mention dispatch ever gets, it
-        cannot go back to being silent: the LLM-facing ``content`` carries
-        one extra guidance line telling the management agent the user
-        addressed the sub-agent directly (do not answer on its behalf;
-        supervise/relay instead) — a weak model otherwise papers over the
-        silence by answering for the sub-agent. The rendered timeline row
-        stays on the same clean "Message sent to …" text a
-        "management_agent"-initiated dispatch gets, via the same
-        ``_meta.display_content`` split ``on_completed`` uses (backlog #24
-        D2) — the guidance is agent-facing only and must never render.
+        One marker per dispatch (backlog #23/#24 D3): ``SubAgentManager
+        .send()`` threads the caller's ``initiator`` through ``_QueuedPrompt``
+        to this, its one internal notification (immediate dispatch AND a
+        later-drained queued one both go through ``_dispatch_prompt_locked``);
+        no route fires a second call of its own. Spec 091 deleted the
+        ``"user_mention"`` initiator along with the supervise/relay guidance
+        line it carried — the one direct user send left is the composer pin
+        (``"user_pinned"``).
 
         ``initiator == "queue_item"`` (spec 079) is a queue item or an
-        automation the USER assigned to this sub-agent. It is a mention in
-        every respect but one: the marker must not wake the management agent
-        *here*. The session it lands in already carries the item's
+        automation the USER assigned to this sub-agent. Its marker must not
+        wake the management agent *here*. The session it lands in already
+        carries the item's
         ``[QUEUE ITEM | …]`` row and HEADER_CONTRACT, so a manager woken at
         dispatch time reads a live instruction to do the task and calls
         ``mark_task_complete`` on work its own worker is still doing — the
@@ -226,13 +213,7 @@ class LifecycleObserver:
         """
         preview = message_preview[:100]
         display_content = f'[Sub-agent] Message sent to {handle}: "{preview}". Transcript: {transcript_path}'
-        if initiator == "user_mention":
-            content = display_content + (
-                " The user addressed this sub-agent directly — do not "
-                "answer on its behalf; supervise or relay the sub-agent's "
-                "response instead."
-            )
-        elif initiator == "queue_item":
+        if initiator == "queue_item":
             # Read on the WAKE turn, not now (suppress_wake below). Explicit
             # and imperative on purpose: a weaker manager model otherwise
             # re-does the task itself instead of verifying it (the M3

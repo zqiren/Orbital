@@ -6,7 +6,7 @@
 #23 D2, extended by #27).
 
 ``web/src/utils/subAgentMarkerFixtures.json`` is the one source of truth for
-the sub-agent system-marker shapes: started / sent / sent_user_mention /
+the sub-agent system-marker shapes: started / sent /
 completed / failed / stopped-with-error / interaction_required /
 stopped_by_user (± terminated background work) / turn_interrupted /
 background_work_lost. It is read by two independent tests:
@@ -95,14 +95,14 @@ QUEUE_DROPPED_ACTION = "queue_dropped"
 # reality from both sides: a method that starts writing a marker without an
 # entry here fails, and an entry naming a shape the fixture file doesn't have
 # fails too. (One method can own several shapes — a branch that changes the
-# marker text, like on_message_routed's user_mention split or
-# on_user_stopped's optional background-work tail, is its own shape. So is
+# marker text, like on_user_stopped's optional background-work tail, is its
+# own shape. So is
 # each distinct drop reason on_queue_dropped is handed, and THOSE are
 # discovered from sub_agent_manager.py rather than listed — see
 # ``test_every_queue_drop_site_is_marked_and_pinned``.)
 PRODUCER_SHAPES = {
     "lifecycle_observer.on_started": {"started"},
-    "lifecycle_observer.on_message_routed": {"sent", "sent_user_mention"},
+    "lifecycle_observer.on_message_routed": {"sent"},
     "lifecycle_observer.on_interaction_required": {"interaction_required"},
     "lifecycle_observer.on_completed": {"completed"},
     "lifecycle_observer.on_error": {"stopped_with_error"},
@@ -432,15 +432,6 @@ async def test_every_fixture_shape_matches_its_producer_exactly():
         PROJECT_ID, HANDLE, initiator="management_agent",
         message_preview="run the tests", transcript_path=TRANSCRIPT_PATH,
         session_id=SESSION_ID, dispatch_id="fixture-sess:aaaa1111")
-    # user_mention (backlog #23 D3): same dispatch shape as "sent" above, but
-    # the LLM-facing content carries a guidance line — the RENDERED text
-    # (meta.display_content) must still be the same clean "Message sent to
-    # …" form, which is why this fixture row's content is byte-identical to
-    # "sent"'s.
-    await observer.on_message_routed(
-        PROJECT_ID, HANDLE, initiator="user_mention",
-        message_preview="run the tests", transcript_path=TRANSCRIPT_PATH,
-        session_id=SESSION_ID, dispatch_id="fixture-sess:bbbb2222")
     await observer.on_completed(
         PROJECT_ID, HANDLE, "All tests passing", TRANSCRIPT_PATH,
         session_id=SESSION_ID)
@@ -472,15 +463,14 @@ async def test_every_fixture_shape_matches_its_producer_exactly():
     produced = {
         "started": agent_manager.injections[0],
         "sent": agent_manager.injections[1],
-        "sent_user_mention": agent_manager.injections[2],
-        "completed": agent_manager.injections[3],
-        "failed": agent_manager.injections[4],
-        "stopped_with_error": agent_manager.injections[5],
-        "interaction_required": agent_manager.injections[6],
-        "stopped_by_user": agent_manager.injections[7],
-        "stopped_by_user_with_background": agent_manager.injections[8],
-        "turn_interrupted": agent_manager.injections[9],
-        "background_work_lost": agent_manager.injections[10],
+        "completed": agent_manager.injections[2],
+        "failed": agent_manager.injections[3],
+        "stopped_with_error": agent_manager.injections[4],
+        "interaction_required": agent_manager.injections[5],
+        "stopped_by_user": agent_manager.injections[6],
+        "stopped_by_user_with_background": agent_manager.injections[7],
+        "turn_interrupted": agent_manager.injections[8],
+        "background_work_lost": agent_manager.injections[9],
     }
 
     # Every producer call above landed one marker, no more, no less.
