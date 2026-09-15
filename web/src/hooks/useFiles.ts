@@ -2,9 +2,59 @@
 // Copyright (C) 2026 Orbital Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useState } from 'react';
-import { api } from '../config';
+import { useCallback, useEffect, useState } from 'react';
+import { api, apiBytes } from '../config';
 import type { DirectoryListing, FileContent } from '../types';
+
+export type FileBytesState =
+  | { status: 'idle'; bytes: null; error: null }
+  | { status: 'loading'; bytes: null; error: null }
+  | { status: 'ready'; bytes: ArrayBuffer; error: null }
+  | { status: 'error'; bytes: null; error: Error };
+
+const BYTES_IDLE: FileBytesState = { status: 'idle', bytes: null, error: null };
+const BYTES_LOADING: FileBytesState = { status: 'loading', bytes: null, error: null };
+
+/**
+ * Spec 090 — raw bytes of `url` (a document's `preview_url`) for a client-side
+ * renderer. A new URL or unmount aborts the in-flight request, and a result is
+ * only ever reported for the URL it was fetched for, so a slow fetch for the
+ * previous file can never land on the next one. `null` stays idle.
+ */
+export function useFileBytes(url: string | null): FileBytesState {
+  const [settled, setSettled] = useState<{ url: string; state: FileBytesState } | null>(null);
+
+  useEffect(() => {
+    if (!url) return;
+    const controller = new AbortController();
+    apiBytes(url, { signal: controller.signal }).then(
+      (bytes) => {
+        if (!controller.signal.aborted) {
+          setSettled({ url, state: { status: 'ready', bytes, error: null } });
+        }
+      },
+      (err: unknown) => {
+        if (!controller.signal.aborted) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          setSettled({ url, state: { status: 'error', bytes: null, error } });
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [url]);
+
+  if (!url) return BYTES_IDLE;
+  return settled?.url === url ? settled.state : BYTES_LOADING;
+}
+
+/**
+ * The file-content route for a client that renders documents (spec 090). The
+ * `document_preview=1` opt-in gets PDF / Office / CSV back as a `document`
+ * envelope; without it the daemon keeps the pre-090 shapes for older UIs.
+ */
+export function fileContentPath(projectId: string, path: string): string {
+  return `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}&document_preview=1`;
+}
 
 export function useFiles() {
   const [directory, setDirectory] = useState<DirectoryListing | null>(null);
@@ -39,9 +89,7 @@ export function useFiles() {
       setLoading(true);
       setError(null);
       try {
-        const data = await api<FileContent>(
-          `/api/v2/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`,
-        );
+        const data = await api<FileContent>(fileContentPath(projectId, path));
         setFileContent(data);
         return data;
       } catch (e) {

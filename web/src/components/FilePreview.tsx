@@ -14,6 +14,7 @@ import { File, Download, Copy, Check, Pencil } from 'lucide-react';
 import type { FileContent } from '../types';
 import MarkdownContent from './MarkdownContent';
 import AnnotateOverlay from './panel/AnnotateOverlay';
+import DocumentPreview from './preview/DocumentPreview';
 import type { AnnotationBox } from '../utils/annotations';
 import { useT } from '../i18n/useT';
 
@@ -438,6 +439,37 @@ export default function FilePreview({
               </button>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Spec 090: PDF / Word / Excel / CSV render client-side from raw bytes.
+  // DocumentPreview owns loading, failure + download fallback and the
+  // navigation row; text selected in its body (PDF text layer, sheet cells)
+  // quotes through the same QuoteRegion as the text views.
+  if (fileType === 'document') {
+    const documentBody = (
+      <DocumentPreview
+        key={fileContent.path}
+        fileContent={fileContent}
+        onQuoteFile={quoting && onQuote ? () => onQuote({ path: quotePath }) : undefined}
+      />
+    );
+    return (
+      <div className="flex flex-col h-full">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <h3 className="font-semibold text-sm text-primary truncate">{fileName}</h3>
+          <span className="text-xs text-secondary ml-2 shrink-0">{formatSize(fileContent.size)}</span>
+        </div>
+        <div className="flex-1 min-h-0">
+          {quoting && onQuote ? (
+            <QuoteRegion source="" exact={false} path={quotePath} onQuote={onQuote} className="h-full">
+              {documentBody}
+            </QuoteRegion>
+          ) : (
+            documentBody
+          )}
         </div>
       </div>
     );

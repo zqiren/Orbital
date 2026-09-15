@@ -150,3 +150,52 @@ export async function apiWithTotal<T = unknown>(
     throw new ApiError(0, `Invalid JSON response (${text.length} bytes)`);
   }
 }
+
+/**
+ * Fetch raw bytes (spec 090 document preview) under the same URL/auth rules
+ * as `api`. The relay tunnel re-serialises response bodies as text, which
+ * destroys binary data, so the daemon answers a relayed request with a base64
+ * JSON envelope instead; it is decoded here so callers always get bytes.
+ */
+export async function apiBytes(
+  path: string,
+  options?: { signal?: AbortSignal },
+): Promise<ArrayBuffer> {
+  const url = isRelayMode ? window.location.origin + path : BASE_URL + path;
+  const headers: Record<string, string> = {};
+  if (isRelayMode) {
+    const token = getAuthToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+  let finalUrl = url;
+  if (isRelayMode) {
+    const sep = finalUrl.includes('?') ? '&' : '?';
+    finalUrl += `${sep}_t=${Date.now()}`;
+  }
+  const fetchOpts: RequestInit = { headers, signal: options?.signal };
+  if (isRelayMode) fetchOpts.cache = 'no-store';
+
+  const response = await fetch(finalUrl, fetchOpts);
+  if (!response.ok) {
+    const body = await response.text();
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed.detail === 'string') detail = parsed.detail;
+    } catch {
+      // not JSON — keep the raw body
+    }
+    throw new ApiError(response.status, detail);
+  }
+  if ((response.headers.get('content-type') ?? '').includes('application/json')) {
+    const envelope = (await response.json()) as { encoding?: string; content?: string };
+    if (envelope.encoding !== 'base64' || typeof envelope.content !== 'string') {
+      throw new ApiError(0, 'Unexpected preview response');
+    }
+    const binary = atob(envelope.content);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+  return response.arrayBuffer();
+}

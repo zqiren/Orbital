@@ -12,9 +12,10 @@ import base64
 import logging
 import mimetypes
 import os
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from agent_os.queue.models import ItemState, QueueRunState
@@ -45,6 +46,23 @@ def configure(project_store, agent_manager=None, ws_manager=None):
 
 MAX_PREVIEW_BYTES = 512_000  # 500KB
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
+# Ceiling for handing a whole file to the client: the binary card's base64
+# payload and the spec-090 document preview bytes share it.
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50MB
+
+# Spec 090: documents the client renders itself from raw bytes (pdf.js,
+# docx-preview, SheetJS / papaparse). Classified BEFORE the UTF-8 attempt, so a
+# PDF or a GBK-encoded CSV never lands in the base64 binary branch. The content
+# type comes from this fixed map, never from `mimetypes` (which reads per-OS
+# registries and can differ between machines).
+DOCUMENT_FORMATS = {
+    ".pdf": ("pdf", "application/pdf"),
+    ".doc": ("doc", "application/msword"),
+    ".docx": ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ".xlsx": ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ".xls": ("xls", "application/vnd.ms-excel"),
+    ".csv": ("csv", "text/csv"),
+}
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
@@ -178,7 +196,7 @@ async def resolve_file(project_id: str, path: str):
 
 
 @router.get("/projects/{project_id}/files/content")
-async def get_file_content(project_id: str, path: str):
+async def get_file_content(project_id: str, path: str, document_preview: bool = False):
     _workspace, target = _resolve_path(project_id, path)
 
     if not os.path.isfile(target):
@@ -187,6 +205,31 @@ async def get_file_content(project_id: str, path: str):
     size = os.path.getsize(target)
     ext = os.path.splitext(target)[1].lower()
     mime_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
+
+    # Documents (spec 090): metadata only. The client fetches the bytes from
+    # `preview_url` and renders them itself; nothing is base64'd into JSON.
+    # OPT-IN via `document_preview=1`: older frontends (the relay serves its own
+    # SPA build; a cached bundle) don't know `type: "document"` and must keep
+    # getting the pre-090 shapes below — binary for PDF/Office, text for CSV.
+    # A query param, not a header, because it survives the relay tunnel.
+    document = DOCUMENT_FORMATS.get(ext) if document_preview else None
+    if document is not None:
+        doc_format, doc_mime = document
+        encoded_path = quote(path, safe="/")
+        envelope = {
+            "path": path,
+            "type": "document",
+            "format": doc_format,
+            "mime": doc_mime,
+            "size": size,
+            "content": "",
+            "truncated": False,
+            "preview_url": f"/api/v2/projects/{project_id}/files/preview?path={encoded_path}",
+            "download_url": f"/api/v2/projects/{project_id}/files/download?path={encoded_path}",
+        }
+        if size > MAX_DOWNLOAD_BYTES:
+            envelope["preview_unavailable"] = "too_large"
+        return envelope
 
     # Image files: return base64 encoded
     if ext in IMAGE_EXTENSIONS:
@@ -235,9 +278,8 @@ async def get_file_content(project_id: str, path: str):
         }
     except (UnicodeDecodeError, ValueError):
         # Binary file (not text, not image) — include base64 for relay download
-        max_download_bytes = 50 * 1024 * 1024
         content_b64 = ""
-        if size <= max_download_bytes:
+        if size <= MAX_DOWNLOAD_BYTES:
             try:
                 with open(target, "rb") as f:
                     content_b64 = base64.b64encode(f.read()).decode("ascii")
@@ -427,3 +469,75 @@ async def download_file(project_id: str, path: str):
 
     mime_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
     return FileResponse(target, media_type=mime_type)
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    if if_none_match.strip() == "*":
+        return True
+    return etag in {tag.strip().removeprefix("W/") for tag in if_none_match.split(",")}
+
+
+@router.get("/projects/{project_id}/files/preview")
+async def preview_file(project_id: str, path: str, request: Request):
+    """Raw bytes of a document for the client-side renderer (spec 090).
+
+    Only ``DOCUMENT_FORMATS`` are served (415 otherwise), always inline, with
+    the content type from that fixed map. Containment is ``_resolve_path``'s
+    realpath check (symlink-out and sibling-prefix escapes refused). The
+    revision (``mtime_ns`` + size) is the ETag, so re-opening an unchanged file
+    revalidates to a 304. Above the download ceiling it is a 413 and the client
+    shows its download card.
+
+    Relay: the tunnel client re-serialises every proxied body as text
+    (``resp.text``), which replaces non-UTF-8 bytes with U+FFFD. A relayed
+    request (``X-Via-Relay``, set by that client) therefore gets the bytes
+    base64-wrapped in JSON, the one encoding that survives it.
+    """
+    _workspace, target = _resolve_path(project_id, path)
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    document = DOCUMENT_FORMATS.get(os.path.splitext(target)[1].lower())
+    if document is None:
+        raise HTTPException(status_code=415, detail="preview_unavailable: unsupported")
+    doc_format, doc_mime = document
+
+    stat = os.stat(target)
+    if stat.st_size > MAX_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="preview_unavailable: too_large")
+
+    if request.headers.get("x-via-relay") == "true":
+        try:
+            with open(target, "rb") as f:
+                data = f.read(MAX_DOWNLOAD_BYTES + 1)
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
+        if len(data) > MAX_DOWNLOAD_BYTES:  # grew after the stat
+            raise HTTPException(status_code=413, detail="preview_unavailable: too_large")
+        return {
+            "path": path,
+            "format": doc_format,
+            "mime": doc_mime,
+            "size": len(data),
+            "encoding": "base64",
+            "content": base64.b64encode(data).decode("ascii"),
+        }
+
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return FileResponse(
+        target,
+        media_type=doc_mime,
+        headers=headers,
+        filename=os.path.basename(target),
+        content_disposition_type="inline",
+        stat_result=stat,
+    )
