@@ -38,9 +38,9 @@ Orbital takes the context out of the session and puts it back in your local fold
 </p>
 <p align="center">Set up in under 5 minutes. No Python or Node required. Bring your own API key.</p>
 
-<p align="center"><em>One-minute demo: the worker changed three times, the project never stopped</em></p>
+<p align="center"><em>One-minute demo: one task, two agents, nothing re-explained</em></p>
 
-https://github.com/user-attachments/assets/e6b00c11-9260-4adb-8fe5-c5cfb402dcab
+https://github.com/user-attachments/assets/5f1373bc-2c3e-440b-af52-77ecbd80c27f
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](#license) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple)
 
