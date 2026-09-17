@@ -4,11 +4,9 @@
 
 
 
-<p align="center"><strong>任务进行到一半，Claude Code余额用完了。Orbital直接转发Codex继续——完全无需重新解释。</strong></p>
+<p align="center"><strong>任务进行到一半，Claude Code余额用完了。Codex在同一个对话里接着做——完全无需重新解释。</strong></p>
 
-<p align="center"><img src="docs/screenshots/hero-worker-blocked.gif" alt="Orbital 派给 Claude Code 的任务中途被订阅限制挡住；Orbital 读到报错，判断是账号层面的问题，从项目文件重新给 Codex 写了同一份简报，Codex 接着做" width="100%"></p>
-
-<p align="center"><em>Orbital 之前把一个spec派给了 Claude Code。Claude Code跑到一半余额用完了，Orbital读到报错，判断这是账号问题、自己解不开，于是直接收集相关上下文，转交Codex接着做。会话，数据和上下文都是项目里的文件，不在绑定Claude的会话，所以任何agent都能接手。agent可以换，项目一直不断。</em></p>
+<p align="center"><img src="docs/screenshots/handoff-codex-continue.gif" alt="同一个对话里 Claude Code 额度用完了，用户 @codex 说「你继续吧」，Codex 读取同一份项目上下文接着做" width="100%"></p>
 
 <p align="center">
   <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
@@ -50,9 +48,6 @@ https://github.com/user-attachments/assets/88cf118c-1dd9-4429-897d-f2003de3049d
 ## 为什么你需要一个“project” agent
 
 你正在和 Claude Code 讨论一个方案，聊到第三轮，它弹出「You're out of usage credits」。Codex 的额度还在，但 Codex 对这个项目一无所知——目标、前两轮拍板的结论、改到一半的文件，都得你重讲一遍。
-
-<p align="center"><img src="docs/screenshots/handoff-codex-continue.gif" alt="同一个对话里 Claude Code 额度用完了，用户 @codex 说「你继续吧」，Codex 读取同一份项目上下文接着做" width="100%"></p>
-<p align="center"><em>同一个对话里：Claude Code用完了，你 @codex 说一句“你继续吧”，Codex 延续项目上下文继续任务。</em></p>
 
 在工作中，大家都已经在同时用好几个 agent —— 可能是因为新出的模型、剩余的额度，也可能是因为某个工具更擅长这类活。
 
