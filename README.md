@@ -2,12 +2,10 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center"><strong>Claude Code got cut off mid-task. Orbital handed the same task to Codex. Nothing was re-explained.</strong></p>
+<p align="center"><strong>Claude Code hit its usage limit mid-task. Codex picked it up in the same conversation. Nothing was re-explained.</strong></p>
 
 <!-- The clip is the Chinese-UI capture; an English re-shoot of the same scenario is pending -->
-<p align="center"><img src="docs/screenshots/hero-worker-blocked.gif" alt="A task Orbital dispatched to Claude Code is blocked by the subscription mid-run; Orbital reads the error, decides it is an account-level problem, re-briefs Codex on the same spec from the project files, and Codex continues" width="100%"></p>
-
-<p align="center"><em>What you're seeing: Orbital had dispatched Claude Code on a spec. Claude Code came back blocked by its subscription. Orbital read the error, decided an account problem was not something it could unblock, re-briefed Codex on the same spec from the project's files, and Codex continued. The brief, the state, and the conversation are files in the project folder, not Claude's session, so any worker can pick them up. The worker can change. The project continues.</em></p>
+<p align="center"><img src="docs/screenshots/handoff-codex-continue.gif" alt="In the same conversation Claude Code hits its usage limit; the user tells @codex to continue and Codex picks up from the same project context" width="100%"></p>
 
 <p align="center">
   <img src="docs/screenshots/orbital-logo.png" alt="Orbital" width="80">
@@ -49,9 +47,6 @@ https://github.com/user-attachments/assets/5f1373bc-2c3e-440b-af52-77ecbd80c27f
 ## Why a project agent?
 
 You're three rounds into a design discussion with Claude Code when it stops with "You're out of usage credits." Your Codex quota is sitting right there, but Codex knows nothing about this project: the goal, the two decisions you just made, the half-edited files. You'd have to explain all of it again.
-
-<p align="center"><img src="docs/screenshots/handoff-codex-continue.gif" alt="In the same conversation Claude Code hits its usage limit; the user tells @codex to continue and Codex picks up from the same project context" width="100%"></p>
-<p align="center"><em>Same conversation: Claude Code hits its usage limit, you tell @codex "you continue", and Codex reads the same project context and picks up exactly where the discussion left off.</em></p>
 
 People already use several capable agents at work — for the newest model, the leftover quota, or because a particular tool is better at the job.
 
