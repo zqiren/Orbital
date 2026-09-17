@@ -433,6 +433,65 @@ class TestSDKUsageCapture:
         # The error event still flows — capture failure didn't break the turn.
         assert any(e.event_type == "error" for e in events)
 
+    def test_cumulative_session_cost_is_recorded_as_per_turn_increment(self, tmp_path):
+        """``total_cost_usd`` is the CLI process's running session total, not
+        the turn's cost (measured on real ledgers: $1.91 → $2.61 → $3.65 …
+        within one session). Recording it verbatim made spend() sum a running
+        total — a long session showed ~5x its real cost."""
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        usage = {"input_tokens": 10, "output_tokens": 5}
+        for total in (1.0, 1.5, 1.5, 2.25):
+            transport._message_to_events(
+                self._result(usage=usage, total_cost_usd=total))
+
+        costs = [ev.get("reported_cost") for ev in self._ledger_lines(str(tmp_path))]
+        # An unchanged total (a turn the CLI billed nothing for) → tokens only.
+        assert costs == [1.0, 0.5, None, 0.75]
+
+    def test_total_that_drops_is_a_new_process_counted_from_zero(self, tmp_path):
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        usage = {"input_tokens": 10, "output_tokens": 5}
+        transport._message_to_events(self._result(usage=usage, total_cost_usd=17.5))
+        transport._message_to_events(self._result(usage=usage, total_cost_usd=0.4))
+
+        costs = [ev.get("reported_cost") for ev in self._ledger_lines(str(tmp_path))]
+        assert costs == [17.5, 0.4]
+
+    @pytest.mark.asyncio
+    async def test_new_client_resets_the_running_total(self, tmp_path):
+        """A restarted CLI starts its total at zero; a first turn that happens
+        to cost MORE than the old process's total must not be diffed against it."""
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        usage = {"input_tokens": 10, "output_tokens": 5}
+        transport._message_to_events(self._result(usage=usage, total_cost_usd=0.5))
+
+        with patch("agent_os.agent.transports.sdk_transport.ClaudeSDKClient") as MockClient, \
+             patch("agent_os.agent.transports.sdk_transport.ClaudeAgentOptions"):
+            MockClient.return_value.connect = AsyncMock()
+            await transport.start("claude", [], str(tmp_path))
+        transport._message_to_events(self._result(usage=usage, total_cost_usd=0.8))
+
+        costs = [ev.get("reported_cost") for ev in self._ledger_lines(str(tmp_path))]
+        assert costs == [0.5, 0.8]
+
+    def test_synthetic_assistant_model_does_not_replace_the_real_one(self, tmp_path):
+        """The CLI emits ``<synthetic>`` assistant messages (interrupts, API
+        errors); they rendered as a separate model row in the cost view."""
+        from claude_agent_sdk.types import AssistantMessage, TextBlock
+
+        transport = SDKTransport()
+        transport._workspace = str(tmp_path)
+        for model in ("claude-fable-5", "<synthetic>"):
+            transport._message_to_events(
+                AssistantMessage(content=[TextBlock(text="x")], model=model))
+        transport._message_to_events(self._result(
+            usage={"input_tokens": 10, "output_tokens": 5}, total_cost_usd=0.1))
+
+        assert self._ledger_lines(str(tmp_path))[0]["model"] == "claude-fable-5"
+
     def test_capture_never_raises_on_bad_workspace(self):
         """An unwritable workspace must not propagate out of capture."""
         transport = SDKTransport()

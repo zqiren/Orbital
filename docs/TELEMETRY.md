@@ -46,7 +46,13 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
     "errors_by_provider": { "deepseek": 2 },
     "tokens_by_provider": { "deepseek": { "in": 120000, "out": 8000 } },
     "login_attempted": 1,
-    "login_failed": 0
+    "login_failed": 0,
+    "subagent_dispatches": 4,
+    "subagent_failed": 1,
+    "subagent_by_agent": {
+      "claude-code": { "dispatched": 3, "failed": 0 },
+      "codex": { "dispatched": 1, "failed": 1 }
+    }
   }
 }
 ```
@@ -70,6 +76,9 @@ machine. The exact outbound JSON is also inspectable in-app, verbatim, under
 | `counters.tokens_by_provider` | map | Daily input/output token totals per provider (no per-model detail; that stays local in the budget ledger). |
 | `counters.login_attempted` | int | Sub-agent CLI sign-in jobs started (Claude Code, Codex, …). The agent slug stays local in the spool — only the daily total is sent. |
 | `counters.login_failed` | int | Of those, how many ended in failure. Together with `login_attempted` this is the only visibility into whether sub-agent setup is where activation stalls. |
+| `counters.subagent_dispatches` | int | Prompts handed to a sub-agent (by the management agent, a direct send, a queue item, or a fanout worker). |
+| `counters.subagent_failed` | int | Sub-agent work that failed: a sub-agent that could not be started, or a task that ended in an error. A deliberate stop is not a failure. Because a failed start is never dispatched, this is not a subset of `subagent_dispatches`. |
+| `counters.subagent_by_agent` | map | The same two counts per sub-agent: `{agent: {dispatched, failed}}`. Keys are built-in sub-agent names only (`claude-code`, `codex`, `gemini-cli`, …), `native` for Orbital's own fanout workers, and `other` for any name that is not built in — so no free text leaves the machine. |
 
 `counters.sessions` counts sessions at the point they are minted, so every
 path produces one: the "+ New session" button, the first-run cold-start scan,
