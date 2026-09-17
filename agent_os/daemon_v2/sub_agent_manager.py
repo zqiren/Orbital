@@ -15,6 +15,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from agent_os import telemetry
 from agent_os.agent.adapters.cli_adapter import CLIAdapter
 from agent_os.agent.prompt_builder import Autonomy
 from agent_os.agent.project_paths import ProjectPaths
@@ -1084,6 +1085,9 @@ class SubAgentManager:
                 pinned=(initiator == "user_pinned"),
             )
             if start_result.startswith("Error"):
+                # A spawn that never started is the dispatch's failure; no
+                # observer terminal will ever fire for it.
+                telemetry.emit("subagent_failed", {"agent": handle})
                 return start_result
             spawned = self._adapters.get(sk, {}).get(handle)
             status, reason = getattr(
@@ -1560,6 +1564,9 @@ class SubAgentManager:
         synchronous raise straight out of this ``await`` — the caller
         (``send()``) wraps that call and does the equivalent cleanup there.
         """
+        # Every prompt bound for a worker crosses here — immediate send, a
+        # drained queue, fanout — so this is the one dispatch count.
+        telemetry.emit("subagent_dispatched", {"agent": handle})
         transport = getattr(adapter, '_transport', None)
 
         if transport is not None and hasattr(transport, 'dispatch'):

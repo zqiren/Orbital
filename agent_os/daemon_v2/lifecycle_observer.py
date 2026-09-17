@@ -12,6 +12,8 @@ prefix and transcript path.
 import logging
 import json
 
+from agent_os import telemetry
+
 logger = logging.getLogger(__name__)
 
 
@@ -413,6 +415,7 @@ class LifecycleObserver:
                        transcript_path: str,
                        *, session_id: str | None = None) -> None:
         """Sub-agent encountered an error."""
+        telemetry.emit("subagent_failed", {"agent": handle})
         content = f"[Sub-agent] {handle} stopped with error: {error}. Transcript: {transcript_path}"
         pinned = self._is_pinned_dispatch(project_id, handle, session_id)
         # A worker that errored out IS the assigned item's outcome: the
@@ -456,6 +459,7 @@ class LifecycleObserver:
         on a sub-agent that was already dead
         (TASK-honest-subagent-completion-reporting, path e).
         """
+        telemetry.emit("subagent_failed", {"agent": handle})
         content = (
             f"[Sub-agent] {handle} failed: {reason}. "
             f"The dispatched task did not complete."
