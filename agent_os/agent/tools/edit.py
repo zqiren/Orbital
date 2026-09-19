@@ -54,6 +54,19 @@ class EditTool(Tool):
             count = content.count(old_text)
 
             if count == 0:
+                # PROJECT_STATE: every bullet carries a hidden `<!--mem …-->`
+                # line that the injected prompt view strips (spec 089 v2), so
+                # an old_text spanning several bullets never matches the raw
+                # bytes. Retry against the comment-stripped view; the write
+                # chokepoint below re-attaches every unchanged bullet's id.
+                from agent_os.agent import memory_entries, user_flags
+                if memory_entries.memory_key_for_path(resolved, self._workspace) == "state":
+                    stripped = user_flags.strip_mem_comments(content)
+                    if stripped != content and stripped.count(old_text) == 1:
+                        content = stripped
+                        count = 1
+
+            if count == 0:
                 # Honest, actionable error. Name the file, explain the likely
                 # cause, and instruct a re-read — the model usually fails here
                 # because it built old_text from a stale/truncated view rather
