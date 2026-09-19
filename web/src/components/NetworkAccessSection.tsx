@@ -11,8 +11,8 @@
  * (asked via `request_network_access`, Plan 2 Task 3, and auto-denied into
  * this list under hands-off autonomy, Task 5). All edits are staged locally
  * through `onChange` — like ProjectConnectorToggles, this component owns no
- * state itself; SettingsView holds it and persists both fields together on
- * the form's existing Save (Task 2 applies the resulting grants server-side).
+ * state itself; SettingsView holds it and saves both fields together on each
+ * change (Task 2 applies the resulting grants server-side).
  */
 
 import { useT } from '../i18n/useT';

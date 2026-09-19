@@ -111,9 +111,6 @@ export default function ProjectConnectorToggles({
               </label>
             ))}
           </div>
-          <p className="text-[11px] text-secondary/60 mt-1.5 italic">
-            {t('connectors.project.saveNote')}
-          </p>
         </>
       )}
     </div>

@@ -15,6 +15,7 @@ import CardList from './CardList';
 import MigrationNoteBanner from './MigrationNoteBanner';
 import FallbackModelsEditor from './FallbackModelsEditor';
 import { useCredentialCards } from '../hooks/useCredentialCards';
+import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
 import { type SubAgentMemoryEntry } from './SubAgentMemoryCard';
 import { type InstalledSubAgent } from './SubAgentToggleList';
 import SubAgentCard from './SubAgentCard';
@@ -40,7 +41,9 @@ interface SkillMeta {
 
 interface SettingsViewProps {
   project: Project;
-  onSave: (data: ProjectUpdateRequest) => void;
+  /** Persist a partial update of THIS project. Called for every edit —
+   *  the page has no Save button — so it must be bound to `project`. */
+  onSave: (data: ProjectUpdateRequest) => Promise<unknown> | void;
   onDelete: () => void;
   /** Navigate to the pricing-table editor. */
   onEditPricing?: () => void;
@@ -127,7 +130,10 @@ export default function SettingsView({
   const [projectGoals, setProjectGoals] = useState(project.project_goals_content || '');
   const [standingRules, setStandingRules] = useState(project.user_directives_content || '');
   const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
-  const [saved, setSaved] = useState(false);
+  // Every edit saves itself: clicks at once, typing after a pause or when the
+  // field loses focus. There is no Save button — it made the card picker (and
+  // everything else here) look applied when it was not (2026-09-19).
+  const autosave = useAutosave<ProjectUpdateRequest>(onSave);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(
@@ -167,17 +173,17 @@ export default function SettingsView({
   );
 
   // Per-project connector enablement (spec 011 §0.2 — authenticate globally,
-  // enable per project). Saved through THIS form's payload, like every other
-  // project field; the toggles component only reads/writes this state.
+  // enable per project). Saved on each flip, like every other project field;
+  // the toggles component only reads/writes this state.
   const [enabledConnectors, setEnabledConnectors] = useState<string[]>(
     project.enabled_connectors ?? [],
   );
 
-  // TOFU network grants (Plan 2). Like enabled_connectors, saved through
-  // THIS form's payload — Task 2's PUT route applies the resulting grants to
-  // a running agent's proxy immediately. pendingDomainRequests is display +
-  // approve/dismiss state; approving moves an entry into approvedDomains and
-  // drops it from pendingDomainRequests locally (persisted together on Save).
+  // TOFU network grants (Plan 2). Like enabled_connectors, saved on change —
+  // Task 2's PUT route applies the resulting grants to a running agent's proxy
+  // immediately. pendingDomainRequests is display + approve/dismiss state;
+  // approving moves an entry into approvedDomains and drops it from
+  // pendingDomainRequests, and both are saved together.
   const [approvedDomains, setApprovedDomains] = useState<string[]>(
     project.approved_domains ?? [],
   );
@@ -320,13 +326,15 @@ export default function SettingsView({
     return () => { cancelled = true; };
   }, [project.is_scratch]);
 
+  const { saveNow, saveSoon } = autosave;
+
   const handleToggleSubAgent = useCallback((slug: string, enabled: boolean) => {
-    setDisabledSubAgents((prev) =>
-      enabled
-        ? prev.filter((s) => s !== slug)
-        : prev.includes(slug) ? prev : [...prev, slug],
-    );
-  }, []);
+    const next = enabled
+      ? disabledSubAgents.filter((s) => s !== slug)
+      : disabledSubAgents.includes(slug) ? disabledSubAgents : [...disabledSubAgents, slug];
+    setDisabledSubAgents(next);
+    saveNow({ disabled_sub_agents: next });
+  }, [disabledSubAgents, saveNow]);
 
   async function handleDeleteSkill(dirName: string) {
     setSkillError('');
@@ -373,35 +381,26 @@ export default function SettingsView({
   function handleFallbackChange(models: FallbackModelEntry[]) {
     setFallbackModels(models);
     fallbackModelsRef.current = models;
+    saveNow({ llm_fallback_models: models });
   }
 
-  function handleSave(ev: React.FormEvent) {
-    ev.preventDefault();
-    const data: ProjectUpdateRequest = {
-      agent_name: agentName,
-      project_goals_content: projectGoals,
-      user_directives_content: standingRules,
-      // Always PRESENT, null included: null is the explicit "follow the
-      // global default card", and the daemon applies the field whenever it is
-      // in the body. An `|| undefined` here would make "back to default"
-      // unsavable — the wart spec 072 left behind on the old key field.
-      card_id: cardId,
-      autonomy,
-      llm_fallback_models: fallbackModelsRef.current,
-      budget_limit_usd: budgetLimit ? parseFloat(budgetLimit) : null,
+  function handleCardChange(next: string | null) {
+    setCardId(next);
+    // Always PRESENT, null included: null is the explicit "follow the global
+    // default card", and the daemon applies the field whenever it is in the
+    // body. An `|| undefined` here would make "back to default" unsavable —
+    // the wart spec 072 left behind on the old key field.
+    saveNow({ card_id: next });
+  }
+
+  function handleBudgetLimitChange(next: string) {
+    setBudgetLimit(next);
+    // The currency rides along, as it did with the old Save: without it the
+    // daemon picks the provider's currency while this form shows another.
+    saveSoon({
+      budget_limit_usd: next ? parseFloat(next) : null,
       budget_currency: budgetCurrency,
-      budget_period: budgetPeriod,
-      budget_action: budgetAction,
-      disabled_sub_agents: disabledSubAgents,
-      sub_agent_deployment_instructions: subAgentDeploymentInstructions,
-      enabled_connectors: enabledConnectors,
-      approved_domains: approvedDomains,
-      pending_domain_requests: pendingDomainRequests,
-      workbench_exclude_global: workbenchExcludeGlobal,
-    };
-    onSave(data);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    });
   }
 
   function handleDelete() {
@@ -440,14 +439,23 @@ export default function SettingsView({
       containerRef={scrollContainerRef}
     />
     <div className="max-w-[720px] w-full min-w-0 py-8 px-6 max-md:px-4">
-      <form onSubmit={handleSave}>
+      {/* A div, not a <form>: nothing here submits, and a form around the
+          card dialog is what made adding a card reload the app. Leaving any
+          field sends what was typed in it. */}
+      <div onBlur={() => void autosave.flush()}>
         <SettingsGroup title={t('settings.group.project')}>
         {/* Agent Name */}
         <SettingsSection id="agent-name" title={t('createProject.agentName.label')}>
           <input
             type="text"
             value={agentName}
-            onChange={(e) => setAgentName(e.target.value)}
+            onChange={(e) => {
+              setAgentName(e.target.value);
+              saveSoon({ agent_name: e.target.value });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void autosave.flush();
+            }}
             placeholder={t('settings.agentName.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150"
           />
@@ -459,7 +467,10 @@ export default function SettingsView({
             <textarea
               rows={6}
               value={projectGoals}
-              onChange={(e) => setProjectGoals(e.target.value)}
+              onChange={(e) => {
+                setProjectGoals(e.target.value);
+                saveSoon({ project_goals_content: e.target.value });
+              }}
               disabled={loadingDetail}
               placeholder={loadingDetail ? t('settings.loading') : t('settings.projectGoals.placeholder')}
               className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
@@ -476,7 +487,10 @@ export default function SettingsView({
           <textarea
             rows={4}
             value={standingRules}
-            onChange={(e) => setStandingRules(e.target.value)}
+            onChange={(e) => {
+              setStandingRules(e.target.value);
+              saveSoon({ user_directives_content: e.target.value });
+            }}
             disabled={loadingDetail}
             placeholder={loadingDetail ? t('settings.loading') : t('settings.projectInstructions.placeholder')}
             className="w-full text-sm bg-sidebar border border-border rounded-lg px-3 py-2 text-primary placeholder:text-secondary/60 focus:outline-none focus:border-accent transition-all duration-150 resize-y disabled:opacity-50"
@@ -508,7 +522,10 @@ export default function SettingsView({
               rows={4}
               maxLength={4000}
               value={subAgentDeploymentInstructions}
-              onChange={(e) => setSubAgentDeploymentInstructions(e.target.value)}
+              onChange={(e) => {
+                setSubAgentDeploymentInstructions(e.target.value);
+                saveSoon({ sub_agent_deployment_instructions: e.target.value });
+              }}
               disabled={loadingDetail}
               placeholder={loadingDetail
                 ? t('settings.loading')
@@ -546,9 +563,6 @@ export default function SettingsView({
                   ))}
                 </div>
                 <p className="text-[11px] text-secondary/60 mt-1.5 italic">
-                  {t('settings.subAgents.saveReminder')}
-                </p>
-                <p className="text-[11px] text-secondary/60 mt-1 italic">
                   {t('settings.subAgents.installHint')}
                 </p>
               </>
@@ -625,8 +639,8 @@ export default function SettingsView({
         )}
 
         {/* Connectors — per-project enablement (spec 011 §0.2/§0.6, Task E1).
-            One switch per globally-connected connector, writing
-            enabled_connectors through this form's save. Mounting this fills
+            One switch per globally-connected connector; a flip saves
+            enabled_connectors at once. Mounting this fills
             the reserved 'connectors' rail entry. */}
         <SettingsSection
           id="connectors"
@@ -636,7 +650,10 @@ export default function SettingsView({
         >
           <ProjectConnectorToggles
             enabledConnectors={enabledConnectors}
-            onChange={setEnabledConnectors}
+            onChange={(ids) => {
+              setEnabledConnectors(ids);
+              saveNow({ enabled_connectors: ids });
+            }}
           />
         </SettingsSection>
         </SettingsGroup>
@@ -659,7 +676,7 @@ export default function SettingsView({
             cards={cards}
             defaultCardId={defaultCardId}
             value={cardId}
-            onChange={setCardId}
+            onChange={handleCardChange}
             loading={cardsLoading}
             onRefresh={refreshCards}
             onCardUpdated={applyCard}
@@ -687,7 +704,10 @@ export default function SettingsView({
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => setAutonomy(opt.value)}
+                onClick={() => {
+                  setAutonomy(opt.value);
+                  saveNow({ autonomy: opt.value });
+                }}
                 className={`text-left border rounded-lg p-3 transition-all duration-150 max-md:min-h-[44px] ${
                   autonomy === opt.value
                     ? 'border-accent bg-accent/5'
@@ -714,21 +734,30 @@ export default function SettingsView({
           <BudgetSection
             project={project}
             limit={budgetLimit}
-            onLimitChange={setBudgetLimit}
+            onLimitChange={handleBudgetLimitChange}
             currency={budgetCurrency}
-            onCurrencyChange={setBudgetCurrency}
+            onCurrencyChange={(next) => {
+              setBudgetCurrency(next);
+              saveNow({ budget_currency: next });
+            }}
             period={budgetPeriod}
-            onPeriodChange={setBudgetPeriod}
+            onPeriodChange={(next) => {
+              setBudgetPeriod(next);
+              saveNow({ budget_period: next });
+            }}
             action={budgetAction}
-            onActionChange={setBudgetAction}
+            onActionChange={(next) => {
+              setBudgetAction(next);
+              saveNow({ budget_action: next });
+            }}
             onEditPricing={onEditPricing}
           />
         </SettingsSection>
 
         {/* Network access — TOFU allowlist (Plan 2 Task 7). Approved domains +
-            pending requests, writing approved_domains / pending_domain_requests
-            through this form's save (Task 2's PUT route live-rebuilds the
-            proxy rules server-side). */}
+            pending requests; approve/dismiss saves approved_domains /
+            pending_domain_requests at once (Task 2's PUT route live-rebuilds
+            the proxy rules server-side). */}
         <SettingsSection
           id="network"
           title={t('settings.network.label')}
@@ -740,15 +769,14 @@ export default function SettingsView({
             onChange={({ approvedDomains: next, pendingRequests }) => {
               setApprovedDomains(next);
               setPendingDomainRequests(pendingRequests);
+              saveNow({ approved_domains: next, pending_domain_requests: pendingRequests });
             }}
           />
         </SettingsSection>
         </SettingsGroup>
 
         <SettingsGroup title={t('settings.group.preferences')}>
-        {/* Notification Preferences (remote mode only). Unlike every other
-            section these save on change, not on Save — hence the standalone
-            note under the list. */}
+        {/* Notification Preferences (remote mode only). */}
         {!project.is_scratch && isRelayMode && (
           <SettingsSection
             id="notifications"
@@ -769,8 +797,7 @@ export default function SettingsView({
                     onChange={(e) => {
                       const updated = { ...notifPrefs, [key]: e.target.checked };
                       setNotifPrefs(updated);
-                      // Save immediately via API
-                      onSave({ notification_prefs: updated });
+                      saveNow({ notification_prefs: updated });
                     }}
                     className="rounded border-border accent-accent"
                   />
@@ -797,7 +824,10 @@ export default function SettingsView({
             <input
               type="checkbox"
               checked={workbenchExcludeGlobal}
-              onChange={(e) => setWorkbenchExcludeGlobal(e.target.checked)}
+              onChange={(e) => {
+                setWorkbenchExcludeGlobal(e.target.checked);
+                saveNow({ workbench_exclude_global: e.target.checked });
+              }}
               className="rounded border-border accent-accent"
             />
             <span className="text-sm text-primary">
@@ -807,20 +837,10 @@ export default function SettingsView({
         </SettingsSection>
         </SettingsGroup>
 
-        {/* Save */}
-        {/* No rule above Save: a rule means "a chapter starts here" now. */}
-        <div className="flex items-center gap-3 mt-12">
-          <button
-            type="submit"
-            className="bg-accent text-white text-sm font-medium rounded-lg px-5 py-2.5 hover:bg-accent/90 transition-all duration-150 max-md:w-full max-md:min-h-[44px]"
-          >
-            {t('settings.save')}
-          </button>
-          {saved && (
-            <span className="text-sm text-success">{t('settings.saved')}</span>
-          )}
-        </div>
-      </form>
+        <p className="text-xs text-secondary/70 mt-12" data-testid="settings-autosave-hint">
+          {t('settings.autosave.hint')}
+        </p>
+      </div>
 
       {/* Danger zone */}
       {!project.is_scratch && (
@@ -856,6 +876,66 @@ export default function SettingsView({
       )}
     </div>
     </div>
+    <AutosaveStatusPill
+      status={autosave.status}
+      error={autosave.error}
+      onRetry={() => void autosave.retry()}
+    />
+    </div>
+  );
+}
+
+/**
+ * Where the Save button's confirmation used to be — except it follows the
+ * user down the page, since the edit may be a card tile halfway down. Shows
+ * while saving, briefly after, and stays with a Retry while a save failed.
+ */
+function AutosaveStatusPill({
+  status,
+  error,
+  onRetry,
+}: {
+  status: AutosaveStatus;
+  error: string;
+  onRetry: () => void;
+}) {
+  const t = useT();
+  const [showSaved, setShowSaved] = useState(false);
+  useEffect(() => {
+    if (status !== 'saved') return;
+    setShowSaved(true);
+    const id = setTimeout(() => setShowSaved(false), 2000);
+    return () => clearTimeout(id);
+  }, [status]);
+
+  if (status === 'idle' || (status === 'saved' && !showSaved)) return null;
+  return (
+    <div className="sticky bottom-4 flex justify-center pointer-events-none">
+      <div
+        role="status"
+        data-testid="settings-autosave-status"
+        className={`pointer-events-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm ${
+          status === 'error'
+            ? 'border-error/40 bg-background text-error'
+            : 'border-border bg-background text-secondary'
+        }`}
+      >
+        {status === 'saving' && t('settings.autosave.saving')}
+        {status === 'saved' && t('settings.saved')}
+        {status === 'error' && (
+          <>
+            {t('settings.autosave.error', { message: error })}
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="settings-autosave-retry"
+              className="font-medium underline underline-offset-2"
+            >
+              {t('settings.autosave.retry')}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
