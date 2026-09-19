@@ -356,10 +356,14 @@ def _read_exact(path: str) -> tuple[str | None, bool]:
             raw = f.read()
     except OSError:
         return None, True
+    # Line endings are normalised like a text-mode read: `_atomic_write`
+    # writes in text mode, so on Windows a kept `\r\n` became `\r\r\n` and
+    # every rewrite doubled the file's line breaks.
     try:
-        return raw.decode("utf-8"), True
+        text, ok = raw.decode("utf-8"), True
     except UnicodeDecodeError:
-        return raw.decode("utf-8", errors="replace"), False
+        text, ok = raw.decode("utf-8", errors="replace"), False
+    return text.replace("\r\n", "\n").replace("\r", "\n"), ok
 
 
 def _atomic_write(path: str, content: str) -> None:

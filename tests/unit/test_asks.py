@@ -812,3 +812,43 @@ class TestTriggerWordsEverywhere:
         agents_md = AGENT_MD_TEMPLATE.format(project_name="P", agent_name="A")
         for text in (semi, asks.FORMAT_HEADER, agents_md):
             assert TRIGGER in flat(text)
+
+
+class TestWindowsLineEndings:
+    """CRLF files (Windows) must not be rewritten or get doubled line breaks.
+
+    `_read_exact` used to keep `\\r\\n` while `_atomic_write` writes in text
+    mode, which on Windows turns every `\\n` into `\\r\\n` again — so each
+    append doubled the file's line breaks and the first-start migration
+    rewrote every Windows user's PROJECT_STATE even with nothing to convert.
+    """
+
+    def test_read_exact_normalises_line_endings(self, tmp_path):
+        p = tmp_path / "x.md"
+        p.write_bytes(b"a\r\nb\r\n")
+        text, ok = asks._read_exact(str(p))
+        assert ok and text == "a\nb\n"
+
+    def test_crlf_state_with_nothing_to_convert_is_not_rewritten(self, tmp_path):
+        from agent_os.agent import memory_entries
+        ws = tmp_path / "ws"
+        orbital = ws / "orbital"
+        orbital.mkdir(parents=True)
+        state = memory_entries.FORMAT_HEADERS["state"] + "\n## Focus\n- all quiet\n"
+        raw = state.replace("\n", "\r\n").encode("utf-8")
+        (orbital / "PROJECT_STATE.md").write_bytes(raw)
+        result = asks.migrate_project(str(ws), today=TODAY)
+        assert result["status"] == "migrated"
+        assert result["backup"] is None                      # nothing touched
+        assert (orbital / "PROJECT_STATE.md").read_bytes() == raw
+
+    def test_append_to_a_crlf_log_keeps_one_line_per_event(self, tmp_path):
+        orbital = tmp_path / "orbital"
+        orbital.mkdir()
+        (orbital / "ASKS.md").write_bytes(
+            (asks.FORMAT_HEADER + "\n- open a1b2c3 2026-07-20 Pick a venue.\n")
+            .replace("\n", "\r\n").encode("utf-8"))
+        asks.append_event(str(orbital), "done", "a1b2c3", "", "user", today=TODAY)
+        text = (orbital / "ASKS.md").read_text(encoding="utf-8")
+        assert "\n\n" not in text
+        assert [a.state for a in asks.read_asks(str(orbital))] == ["done"]
