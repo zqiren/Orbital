@@ -35,9 +35,11 @@ export function useChatHistory(options: UseChatHistoryOptions = {}) {
    * here as the last event seen.
    *
    * Caveat for consumers, verified against
-   * `agent_os/daemon_v2/activity_translator.py:193`: the live `tool_result`
-   * event carries only `{category, description: "Tool result received",
-   * tool_name: <tool_call_id>}` — NO `_meta`, so no `screenshot_path`. The
+   * `agent_os/daemon_v2/activity_translator.py`: the live `tool_result`
+   * event carries `{category, description: "Tool result received",
+   * tool_name: <tool_call_id>, tool_call_id, result_preview}` (the preview is
+   * capped at what the chat capsule shows) — NO `_meta`, so no
+   * `screenshot_path`. The
    * browser screenshot is only readable from the persisted history row's
    * `_meta` (or, once it lands, the live CDP stream).
    */

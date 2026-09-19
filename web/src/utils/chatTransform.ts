@@ -17,6 +17,16 @@ export type ActivityTranslate = (
 ) => string;
 const EN_ACTIVITY: ActivityTranslate = (key, vars) => translate('en', key, vars);
 
+export interface ResultTotals {
+  chars: number;
+  lines: number;
+}
+
+export interface ToolCallDispatch {
+  agent: string;
+  message: string;
+}
+
 export interface Activity {
   id: string;
   category: ActivityCategory;
@@ -52,6 +62,17 @@ export type DisplayItem =
       timestamp: string;
       result_content: string | null;
       result_status: 'pending' | 'received' | 'error';
+      /**
+       * Set only when result_content is a pre-cut preview (the live
+       * tool_result event carries just the part the capsule shows): the
+       * full result's size, for the truncation footer.
+       */
+      result_totals?: ResultTotals;
+      /**
+       * An `agent_message` send/respond: the agent it went to and the full
+       * message Orbital sent, straight from the tool call's arguments.
+       */
+      dispatch?: ToolCallDispatch;
       isHistorical?: boolean;
     }
   | {
@@ -331,7 +352,7 @@ function toolCallToActivity(
       description = tr('activity.requestedAccess', { path: String(args.path ?? name) });
       break;
     case 'agent_message':
-      description = tr('activity.messaged', { handle: String(args.handle ?? args.target ?? name) });
+      description = tr('activity.messaged', { handle: String(args.agent ?? args.handle ?? args.target ?? name) });
       break;
     case 'browser_automation': {
       const action = args.action as string | undefined;
@@ -400,6 +421,28 @@ export function describeLiveActivity(
     function: { name: toolName, arguments: JSON.stringify(args) },
   };
   return toolCallToActivity(tc, '', undefined, workspace, tr).description;
+}
+
+/** The agent and full message of an `agent_message` send/respond, read from
+ * the tool call's arguments (the persisted row's or the live event's).
+ * Undefined for any other tool, and for actions that send no message. */
+export function dispatchFromToolCall(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+): ToolCallDispatch | undefined {
+  if (toolName !== 'agent_message' || !args) return undefined;
+  const message = args.message;
+  if (typeof message !== 'string' || message === '') return undefined;
+  return { agent: String(args.agent ?? args.handle ?? args.target ?? ''), message };
+}
+
+function parseToolArgs(raw: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Reasoning, tool_call_row, and empty-content agent_message markers
@@ -1048,6 +1091,9 @@ export function transformChatHistory(
               continue;
             }
             const activity = toolCallToActivity(tc, msg.timestamp, msg, workspace, tr);
+            const dispatch = tc.function.name === 'agent_message'
+              ? dispatchFromToolCall(tc.function.name, parseToolArgs(tc.function.arguments))
+              : undefined;
             currentCapsule.items.push({
               type: 'tool_call_row',
               tool_name: activity.toolName,
@@ -1057,6 +1103,7 @@ export function transformChatHistory(
               timestamp: msg.timestamp,
               result_content: null,
               result_status: 'pending',
+              ...(dispatch ? { dispatch } : {}),
             });
             currentCapsule.endedAtMs = msTime;
           }
@@ -1180,6 +1227,8 @@ export function transformChatHistory(
   return items;
 }
 
+// Mirrored by the daemon's live tool_result preview (activity_translator.py);
+// the shared toolResultPreviewFixtures.json tests fail if the two drift.
 const RESULT_CHAR_BOUND = 500;
 const RESULT_LINE_BOUND = 12;
 
@@ -1187,14 +1236,19 @@ const RESULT_LINE_BOUND = 12;
  * Mechanical truncation for tool result content displayed in the UI.
  * Returns the content unchanged when it fits both bounds; otherwise cuts
  * at whichever bound triggers first and adds a footer noting the totals.
+ *
+ * `totals` is for a preview the daemon already cut to these bounds (the live
+ * tool_result event): the full result's size, so the cut is still marked and
+ * the footer reports the whole result, exactly as after a reload.
  */
 export function truncateResult(
   content: string,
   tr: ActivityTranslate = EN_ACTIVITY,
+  totals?: ResultTotals,
 ): { text: string; footer: string | null } {
-  const totalChars = content.length;
   const lines = content.split('\n');
-  const totalLines = lines.length;
+  const totalChars = totals?.chars ?? content.length;
+  const totalLines = totals?.lines ?? lines.length;
 
   if (totalChars <= RESULT_CHAR_BOUND && totalLines <= RESULT_LINE_BOUND) {
     return { text: content, footer: null };

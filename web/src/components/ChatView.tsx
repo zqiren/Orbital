@@ -14,8 +14,9 @@ import {
   truncateResult,
   mergeRecoveredAssistantMessage,
   describeLiveActivity,
+  dispatchFromToolCall,
 } from '../utils/chatTransform';
-import type { DisplayItem } from '../utils/chatTransform';
+import type { DisplayItem, ResultTotals } from '../utils/chatTransform';
 import { isWorkerHandle } from '../utils/subAgentHandle';
 import type { ChatMessage as ChatMessageRow, AgentStatusEvent } from '../types';
 import AgentErrorNotice from './AgentErrorNotice';
@@ -250,23 +251,24 @@ function finalizeLiveCapsule(
   return next;
 }
 
-// Live tool_result events carry only the placeholder description
-// "Tool result received" and the originating tool_call_id (in the
-// tool_name field per activity_translator.py:189) — no real content is
-// on the wire. Mark the most recent pending tool_call_row inside the
-// live capsule as received with empty content; the JSONL reload will
-// surface the actual content on next mount via chatTransform pairing.
 type ToolCallRowItem = Extract<CapsuleChild, { type: 'tool_call_row' }>;
 
 function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   const t = useT();
   const { locale } = useLocale();
   const [expanded, setExpanded] = useState(false);
-  const expandable = row.result_status !== 'pending';
+  const { dispatch } = row;
+  // An agent_message row can open before its ack arrives: the message it
+  // sent is already known from the call's arguments.
+  const hasResult = row.result_status !== 'pending';
+  const expandable = hasResult || !!dispatch;
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="mb-1 font-mono text-[11px] text-secondary">
+    <div
+      data-testid="tool-call-row"
+      className="mb-1 font-mono text-[11px] text-secondary"
+    >
       <button
         type="button"
         onClick={expandable ? () => setExpanded(e => !e) : undefined}
@@ -282,18 +284,35 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
         <span className="text-muted" aria-hidden>·</span>
         <span className="truncate">{row.target_description}</span>
       </button>
-      {expanded && expandable && (() => {
+      {expanded && dispatch && (
+        <div className="mt-1 ml-5">
+          <div className="mb-1 px-3 text-[11px] text-secondary/70">
+            {t('chat.toolRow.messageTo', { agent: dispatch.agent })}
+          </div>
+          <pre className="max-h-80 overflow-y-auto px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
+            {dispatch.message}
+          </pre>
+        </div>
+      )}
+      {expanded && hasResult && (() => {
         const raw = row.result_content;
+        const label = dispatch && (
+          <div className="mt-2 mb-1 px-3 text-[11px] text-secondary/70">{t('chat.toolRow.result')}</div>
+        );
         if (raw === null || raw === '') {
           return (
-            <div className="mt-1 ml-5 px-3 py-2 rounded bg-background border border-border/40 text-xs italic text-secondary/70">
-              {t('chat.toolRow.noResult')}
+            <div className="mt-1 ml-5">
+              {label}
+              <div className="px-3 py-2 rounded bg-background border border-border/40 text-xs italic text-secondary/70">
+                {t('chat.toolRow.noResult')}
+              </div>
             </div>
           );
         }
-        const { text, footer } = truncateResult(raw, (k, v) => translate(locale, k, v));
+        const { text, footer } = truncateResult(raw, (k, v) => translate(locale, k, v), row.result_totals);
         return (
           <div className="mt-1 ml-5">
+            {label}
             <pre className="px-3 py-2 rounded bg-background border border-border/40 text-xs text-secondary leading-relaxed whitespace-pre-wrap break-words font-mono">
               {text}
             </pre>
@@ -307,17 +326,42 @@ function ToolCallRow({ row }: { row: ToolCallRowItem }): React.ReactNode {
   );
 }
 
+// A live tool_result event, as far as the capsule row needs it. Newer
+// daemons send the tool_call_id plus the part of the result the row shows
+// (activity_translator.py `_result_preview`); older ones send neither — only
+// the "Tool result received" placeholder, with the id in `tool_name`.
+interface LiveToolResult {
+  toolCallId?: string;
+  content: string;
+  totals?: ResultTotals;
+}
+
 function markLatestLiveCallResultReceived(
   prev: DisplayItem[],
   timestamp: string,
+  result: LiveToolResult = { content: '' },
 ): DisplayItem[] {
   const live = getLiveRunningCapsule(prev);
   if (!live) return prev;
   const items = live.capsule.items;
+  // Pair by id when the daemon sends one: parallel calls finish in any
+  // order, and a result with no row here (the fanout ack) must not land on
+  // another call's row. Without an id (older daemon) fall back to the most
+  // recent pending row, as before; the content is then empty and the JSONL
+  // reload fills it in on next mount via chatTransform pairing.
   for (let k = items.length - 1; k >= 0; k--) {
     const item = items[k];
-    if (item.type === 'tool_call_row' && item.result_status === 'pending') {
-      const updatedRow = { ...item, result_content: '', result_status: 'received' as const };
+    if (item.type !== 'tool_call_row') continue;
+    const isTarget = result.toolCallId
+      ? item.tool_call_id === result.toolCallId
+      : item.result_status === 'pending';
+    if (isTarget) {
+      const updatedRow: ToolCallRowItem = {
+        ...item,
+        result_content: result.content,
+        result_status: 'received',
+        ...(result.totals ? { result_totals: result.totals } : {}),
+      };
       const newItems = [...items];
       newItems[k] = updatedRow;
       const updatedCapsule: AgentRunItem = {
@@ -1765,14 +1809,23 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // delivered via chat.sub_agent_message — drop them.
       if (e.category === 'agent_output') return;
 
-      // tool_result activity: the broadcast carries tool_call_id in the
-      // tool_name field (per activity_translator.py:189) but no result
-      // content — only a "Tool result received" placeholder we never
-      // surface. Mark the most recent pending row in the capsule as
-      // received with empty content; the actual content arrives via
-      // JSONL on next mount through chatTransform pairing.
+      // tool_result activity: newer daemons send the tool_call_id and the
+      // part of the result the row shows (plus the full size when cut), so
+      // a row expanded mid-turn has content. Older daemons send only the
+      // "Tool result received" placeholder — the row is then marked
+      // received with empty content until a reload.
       if (e.category === 'tool_result') {
-        setItems((prev) => markLatestLiveCallResultReceived(prev, e.timestamp));
+        const totals =
+          e.result_total_chars !== undefined && e.result_total_lines !== undefined
+            ? { chars: e.result_total_chars, lines: e.result_total_lines }
+            : undefined;
+        setItems((prev) =>
+          markLatestLiveCallResultReceived(prev, e.timestamp, {
+            toolCallId: e.tool_call_id || undefined,
+            content: e.result_preview ?? '',
+            totals,
+          }),
+        );
         scrollToBottom();
         return;
       }
@@ -1781,15 +1834,18 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       // fanout.started card IS its representation (spec 009 §0.5), and the
       // persisted-history transform skips it the same way, so live and
       // reloaded views agree. Its ack (a tool_result event) is harmless:
-      // markLatestLiveCallResultReceived no-ops when nothing is pending.
+      // no row carries its tool_call_id, so markLatestLiveCallResultReceived
+      // no-ops (an older daemon sends no id; then it no-ops when nothing is
+      // pending).
       if (e.tool_name === 'fanout') {
         return;
       }
 
-      // Tool-use family: route into the live capsule. The live
-      // ActivityEvent does not carry tool_call_id for tool_use; the
-      // event id is used as a synthetic key — pairing with tool_result
-      // on the live path is positional, not by id.
+      // Tool-use family: route into the live capsule. Newer daemons send
+      // the tool_call_id, which pairs the row with its tool_result by id;
+      // for older ones the event id is a synthetic key and pairing is
+      // positional.
+      const dispatch = dispatchFromToolCall(e.tool_name, e.arguments);
       setItems((prev) =>
         appendToLiveCapsule(
           prev,
@@ -1805,11 +1861,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               (k, v) => translate(localeRef.current, k, v),
               e.description,
             ),
-            tool_call_id: e.id,
+            tool_call_id: e.tool_call_id || e.id,
             category: e.category,
             timestamp: e.timestamp,
             result_content: null,
             result_status: 'pending',
+            ...(dispatch ? { dispatch } : {}),
           },
           e.timestamp,
         ),

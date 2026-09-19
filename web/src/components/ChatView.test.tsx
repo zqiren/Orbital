@@ -3386,3 +3386,174 @@ describe('Spec 078 ChatView: sending annotations', () => {
     ).toBe(formatQuotes([browserAnnotation]));
   });
 });
+
+// Live tool rows show their result without leaving the session. The daemon's
+// tool_result event now carries the tool_call_id and a capped preview of the
+// result (activity_translator.py); before, every row expanded mid-turn said
+// "no result content" until the session was reopened.
+describe('ChatView: live tool rows show their result', () => {
+  const now = () => new Date().toISOString();
+
+  function toolUse(toolCallId: string | undefined, toolName: string, args: Record<string, unknown>, id: string) {
+    return {
+      type: 'agent.activity',
+      project_id: 'p1',
+      session_id: 's1',
+      id,
+      category: toolName === 'agent_message' ? 'agent_message' : 'tool_use',
+      tool_name: toolName,
+      description: `Using ${toolName}`,
+      arguments: args,
+      ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+      source: 'management',
+      timestamp: now(),
+    };
+  }
+
+  function toolResult(toolCallId: string, extra: Record<string, unknown> = {}) {
+    return {
+      type: 'agent.activity',
+      project_id: 'p1',
+      session_id: 's1',
+      id: `res-${toolCallId}`,
+      category: 'tool_result',
+      description: 'Tool result received',
+      tool_name: toolCallId,
+      source: 'management',
+      timestamp: now(),
+      ...extra,
+    };
+  }
+
+  function rows(): HTMLElement[] {
+    return [...container.querySelectorAll('[data-testid="tool-call-row"]')] as HTMLElement[];
+  }
+
+  async function expand(row: HTMLElement) {
+    await act(async () => {
+      (row.querySelector('button') as HTMLButtonElement).click();
+    });
+  }
+
+  async function startRunning() {
+    runStatusHolder = 's1';
+    await renderChat({ agentStatus: 'running', sessionId: 's1' });
+    await flushEffects();
+  }
+
+  it('pairs each result to its own row by tool_call_id, even out of order', async () => {
+    await startRunning();
+    await act(async () => {
+      emitWs('agent.activity', toolUse('call_a', 'read', { path: 'a.md' }, 'ev-a'));
+      emitWs('agent.activity', toolUse('call_b', 'shell', { command: 'ls' }, 'ev-b'));
+      // The FIRST call's result arrives while the second is still pending —
+      // positional "latest pending" pairing would have put it on row b.
+      emitWs('agent.activity', toolResult('call_a', { tool_call_id: 'call_a', result_preview: 'A-CONTENT' }));
+    });
+    const [rowA, rowB] = rows();
+    expect((rowB.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+    await expand(rowA);
+    expect(rowA.textContent).toContain('A-CONTENT');
+
+    await act(async () => {
+      emitWs('agent.activity', toolResult('call_b', { tool_call_id: 'call_b', result_preview: 'B-CONTENT' }));
+    });
+    await expand(rows()[1]);
+    expect(rows()[1].textContent).toContain('B-CONTENT');
+    expect(rows()[0].textContent).not.toContain('B-CONTENT');
+  });
+
+  it('a capped preview reports the full result size in the footer', async () => {
+    await startRunning();
+    await act(async () => {
+      emitWs('agent.activity', toolUse('call_a', 'read', { path: 'big.log' }, 'ev-a'));
+      emitWs('agent.activity', toolResult('call_a', {
+        tool_call_id: 'call_a',
+        result_preview: 'x'.repeat(500),
+        result_total_chars: 9000,
+        result_total_lines: 1,
+      }));
+    });
+    await expand(rows()[0]);
+    expect(rows()[0].textContent).toContain('x'.repeat(500) + '…');
+    expect(rows()[0].textContent).toContain('first 500 chars · result is 9000 chars total');
+  });
+
+  it('a result for a call with no row (e.g. the fanout ack) leaves other pending rows alone', async () => {
+    await startRunning();
+    await act(async () => {
+      emitWs('agent.activity', toolUse('call_a', 'read', { path: 'a.md' }, 'ev-a'));
+      emitWs('agent.activity', toolResult('call_fanout', { tool_call_id: 'call_fanout', result_preview: 'Fanout f1 started' }));
+    });
+    expect((rows()[0].querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('an older daemon (no tool_call_id, no preview) still marks the latest row received', async () => {
+    await startRunning();
+    await act(async () => {
+      emitWs('agent.activity', toolUse(undefined, 'read', { path: 'a.md' }, 'ev-a'));
+      emitWs('agent.activity', toolResult('call_a'));
+    });
+    await expand(rows()[0]);
+    expect(rows()[0].textContent).toContain('no result content');
+  });
+
+  it('an agent_message row shows the target agent and the full message above the result', async () => {
+    const brief = 'Audit the billing module.\n\n' + 'Check every rounding path. '.repeat(60) + 'END-OF-BRIEF';
+    await startRunning();
+    await act(async () => {
+      emitWs('agent.activity', toolUse(
+        'call_d', 'agent_message', { action: 'send', agent: 'claude-code', message: brief }, 'ev-d',
+      ));
+    });
+    const row = rows()[0];
+    expect(row.textContent).toContain('Messaged: @claude-code');
+    // The message is known before the ack arrives, so the row opens already.
+    await expand(row);
+    expect(rows()[0].textContent).toContain('Message to @claude-code');
+    expect(rows()[0].textContent).toContain('END-OF-BRIEF');
+
+    await act(async () => {
+      emitWs('agent.activity', toolResult('call_d', {
+        tool_call_id: 'call_d',
+        result_preview: 'Dispatched to claude-code. Awaiting completion.',
+      }));
+    });
+    const text = rows()[0].textContent ?? '';
+    expect(text).toContain('Dispatched to claude-code. Awaiting completion.');
+    expect(text.indexOf('END-OF-BRIEF')).toBeLessThan(text.indexOf('Dispatched to claude-code'));
+  });
+
+  it('a reloaded agent_message row shows the persisted message', async () => {
+    const brief = 'Write the release notes. PERSISTED-BRIEF';
+    chatInitialResponse = {
+      data: [
+        { role: 'user', content: 'delegate', source: 'user', timestamp: '2026-09-19T10:00:00Z' },
+        {
+          role: 'assistant', content: null, source: 'management', timestamp: '2026-09-19T10:00:01Z',
+          tool_calls: [{
+            id: 'call_d', type: 'function',
+            function: { name: 'agent_message', arguments: JSON.stringify({ action: 'send', agent: 'codex', message: brief }) },
+          }],
+        },
+        {
+          role: 'tool', content: 'Dispatched to codex. Awaiting completion.', source: 'management',
+          timestamp: '2026-09-19T10:00:02Z', tool_call_id: 'call_d',
+        },
+        { role: 'assistant', content: 'Sent.', source: 'management', timestamp: '2026-09-19T10:00:03Z' },
+      ],
+      total: 4,
+    };
+    await renderChat({ agentStatus: 'idle', sessionId: 's1' });
+    await flushEffects();
+    const capsule = container.querySelector('[data-testid="agent_run"]') as HTMLElement;
+    await act(async () => {
+      (capsule.querySelector('button') as HTMLButtonElement).click();
+    });
+    await expand(rows()[0]);
+    const text = rows()[0].textContent ?? '';
+    expect(text).toContain('Message to @codex');
+    expect(text).toContain('PERSISTED-BRIEF');
+    expect(text).toContain('Dispatched to codex. Awaiting completion.');
+  });
+});
