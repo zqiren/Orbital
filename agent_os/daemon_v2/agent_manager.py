@@ -3804,6 +3804,23 @@ class AgentManager:
             )
         session_uuid, jsonl_path = resolved
 
+        # A worker still working in this session (open turn or live background
+        # work) → refuse (409). The run-status check below only sees the
+        # manager, which a pinned or queue dispatch never starts, and the
+        # teardown after it would kill the worker mid-turn (spec 095 §8).
+        if self._sub_agent_manager is not None:
+            for sid in {session_id, session_uuid}:
+                try:
+                    active = self._sub_agent_manager.list_active(
+                        project_id, session_id=sid)
+                except Exception:
+                    continue
+                if any(a.get("status") != "idle" for a in active):
+                    raise RuntimeError(
+                        "Cannot delete a session while a sub-agent is working "
+                        "in it. Stop it first."
+                    )
+
         # Drop any pending injects targeting this session BEFORE teardown so a
         # deleted session can't be resurrected by a slot-free dispatch (B6).
         self._purge_pending_for_session(project_id, session_id, session_uuid)

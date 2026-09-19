@@ -598,7 +598,11 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // viewed session IS the holder (viewing a non-holder session shows its
   // static history; live events for the holder are dropped here).
   const [holderSessionId, setHolderSessionId] = useState<string | null>(null);
-  const [subAgentLoading, setSubAgentLoading] = useState<string | null>(null);
+  // The pinned-send "●●●" bubble, stamped with the session that sent it so a
+  // switch while the inject is in flight doesn't carry it along (spec 096).
+  const [subAgentLoading, setSubAgentLoading] = useState<
+    { sessionId: string | undefined; target: string } | null
+  >(null);
   // Spec 074 — the composer "Talking to" pin. Backend truth comes from the
   // session list (`pinned_target` on the entry); `localPin` is the
   // optimistic overlay for the VIEWED session so the dropdown responds
@@ -785,10 +789,19 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // IS the holder and the project is running. Applied at RENDER time below (the
   // agent_run case), NOT fed into the transform, so a status flip never
   // invalidates the memo (FE-A1).
-  const isActivelyRunning =
-    sessionId !== undefined &&
-    sessionId === holderSessionId &&
-    agentStatus === 'running';
+  const viewedSessionIsHolder =
+    sessionId !== undefined && sessionId === holderSessionId;
+  const isActivelyRunning = viewedSessionIsHolder && agentStatus === 'running';
+  // Spec 096: `showThinking` is set per project (the status is project-wide
+  // and this instance outlives session switches), so it only ever renders on
+  // the holder. Holder, not isActivelyRunning: the spinner stays through the
+  // holder's running → waiting on purpose. Any new reader of showThinking
+  // needs the same gate.
+  const thinkingVisible = showThinking && viewedSessionIsHolder;
+  const subAgentLoadingTarget =
+    subAgentLoading && subAgentLoading.sessionId === sessionId
+      ? subAgentLoading.target
+      : null;
 
   // FE-1 / FE-A1: single-pass transform of the FULL accumulated raw history.
   // Deps are purely the source data (rawMessages + workspace) — status flips
@@ -1540,14 +1553,16 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
   // terminal status the capsule is finalized so it collapses.
   //
   // agentStatus is PROJECT-wide (it reflects the slot holder). Conversation
-  // mutations here (finalize capsule, thinking indicator, catch-up fetch,
-  // new_session reset) therefore only apply when the VIEWED session is the
-  // holder. The Stop-button affordance (isCancelling) is project-wide and is
-  // always cleared on a terminal status regardless of which session is viewed.
+  // mutations here (finalize capsule, catch-up fetch, new_session reset)
+  // therefore only apply when the VIEWED session is the holder. The thinking
+  // indicator is set project-wide and gated per session at render
+  // (thinkingVisible). The Stop-button affordance (isCancelling) is
+  // project-wide and is always cleared on a terminal status regardless of
+  // which session is viewed.
   useEffect(() => {
     // "viewing" = the viewed session IS the running/holder session. This is a
-    // render-state concern (finalize capsule, thinking indicator), NOT event
-    // routing — live events route strictly by session_id in the handlers below.
+    // render-state concern (finalize capsule), NOT event routing — live
+    // events route strictly by session_id in the handlers below.
     const viewing =
       sessionIdRef.current !== undefined &&
       sessionIdRef.current === holderSessionIdRef.current;
@@ -1585,9 +1600,14 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
       const finalStatus = agentStatus === 'idle' ? 'completed' : 'error';
       setItems((prev) => finalizeLiveCapsule(prev, finalStatus));
     } else if (agentStatus === 'running') {
+      // Set even when the holder isn't resolved (or isn't viewed) yet: the
+      // render gates it per session, and a holder fetch landing after this
+      // tick would otherwise leave the holder's spinner off all turn.
+      // wasRunningRef stays behind the guard — it drives the viewed
+      // session's idle catch-up.
+      setShowThinking(true);
       if (!viewing) return;
       wasRunningRef.current = true;
-      setShowThinking(true);
     } else if (agentStatus === 'pending_approval') {
       if (!viewing) return;
       // Fetch pending approval via REST in case the WS event was missed.
@@ -2650,7 +2670,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
     // even if they had scrolled up to read history before sending.
     scrollToBottom({ force: true });
 
-    if (target) setSubAgentLoading(target);
+    const loading = target ? { sessionId, target } : null;
+    if (loading) setSubAgentLoading(loading);
     // An annotated PNG that failed to render/upload still gets sent — the
     // coordinates + note in the quotes block carry the meaning — but the user
     // is told the image did not make it.
@@ -2823,7 +2844,8 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
         setInjectError(t('chat.injectError'));
       }
     } finally {
-      setSubAgentLoading(null);
+      // Only this send's bubble — a later send may have replaced it.
+      if (loading) setSubAgentLoading((cur) => (cur === loading ? null : cur));
     }
 
     scrollToBottom();
@@ -3474,12 +3496,12 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
               ),
             )}
 
-        {subAgentLoading && (
+        {subAgentLoadingTarget && (
           <div className="flex gap-[10px]">
             <MessageAvatar variant="agent" />
             <div className="flex-1 min-w-0">
               <div className="font-mono text-[11px] mb-1">
-                <span className="text-secondary">{subAgentLoading}</span>
+                <span className="text-secondary">{subAgentLoadingTarget}</span>
               </div>
               <div className="text-[13px] leading-[1.55]">
                 <span className="inline-flex gap-1 text-secondary">
@@ -3492,7 +3514,7 @@ export default function ChatView({ projectId, project, agentStatus, statusTick, 
           </div>
         )}
 
-        {showThinking && !stream && !subAgentLoading && (
+        {thinkingVisible && !stream && !subAgentLoadingTarget && (
           <div className="flex items-center gap-2 px-2 py-1 text-secondary text-sm">
             <Loader2 size={14} className="animate-spin" />
             <span>{t('chat.thinking')}</span>

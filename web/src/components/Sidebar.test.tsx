@@ -286,3 +286,45 @@ describe('Sidebar — Workbench nav item', () => {
     expect(apiMock).toHaveBeenCalledTimes(1); // no refetch after unmount
   });
 });
+
+// Spec 095: a pinned dispatch runs no management turn, so the manager status
+// stays idle for the worker's whole run. The row reads the worker flag too.
+describe('Sidebar — project dot while a worker runs (spec 095)', () => {
+  function rowDot() {
+    const row = screen.getByText('Test Project').closest('button') as HTMLElement;
+    return row.querySelector('.rounded-full') as HTMLElement;
+  }
+
+  it('is green with the manager idle and a worker running', () => {
+    render(
+      <Sidebar
+        {...defaultProps}
+        agentStatuses={{ 'proj-1': 'idle' }}
+        subAgentsRunning={{ 'proj-1': true }}
+      />,
+    );
+    expect(rowDot()).toHaveClass('bg-success');
+  });
+
+  it('is grey once the worker is done', () => {
+    render(
+      <Sidebar
+        {...defaultProps}
+        agentStatuses={{ 'proj-1': 'idle' }}
+        subAgentsRunning={{ 'proj-1': false }}
+      />,
+    );
+    expect(rowDot()).toHaveClass('bg-idle');
+  });
+
+  it('keeps a manager error red while a worker runs', () => {
+    render(
+      <Sidebar
+        {...defaultProps}
+        agentStatuses={{ 'proj-1': 'error' }}
+        subAgentsRunning={{ 'proj-1': true }}
+      />,
+    );
+    expect(rowDot()).toHaveClass('bg-error');
+  });
+});

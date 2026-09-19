@@ -549,7 +549,9 @@ export interface SubAgentLifecycleEvent {
     | 'sub_agent.error'
     | 'sub_agent.failed'
     | 'sub_agent.stopped'
-    | 'sub_agent.turn_interrupted';
+    | 'sub_agent.turn_interrupted'
+    // Every dispatch to a worker, warm or freshly spawned (spec 095).
+    | 'sub_agent.dispatched';
   project_id: string;
   session_id?: string | null;
   handle: string;

@@ -36,6 +36,8 @@ interface SidebarProps {
   agentStatuses: Record<string, AgentRunStatus>;
   statusSummaries: Record<string, string>;
   pendingApprovals: Record<string, number>;
+  /** run-status `sub_agents_running` per project (spec 095). */
+  subAgentsRunning?: Record<string, boolean>;
   route: Route;
   connectionState: ConnectionState;
   onSelectProject: (id: string) => void;
@@ -154,6 +156,7 @@ export default function Sidebar({
   agentStatuses,
   statusSummaries,
   pendingApprovals,
+  subAgentsRunning = {},
   route,
   connectionState,
   onSelectProject,
@@ -226,7 +229,9 @@ export default function Sidebar({
   // pinned changes where the row sits, never how it looks or behaves.
   function renderProjectRow(project: Project) {
     const isActive = project.project_id === selectedProjectId;
-    const dotColor = getProjectDotColor(project.project_id, agentStatuses, pendingApprovals);
+    const dotColor = getProjectDotColor(
+      project.project_id, agentStatuses, pendingApprovals, subAgentsRunning,
+    );
     const summary = statusSummaries[project.project_id];
     return (
       <button

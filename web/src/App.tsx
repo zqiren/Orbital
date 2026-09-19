@@ -39,6 +39,10 @@ import CalendarPage from './components/CalendarPage';
 import WorkbenchPage from './components/WorkbenchPage';
 import { useT } from './i18n/useT';
 import { api, isRelayMode } from './config';
+import {
+  SUB_AGENTS_RUNNING_EVENTS,
+  createSubAgentsRunningSync,
+} from './utils/projectStatus';
 
 function mapConnectionState(
   state: ConnectionState,
@@ -92,6 +96,22 @@ export default function App() {
   const [statusTicks, setStatusTicks] = useState<Record<string, number>>({});
   const [statusSummaries, setStatusSummaries] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, number>>({});
+  // Spec 095: a worker has an open turn in the project (run-status
+  // `sub_agents_running`). A pinned dispatch runs no management turn, so
+  // `agentStatuses` stays idle for the whole run; the project dot reads this.
+  const [subAgentsRunning, setSubAgentsRunning] = useState<Record<string, boolean>>({});
+  const [subAgentsSync] = useState(() =>
+    createSubAgentsRunningSync(
+      (projectId) =>
+        api<{ sub_agents_running?: boolean }>(
+          `/api/v2/agents/${encodeURIComponent(projectId)}/run-status`,
+        ).then((result) => result.sub_agents_running),
+      (projectId, running) =>
+        setSubAgentsRunning((prev) =>
+          (prev[projectId] ?? false) === running ? prev : { ...prev, [projectId]: running },
+        ),
+    ),
+  );
   const [daemonOnline, setDaemonOnline] = useState(true);
   // Project-level agent availability. Lifted out of ChatView so a Files->Chat
   // tab switch doesn't block on the daemon's /agents/available cache miss
@@ -241,7 +261,8 @@ export default function App() {
     if (ws.connectionState !== 'connected') return;
     let cancelled = false;
     for (const p of projects) {
-      api<{ project_id: string; status: AgentRunStatus }>(
+      const settleWorkers = subAgentsSync.track(p.project_id);
+      api<{ project_id: string; status: AgentRunStatus; sub_agents_running?: boolean }>(
         `/api/v2/agents/${encodeURIComponent(p.project_id)}/run-status`,
       )
         .then((result) => {
@@ -250,11 +271,26 @@ export default function App() {
             if (prev[result.project_id] === result.status) return prev;
             return { ...prev, [result.project_id]: result.status };
           });
+          settleWorkers(result.sub_agents_running);
         })
         .catch(() => {});
     }
     return () => { cancelled = true; };
-  }, [setupComplete, projects, ws.connectionState]);
+  }, [setupComplete, projects, ws.connectionState, subAgentsSync]);
+
+  // Spec 095: refetch the worker flag whenever it may have changed. Only the
+  // flag is taken from these refetches — a response that lands after a newer
+  // agent.status event would otherwise roll the manager status back.
+  useEffect(() => {
+    const onWorkerEvent = (event: WebSocketEvent) => {
+      const projectId = (event as { project_id?: string }).project_id;
+      if (projectId) subAgentsSync.refresh(projectId);
+    };
+    for (const type of SUB_AGENTS_RUNNING_EVENTS) ws.on(type, onWorkerEvent);
+    return () => {
+      for (const type of SUB_AGENTS_RUNNING_EVENTS) ws.off(type, onWorkerEvent);
+    };
+  }, [ws, subAgentsSync]);
 
   // WebSocket event handlers
   const handleAgentStatus = useCallback((event: WebSocketEvent) => {
@@ -511,6 +547,7 @@ export default function App() {
     agentStatuses,
     statusSummaries,
     pendingApprovals,
+    subAgentsRunning,
     route,
     connectionState: mapConnectionState(ws.connectionState, daemonOnline),
     onSelectProject: handleSelectProject,
@@ -538,6 +575,7 @@ export default function App() {
           currentProjectId={route.projectId}
           agentStatuses={agentStatuses}
           pendingApprovals={pendingApprovals}
+          subAgentsRunning={subAgentsRunning}
           pinned={projectListPinned}
           onTogglePin={toggleProjectListPinned}
         >

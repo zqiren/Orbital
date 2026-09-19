@@ -56,6 +56,8 @@ interface EdgeStripProps {
   currentProjectId: string;
   agentStatuses: Record<string, AgentRunStatus>;
   pendingApprovals: Record<string, number>;
+  /** run-status `sub_agents_running` per project (spec 095). */
+  subAgentsRunning?: Record<string, boolean>;
   /** Docked: the list is a real column and hover-intent is off. */
   pinned: boolean;
   /** Click / Enter / Space on the rail. The owner flips `pinned` and persists it. */
@@ -75,12 +77,15 @@ function aggregateDot(
   currentProjectId: string,
   agentStatuses: Record<string, AgentRunStatus>,
   pendingApprovals: Record<string, number>,
+  subAgentsRunning: Record<string, boolean>,
 ): { color: 'bg-error' | 'bg-warning' | null; count: number } {
   let color: 'bg-error' | 'bg-warning' | null = null;
   let count = 0;
   for (const project of projects) {
     if (project.project_id === currentProjectId) continue;
-    const dot = getProjectDotColor(project.project_id, agentStatuses, pendingApprovals);
+    const dot = getProjectDotColor(
+      project.project_id, agentStatuses, pendingApprovals, subAgentsRunning,
+    );
     if (dot !== 'bg-error' && dot !== 'bg-warning') continue;
     count += 1;
     if (dot === 'bg-error') {
@@ -97,6 +102,7 @@ export default function EdgeStrip({
   currentProjectId,
   agentStatuses,
   pendingApprovals,
+  subAgentsRunning = {},
   pinned,
   onTogglePin,
   children,
@@ -228,6 +234,7 @@ export default function EdgeStrip({
     currentProjectId,
     agentStatuses,
     pendingApprovals,
+    subAgentsRunning,
   );
   const dotTitle = dotCount === 1
     ? t('strip.needsYou.one')

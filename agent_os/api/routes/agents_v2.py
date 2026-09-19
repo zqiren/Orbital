@@ -1602,6 +1602,9 @@ async def agent_run_status(project_id: str, session_id: str | None = None):
     — the frontend uses it to re-hydrate a classified error (error_code +
     details) after a page reload, since the agent.status broadcast that
     carried it is ephemeral.
+
+    ``sub_agents_running`` is True while any worker in the project has an
+    open turn, whether or not a management turn is running (spec 095).
     """
     status = _agent_manager.get_run_status(project_id)
     holder = _agent_manager.current_holder_session_id(project_id)
@@ -1614,6 +1617,14 @@ async def agent_run_status(project_id: str, session_id: str | None = None):
         "pending_count": len(_agent_manager.list_pending(project_id)),
         "last_terminal_event": _agent_manager.get_last_terminal_event(
             project_id, session_id=session_id,
+        ),
+        # A worker has an open turn somewhere in the project (spec 095). Kept
+        # apart from ``status``, which stays manager-only: a pinned dispatch
+        # runs no management turn, so the project-list dot reads this instead.
+        # Additive — older frontends ignore it.
+        "sub_agents_running": (
+            _sub_agent_manager.has_running_sub_agents(project_id)
+            if _sub_agent_manager is not None else False
         ),
     }
 
