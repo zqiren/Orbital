@@ -4,14 +4,17 @@
 
 """File browsing endpoints for Agent OS v2 API.
 
-Provides directory listing, file content preview, upload, and download
-within project workspaces.
+Provides directory listing, file content preview, upload, download, and
+"reveal in the OS file manager" within project workspaces.
 """
 
+import asyncio
 import base64
 import logging
 import mimetypes
 import os
+import subprocess
+import sys
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
@@ -19,6 +22,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from agent_os.queue.models import ItemState, QueueRunState
+from agent_os.utils.subprocess_flags import win_no_window_flags
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +80,10 @@ HTML_EXTENSIONS = {".html", ".htm"}
 class WriteFileRequest(BaseModel):
     path: str
     content: str
+
+
+class RevealRequest(BaseModel):
+    path: str = ""  # workspace-relative; "" = the workspace root
 
 
 def _resolve_path(project_id: str, path: str):
@@ -541,3 +549,86 @@ async def preview_file(project_id: str, path: str, request: Request):
         content_disposition_type="inline",
         stat_result=stat,
     )
+
+
+# ---- Reveal in Finder / Show in File Explorer (spec 093) ----
+
+_REVEAL_PLATFORMS = ("darwin", "win32")
+
+
+def _reveal_argv(target: str, is_root: bool, platform: str) -> list[str] | None:
+    """The command that shows ``target`` in the OS file manager.
+
+    A file or directory is revealed SELECTED in its parent folder; the
+    workspace root is opened itself (selecting it in its parent reads as "the
+    wrong folder"). ``None`` means the Windows root, which goes through
+    ``os.startfile``. ``target`` is absolute (``_resolve_path`` joins it onto
+    the workspace), so it can never be mistaken for an option.
+    """
+    if platform == "darwin":
+        return ["open", target] if is_root else ["open", "-R", target]
+    if platform == "win32":
+        # `/select,` splits its argument on commas, so a path containing one
+        # opens a default folder instead (spec 093 R1). The robust fix, if it
+        # ever matters, is SHOpenFolderAndSelectItems via ctypes. Spaces are
+        # fine: list2cmdline quotes the whole `/select,<path>` argument.
+        return None if is_root else ["explorer", f"/select,{target}"]
+    raise ValueError(f"reveal is not supported on {platform}")
+
+
+def _spawn_reveal(target: str, is_root: bool, platform: str) -> None:
+    """Hand ``target`` to the file manager. Blocking; run it off the loop."""
+    argv = _reveal_argv(target, is_root, platform)
+    if argv is None:
+        startfile = getattr(os, "startfile", None)  # Windows-only attribute
+        if startfile is None:
+            raise OSError("os.startfile is unavailable")
+        startfile(target)
+        return
+    result = subprocess.run(
+        argv,
+        check=False,
+        timeout=10,
+        capture_output=True,
+        creationflags=win_no_window_flags(),
+    )
+    # explorer.exe exits 1 even when the window opened, so its code means
+    # nothing. `open` does report failures; log them, the reveal is best-effort.
+    if platform == "darwin" and result.returncode != 0:
+        logger.warning(
+            "open exited %s revealing %s: %s",
+            result.returncode, target,
+            (result.stderr or b"").decode("utf-8", "replace").strip(),
+        )
+
+
+@router.post("/projects/{project_id}/files/reveal")
+async def reveal_path(project_id: str, req: RevealRequest, request: Request):
+    """Show a workspace file or folder in Finder / File Explorer.
+
+    The file manager opens on the machine running the daemon, so a request
+    that came through the relay (the phone) is refused outright. The relay
+    client ADDS ``X-Via-Relay: true`` to whatever headers the phone sent, so
+    every value is checked, not just the first. The target goes through
+    ``_resolve_path``: realpath containment on both sides with a trailing
+    separator, so ``..``, absolute paths, symlinks pointing out and sibling
+    prefixes are all a 400 before anything is spawned.
+    """
+    if "true" in request.headers.getlist("x-via-relay"):
+        raise HTTPException(
+            status_code=403,
+            detail="Reveal is only available on the computer running Orbital",
+        )
+    workspace, target = _resolve_path(project_id, req.path)
+    if not os.path.exists(target):
+        raise HTTPException(status_code=404, detail="Path not found")
+    platform = sys.platform
+    if platform not in _REVEAL_PLATFORMS:
+        raise HTTPException(status_code=501, detail="Reveal not supported on this platform")
+    is_root = os.path.realpath(target) == os.path.realpath(workspace)
+    try:
+        await asyncio.to_thread(_spawn_reveal, target, is_root, platform)
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("reveal failed for %s: %s", target, e)
+        raise HTTPException(status_code=500, detail="Could not open the file manager")
+    return {"revealed": True, "path": req.path}

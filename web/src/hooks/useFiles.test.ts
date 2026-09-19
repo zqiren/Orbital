@@ -5,7 +5,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../config';
-import { fileContentPath, useFileBytes, useFiles } from './useFiles';
+import { fileContentPath, revealPath, useFileBytes, useFiles } from './useFiles';
 
 const URL_A = '/api/v2/projects/p1/files/preview?path=a.pdf';
 const URL_B = '/api/v2/projects/p1/files/preview?path=b.pdf';
@@ -53,6 +53,38 @@ describe('file content requests opt in to the document envelope (spec 090)', () 
     expect(url).toContain('/api/v2/projects/p1/files/content?path=docs%2Fa.pdf');
     expect(url).toContain('document_preview=1');
     expect(data).toMatchObject({ type: 'document', format: 'pdf' });
+  });
+});
+
+describe('revealPath (spec 093)', () => {
+  it('POSTs the workspace-relative path to the reveal route', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ revealed: true, path: 'docs/a b.md' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await expect(revealPath('p 1', 'docs/a b.md')).resolves.toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v2/projects/p%201/files/reveal');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ path: 'docs/a b.md' });
+  });
+
+  it('sends "" for the project folder itself', async () => {
+    fetchMock.mockResolvedValue(new Response('{"revealed":true,"path":""}', { status: 200 }));
+    await revealPath('p1', '');
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({ path: '' });
+  });
+
+  it('resolves false instead of throwing when the daemon refuses', async () => {
+    fetchMock.mockResolvedValue(new Response('{"detail":"Path not found"}', { status: 404 }));
+    await expect(revealPath('p1', 'gone.md')).resolves.toBe(false);
+  });
+
+  it('is exposed on useFiles() for the panel', () => {
+    const { result } = renderHook(() => useFiles());
+    expect(result.current.revealPath).toBe(revealPath);
   });
 });
 

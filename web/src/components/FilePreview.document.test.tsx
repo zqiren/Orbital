@@ -73,3 +73,36 @@ describe('FilePreview — documents and the panel header (spec 088 × 090)', () 
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('FilePreview — documents offer the reveal (spec 093)', () => {
+  it('Files tab header button and panel More item both reveal the document', () => {
+    Object.defineProperty(window.navigator, 'platform', { value: 'MacIntel', configurable: true });
+    try {
+      const onReveal = vi.fn();
+      const { unmount } = render(
+        <FilePreview fileContent={pdf} loading={false} selectedPath="docs/report.pdf" onReveal={onReveal} />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }));
+      expect(onReveal).toHaveBeenCalledWith('docs/report.pdf');
+      unmount();
+
+      const onRevealPanel = vi.fn();
+      render(
+        <FilePreview
+          fileContent={pdf}
+          loading={false}
+          selectedPath="docs/report.pdf"
+          panelHeader={{ onBack: vi.fn(), onOpenInFiles: vi.fn() }}
+          onReveal={onRevealPanel}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
+      expect(items.slice(-2)).toEqual(['Open in Files', 'Reveal in Finder']);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Reveal in Finder' }));
+      expect(onRevealPanel).toHaveBeenCalledWith('docs/report.pdf');
+    } finally {
+      delete (window.navigator as unknown as { platform?: string }).platform;
+    }
+  });
+});
