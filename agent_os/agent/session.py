@@ -1054,29 +1054,69 @@ class Session:
                 self._pending_meta = None
 
     # ------------------------------------------------------------------
-    # Compaction support (PRIVATE)
+    # Compaction support (spec 086: append-only)
     # ------------------------------------------------------------------
+    #
+    # Compaction never rewrites the file. It appends one marker row (the
+    # summary, ``_compaction: True``) that says where the model's history
+    # resumes, counted back from the marker's own position:
+    #   ``_compaction_keep``   — the N rows right before the marker stay in
+    #                            the model's view (the kept tail);
+    #   ``_compaction_pinned`` — offsets of older rows carried verbatim after
+    #                            the summary (the current turn's user messages).
+    # ``self._messages`` stays the full on-disk history, so the chat route and
+    # the rewrite paths above (stub supersession, cancellation splice) see and
+    # keep every row. Relative offsets survive both: neither inserts a row
+    # between a marker and the tail it keeps. Markers written by older versions
+    # carry no ``_compaction_keep``; they already sit at the top of a file whose
+    # earlier rows are gone, so their view is the whole list, exactly as before.
 
-    def _compact(self, summary_message: dict, split_index: int) -> None:
-        """Replace messages[0:split_index] with summary_message.
+    def _model_view(self) -> tuple[list[int], int]:
+        """Positions in ``self._messages`` of the history the model sees, and
+        how many of them lead the view out of file order (marker + pinned)."""
+        msgs = self._messages
+        for m in range(len(msgs) - 1, -1, -1):
+            row = msgs[m]
+            if not row.get("_compaction"):
+                continue
+            keep = row.get("_compaction_keep")
+            if not isinstance(keep, int):
+                break  # pre-086 marker: the file itself is the view
+            keep = max(0, min(keep, m))
+            pinned = [m - o for o in row.get("_compaction_pinned") or []
+                      if isinstance(o, int) and keep < o <= m]
+            # Older markers inside the kept tail are superseded: this summary
+            # was written with them in view, so it already covers them.
+            kept = [i for i in range(m - keep, m) if not msgs[i].get("_compaction")]
+            return [m, *pinned, *kept, *range(m + 1, len(msgs))], 1 + len(pinned)
+        return list(range(len(msgs))), 0
 
-        Atomic file replacement: write tmp, fsync, os.replace.
+    def get_model_messages(self) -> list[dict]:
+        """The model-facing history: the latest compaction summary, the rows
+        it pinned and kept, and everything appended after it."""
+        return [self._messages[i] for i in self._model_view()[0]]
+
+    def _compact(self, summary_message: dict, split_index: int,
+                 pinned: list[int] | None = None) -> None:
+        """Summarize ``get_model_messages()[:split_index]``, append-only.
+
+        ``pinned`` are indices into that same view, before ``split_index``,
+        of rows the model keeps verbatim after the summary. Appends the marker
+        through ``append()``, so observers (the live chat) see it like any row.
         """
-        new_messages = [summary_message] + self._messages[split_index:]
-        tmp_path = self._filepath + ".tmp"
-        with self._lock:
-            with self._file_lock:
-                meta_lines = self._collect_meta_lines()
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    for line in meta_lines:
-                        f.write(line)
-                    for msg in new_messages:
-                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp_path, self._filepath)
-                self._pending_meta = None
-        self._messages = new_messages
+        view, lead = self._model_view()
+        at = len(self._messages)  # where the marker lands
+        # Kept rows still in the previous marker's lead (its pinned rows) are
+        # not contiguous with the rest of the tail: carry them as pinned too.
+        carried = set(pinned or []) | set(range(split_index, lead))
+        tail_start = max(split_index, lead)
+        keep_from = view[tail_start] if tail_start < len(view) else at
+        marker = dict(summary_message)
+        marker["_compaction_keep"] = at - keep_from
+        marker["_compaction_pinned"] = [at - view[i] for i in sorted(carried)
+                                        if i < len(view) and view[i] < keep_from
+                                        and not self._messages[view[i]].get("_compaction")]
+        self.append(marker)
 
 
 def persist_user_row(session: Session, content: str,

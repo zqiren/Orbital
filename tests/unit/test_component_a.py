@@ -473,8 +473,9 @@ class TestResolvePendingToolCalls:
 
 class TestSessionCompact:
 
-    def test_compact_rewrites_jsonl(self, tmp_path):
-        """_compact should replace messages[0:split_idx] with summary."""
+    def test_compact_summarizes_the_model_view(self, tmp_path):
+        """_compact puts the summary in place of messages[0:split_idx] for the
+        model, and appends it to the session instead of dropping rows."""
         session = Session.new("compact", str(tmp_path))
         for i in range(10):
             session.append({"role": "user", "content": f"msg {i}", "source": "user"})
@@ -483,16 +484,21 @@ class TestSessionCompact:
                    "source": "management", "timestamp": "2026-01-01T00:00:00"}
         session._compact(summary, split_index=7)
 
-        msgs = session.get_messages()
+        view = session.get_model_messages()
         # Should be: summary + messages 7,8,9 = 4 messages
-        assert len(msgs) == 4
-        assert msgs[0]["_compaction"] is True
-        assert msgs[0]["content"] == "Summary of messages 0-6"
-        assert msgs[1]["content"] == "msg 7"
-        assert msgs[3]["content"] == "msg 9"
+        assert len(view) == 4
+        assert view[0]["_compaction"] is True
+        assert view[0]["content"] == "Summary of messages 0-6"
+        assert view[1]["content"] == "msg 7"
+        assert view[3]["content"] == "msg 9"
+        # Every row is still in the session, the marker last
+        msgs = session.get_messages()
+        assert [m["content"] for m in msgs[:10]] == [f"msg {i}" for i in range(10)]
+        assert msgs[10]["_compaction"] is True
 
     def test_compact_persists_to_disk(self, tmp_path):
-        """After _compact, reloading the session should reflect compacted state."""
+        """After _compact, a reload gives the model the same compacted view
+        and still holds every row."""
         session = Session.new("compactd", str(tmp_path))
         for i in range(5):
             session.append({"role": "user", "content": f"msg {i}", "source": "user"})
@@ -503,9 +509,10 @@ class TestSessionCompact:
 
         filepath = str(tmp_path / "orbital" / "sessions" / "compactd.jsonl")
         loaded = Session.load(filepath)
-        msgs = loaded.get_messages()
-        assert len(msgs) == 3  # summary + msg3 + msg4
-        assert msgs[0]["_compaction"] is True
+        view = loaded.get_model_messages()
+        assert len(view) == 3  # summary + msg3 + msg4
+        assert view[0]["_compaction"] is True
+        assert len(loaded.get_messages()) == 6  # 5 rows + the marker
 
 
 # ===========================================================================
@@ -1304,15 +1311,16 @@ class TestContextTokenBudget:
 
 
 # ===========================================================================
-# AC-20: Tool result pruning: old tool result >500 chars is truncated in
-#         prepared context but intact in JSONL.
+# AC-20: Tool result pruning: an old text tool result is sent as-is (spec 086:
+#         no rolling rewrite, it broke the prompt cache every call) and stays
+#         intact in JSONL.
 # ===========================================================================
 
 class TestToolResultPruning:
 
-    def test_old_tool_result_truncated_in_context(self, tmp_path):
-        """Tool results older than 5 turns with >500 chars should be
-        truncated in prepare() output but intact in JSONL."""
+    def test_old_tool_result_untouched_in_context(self, tmp_path):
+        """A 1000-char text tool result 10 turns old is byte-identical in
+        prepare() output and intact in JSONL."""
         session = Session.new("prune", str(tmp_path))
 
         # Create a long tool result
@@ -1337,13 +1345,10 @@ class TestToolResultPruning:
 
         result = context_mgr.prepare()
 
-        # In the prepared context, the old tool result should be truncated
-        tool_msgs_in_context = [m for m in result if m.get("role") == "tool"]
-        for m in tool_msgs_in_context:
-            if m.get("tool_call_id") == "tc_long":
-                assert len(m["content"]) < len(long_content), \
-                    "Old tool result should be truncated in prepared context"
-                assert "[Truncated]" in m["content"]
+        # In the prepared context, the old tool result is sent unchanged
+        sent = [m for m in result if m.get("tool_call_id") == "tc_long"]
+        assert len(sent) == 1
+        assert sent[0]["content"] == long_content
 
         # In the JSONL (session), the original should be intact
         session_msgs = session.get_messages()
@@ -1487,13 +1492,14 @@ class TestCompactionModule:
 
     @pytest.mark.asyncio
     async def test_compaction_run_summarizes(self, tmp_path):
-        """compaction.run() should summarize older messages and compact."""
+        """compaction.run() summarizes older messages for the model and keeps
+        every row in the session (spec 086: append-only)."""
         session = Session.new("compactrun", str(tmp_path))
         for i in range(20):
             session.append({"role": "user", "content": f"Message {i}: details about task {i}", "source": "user"})
             session.append({"role": "assistant", "content": f"Working on task {i}", "source": "management"})
 
-        original_count = len(session.get_messages())
+        original = session.get_messages()
 
         # Mock provider for summarization
         summary_response = _make_text_response("Summary: User discussed tasks 0-13.")
@@ -1503,11 +1509,12 @@ class TestCompactionModule:
 
         await compaction_mod.run(session, provider, utility_provider=utility_provider)
 
-        msgs = session.get_messages()
-        # Should have fewer messages after compaction
-        assert len(msgs) < original_count
-        # First message should be the compaction summary
-        assert msgs[0].get("_compaction") is True
+        # The model's history is shorter and opens on the summary
+        view = session.get_model_messages()
+        assert len(view) < len(original)
+        assert view[0].get("_compaction") is True
+        # Nothing is dropped from the session itself
+        assert session.get_messages()[:len(original)] == original
 
 
 class TestContextManagerShouldCompact:

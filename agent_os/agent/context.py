@@ -51,6 +51,16 @@ _POSITIONAL_EVENT_TAGS: frozenset[str] = frozenset({
 # window rather than the usable budget.
 _COMPACT_FRACTION = 0.80
 
+# Share of the raw window the tail a compaction keeps may fill (spec 086).
+# With the 80% trigger this leaves room for the fixed rows and the summary and
+# puts the next compaction well away from the last one.
+_KEEP_FRACTION = 0.30
+
+# Bounds on the estimate/real token ratio that calibrates the sliding window.
+# Measured: Chinese ~2.1 (escaped \uXXXX), plain English ~0.9, hex dumps ~0.3.
+_RATIO_MIN = 0.25
+_RATIO_MAX = 4.0
+
 # Tokens held back for the model's reply. The daemon never overrides this, so
 # it is also what a read-only caller (the context endpoint) must assume.
 DEFAULT_RESPONSE_RESERVE = 20_000
@@ -140,6 +150,13 @@ class ContextManager:
         self._last_used_tokens: float = 0.0
         self._window_factor: float = 1.0
         self._recovery_injected: bool = False
+        # Estimate-to-real calibration from the last call the provider
+        # reported (record_prompt_tokens); neutral until then.
+        self._estimate_ratio: float = 1.0
+        self._overhead_estimate: float = 0.0
+        self._last_estimated_tokens: float = 0.0
+        self._rows_at_prepare: int | None = None
+        self._compaction_hold: bool = False
 
     @property
     def usage_percentage(self) -> float:
@@ -157,7 +174,107 @@ class ContextManager:
         )
 
     def should_compact(self) -> bool:
-        return self._last_used_tokens >= self.compaction_threshold_tokens
+        """True when the NEXT prompt would cross the compaction threshold.
+
+        That is the last call's measured prompt plus what has been appended
+        since (the tool results just added), in real tokens. Checking the
+        projection instead of the last prompt compacts before the sliding
+        window would have to cut the oldest rows, the user's task first.
+
+        Right after a compaction one over-threshold check is skipped: the kept
+        tail alone is too big, and compacting again at once would summarize
+        nothing new. The sliding window trims that call; the next check
+        compacts rows that have become old by then.
+        """
+        projected = self._projected_tokens()
+        over = projected >= self.compaction_threshold_tokens
+        if self._compaction_hold:
+            self._compaction_hold = False
+            if over:
+                logger.warning(
+                    "Prompt still over the compaction threshold right after "
+                    "compacting (%d >= %d tokens); not compacting again this "
+                    "call, the sliding window trims it",
+                    projected, self.compaction_threshold_tokens,
+                )
+                return False
+        return over
+
+    def flush_fits(self) -> bool:
+        """Whether the next prompt fits the usable window untrimmed.
+
+        When it does not, the pre-compaction flush would be built from a
+        prompt the sliding window has cut, oldest rows (the user's task)
+        first, and the agent saves state from a partial view.
+        """
+        return self._projected_tokens() <= self._model_context_limit - self._response_reserve
+
+    def note_compacted(self) -> None:
+        """The loop just compacted; see should_compact()."""
+        self._compaction_hold = True
+
+    def compaction_keep_tokens(self) -> int:
+        """Budget for the tail a compaction keeps, in estimate units."""
+        return int(_KEEP_FRACTION * self._model_context_limit * self._estimate_ratio)
+
+    def _projected_tokens(self) -> float:
+        """The last prompt's measured size plus the rows appended since the
+        prepare() that built it, in real tokens."""
+        if self._rows_at_prepare is None:
+            return self._last_used_tokens
+        rows = self._session.get_messages()[self._rows_at_prepare:]
+        added = sum(estimate_message_tokens(m) for m in rows)
+        return self._last_used_tokens + added / self._estimate_ratio
+
+    def _recent_history(self, max_tokens: int) -> list[dict]:
+        """The newest rows of the model-facing history that fit ``max_tokens``.
+
+        The walk ``Session.get_recent`` does, over ``get_model_messages()``:
+        after a compaction the model resumes from the latest summary while the
+        session keeps every row on disk (spec 086).
+        """
+        result: list[dict] = []
+        used = 0.0
+        for msg in reversed(self._session.get_model_messages()):
+            est = estimate_message_tokens(msg)
+            if used + est > max_tokens:
+                break
+            result.append(msg)
+            used += est
+        result.reverse()
+        return result
+
+    def record_prompt_tokens(self, tokens: int, overhead_estimate: float = 0.0) -> None:
+        """Measure the last prompt by what the provider billed for it.
+
+        prepare() leaves an estimate that escapes CJK to ``\\uXXXX`` and counts
+        Chinese about 2x its real size, which would compact a Chinese-heavy
+        session at ~40% of the real window (spec 086 §8.1). The loop calls
+        this after every call that reported usage; a call that reported none
+        keeps the estimate its own prepare() left.
+
+        The usage ratio the next prompt shows the agent ("Context usage ~X%",
+        and the "compacted soon" nudges above 85%) moves to the same measure,
+        so the agent is not told to save state for a compaction that is still
+        far away.
+
+        The ratio of the estimate to this count calibrates the sliding window
+        (prepare), so it runs out of room at the real budget instead of at ~46%
+        of it on Chinese text, and compaction stays the only thing that relieves
+        pressure. ``overhead_estimate`` is the estimate of what the request
+        carried besides the messages (the tool schemas): the provider counts
+        it, so the ratio must too, or a short prompt would read as ~0.3.
+        """
+        self._last_used_tokens = float(tokens)
+        estimated = self._last_estimated_tokens + overhead_estimate
+        if estimated > 0 and tokens > 0:
+            self._estimate_ratio = min(_RATIO_MAX, max(_RATIO_MIN, estimated / tokens))
+            self._overhead_estimate = overhead_estimate
+        available_budget = self._model_context_limit - self._response_reserve
+        if available_budget > 0:
+            self._last_usage_pct = tokens / available_budget
+        else:
+            self._last_usage_pct = 1.0
 
     def reduce_window(self, factor: float = 0.5) -> None:
         self._window_factor *= factor
@@ -387,12 +504,16 @@ class ContextManager:
             estimate_message_tokens(m) for m in cold_resume_messages
         )
 
-        # Calculate remaining budget for sliding window
-        remaining = available_budget - system_tokens - semi_stable_tokens - dynamic_tokens - layer_tokens - cold_resume_tokens
+        # Calculate remaining budget for sliding window. The estimate runs ~2x
+        # over on Chinese and ~0.3x under on token-dense text, so the budget is
+        # converted to estimate units with the ratio the last reported call
+        # measured (1.0 before any), leaving room for the tool schemas.
+        calibrated_budget = available_budget * self._estimate_ratio - self._overhead_estimate
+        remaining = calibrated_budget - system_tokens - semi_stable_tokens - dynamic_tokens - layer_tokens - cold_resume_tokens
         remaining = max(0, int(remaining * self._window_factor))
 
-        # Get sliding window from session
-        sliding_window = self._session.get_recent(remaining)
+        # Get sliding window from the model-facing history
+        sliding_window = self._recent_history(remaining)
 
         # Remap non-standard roles for LLM compatibility
         sliding_window = self._sanitize_roles(sliding_window)
@@ -448,8 +569,13 @@ class ContextManager:
         # Update usage percentage. `_last_used_tokens` is the measured prompt
         # size and drives should_compact(); `_last_usage_pct` stays a ratio of
         # the usable budget because that is what the sliding window and the
-        # prompt's own hygiene warnings are scaled against.
-        total_tokens = sum(estimate_message_tokens(m) for m in result)
+        # prompt's own hygiene warnings are scaled against. Both are the
+        # estimate (converted with the last measured ratio) until the provider
+        # reports this call's real count (record_prompt_tokens).
+        estimated = sum(estimate_message_tokens(m) for m in result)
+        self._last_estimated_tokens = estimated
+        self._rows_at_prepare = len(self._session.get_messages())
+        total_tokens = (estimated + self._overhead_estimate) / self._estimate_ratio
         self._last_used_tokens = total_tokens
         if available_budget > 0:
             self._last_usage_pct = total_tokens / available_budget
@@ -627,10 +753,18 @@ class ContextManager:
         return cleaned
 
     def _prune_old_tool_results(self, messages: list[dict]) -> list[dict]:
-        """Prune tool results older than 5 LLM turns if >500 chars. In-memory only.
+        """Replace stale media tool results with a one-liner. In-memory only.
 
-        Browser snapshots get aggressive 2-turn TTL. Browser screenshots
-        are always replaced with a one-liner.
+        Browser screenshots are always replaced, browser snapshots after 2
+        turns, image-bearing results after 1 turn. Nothing else is touched.
+
+        Text results are never rewritten here. A rule that rewrites whatever
+        just crossed a moving age horizon changes one mid-history message on
+        every call, and the provider's prompt cache misses from that message
+        on (spec 086). Text is bounded at ingest instead (``ReadTool`` caps at
+        10% of the window, ``Session._cap_tool_result`` at 30%,
+        ``_prefilter_shell`` keeps the last 200 lines) and leaves the prompt
+        only through compaction or supersession (``tool_result_lifecycle``).
 
         "Turns" are counted as assistant messages (LLM responses), not raw
         message indices, so multi-message tool batches within one turn are
@@ -695,24 +829,6 @@ class ContextManager:
                         ref = f"[Image analyzed] {summary}"
                     new_msg = dict(msg)
                     new_msg["content"] = ref
-                    pruned.append(new_msg)
-                    continue
-
-            # Default pruning: 5-turn / 500-char rule
-            if llm_turns_ago > 5:
-                if isinstance(content, list):
-                    # Multimodal content: replace with text summary
-                    text_parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
-                    summary = " ".join(text_parts)[:200] or "[multimodal content]"
-                    new_msg = dict(msg)
-                    new_msg["content"] = f"[Pruned] {summary}"
-                    pruned.append(new_msg)
-                    continue
-                if isinstance(content, str) and len(content) > 500:
-                    tool_name = msg.get("tool_call_id", "unknown")
-                    first_line = content.split("\n")[0][:100]
-                    new_msg = dict(msg)
-                    new_msg["content"] = f"[Truncated] {tool_name}: {first_line}... ({len(content)} chars)"
                     pruned.append(new_msg)
                     continue
 

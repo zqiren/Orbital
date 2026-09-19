@@ -314,7 +314,7 @@ async def test_flush_completion_emits_ledger_line(tmp_path):
     )
     loop = _flush_scenario_loop(tmp_path, session, utility)
 
-    async def mock_compact_run(sess, prov, utility_provider=None):
+    async def mock_compact_run(sess, prov, utility_provider=None, **kwargs):
         pass
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
@@ -351,7 +351,7 @@ async def test_flush_without_usage_emits_nothing(tmp_path):
     utility = UtilityCompleteProvider(None)  # usage=None on the flush response
     loop = _flush_scenario_loop(tmp_path, session, utility)
 
-    async def mock_compact_run(sess, prov, utility_provider=None):
+    async def mock_compact_run(sess, prov, utility_provider=None, **kwargs):
         pass
 
     with patch("agent_os.agent.compaction.run", new=mock_compact_run):
