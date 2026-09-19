@@ -314,11 +314,13 @@ class Session:
         self._first_user_seen: bool = False
 
         # Rows loaded from disk with base64 images still inline (logs written
-        # before the blob store, spec 066 phase 1b), by ``id()``. Whole-file
-        # rewrites write these back exactly as they were — existing data is
-        # never converted — while every other row stores its images as blob
-        # references. Pruned to the live rows on each rewrite.
-        self._legacy_inline_ids: set[int] = set()
+        # before the blob store, spec 066 phase 1b): ``id(row) -> row``.
+        # Whole-file rewrites write these back exactly as they were — existing
+        # data is never converted — while every other row stores its images
+        # as blob references. Holding the row itself (not just its id) means
+        # a recycled id can never make a NEW row look legacy. Pruned to the
+        # live rows before each rewrite this class owns.
+        self._legacy_inline_rows: dict[int, dict] = {}
 
         # Sub-agent thread registry (TASK-resume-persistence, piece 2).
         # handle -> {"session_id", "model", "last_used_at"}: the resume
@@ -448,10 +450,20 @@ class Session:
                                     dict(msg["thread"])
                                 )
                         continue
-                    session._messages.append(session._hydrate_loaded_row(msg))
+                    session._messages.append(msg)
 
             if skipped > 0:
                 logger.warning("Skipped %d corrupted lines during session load", skipped)
+
+            # ── Spec 066 phase 1b: blob-referenced images ─────────────────
+            # Images are stored in the blob store and the rows carry
+            # references; put the data URLs back so the in-memory
+            # conversation is exactly what it was when written. Rows that were
+            # still written inline are remembered as legacy (see _row_line).
+            session._messages = [
+                session._hydrate_loaded_row(m) for m in session._messages
+            ]
+            # ── end spec 066 block ────────────────────────────────────────
 
             # Name resolution (display label):
             #   1. Stored name on the session_start meta wins (explicit rename
@@ -580,7 +592,7 @@ class Session:
         were loaded with their images inline, which are written back exactly
         as they were read. The in-memory ``msg`` is never modified.
         """
-        if id(msg) not in self._legacy_inline_ids:
+        if self._legacy_inline_rows.get(id(msg)) is not msg:
             msg = blob_store.deinline_row_images(msg, self._orbital_dir())
         return json.dumps(msg, ensure_ascii=False) + "\n"
 
@@ -592,14 +604,17 @@ class Session:
         legacy = blob_store.has_inline_images(msg)
         msg = blob_store.rehydrate_row_images(msg, self._orbital_dir())
         if legacy:
-            self._legacy_inline_ids.add(id(msg))
+            self._legacy_inline_rows[id(msg)] = msg
         return msg
 
-    def _prune_legacy_ids(self, messages: list[dict]) -> None:
-        """Forget ids of rows that are no longer in the conversation (an id
-        can be reused by a new object once the old one is gone)."""
-        live = {id(m) for m in messages}
-        self._legacy_inline_ids &= live
+    def _prune_legacy_rows(self) -> None:
+        """Drop legacy entries for rows no longer in the conversation."""
+        if not self._legacy_inline_rows:
+            return
+        live = {id(m) for m in self._messages}
+        self._legacy_inline_rows = {
+            k: v for k, v in self._legacy_inline_rows.items() if k in live
+        }
 
     def _write_line(self, line_bytes: bytes) -> None:
         """Append one physical JSONL line under both locks.
@@ -1021,7 +1036,7 @@ class Session:
         os.replace(tmp_path, self._filepath)
         # Rows were re-read from disk, so they carry blob references where
         # images were stored out of line — hydrate them like load() does.
-        self._legacy_inline_ids.clear()
+        self._legacy_inline_rows = {}
         self._messages = [
             self._hydrate_loaded_row(m) for m in new_full if m.get("role") != "meta"
         ]
@@ -1138,6 +1153,7 @@ class Session:
             return
 
         # Atomic JSONL rewrite (same pattern as _compact)
+        self._prune_legacy_rows()
         tmp_path = self._filepath + ".tmp"
         with self._lock:
             with self._file_lock:
@@ -1151,7 +1167,6 @@ class Session:
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
                 self._pending_meta = None
-        self._prune_legacy_ids(self._messages)
 
     # ------------------------------------------------------------------
     # Compaction support (PRIVATE)
@@ -1171,13 +1186,12 @@ class Session:
                     for line in meta_lines:
                         f.write(line)
                     for msg in new_messages:
-                        f.write(self._row_line(msg))
+                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self._filepath)
                 self._pending_meta = None
         self._messages = new_messages
-        self._prune_legacy_ids(self._messages)
 
 
 def persist_user_row(session: Session, content: str,
